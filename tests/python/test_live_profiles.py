@@ -353,6 +353,9 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     preferences_path = config_dir / "preferences.ini"
     write_utf16_ini_text(preferences_path, "[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n")
     app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    expected_template = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
+    expected_template.parent.mkdir(parents=True)
+    expected_template.write_text("template\n", encoding="utf-8")
 
     live_profiles.apply_webserver_profile(
         config_dir,
@@ -369,7 +372,6 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     )
 
     text = live_profiles.read_ini_text(preferences_path)
-    expected_template = str(app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl")
     emule_section = text.split("[WebServer]", 1)[0]
     assert emule_section.count("WebTemplateFile=") == 1
     assert f"WebTemplateFile={expected_template}" in emule_section
@@ -382,3 +384,42 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     assert "EnableDiagnosticRestEndpoints=0" in text
     assert "MaxFileUploadSizeMB=5" in text
     assert "AllowedIPs=127.0.0.1" in text
+
+
+def test_apply_webserver_profile_falls_back_to_workspace_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    source_template = (
+        workspace_root
+        / "workspaces"
+        / "workspace"
+        / "app"
+        / "emulebb-main"
+        / "srchybrid"
+        / "webinterface"
+        / "eMule.tmpl"
+    )
+    source_template.parent.mkdir(parents=True)
+    source_template.write_text("template\n", encoding="utf-8")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(workspace_root))
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    write_utf16_ini_text(preferences_path, "[eMule]\n[WebServer]\nEnabled=0\n")
+    app_exe = tmp_path / "out" / "Release" / "diagnostics" / "bin" / "emulebb-diagnostics.exe"
+
+    live_profiles.apply_webserver_profile(
+        config_dir,
+        live_profiles.WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key="api-key",
+            port=4711,
+            lan_bind_addr="192.0.2.10",
+        ),
+    )
+
+    text = live_profiles.read_ini_text(preferences_path)
+    emule_section = text.split("[WebServer]", 1)[0]
+    assert f"WebTemplateFile={source_template}" in emule_section

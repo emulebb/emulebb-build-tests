@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import struct
@@ -121,6 +122,42 @@ class PrivateHarnessProfileSpec:
     shared_dirs: tuple[str, ...] = field(default_factory=tuple)
 
 
+def workspace_root() -> Path:
+    """Returns the canonical workspace root without overriding operator environment."""
+
+    configured = os.environ.get("EMULEBB_WORKSPACE_ROOT", "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[3]
+
+
+def resolve_webserver_template_path(app_exe: Path) -> Path:
+    """Returns an existing WebServer template path for staged or source layouts."""
+
+    source_template = (
+        workspace_root()
+        / "workspaces"
+        / "workspace"
+        / "app"
+        / "emulebb-main"
+        / "srchybrid"
+        / "webinterface"
+        / "eMule.tmpl"
+    )
+    candidates = (
+        app_exe.parent / "eMule.tmpl",
+        app_exe.parent / "webinterface" / "eMule.tmpl",
+        app_exe.parent.parent / "webinterface" / "eMule.tmpl",
+        app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl",
+        source_template,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    formatted = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(f"Unable to locate eMule WebServer template. Checked: {formatted}")
+
+
 def win_path(path: Path, trailing_slash: bool = False) -> str:
     """Formats a path as an absolute Windows string, optionally with a trailing separator."""
 
@@ -206,7 +243,7 @@ def apply_minimized_to_tray_startup(config_dir: Path) -> None:
 def apply_webserver_profile(config_dir: Path, spec: WebServerProfileSpec) -> None:
     """Applies a WebServer/REST overlay to one generated profile."""
 
-    template_path = spec.app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
+    template_path = resolve_webserver_template_path(spec.app_exe)
     preferences_path = config_dir / "preferences.ini"
     text = read_ini_text(preferences_path)
     text = upsert_ini_section_value(text, "eMule", "WebTemplateFile", str(template_path))
