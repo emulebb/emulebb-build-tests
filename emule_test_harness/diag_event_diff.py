@@ -454,6 +454,59 @@ def diff_traces(
     }
 
 
+def schema_audit(
+    rust_trace: list[dict[str, Any]],
+    mfc_trace: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Body-field schema delta per ``(family, event)``, MFC being the oracle.
+
+    Event *names* aligning across rust and the MFC oracle does not mean their
+    bodies do. For every event, this reports which body keys are shared,
+    rust-only, or oracle(MFC)-only, plus which side emits the event at all — so
+    rust emitters can be conformed to the oracle schema. Keys only; value
+    semantics are out of scope.
+    """
+
+    def index(trace: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+        acc: dict[tuple[str, str], dict[str, Any]] = {}
+        for record in trace:
+            family = record.get("family")
+            event = record.get("event")
+            if not isinstance(family, str) or not isinstance(event, str):
+                continue
+            slot = acc.setdefault((family, event), {"keys": set(), "count": 0})
+            body = record.get("body")
+            if isinstance(body, dict):
+                slot["keys"].update(body.keys())
+            slot["count"] += 1
+        return acc
+
+    rust_idx = index(rust_trace)
+    mfc_idx = index(mfc_trace)
+    events: list[dict[str, Any]] = []
+    for family, event in sorted(set(rust_idx) | set(mfc_idx)):
+        rust = rust_idx.get((family, event))
+        mfc = mfc_idx.get((family, event))
+        rkeys = rust["keys"] if rust else set()
+        mkeys = mfc["keys"] if mfc else set()
+        presence = "both" if rust and mfc else ("rust_only" if rust else "mfc_only")
+        events.append(
+            {
+                "family": family,
+                "event": event,
+                "presence": presence,
+                "rustCount": rust["count"] if rust else 0,
+                "mfcCount": mfc["count"] if mfc else 0,
+                "bodyOk": presence == "both" and rkeys == mkeys,
+                "sharedKeys": sorted(rkeys & mkeys),
+                "onlyRustKeys": sorted(rkeys - mkeys),
+                "onlyMfcKeys": sorted(mkeys - rkeys),
+            }
+        )
+    ok = all(e["presence"] == "both" and e["bodyOk"] for e in events)
+    return {"schema": DIAG_SCHEMA, "ok": ok, "events": events}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Diff two diag_event_v1 diagnostic traces.")
     parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust diag_event_v1 JSONL dump.")
