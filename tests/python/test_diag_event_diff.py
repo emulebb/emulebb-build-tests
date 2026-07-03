@@ -205,3 +205,17 @@ def test_self_diff_of_mixed_trace_is_ok() -> None:
     ]
     report = diff_traces(list(trace), list(trace))
     assert report["ok"] is True
+
+
+def test_conformance_ignores_deliberate_pii_omissions() -> None:
+    # rust deliberately omits filenames/usernames for privacy; an oracle-only PII
+    # body key must NOT count as a rust-superset-of-oracle conformance violation.
+    from emule_test_harness.diag_event_diff import schema_audit
+
+    common = {"schema": "diag_event_v1", "family": "bad_peer", "event": "repeat_block_request",
+              "severity": "medium", "keys": {"peer": "1.2.3.4:5"}}
+    rust = [{**common, "body": {"action": "observe", "behavior": "repeat_block_request"}}]
+    mfc = [{**common, "body": {"action": "observe", "behavior": "repeat_block_request",
+                               "fileName": "secret.mkv", "userName": "http://x"}}]
+    audit = schema_audit(rust, mfc)
+    assert audit["conformance"]["conformant"] is True

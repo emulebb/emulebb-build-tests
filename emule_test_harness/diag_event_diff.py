@@ -99,6 +99,16 @@ _COMPARABLE_KEYS: dict[str, tuple[str, ...]] = {
     "bad_peer": ("peer", "peerHash", "fileHash", "searchId"),
 }
 
+# Oracle body keys rust DELIBERATELY omits for privacy (filenames, sizes, usernames,
+# client-software strings). These are never counted as a rust ⊇ oracle conformance
+# violation even if they appear on the oracle side (e.g. from a raw bad_peer_event_v1
+# record rather than the PII-stripping mfc_diag_adapter). Keyed by family.
+_DELIBERATE_ORACLE_KEY_OMISSIONS: dict[str, frozenset[str]] = {
+    "bad_peer": frozenset(
+        {"fileName", "fileSize", "userName", "clientSoftware", "clientMod", "name"}
+    ),
+}
+
 
 def load_trace(path: Path) -> list[dict[str, Any]]:
     """Loads ``diag_event_v1`` records from a JSONL dump (``\\n`` or ``\\r\\n``)."""
@@ -526,11 +536,16 @@ def schema_audit(
     # and rust-only body keys are allowed extras, not violations. Oracle events rust
     # did not emit in-window are `unverified` (window/state vs a real gap is
     # indistinguishable from a single trace), not a hard fail.
-    body_violations = [
-        {"family": e["family"], "event": e["event"], "missingOracleKeys": e["onlyMfcKeys"]}
-        for e in events
-        if e["presence"] == "both" and e["onlyMfcKeys"]
-    ]
+    body_violations = []
+    for e in events:
+        if e["presence"] != "both" or not e["onlyMfcKeys"]:
+            continue
+        omitted = _DELIBERATE_ORACLE_KEY_OMISSIONS.get(e["family"], frozenset())
+        missing = [key for key in e["onlyMfcKeys"] if key not in omitted]
+        if missing:
+            body_violations.append(
+                {"family": e["family"], "event": e["event"], "missingOracleKeys": missing}
+            )
     conformance = {
         "conformant": not body_violations,
         "bodyKeyViolations": body_violations,
