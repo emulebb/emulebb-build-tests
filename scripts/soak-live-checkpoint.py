@@ -217,15 +217,32 @@ def divergence(args: argparse.Namespace) -> None:
                 print(f"  ({clean} shared events with identical body schema)")
     else:
         print("  (skipped diag diff: missing one trace)")
-    rust_pkt = args.rust_packet or _newest(args.rust_dump, "emulebb-rust-ed2k-tcp-dump-*.jsonl")
-    mfc_pkt = args.mfc_packet if args.mfc_packet else (MFC_LOGS / "emulebb-diagnostics-packet.log")
-    if rust_pkt and Path(rust_pkt).exists() and Path(mfc_pkt).exists():
-        rp = packet_trace_diff.load_trace(Path(rust_pkt))
-        mp = packet_trace_diff.load_trace(Path(mfc_pkt))
+    # C2 + rotation: rust splits eD2K packets across the tcp (peer) and server
+    # dumps, and MFC rotates its packet.log by size. Concat BOTH rust eD2K dumps so
+    # server-flow parity is not silently dropped, and the MFC packet.log files
+    # touched within the window so MFC is not just its active slice.
+    if args.rust_packet:
+        rust_pkt_files = [Path(args.rust_packet)]
+    else:
+        rust_pkt_files = sorted(Path(args.rust_dump).glob("emulebb-rust-ed2k-*-dump-*.jsonl"))
+    if args.mfc_packet:
+        mfc_pkt_files = [Path(args.mfc_packet)]
+    else:
+        mfc_pkt_files = [
+            Path(p)
+            for p in glob.glob(str(MFC_LOGS / "emulebb-diagnostics-packet*.log"))
+            if datetime.datetime.fromtimestamp(Path(p).stat().st_mtime, datetime.timezone.utc) >= since
+        ]
+    if rust_pkt_files and mfc_pkt_files:
+        rp = _windowed_diag_trace(packet_trace_diff.load_trace, rust_pkt_files, since)
+        mp = _windowed_diag_trace(packet_trace_diff.load_trace, mfc_pkt_files, since)
         res = packet_trace_diff.diff_traces(rp, mp)
         report["packet"] = res
         cov = res.get("opcodeCoverage", {})
-        print(f"\n-- packet opcodeCoverage (ok={res.get('coverageOk')}, rust={len(rp)} mfc={len(mp)}) --")
+        print(
+            f"\n-- packet opcodeCoverage (coverageOk={res.get('coverageOk')} "
+            f"oracleCoverageOk={res.get('oracleCoverageOk')}, rust={len(rp)} mfc={len(mp)}) --"
+        )
         print(f"  {json.dumps(cov, default=str)[:900]}")
     else:
         print("  (skipped packet diff: missing one trace)")
