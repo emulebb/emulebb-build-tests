@@ -76,6 +76,44 @@ def ensure_whitelisted(exe_path: Path, *, name: str | None = None, settings_path
     return True
 
 
+# LAN / control-plane CIDR(s) that must BYPASS the tunnel. In whitelist mode the
+# whitelisted client exes route ALL their traffic through the tunnel, including the
+# REST control plane which binds to the LAN X_LOCAL_IP (192.168.1.210). Without an
+# exclude, rust's REST reply to a LAN peer egresses the tunnel and the TCP handshake
+# never completes ("network unreachable"). Excluding the LAN keeps the control plane
+# on the LAN while eD2K/Kad (server 45.82.80.155 + peers) still tunnel. HARD RULE:
+# P2P binds the hide.me tunnel; REST binds X_LOCAL_IP.
+CONTROL_PLANE_EXCLUDE_RANGES: tuple[str, ...] = ("192.168.1.0/24",)
+
+
+def ensure_excluded_ip_ranges(
+    ranges: tuple[str, ...] = CONTROL_PLANE_EXCLUDE_RANGES,
+    *,
+    settings_path: Path | None = None,
+) -> bool:
+    """Ensures each CIDR in ``ranges`` is in the split-tunnel ExcludeIPRanges.
+
+    Returns True when any entry was added (caller should restart hide.me), False
+    when all were already present (idempotent no-op). Entries are stored as plain
+    CIDR strings, matching the hide.me ``ExcludeIPRanges`` list.
+    """
+
+    settings_path = settings_path or vpn_settings_path()
+    settings = _load_settings(settings_path)
+    split = settings.setdefault("SplitTunneling", {})
+    excluded = split.setdefault("ExcludeIPRanges", [])
+    have = {str(entry).casefold() for entry in excluded}
+    added = False
+    for cidr in ranges:
+        if cidr.casefold() not in have:
+            excluded.append(cidr)
+            have.add(cidr.casefold())
+            added = True
+    if added:
+        settings_path.write_text(json.dumps(settings, indent=0), encoding="utf-8")
+    return added
+
+
 def _powershell(script: str, *, timeout_seconds: float = 60.0) -> str:
     completed = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
@@ -152,9 +190,17 @@ def hideme_adapter_ipv4() -> str:
 def ensure_vpn_ready(exe_path: Path, *, name: str | None = None) -> dict[str, Any]:
     """Whitelists the exe (restarting hide.me only if needed) and returns the tunnel bind IP."""
 
-    added = ensure_whitelisted(exe_path, name=name)
-    if added:
+    whitelist_added = ensure_whitelisted(exe_path, name=name)
+    # HARD RULE: exclude the LAN so the REST control plane (X_LOCAL_IP) bypasses the
+    # tunnel while eD2K/Kad still tunnel. Must be applied deterministically every run
+    # — a hide.me reconnect can reset ExcludeIPRanges.
+    exclude_added = ensure_excluded_ip_ranges()
+    if whitelist_added or exclude_added:
         restart_hideme()
     else:
         wait_for_tunnel()
-    return {"whitelistAdded": added, "bindIp": hideme_adapter_ipv4()}
+    return {
+        "whitelistAdded": whitelist_added,
+        "excludeAdded": exclude_added,
+        "bindIp": hideme_adapter_ipv4(),
+    }
