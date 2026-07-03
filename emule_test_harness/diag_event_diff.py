@@ -109,6 +109,16 @@ _DELIBERATE_ORACLE_KEY_OMISSIONS: dict[str, frozenset[str]] = {
     ),
 }
 
+# Oracle body keys BOTH clients emit only CONDITIONALLY — present only when the event
+# actually carried that datum. e.g. `firstSkipReason` on sched/upload_request_outcome
+# appears only when an upload request skipped a block before serving; MFC omits it the
+# same way rust does (OtherFunctions.cpp appends it only when non-empty). So a finite
+# window where rust logged none of these while the oracle logged some is a SAMPLING
+# artifact, not a rust ⊇ oracle gap — never a conformance violation. Keyed by family.
+_CONDITIONAL_ORACLE_BODY_KEYS: dict[str, frozenset[str]] = {
+    "sched": frozenset({"firstSkipReason"}),
+}
+
 
 def load_trace(path: Path) -> list[dict[str, Any]]:
     """Loads ``diag_event_v1`` records from a JSONL dump (``\\n`` or ``\\r\\n``)."""
@@ -541,7 +551,10 @@ def schema_audit(
         if e["presence"] != "both" or not e["onlyMfcKeys"]:
             continue
         omitted = _DELIBERATE_ORACLE_KEY_OMISSIONS.get(e["family"], frozenset())
-        missing = [key for key in e["onlyMfcKeys"] if key not in omitted]
+        conditional = _CONDITIONAL_ORACLE_BODY_KEYS.get(e["family"], frozenset())
+        missing = [
+            key for key in e["onlyMfcKeys"] if key not in omitted and key not in conditional
+        ]
         if missing:
             body_violations.append(
                 {"family": e["family"], "event": e["event"], "missingOracleKeys": missing}
