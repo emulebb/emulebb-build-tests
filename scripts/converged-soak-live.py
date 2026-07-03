@@ -383,6 +383,58 @@ def status_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.
     }
 
 
+def ensure_operator_and_kad(
+    base_url: str,
+    api_key: str,
+    label: str,
+    *,
+    endpoint: str = OPERATOR_SERVER,
+    attempts: int = 8,
+    per_attempt_wait: float = 20.0,
+) -> bool:
+    """Deterministically bring one client onto the operator eD2K server AND Kad.
+
+    HARD REQUIREMENT: both clients must ALWAYS be on the single operator server
+    (``OPERATOR_SERVER`` = 45.82.80.155:5687) and on Kad for parity runs. The rust
+    config auto-connects its server but MFC is otherwise left serverless, so this
+    explicitly + idempotently ensures both. Kad is started (no-op if running) and
+    the operator server connect is retried on a server-friendly backoff (eD2K
+    servers temp-ban rapid reconnects) until ``operator_connected`` holds. Returns
+    True once connected; logs and returns False if it never connects.
+    """
+
+    try:
+        retry_http_json(
+            f"{label} kad start",
+            2,
+            base_url,
+            "/api/v1/kad/operations/start",
+            api_key=api_key,
+            method="POST",
+            body={},
+            timeout_seconds=15.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - kad is often already running
+        log(f"{label}: kad start note: {exc}")
+    for attempt in range(1, attempts + 1):
+        if operator_connected(status_snapshot(base_url, api_key), endpoint=endpoint):
+            log(f"{label}: connected to operator server {endpoint} (attempt {attempt})")
+            return True
+        try:
+            soak_launch.connect_operator_server(
+                base_url,
+                api_key,
+                description=f"{label} operator connect",
+                endpoint=endpoint,
+            )
+        except Exception as exc:  # noqa: BLE001 - transient; retried with backoff
+            log(f"{label}: operator connect attempt {attempt} note: {exc}")
+        time.sleep(per_attempt_wait)
+    ok = operator_connected(status_snapshot(base_url, api_key), endpoint=endpoint)
+    log(f"{label}: operator server {'CONNECTED' if ok else 'NOT connected after retries'}")
+    return ok
+
+
 def operator_connected(status: dict[str, Any], *, endpoint: str = OPERATOR_SERVER) -> bool:
     """Returns true when a redacted status snapshot is on the required server."""
 
@@ -1205,6 +1257,12 @@ def main(argv: list[str] | None = None) -> int:
         mfc_base = mfc_handles["baseUrl"]
         rust_dump_dir = Path(rust_handles["packetDumpDir"])
         mfc_dump_dir = Path(mfc_handles["packetDumpDir"])
+
+        # HARD REQUIREMENT: both clients must ALWAYS be on the single operator eD2K
+        # server (45.82.80.155:5687) AND Kad — deterministically, every launch. The
+        # rust config auto-connects its server but MFC is otherwise serverless.
+        ensure_operator_and_kad(rust_base, RUST_API_KEY, "rust")
+        ensure_operator_and_kad(mfc_base, MFC_API_KEY, "mfc")
 
         if args.trackmulebb_cmd:
             log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")
