@@ -171,7 +171,7 @@ def divergence(args: argparse.Namespace) -> None:
             report["schema_audit"] = audit
             if args.oracle_conformance:
                 conf = audit["conformance"]
-                print(f"\n-- oracle conformance (rust ⊇ MFC oracle): {'PASS' if conf['conformant'] else 'FAIL'} --")
+                print(f"\n-- oracle conformance (rust superset-of MFC oracle): {'PASS' if conf['conformant'] else 'FAIL'} --")
                 for v in conf["bodyKeyViolations"]:
                     print(f"  [VIOLATION] {v['family']}/{v['event']} missing oracle keys: {v['missingOracleKeys']}")
                 if conf["oracleOnlyUnverified"]:
@@ -219,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", action="store_true", help="Also run the cross-client divergence report.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
-    parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust ⊇ oracle)? rust extras allowed.")
+    parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust superset-of oracle)? rust extras allowed.")
     parser.add_argument("--rust-diag", help="Override rust diag_event_v1 jsonl (default: newest in --rust-dump).")
     parser.add_argument("--mfc-diag", help="Override MFC diag_event_v1 log.")
     parser.add_argument("--rust-packet", help="Override rust ed2k_packet_v1 jsonl.")
