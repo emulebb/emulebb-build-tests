@@ -191,6 +191,18 @@ def divergence(args: argparse.Namespace) -> None:
             }
         )
         print(f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
+        # Defensive-measure runtime usefulness: per bad_peer event type, how many times
+        # each side fired it this window. A measure with rust=0 is either not yet ported
+        # or catches no abuse in this window; high counts = high live usefulness. This is
+        # how we judge whether each ported defence is worth its complexity at runtime.
+        rust_bp = collections.Counter(r.get("event") for r in rt if r.get("family") == "bad_peer")
+        mfc_bp = collections.Counter(m.get("event") for m in mt if m.get("family") == "bad_peer")
+        report["bad_peer_tally"] = {"rust": dict(rust_bp), "mfc": dict(mfc_bp)}
+        events = sorted(set(rust_bp) | set(mfc_bp), key=lambda e: -(rust_bp[e] + mfc_bp[e]))
+        print("\n-- bad_peer defensive-measure usefulness (firings this window) --")
+        for ev in events:
+            note = "" if rust_bp[ev] else "   <- rust: not fired/ported"
+            print(f"  {ev}: rust={rust_bp[ev]} mfc={mfc_bp[ev]}{note}")
         if args.schema_audit or args.oracle_conformance:
             audit = diag_event_diff.schema_audit(rt, mt)
             report["schema_audit"] = audit
