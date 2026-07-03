@@ -84,3 +84,36 @@ def test_load_trace_filters_non_packet_records(tmp_path: Path) -> None:
     records = load_trace(path)
     assert len(records) == 1
     assert records[0]["opcode"] == 0x01
+
+
+def _kad(opcode, direction, name=None):
+    rec = {"schema": "diag_event_v1", "family": "kad_udp", "keys": {"opcode": opcode}, "body": {"direction": direction}}
+    if name:
+        rec["opcode_name"] = name
+    return rec
+
+
+def test_kad_opcode_coverage_rust_superset_is_oracle_ok() -> None:
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust = [_kad(67, "send", "KADEMLIA2_REQ"), _kad(99, "send")]  # 99 is rust-only extra
+    mfc = [_kad(67, "send")]
+    cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
+    assert cov["oracleOk"] is True  # rust covers MFC's opcode; the extra is allowed
+    assert cov["ok"] is False  # strict: a one-sided (onlyRust) opcode is present
+
+
+def test_kad_opcode_coverage_flags_oracle_only_opcode() -> None:
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust = [_kad(67, "send")]
+    mfc = [_kad(67, "send"), _kad(41, "recv")]  # 41 is an oracle opcode rust never emitted
+    cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
+    assert cov["oracleOk"] is False
+
+
+def test_kad_records_filters_non_kad() -> None:
+    from emule_test_harness import packet_trace_diff as ptd
+
+    trace = [_kad(67, "send"), {"schema": "diag_event_v1", "family": "sched", "event": "x"}]
+    assert len(ptd.kad_records(trace)) == 1

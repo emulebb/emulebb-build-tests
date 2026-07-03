@@ -299,6 +299,100 @@ def _op_entry(
     }
 
 
+def kad_records(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filters Kad packet records from a converged diag_event trace (or raw dump).
+
+    Kad packets have no standalone MFC ``udp_packet_v1`` dump — they live only in
+    the converged ``diag_event_v1`` stream (``family:"kad_udp"``) on both clients —
+    so the Kad opcode coverage is computed off the diag traces, not packet_trace_diff
+    input files.
+    """
+
+    return [
+        record
+        for record in trace
+        if record.get("family") in ("kad", "kad_udp") or record.get("schema") == "udp_packet_v1"
+    ]
+
+
+def _kad_opcode(record: dict[str, Any]) -> int | str | None:
+    keys = record.get("keys") or {}
+    body = record.get("body") or {}
+    opcode = keys.get("opcode")
+    if opcode is None:
+        opcode = body.get("opcode")
+    if opcode is None:
+        opcode = record.get("opcode")
+    if isinstance(opcode, str):
+        try:
+            return int(opcode, 0)
+        except ValueError:
+            return opcode
+    return opcode
+
+
+def _kad_direction(record: dict[str, Any]) -> str:
+    body = record.get("body") or {}
+    return str(record.get("direction") or body.get("direction") or "any")
+
+
+def kad_opcode_coverage(
+    rust_records: list[dict[str, Any]],
+    emule_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Per-direction Kad opcode-set coverage (the byte-level ``kad_udp`` diag diff
+    keys on ``decodedHex`` and never aligns for independent clients; this is the
+    live-meaningful Kad parity signal — which KADEMLIA2_* opcodes each client
+    exercises). Same rust-superset semantics as :func:`_opcode_coverage`: ``ok`` is
+    strict (no one-sided), ``oracleOk`` fails only on ``onlyEmule`` (a Kad opcode the
+    oracle used that rust did not)."""
+
+    by_dir: dict[str, dict[str, dict[Any, int]]] = {}
+    names: dict[Any, str] = {}
+    for side, records in (("rust", rust_records), ("emule", emule_records)):
+        for record in records:
+            opcode = _kad_opcode(record)
+            if opcode is None:
+                continue
+            slot = by_dir.setdefault(_kad_direction(record), {"rust": {}, "emule": {}})[side]
+            slot[opcode] = slot.get(opcode, 0) + 1
+            name = record.get("opcode_name") or (record.get("body") or {}).get("opcodeName")
+            if name and opcode not in names:
+                names[opcode] = name
+
+    directions: list[dict[str, Any]] = []
+    all_ok = True
+    oracle_ok = True
+    for direction, sides in sorted(by_dir.items()):
+        rust_ops = sides["rust"]
+        emule_ops = sides["emule"]
+        only_rust = sorted(set(rust_ops) - set(emule_ops), key=str)
+        only_emule = sorted(set(emule_ops) - set(rust_ops), key=str)
+        shared = sorted(set(rust_ops) & set(emule_ops), key=str)
+        if only_rust or only_emule:
+            all_ok = False
+        if only_emule:
+            oracle_ok = False
+
+        def entry(opcode: Any, rust_n: int, emule_n: int) -> dict[str, Any]:
+            return {
+                "opcode": opcode,
+                "opcodeName": names.get(opcode),
+                "rustCount": rust_n,
+                "emuleCount": emule_n,
+            }
+
+        directions.append(
+            {
+                "direction": direction,
+                "shared": [entry(op, rust_ops[op], emule_ops[op]) for op in shared],
+                "onlyRust": [entry(op, rust_ops[op], 0) for op in only_rust],
+                "onlyEmule": [entry(op, 0, emule_ops[op]) for op in only_emule],
+            }
+        )
+    return {"ok": all_ok, "oracleOk": oracle_ok, "directions": directions}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Diff two ed2k_packet_v1 packet traces.")
     parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust ed2k_packet_v1 JSONL dump.")

@@ -176,6 +176,21 @@ def divergence(args: argparse.Namespace) -> None:
         for fam in res["families"]:
             flag = "ok" if fam.get("ok") else "DIVERGENT"
             print(f"  [{flag}] {fam.get('family')} ({fam.get('strategy')}): {_one_sided(fam)}")
+        # Kad opcode coverage: the byte-level kad_udp diag diff keys on decodedHex and
+        # never aligns for two independent live clients; this is the live-meaningful
+        # Kad parity signal (which KADEMLIA2_* opcodes each client exercises).
+        kad_cov = packet_trace_diff.kad_opcode_coverage(
+            packet_trace_diff.kad_records(rt), packet_trace_diff.kad_records(mt)
+        )
+        report["kad_opcode_coverage"] = kad_cov
+        kad_gaps = sorted(
+            {
+                str(e["opcodeName"] or e["opcode"])
+                for direction in kad_cov["directions"]
+                for e in direction["onlyEmule"]
+            }
+        )
+        print(f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
         if args.schema_audit or args.oracle_conformance:
             audit = diag_event_diff.schema_audit(rt, mt)
             report["schema_audit"] = audit
