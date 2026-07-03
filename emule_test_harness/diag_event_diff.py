@@ -504,7 +504,27 @@ def schema_audit(
             }
         )
     ok = all(e["presence"] == "both" and e["bodyOk"] for e in events)
-    return {"schema": DIAG_SCHEMA, "ok": ok, "events": events}
+    # Oracle-conformance verdict (MFC = oracle): rust must cover every oracle event
+    # and, on shared events, every oracle body key (rust ⊇ oracle). rust-only events
+    # and rust-only body keys are allowed extras, not violations. Oracle events rust
+    # did not emit in-window are `unverified` (window/state vs a real gap is
+    # indistinguishable from a single trace), not a hard fail.
+    body_violations = [
+        {"family": e["family"], "event": e["event"], "missingOracleKeys": e["onlyMfcKeys"]}
+        for e in events
+        if e["presence"] == "both" and e["onlyMfcKeys"]
+    ]
+    conformance = {
+        "conformant": not body_violations,
+        "bodyKeyViolations": body_violations,
+        "oracleOnlyUnverified": [
+            f"{e['family']}/{e['event']}" for e in events if e["presence"] == "mfc_only"
+        ],
+        "rustExtraEvents": [
+            f"{e['family']}/{e['event']}" for e in events if e["presence"] == "rust_only"
+        ],
+    }
+    return {"schema": DIAG_SCHEMA, "ok": ok, "events": events, "conformance": conformance}
 
 
 def main(argv: list[str] | None = None) -> int:

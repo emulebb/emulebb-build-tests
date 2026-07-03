@@ -166,20 +166,30 @@ def divergence(args: argparse.Namespace) -> None:
         for fam in res["families"]:
             flag = "ok" if fam.get("ok") else "DIVERGENT"
             print(f"  [{flag}] {fam.get('family')} ({fam.get('strategy')}): {_one_sided(fam)}")
-        if args.schema_audit:
+        if args.schema_audit or args.oracle_conformance:
             audit = diag_event_diff.schema_audit(rt, mt)
             report["schema_audit"] = audit
-            print(f"\n-- body-field schema audit (MFC=oracle, overall ok={audit['ok']}) --")
-            clean = 0
-            for e in audit["events"]:
-                if e["presence"] == "both" and e["bodyOk"]:
-                    clean += 1
-                    continue
-                tag = "BODY-DRIFT" if e["presence"] == "both" else e["presence"].upper()
-                print(f"  [{tag}] {e['family']}/{e['event']} r={e['rustCount']} m={e['mfcCount']}"
-                      + (f" onlyRust={e['onlyRustKeys']}" if e["onlyRustKeys"] else "")
-                      + (f" onlyMfc={e['onlyMfcKeys']}" if e["onlyMfcKeys"] else ""))
-            print(f"  ({clean} shared events with identical body schema)")
+            if args.oracle_conformance:
+                conf = audit["conformance"]
+                print(f"\n-- oracle conformance (rust ⊇ MFC oracle): {'PASS' if conf['conformant'] else 'FAIL'} --")
+                for v in conf["bodyKeyViolations"]:
+                    print(f"  [VIOLATION] {v['family']}/{v['event']} missing oracle keys: {v['missingOracleKeys']}")
+                if conf["oracleOnlyUnverified"]:
+                    print(f"  unverified (oracle event, rust silent in-window): {conf['oracleOnlyUnverified']}")
+                if conf["rustExtraEvents"]:
+                    print(f"  rust-only extras (allowed): {conf['rustExtraEvents']}")
+            if args.schema_audit:
+                print(f"\n-- body-field schema audit (MFC=oracle, overall ok={audit['ok']}) --")
+                clean = 0
+                for e in audit["events"]:
+                    if e["presence"] == "both" and e["bodyOk"]:
+                        clean += 1
+                        continue
+                    tag = "BODY-DRIFT" if e["presence"] == "both" else e["presence"].upper()
+                    print(f"  [{tag}] {e['family']}/{e['event']} r={e['rustCount']} m={e['mfcCount']}"
+                          + (f" onlyRust={e['onlyRustKeys']}" if e["onlyRustKeys"] else "")
+                          + (f" onlyMfc={e['onlyMfcKeys']}" if e["onlyMfcKeys"] else ""))
+                print(f"  ({clean} shared events with identical body schema)")
     else:
         print("  (skipped diag diff: missing one trace)")
     rust_pkt = args.rust_packet or _newest(args.rust_dump, "emulebb-rust-ed2k-tcp-dump-*.jsonl")
@@ -209,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", action="store_true", help="Also run the cross-client divergence report.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
+    parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust ⊇ oracle)? rust extras allowed.")
     parser.add_argument("--rust-diag", help="Override rust diag_event_v1 jsonl (default: newest in --rust-dump).")
     parser.add_argument("--mfc-diag", help="Override MFC diag_event_v1 log.")
     parser.add_argument("--rust-packet", help="Override rust ed2k_packet_v1 jsonl.")
