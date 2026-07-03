@@ -501,29 +501,42 @@ def checkpoint_operator_reconnect(
 # --------------------------------------------------------------------------- #
 
 
-def _glob_all(dump_dir: Path, globs: tuple[str, ...]) -> list[Path]:
+def _glob_all(
+    dump_dir: Path, globs: tuple[str, ...], *, min_mtime: float | None = None
+) -> list[Path]:
     found: list[Path] = []
     seen: set[Path] = set()
     for pattern in globs:
         for path in sorted(dump_dir.glob(pattern)):
-            if path not in seen:
-                seen.add(path)
-                found.append(path)
+            if path in seen:
+                continue
+            # MFC rotates its logs by size; without a bound the rotated-file globs
+            # would ingest the whole run's hundreds of files each diff. Load only
+            # files whose mtime overlaps the recent action window (rust is one
+            # growing file whose mtime is always current, so it is never excluded).
+            if min_mtime is not None and path.stat().st_mtime < min_mtime:
+                continue
+            seen.add(path)
+            found.append(path)
     return found
 
 
-def load_packets(dump_dir: Path, *, side: str) -> list[dict[str, Any]]:
+def load_packets(
+    dump_dir: Path, *, side: str, min_mtime: float | None = None
+) -> list[dict[str, Any]]:
     globs = clw.RUST_PACKET_DUMP_GLOBS if side == "rust" else clw.EMULE_PACKET_DUMP_GLOBS
     records: list[dict[str, Any]] = []
-    for path in _glob_all(dump_dir, globs):
+    for path in _glob_all(dump_dir, globs, min_mtime=min_mtime):
         records.extend(packet_trace_diff.load_trace(path))
     return records
 
 
-def load_diag(dump_dir: Path, *, side: str) -> list[dict[str, Any]]:
+def load_diag(
+    dump_dir: Path, *, side: str, min_mtime: float | None = None
+) -> list[dict[str, Any]]:
     globs = clw.RUST_DIAG_DUMP_GLOBS if side == "rust" else clw.EMULE_DIAG_DUMP_GLOBS
     records: list[dict[str, Any]] = []
-    for path in _glob_all(dump_dir, globs):
+    for path in _glob_all(dump_dir, globs, min_mtime=min_mtime):
         records.extend(diag_event_diff.load_trace(path))
     return records
 
@@ -1517,10 +1530,19 @@ def main(argv: list[str] | None = None) -> int:
                 maybe_reconnect_rust(rust_loop_status)
                 pairs, aged_unpaired = [], []
             if pairs:
-                rust_pkts = load_packets(rust_dump_dir, side="rust")
-                mfc_pkts = load_packets(mfc_dump_dir, side="emule")
-                rust_dg = load_diag(rust_dump_dir, side="rust")
-                mfc_dg = load_diag(mfc_dump_dir, side="emule")
+                # Bound MFC rotated-log loading to the action-correlation+settle span
+                # so the diff sees MFC's records for the just-settled actions
+                # (previously only its active file, missing rotated-out records).
+                load_since = time.time() - (
+                    args.correlation_window
+                    + max(args.settle_seconds, args.download_settle_seconds)
+                    + args.lead_seconds
+                    + 120.0
+                )
+                rust_pkts = load_packets(rust_dump_dir, side="rust", min_mtime=load_since)
+                mfc_pkts = load_packets(mfc_dump_dir, side="emule", min_mtime=load_since)
+                rust_dg = load_diag(rust_dump_dir, side="rust", min_mtime=load_since)
+                mfc_dg = load_diag(mfc_dump_dir, side="emule", min_mtime=load_since)
                 for pair in pairs:
                     process_report(
                         sad.diff_action(
@@ -1557,10 +1579,10 @@ def main(argv: list[str] | None = None) -> int:
                         process_report(
                             sad.diff_action(
                                 pair,
-                                rust_packets=load_packets(rust_dump_dir, side="rust"),
-                                mfc_packets=load_packets(mfc_dump_dir, side="emule"),
-                                rust_diag=load_diag(rust_dump_dir, side="rust"),
-                                mfc_diag=load_diag(mfc_dump_dir, side="emule"),
+                                rust_packets=load_packets(rust_dump_dir, side="rust", min_mtime=marker_t0.timestamp() - 60.0),
+                                mfc_packets=load_packets(mfc_dump_dir, side="emule", min_mtime=marker_t0.timestamp() - 60.0),
+                                rust_diag=load_diag(rust_dump_dir, side="rust", min_mtime=marker_t0.timestamp() - 60.0),
+                                mfc_diag=load_diag(mfc_dump_dir, side="emule", min_mtime=marker_t0.timestamp() - 60.0),
                                 lead_seconds=0.0, settle_seconds=0.0,
                             )
                         )

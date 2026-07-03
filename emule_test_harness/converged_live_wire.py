@@ -44,9 +44,11 @@ RUST_PACKET_DUMP_GLOBS = (
     "emulebb-rust-ed2k-*-dump-*.jsonl",
     "emulebb-rust-ed2k-tcp-dump-*.jsonl",
 )
-EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet.log",)
+# MFC rotates its packet/diag logs (size cap), so the active file is a tiny slice
+# of the run; match the rotated files too (`…-packet-<ts>.log`, `…-diag-<ts>.log`).
+EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet*.log",)
 RUST_DIAG_DUMP_GLOBS = ("emulebb-rust-diag-*.jsonl",)
-EMULE_DIAG_DUMP_GLOBS = ("emulebb-diagnostics-diag.log",)
+EMULE_DIAG_DUMP_GLOBS = ("emulebb-diagnostics-diag*.log",)
 
 
 def mfc_diagnostics_build_dir(
@@ -196,7 +198,9 @@ def find_packet_trace(dump_dir: Path, *, side: str) -> Path | None:
         matches = _first_existing_glob(dump_dir, EMULE_PACKET_DUMP_GLOBS)
     else:
         raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
-    return matches[0] if matches else None
+    # With a rotated-file glob, the most-recently-written file is the live window;
+    # matches[0] (name-sorted) would pick the oldest rotated slice.
+    return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
 
 
 def find_diag_trace(dump_dir: Path, *, side: str) -> Path | None:
@@ -208,7 +212,9 @@ def find_diag_trace(dump_dir: Path, *, side: str) -> Path | None:
         matches = _first_existing_glob(dump_dir, EMULE_DIAG_DUMP_GLOBS)
     else:
         raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
-    return matches[0] if matches else None
+    # With a rotated-file glob, the most-recently-written file is the live window;
+    # matches[0] (name-sorted) would pick the oldest rotated slice.
+    return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
 
 
 def count_jsonl_records(path: Path | None) -> int:
