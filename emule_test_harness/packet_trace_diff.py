@@ -186,6 +186,7 @@ def diff_traces(
         "schema": PACKET_SCHEMA,
         "ok": total_mismatches == 0 and total_only_rust == 0 and total_only_emule == 0,
         "coverageOk": coverage["ok"],
+        "oracleCoverageOk": coverage["oracleOk"],
         "totals": {
             "matched": sum(d.matched for d in flow_diffs),
             "payload_mismatches": total_mismatches,
@@ -248,24 +249,28 @@ def _opcode_coverage(
                 names[ident] = name
 
     channels: list[dict[str, Any]] = []
+    # `ok` is the STRICT verdict (no one-sided opcode either way); kept for the
+    # action-scoped `fullCoverageOk` reference. `oracle_ok` is the rust ⊇ oracle
+    # verdict: rust exercising opcodes the oracle didn't (onlyRust) is an allowed
+    # superset — and between two independent live clients it is dominated by
+    # connection churn (rust's fresh peer handshakes HELLO/SECIDENT/HASHSETREQ vs the
+    # oracle's established, payload-only connections). The real parity concern is
+    # only opcodes the ORACLE used that rust did NOT (onlyEmule). NOTE: onlyEmule can
+    # still be state/window-dependent (e.g. OP_QUEUERANKING only fires when a waiter
+    # exists), so treat it as a lead to confirm rather than a hard verdict until
+    # synchronized-action windowing scopes coverage to a shared action window.
     all_ok = True
+    oracle_ok = True
     for (channel, direction), sides in sorted(by_key.items()):
         rust_ops = sides["rust"]
         emule_ops = sides["emule"]
         only_rust = sorted(set(rust_ops) - set(emule_ops))
         only_emule = sorted(set(emule_ops) - set(rust_ops))
         shared = sorted(set(rust_ops) & set(emule_ops))
-        # rust ⊇ oracle: rust exercising opcodes the oracle didn't (onlyRust) is an
-        # allowed superset, and between two independent live clients it is dominated
-        # by connection churn — rust's fresh peer handshakes (HELLO/SECIDENT/
-        # HASHSETREQ) vs the oracle's established, payload-only connections. The
-        # parity concern is only opcodes the ORACLE used that rust did NOT
-        # (onlyEmule). NOTE: onlyEmule can still be state/window-dependent (e.g.
-        # OP_QUEUERANKING only fires when a waiter exists), so treat it as a lead to
-        # confirm rather than a hard verdict until synchronized-action windowing
-        # scopes coverage to a shared action window.
-        if only_emule:
+        if only_rust or only_emule:
             all_ok = False
+        if only_emule:
+            oracle_ok = False
         channels.append(
             {
                 "channel": channel,
@@ -275,7 +280,7 @@ def _opcode_coverage(
                 "onlyEmule": [_op_entry(op, names, 0, emule_ops[op]) for op in only_emule],
             }
         )
-    return {"ok": all_ok, "channels": channels}
+    return {"ok": all_ok, "oracleOk": oracle_ok, "channels": channels}
 
 
 def _op_entry(
