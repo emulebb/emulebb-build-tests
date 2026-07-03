@@ -255,7 +255,16 @@ def _opcode_coverage(
         only_rust = sorted(set(rust_ops) - set(emule_ops))
         only_emule = sorted(set(emule_ops) - set(rust_ops))
         shared = sorted(set(rust_ops) & set(emule_ops))
-        if only_rust or only_emule:
+        # rust ⊇ oracle: rust exercising opcodes the oracle didn't (onlyRust) is an
+        # allowed superset, and between two independent live clients it is dominated
+        # by connection churn — rust's fresh peer handshakes (HELLO/SECIDENT/
+        # HASHSETREQ) vs the oracle's established, payload-only connections. The
+        # parity concern is only opcodes the ORACLE used that rust did NOT
+        # (onlyEmule). NOTE: onlyEmule can still be state/window-dependent (e.g.
+        # OP_QUEUERANKING only fires when a waiter exists), so treat it as a lead to
+        # confirm rather than a hard verdict until synchronized-action windowing
+        # scopes coverage to a shared action window.
+        if only_emule:
             all_ok = False
         channels.append(
             {
