@@ -32,7 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, packet_trace_diff  # noqa: E402
+from emule_test_harness import diag_event_diff, mfc_diag_adapter, packet_trace_diff  # noqa: E402
 
 RUST_BASE = "http://192.168.1.210:4731"
 RUST_KEY = "converged-soak"
@@ -160,6 +160,16 @@ def divergence(args: argparse.Namespace) -> None:
     if rust_diag and Path(rust_diag).exists() and mfc_diag_files:
         rt = _windowed_diag_trace(diag_event_diff.load_trace, [Path(rust_diag)], since)
         mt = _windowed_diag_trace(diag_event_diff.load_trace, mfc_diag_files, since)
+        # MFC keeps its richest bad-peer diagnostics in a separate bad_peer_event_v1
+        # log (different names/shape) that never reaches the converged diag stream.
+        # Adapt + window those into the diag_event_v1 bad_peer envelope so the
+        # bad_peer surface is actually diffed (otherwise it is invisible on MFC).
+        mfc_bad_peer_files = mfc_diag_adapter.find_mfc_bad_peer_logs(MFC_LOGS)
+        mt += _windowed_diag_trace(
+            lambda path: mfc_diag_adapter.bad_peer_events_as_diag_v1([path]),
+            mfc_bad_peer_files,
+            since,
+        )
         res = diag_event_diff.diff_traces(rt, mt)
         report["diag_event"] = res
         print(f"\n-- diag_event families (overall ok={res['ok']}, rustRecs={len(rt)} mfcRecs={len(mt)}) --")
