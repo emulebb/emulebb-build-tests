@@ -786,6 +786,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip pre-seeding Rust metadata from the MFC profile's config/known.met before launch.",
     )
     parser.add_argument(
+        "--rust-reveal-identity",
+        action="store_true",
+        help=(
+            "Publish the emulebb-rust mod identity in the eD2K hello (CT_MOD_VERSION). "
+            "Default (off) impersonates a stock eMule Community 0.7-series client."
+        ),
+    )
+    parser.add_argument(
         "--mfc-shared-files-inventory",
         help=(
             "Optional JSON captured from MFC /api/v1/shared-files. When present, "
@@ -1239,6 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
             server_met_url=args.server_met_url, server_endpoint=args.rust_server, obfuscation=obfuscation,
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
+            publish_emule_rust_identity=args.rust_reveal_identity,
         )
         mfc_handles = bring_up_mfc(
             live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,

@@ -42,6 +42,7 @@ def write_rust_config(
     kad_hello_intro_interval_secs: int = 1,
     kad_hello_intro_fanout: int = 4,
     enable_udp_reask: bool = False,
+    publish_emule_rust_identity: bool = False,
     upload_active_slots: int | None = None,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
@@ -90,6 +91,11 @@ def write_rust_config(
                 f"connectTimeoutSecs = {connect_timeout_secs}",
                 f"reconnectIntervalSecs = {reconnect_interval_secs}",
                 f"enableUdpReask = {str(enable_udp_reask).lower()}",
+                # Client identity on the wire: false (default) impersonates a stock
+                # eMule Community 0.7-series client (6-tag hello, no CT_MOD_VERSION);
+                # true publishes the emulebb-rust mod identity. Kept explicit so the
+                # impersonation choice is visible + flippable per soak run.
+                f"publishEmuleRustIdentity = {str(publish_emule_rust_identity).lower()}",
                 "",
             ]
         )

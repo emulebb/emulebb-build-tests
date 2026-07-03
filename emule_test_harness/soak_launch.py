@@ -500,6 +500,7 @@ def bring_up_rust(
     ed2k_port: int = RUST_ED2K_PORT,
     kad_port: int = RUST_KAD_PORT,
     enable_udp_reask: bool = True,
+    publish_emule_rust_identity: bool = False,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent runtime and returns live handles.
 
@@ -531,6 +532,7 @@ def bring_up_rust(
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_udp_reask,
+        publish_emule_rust_identity=publish_emule_rust_identity,
     )
     with config_path.open("a", encoding="utf-8") as cfg:
         cfg.write("\n[nat]\nenabled = true\n")
