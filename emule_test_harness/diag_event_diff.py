@@ -117,6 +117,13 @@ _DELIBERATE_ORACLE_KEY_OMISSIONS: dict[str, frozenset[str]] = {
 # artifact, not a rust ⊇ oracle gap — never a conformance violation. Keyed by family.
 _CONDITIONAL_ORACLE_BODY_KEYS: dict[str, frozenset[str]] = {
     "sched": frozenset({"firstSkipReason"}),
+    # MFC overloads the kad_event "lookup" event across milestones (search lookups,
+    # kad_request_flood anti-flood drops, ...) with different bodies; `reason` appears
+    # only on the flood/error milestones, which rust emits under a DISTINCT event name
+    # (`anti_flood_drop`), not on its search-lookup event. So a window where MFC logged
+    # a lookup-with-reason while rust's lookups had none is a schema-overload sampling
+    # artifact, not a rust ⊇ oracle gap.
+    "kad_event": frozenset({"reason"}),
 }
 
 
