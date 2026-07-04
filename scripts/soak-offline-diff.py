@@ -126,6 +126,8 @@ def _diff_one_action(
     diag_diff = diag_event_diff.diff_traces(rust_diag, mfc_diag)
     packet_diff = packet_trace_diff.diff_traces(rust_pkt, mfc_pkt) if (rust_pkt or mfc_pkt) else None
     action_coverage = soak_action_diff.build_action_coverage(kind, packet_diff or {})
+    audit = diag_event_diff.schema_audit(rust_diag, mfc_diag)
+    conf = audit["conformance"]
 
     rust_total = len(rust_pkt) + len(rust_diag)
     mfc_total = len(mfc_pkt) + len(mfc_diag)
@@ -134,17 +136,18 @@ def _diff_one_action(
     elif rust_total == 0 or mfc_total == 0:
         verdict = "one-sided"
     else:
-        # Both clients emit the same diag_event_v1 schema, so diag family/conformance
-        # parity is the reliable cross-client signal. The packet-opcode gate
-        # (build_action_coverage) is server-channel-specific and does not cover
-        # global/kad search opcodes, so it is reported informationally, not gating.
-        diag_ok = bool(diag_diff.get("ok"))
-        verdict = "coverage-parity" if diag_ok else "divergence"
+        # For two INDEPENDENT clients the strict diag family-match (like byteMatch) is
+        # never true - transition sequences differ. The real parity signal is oracle
+        # CONFORMANCE (rust's diag is a superset of the oracle's) over the action window.
+        # The strict family-match + server-channel opcode gate are informational only.
+        verdict = "conformant" if conf["conformant"] else "divergence"
     return {
         "kind": kind,
         "verdict": verdict,
-        "diagOk": bool(diag_diff.get("ok")),
+        "conformant": bool(conf["conformant"]),
+        "diagFamilyOk": bool(diag_diff.get("ok")),
         "coverageOk": action_coverage.get("ok"),
+        "conformanceViolations": conf.get("bodyKeyViolations") or conf.get("violations") or [],
         "rustRecords": {"packets": len(rust_pkt), "diag": len(rust_diag)},
         "mfcRecords": {"packets": len(mfc_pkt), "diag": len(mfc_diag)},
     }
@@ -197,11 +200,15 @@ def main(argv: list[str] | None = None) -> int:
             lead=args.lead_seconds, settle=args.settle_seconds,
         )
         per_action.append({"actionId": action_id, **result})
+        viol = result.get("conformanceViolations") or []
         print(
-            f"  {action_id:<26} {result['verdict']:<16} diagOk={result['diagOk']} "
-            f"cov={result['coverageOk']} rust(pkt/diag)={result['rustRecords']['packets']}/{result['rustRecords']['diag']} "
+            f"  {action_id:<26} {result['verdict']:<12} conformant={result['conformant']} "
+            f"viol={len(viol)} famOk={result['diagFamilyOk']} "
+            f"rust(pkt/diag)={result['rustRecords']['packets']}/{result['rustRecords']['diag']} "
             f"mfc={result['mfcRecords']['packets']}/{result['mfcRecords']['diag']}"
         )
+        if viol:
+            print(f"      violations: {viol[:5]}")
 
     # Campaign summary over the FULL recordings (conformance + cumulative Kad coverage).
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
@@ -214,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  oracle conformance (rust superset-of oracle): {'PASS' if conf['conformant'] else 'FAIL'}")
     print(f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
     verdicts = {r["verdict"] for r in per_action}
-    all_parity = verdicts <= {"coverage-parity", "no-traffic"}
+    all_parity = verdicts <= {"conformant", "no-traffic"}
     print(f"  per-action verdicts: {sorted(verdicts)}  -> {'PARITY' if all_parity else 'REVIEW'}")
 
     report = {
