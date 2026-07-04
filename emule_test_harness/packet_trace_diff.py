@@ -340,57 +340,92 @@ def kad_opcode_coverage(
     rust_records: list[dict[str, Any]],
     emule_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Per-direction Kad opcode-set coverage (the byte-level ``kad_udp`` diag diff
-    keys on ``decodedHex`` and never aligns for independent clients; this is the
-    live-meaningful Kad parity signal — which KADEMLIA2_* opcodes each client
-    exercises). Same rust-superset semantics as :func:`_opcode_coverage`: ``ok`` is
-    strict (no one-sided), ``oracleOk`` fails only on ``onlyEmule`` (a Kad opcode the
-    oracle used that rust did not)."""
+    """Direction-combined Kad opcode-set coverage — which KADEMLIA2_* opcodes each
+    client *exercises*, the live-meaningful Kad parity signal (the byte-level
+    ``kad_udp`` diag diff keys on ``decodedHex`` and never aligns for independent
+    clients).
+
+    The verdict is computed on the union of both directions per client, NOT
+    per-direction. A per-direction comparison of two INDEPENDENT clients is not a
+    protocol-parity signal: a request opcode is ``send`` on the initiator but ``recv``
+    on the responder, and each client's inbound (``recv``) traffic — and the responses
+    it emits — is network-driven (who chose it as a target), not client-driven. So a
+    client that publishes a key emits ``PUBLISH_KEY_REQ`` on ``send`` while its peer
+    sees the same opcode on ``recv``; splitting by direction reported that as a false
+    gap even though both clients exercise the opcode. Opcode-exercise is also a
+    cumulative property (low-frequency opcodes — buddy, firewall, search-source — need
+    not recur in every narrow window), so feed this the widest trace available rather
+    than a short slice.
+
+    Same rust-superset semantics as :func:`_opcode_coverage`: ``ok`` is strict (no
+    one-sided), ``oracleOk`` fails only on ``onlyEmule`` (an opcode the oracle exercised
+    that rust did not, in either direction). ``directions`` is retained as informational
+    per-direction detail only."""
 
     by_dir: dict[str, dict[str, dict[Any, int]]] = {}
+    rust_all: dict[Any, int] = {}
+    emule_all: dict[Any, int] = {}
     names: dict[Any, str] = {}
     for side, records in (("rust", rust_records), ("emule", emule_records)):
+        combined = rust_all if side == "rust" else emule_all
         for record in records:
             opcode = _kad_opcode(record)
             if opcode is None:
                 continue
             slot = by_dir.setdefault(_kad_direction(record), {"rust": {}, "emule": {}})[side]
             slot[opcode] = slot.get(opcode, 0) + 1
+            combined[opcode] = combined.get(opcode, 0) + 1
             name = record.get("opcode_name") or (record.get("body") or {}).get("opcodeName")
             if name and opcode not in names:
                 names[opcode] = name
 
+    def entry(opcode: Any, rust_n: int, emule_n: int) -> dict[str, Any]:
+        return {
+            "opcode": opcode,
+            "opcodeName": names.get(opcode),
+            "rustCount": rust_n,
+            "emuleCount": emule_n,
+        }
+
+    # Informational per-direction breakdown (NOT used for the verdict).
     directions: list[dict[str, Any]] = []
-    all_ok = True
-    oracle_ok = True
     for direction, sides in sorted(by_dir.items()):
         rust_ops = sides["rust"]
         emule_ops = sides["emule"]
-        only_rust = sorted(set(rust_ops) - set(emule_ops), key=str)
-        only_emule = sorted(set(emule_ops) - set(rust_ops), key=str)
-        shared = sorted(set(rust_ops) & set(emule_ops), key=str)
-        if only_rust or only_emule:
-            all_ok = False
-        if only_emule:
-            oracle_ok = False
-
-        def entry(opcode: Any, rust_n: int, emule_n: int) -> dict[str, Any]:
-            return {
-                "opcode": opcode,
-                "opcodeName": names.get(opcode),
-                "rustCount": rust_n,
-                "emuleCount": emule_n,
-            }
-
         directions.append(
             {
                 "direction": direction,
-                "shared": [entry(op, rust_ops[op], emule_ops[op]) for op in shared],
-                "onlyRust": [entry(op, rust_ops[op], 0) for op in only_rust],
-                "onlyEmule": [entry(op, 0, emule_ops[op]) for op in only_emule],
+                "shared": [
+                    entry(op, rust_ops[op], emule_ops[op])
+                    for op in sorted(set(rust_ops) & set(emule_ops), key=str)
+                ],
+                "onlyRust": [
+                    entry(op, rust_ops[op], 0)
+                    for op in sorted(set(rust_ops) - set(emule_ops), key=str)
+                ],
+                "onlyEmule": [
+                    entry(op, 0, emule_ops[op])
+                    for op in sorted(set(emule_ops) - set(rust_ops), key=str)
+                ],
             }
         )
-    return {"ok": all_ok, "oracleOk": oracle_ok, "directions": directions}
+
+    # Direction-combined verdict: an opcode is exercised by a client if seen in either
+    # direction. This is the actual parity question.
+    only_rust = sorted(set(rust_all) - set(emule_all), key=str)
+    only_emule = sorted(set(emule_all) - set(rust_all), key=str)
+    shared = sorted(set(rust_all) & set(emule_all), key=str)
+    combined = {
+        "shared": [entry(op, rust_all[op], emule_all[op]) for op in shared],
+        "onlyRust": [entry(op, rust_all[op], 0) for op in only_rust],
+        "onlyEmule": [entry(op, 0, emule_all[op]) for op in only_emule],
+    }
+    return {
+        "ok": not (only_rust or only_emule),
+        "oracleOk": not only_emule,
+        "combined": combined,
+        "directions": directions,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -40,6 +40,9 @@ MFC_BASE = "http://192.168.1.210:4732"
 MFC_KEY = "converged-soak-mfc"
 RUNTIME_DUMP = Path(r"C:\var\build\emulebb_out\soak\rust-runtime\packet-dump")
 MFC_LOGS = Path(r"F:\M\H06T01\dldz\EMULE_BIN\logs")
+# Sentinel "since" that keeps every record — used to load a full (unwindowed) trace
+# for the cumulative Kad opcode-coverage signal.
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
 MONITOR_HB = Path(r"C:\var\build\emulebb_out\soak\parity-monitor\upload-parity-monitor.heartbeat.txt")
 
 DIAG_EVENTS = ("anti_flood_ban", "repeat_block_request", "repeat_file_request", "source_count", "reask_sent")
@@ -176,19 +179,22 @@ def divergence(args: argparse.Namespace) -> None:
         for fam in res["families"]:
             flag = "ok" if fam.get("ok") else "DIVERGENT"
             print(f"  [{flag}] {fam.get('family')} ({fam.get('strategy')}): {_one_sided(fam)}")
-        # Kad opcode coverage: the byte-level kad_udp diag diff keys on decodedHex and
-        # never aligns for two independent live clients; this is the live-meaningful
-        # Kad parity signal (which KADEMLIA2_* opcodes each client exercises).
+        # Kad opcode coverage: direction-combined + CUMULATIVE (see
+        # packet_trace_diff.kad_opcode_coverage). Which KADEMLIA2_* opcodes each client
+        # exercises is a cumulative capability, not a per-window one, and recv traffic is
+        # network-driven — so feed rust its FULL session jsonl (one cheap file, loaded
+        # unwindowed) rather than the narrow slice, so low-frequency opcodes
+        # (buddy/firewall/search-source) it does exercise are not falsely flagged. MFC's
+        # window sample is the parity reference.
+        rust_kad_all = packet_trace_diff.kad_records(
+            _windowed_diag_trace(diag_event_diff.load_trace, [Path(rust_diag)], _EPOCH)
+        )
         kad_cov = packet_trace_diff.kad_opcode_coverage(
-            packet_trace_diff.kad_records(rt), packet_trace_diff.kad_records(mt)
+            rust_kad_all, packet_trace_diff.kad_records(mt)
         )
         report["kad_opcode_coverage"] = kad_cov
         kad_gaps = sorted(
-            {
-                str(e["opcodeName"] or e["opcode"])
-                for direction in kad_cov["directions"]
-                for e in direction["onlyEmule"]
-            }
+            {str(e["opcodeName"] or e["opcode"]) for e in kad_cov["combined"]["onlyEmule"]}
         )
         print(f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
         # Defensive-measure runtime usefulness: per bad_peer event type, how many times
