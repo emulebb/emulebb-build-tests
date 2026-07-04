@@ -260,7 +260,8 @@ def main(argv: list[str] | None = None) -> int:
 
     handles: dict | None = None
     base_url = ""
-    dump_dir: Path
+    dump_dir: Path = report_dir / "dumps"
+    results_meta: dict = {}
     run_start = time.time()
     try:
         if client == "rust":
@@ -318,20 +319,12 @@ def main(argv: list[str] | None = None) -> int:
         log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
         time.sleep(args.settle_seconds)
 
-        (report_dir / "results.json").write_text(
-            json.dumps(
-                {
-                    "client": client, "campaign": campaign, "baseUrl": base_url,
-                    "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
-                    "restPort": rest_port, "obfuscation": obfuscation,
-                    "actionResults": results, "runStartEpoch": run_start, "runEndEpoch": time.time(),
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        copied = gather_recording(dump_dir, report_dir / "dumps", run_start)
-        log(f"gathered {copied} dump file(s) for the recording")
+        results_meta = {
+            "client": client, "campaign": campaign, "baseUrl": base_url,
+            "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
+            "restPort": rest_port, "obfuscation": obfuscation,
+            "actionResults": results, "runStartEpoch": run_start, "runEndEpoch": time.time(),
+        }
     finally:
         if handles is not None:
             if client == "rust" and handles.get("process") is not None:
@@ -354,7 +347,21 @@ def main(argv: list[str] | None = None) -> int:
                         handles["app"].kill()
                     except Exception:  # noqa: BLE001
                         pass
+            # MFC persists + flushes its logs on the clean save-and-exit; give it a moment.
+            if client == "mfc":
+                time.sleep(6.0)
 
+    # Gather AFTER shutdown: rust batches diag/packet writes (the REST-starvation fix),
+    # so the buffered action-window records only hit disk on the graceful teardown flush.
+    if results_meta:
+        (report_dir / "results.json").write_text(json.dumps(results_meta, indent=2), encoding="utf-8")
+    dumps_dest = report_dir / "dumps"
+    if dump_dir.resolve() != dumps_dest.resolve():
+        copied = gather_recording(dump_dir, dumps_dest, run_start)  # MFC: external profile logs
+        log(f"gathered {copied} dump file(s) for the recording")
+    else:
+        in_place = len(list(dumps_dest.glob("*"))) if dumps_dest.exists() else 0
+        log(f"recording dumps in place (post-flush): {in_place} file(s)")
     archive = pack_recording(report_dir)
     log(f"recording packed: {archive}")
     return 0
