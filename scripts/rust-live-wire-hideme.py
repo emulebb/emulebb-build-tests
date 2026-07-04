@@ -713,8 +713,12 @@ def share_directories(base_url: str, roots: list[object]) -> dict[str, Any]:
         return {"shared": False, "reason": "no shared_directories.roots in inputs"}
     normalized = [_normalize_shared_root_entry(root) for root in roots]
     body = {"confirmReplaceRoots": True, "roots": normalized}
+    # The shared-directories PATCH triggers the large-library reload, which
+    # transiently starves REST at startup (63k-file profile); REST recovers once the
+    # reload settles. Retry patiently so a fresh launch rides out that window instead
+    # of failing after 2 quick attempts.
     result = retry_http_json(
-        "share dirs", 2, base_url, "/api/v1/shared-directories",
+        "share dirs", 10, base_url, "/api/v1/shared-directories",
         api_key=API_KEY, method="PATCH", body=body,
     )
     log(f"shared {len(normalized)} directory root(s) from live-wire inputs")
