@@ -197,6 +197,32 @@ def divergence(args: argparse.Namespace) -> None:
             {str(e["opcodeName"] or e["opcode"]) for e in kad_cov["combined"]["onlyEmule"]}
         )
         print(f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
+        # Download-parallelism parity (rotation-robust): the latest source_count body from
+        # each side's already-windowed trace. MFC's rapidly-rotated diag logs are gathered
+        # + concatenated above (mfc_diag_files -> mt), so this is NOT subject to the
+        # mid-rotation misses / wrong-glob hits that ad-hoc single-file reads suffer.
+        # validSourceCount >> transferringSourceCount is the stall signature (many engaged
+        # sources, few actually moving bytes).
+        def _latest_source_count(trace: list[dict]) -> dict | None:
+            for record in reversed(trace):
+                if record.get("event") == "source_count":
+                    return record.get("body") or {}
+            return None
+
+        rust_sc = _latest_source_count(rt)
+        mfc_sc = _latest_source_count(mt)
+        report["source_count"] = {"rust": rust_sc, "mfc": mfc_sc}
+        print("\n-- source_count (download parallelism, latest in window) --")
+        for label, sc in (("rust", rust_sc), ("mfc", mfc_sc)):
+            if sc is None:
+                print(f"  {label}: (none in window)")
+            else:
+                print(
+                    f"  {label}: sourceCount={sc.get('sourceCount')} "
+                    f"valid={sc.get('validSourceCount')} "
+                    f"transferring={sc.get('transferringSourceCount')} "
+                    f"a4afFiles={sc.get('a4afFileCount')}"
+                )
         # Defensive-measure runtime usefulness: per bad_peer event type, how many times
         # each side fired it this window. A measure with rust=0 is either not yet ported
         # or catches no abuse in this window; high counts = high live usefulness. This is
