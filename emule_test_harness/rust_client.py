@@ -44,8 +44,16 @@ def write_rust_config(
     enable_udp_reask: bool = False,
     publish_emule_rust_identity: bool = False,
     upload_active_slots: int | None = None,
+    vpn_guard_mode: str = "off",
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
-    """Writes a minimal eMuleBB Rust config for local harness runs."""
+    """Writes a minimal eMuleBB Rust config for local harness runs.
+
+    ``vpn_guard_mode`` (``off`` / ``block``) + ``vpn_guard_allowed_public_ip_cidrs``
+    populate the ``[vpnGuard]`` section: ``block`` fails the P2P data plane closed
+    when the tunnel binding is lost, and the CIDR allowlist validates the public
+    exit (VpnGuardSettings, emulebb-daemon/src/lib.rs).
+    """
 
     lines = [
         f'runtimeDir = "{runtime_dir.as_posix()}"',
@@ -115,6 +123,19 @@ def write_rust_config(
                     "",
                 ]
             )
+    # VPN Guard: activate the fail-closed data-plane guard + public-exit CIDR
+    # allowlist for public live-test runs (workspace Live Test Network Policy).
+    guard_mode = (vpn_guard_mode or "off").strip().lower()
+    guard_enabled = guard_mode == "block"
+    lines.extend(
+        [
+            "[vpnGuard]",
+            f"enabled = {str(guard_enabled).lower()}",
+            f'mode = "{"block" if guard_enabled else "off"}"',
+            f"allowedPublicIpCidrs = {json.dumps(vpn_guard_allowed_public_ip_cidrs or '')}",
+            "",
+        ]
+    )
     path.write_text("\n".join(lines), encoding="utf-8")
 
 

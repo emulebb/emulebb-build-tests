@@ -49,7 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import diag_event_diff, live_process_monitor, mfc_known_met, packet_trace_diff
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
-from emule_test_harness import soak_launch
+from emule_test_harness import soak_launch, vpn_exit_check, vpn_guard_live
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
@@ -161,18 +161,28 @@ def transfer_exists(
     return bool(_api_data(payload))
 
 
-def safe_common_download_candidate(
+def _row_sources(row: dict[str, Any]) -> int:
+    return int(row.get("sources") or row.get("completeSources") or 0)
+
+
+def top_common_download_candidates(
     rust_rows: list[dict[str, Any]],
     mfc_rows: list[dict[str, Any]],
     *,
     rust_mod: Any,
+    limit: int | None = None,
     existing_hashes: set[str] | None = None,
     existing_probe: Callable[[str], bool] | None = None,
-) -> dict[str, Any] | None:
-    """Selects one safe, not-yet-present result hash from both search pages."""
+    prefer_hashes: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Safe, not-yet-present results common to both search pages, most-sourced
+    first. ``prefer_hashes`` (deterministic fixtures) sort ahead of the rest so a
+    re-run picks the same files; within each group the order is source count
+    desc, then smaller size. ``limit`` caps the returned list."""
 
     mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
     existing_hashes = {item.strip().lower() for item in (existing_hashes or set()) if item}
+    prefer_hashes = {item.strip().lower() for item in (prefer_hashes or set()) if item}
     candidates: list[dict[str, Any]] = []
     for row in rust_rows:
         file_hash = _row_hash(row)
@@ -184,15 +194,35 @@ def safe_common_download_candidate(
             continue
         if rust_mod.safe_download_rejection_reason(row) is None:
             candidates.append(row)
-    if not candidates:
-        return None
-    return max(
-        candidates,
+    candidates.sort(
         key=lambda row: (
-            int(row.get("sources") or row.get("completeSources") or 0),
-            -int(row.get("sizeBytes") or row.get("size") or 0),
-        ),
+            0 if _row_hash(row) in prefer_hashes else 1,
+            -_row_sources(row),
+            int(row.get("sizeBytes") or row.get("size") or 0),
+        )
     )
+    return candidates if limit is None else candidates[: max(0, limit)]
+
+
+def safe_common_download_candidate(
+    rust_rows: list[dict[str, Any]],
+    mfc_rows: list[dict[str, Any]],
+    *,
+    rust_mod: Any,
+    existing_hashes: set[str] | None = None,
+    existing_probe: Callable[[str], bool] | None = None,
+) -> dict[str, Any] | None:
+    """Selects one safe, not-yet-present, most-sourced result common to both."""
+
+    top = top_common_download_candidates(
+        rust_rows,
+        mfc_rows,
+        rust_mod=rust_mod,
+        limit=1,
+        existing_hashes=existing_hashes,
+        existing_probe=existing_probe,
+    )
+    return top[0] if top else None
 
 
 def create_search(base_url: str, api_key: str, *, query: str, method: str) -> str:
@@ -256,6 +286,155 @@ def trigger_download(base_url: str, api_key: str, search_id: str, file_hash: str
     except RuntimeError:
         pass
     return download
+
+
+def validate_vpn_exit(
+    *,
+    bind_ip: str,
+    allowed_cidrs: str,
+    rust_base: str,
+    mfc_base: str,
+    rust_mod: Any,
+    live_common: Any,
+    skip: bool,
+) -> dict[str, Any]:
+    """Confirm both clients egress only through the hide.me tunnel.
+
+    Resolves the tunnel's public exit IP two ways (STUN + HTTP, source-bound to
+    ``bind_ip``) and asserts they agree inside ``allowed_cidrs``; cross-checks each
+    client's REST-reported public IP against the same allowlist. ``ok`` is False on
+    any inconsistency or out-of-allowlist address (a clearnet leak)."""
+
+    if skip:
+        return {"ok": True, "skipped": True, "tunnel": {}, "clients": {}, "reasons": ["exit check skipped"]}
+    tunnel = vpn_exit_check.validate_exit_ip(bind_ip, allowed_cidrs, label="hide.me tunnel")
+    reasons = list(tunnel["reasons"])
+    clients: dict[str, Any] = {}
+    client_leak = False
+    for name, base, key in (("rust", rust_base, RUST_API_KEY), ("mfc", mfc_base, MFC_API_KEY)):
+        status: dict[str, Any] = {}
+        try:
+            data = _api_data(
+                retry_http_json(f"{name} status", 2, base, "/api/v1/status", api_key=key, timeout_seconds=20.0)
+            )
+            status = data if isinstance(data, dict) else {}
+        except RuntimeError:
+            status = {}
+        public_ip = vpn_exit_check.rest_reported_public_ip(status)
+        in_allow = bool(public_ip and vpn_exit_check.ipv4_in_cidrs(public_ip, allowed_cidrs))
+        clients[name] = {"publicIp": public_ip, "inAllowlist": in_allow}
+        # A REST-reported public IP OUTSIDE the allowlist is a definite leak. No
+        # reported IP (pre-HighID) is fine — the tunnel STUN+HTTP check covers it.
+        if public_ip and not in_allow:
+            reasons.append(f"{name} REST public IP {public_ip} is outside the hide.me allowlist")
+            client_leak = True
+    return {
+        "ok": bool(tunnel["ok"] and not client_leak),
+        "skipped": False,
+        "tunnel": tunnel,
+        "clients": clients,
+        "reasons": reasons,
+    }
+
+
+def load_deterministic_fixtures(inputs_path: Path) -> list[dict[str, Any]]:
+    """Return the recorded well-sourced linux fixtures (hash-bearing rows)."""
+
+    data = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
+    section = data.get("deterministic_downloads") or {}
+    fixtures = section.get("fixtures")
+    if not isinstance(fixtures, list):
+        return []
+    return [row for row in fixtures if isinstance(row, dict) and str(row.get("hash") or "").strip()]
+
+
+def capture_deterministic_fixtures(
+    inputs_path: Path, downloaded: list[dict[str, Any]], *, min_sources: int
+) -> list[dict[str, Any]]:
+    """Merge freshly downloaded most-sourced linux rows into
+    ``deterministic_downloads.fixtures`` (kept sorted by sources, capped at
+    ``target_count``) and write the inputs file back so re-runs are deterministic."""
+
+    data = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
+    section = data.setdefault("deterministic_downloads", {})
+    target = int(section.get("target_count") or 12)
+    existing_rows = section.get("fixtures") if isinstance(section.get("fixtures"), list) else []
+    merged: dict[str, dict[str, Any]] = {}
+    for row in existing_rows:
+        if isinstance(row, dict) and str(row.get("hash") or "").strip():
+            merged[str(row["hash"]).strip().lower()] = row
+    for row in downloaded:
+        file_hash = _row_hash(row)
+        if not file_hash or _row_sources(row) < min_sources:
+            continue
+        merged[file_hash] = {
+            "name": row.get("name"),
+            "hash": file_hash,
+            "size": row.get("sizeBytes") or row.get("size"),
+            "sources": _row_sources(row),
+        }
+    ordered = sorted(merged.values(), key=lambda row: -int(row.get("sources") or 0))[:target]
+    section["fixtures"] = ordered
+    section["captured_at"] = datetime.now(timezone.utc).isoformat()
+    inputs_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return ordered
+
+
+def seed_linux_downloads(
+    *,
+    inputs_path: Path,
+    rust_base: str,
+    mfc_base: str,
+    rust_mod: Any,
+    terms: list[str],
+    target_count: int,
+    search_timeout_seconds: float,
+    min_sources: int,
+    search_interval: float,
+) -> dict[str, Any]:
+    """Trigger the N most-sourced common linux downloads on both clients and
+    record them as deterministic fixtures. Fixture hashes from a prior run sort
+    first (same files re-tested); a term is only searched if we still need more,
+    spaced by the gentle ``search_interval``."""
+
+    prefer = {str(row.get("hash") or "").strip().lower() for row in load_deterministic_fixtures(inputs_path)}
+    scheduled: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, term in enumerate(terms):
+        if len(scheduled) >= target_count:
+            break
+        if index > 0:
+            time.sleep(search_interval)  # be-gentle: space public searches
+        rust_search_id = create_search(rust_base, RUST_API_KEY, query=term, method="automatic")
+        mfc_search_id = create_search(mfc_base, MFC_API_KEY, query=term, method="automatic")
+        rust_rows = poll_search_results(rust_base, RUST_API_KEY, rust_search_id, timeout_seconds=search_timeout_seconds)
+        mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
+        top = top_common_download_candidates(
+            rust_rows, mfc_rows, rust_mod=rust_mod, existing_hashes=seen, prefer_hashes=prefer
+        )
+        for row in top:
+            if len(scheduled) >= target_count:
+                break
+            file_hash = _row_hash(row)
+            if not file_hash or file_hash in seen:
+                continue
+            seen.add(file_hash)
+            try:
+                trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash)
+                trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash)
+            except RuntimeError:
+                continue
+            scheduled.append(row)
+    captured = capture_deterministic_fixtures(inputs_path, scheduled, min_sources=min_sources)
+    return {
+        "requested": target_count,
+        "scheduledCount": len(scheduled),
+        "capturedCount": len(captured),
+        "reusedFixtureCount": len(prefer),
+        "downloads": [
+            {"name": row.get("name"), "hash": _row_hash(row), "sources": _row_sources(row)} for row in scheduled
+        ],
+    }
 
 
 def drive_automatic_cycle(
@@ -787,6 +966,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL fallback when no local nodes.dat is selected.")
     parser.add_argument("--nodes-file", help="Optional local nodes.dat to seed Rust Kad bootstrap; defaults to the MFC profile file when available.")
+    parser.add_argument(
+        "--vpn-guard-config",
+        help="Path to vpn-guard-live.local.json (hide.me public-exit CIDR allowlist + interface). "
+        "Defaults to vpn-guard-live.local.json beside --inputs.",
+    )
+    parser.add_argument(
+        "--skip-vpn-exit-check",
+        action="store_true",
+        help="Skip the HTTP+STUN public-exit validation (NOT for a release-gate soak).",
+    )
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
     parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
@@ -829,6 +1018,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-download-every", type=int, default=2, help="Start one common safe download every N automated search cycles; 0 disables.")
     parser.add_argument("--auto-download-delay", type=float, default=90.0, help="Seconds to wait after selecting a download candidate before starting it.")
     parser.add_argument("--auto-max-cycles", type=int, default=0, help="Maximum automated cycles; 0 means bounded only by --duration/quit.")
+    parser.add_argument(
+        "--seed-downloads",
+        type=int,
+        default=12,
+        help="After VPN validation, trigger the N most-sourced common linux downloads on both clients "
+        "(the deterministic-download seed) and record them in deterministic_downloads; 0 disables.",
+    )
+    parser.add_argument(
+        "--seed-search-profile",
+        default="generic_open",
+        help="live-wire search_terms profile used to discover the seed downloads.",
+    )
+    parser.add_argument(
+        "--seed-min-sources",
+        type=int,
+        default=5,
+        help="Minimum source count for a discovered file to be captured as a deterministic fixture.",
+    )
     return parser
 
 
@@ -1067,6 +1274,24 @@ def main(argv: list[str] | None = None) -> int:
     shared_dirs_mod = mods["shared_dirs"]
 
     inputs_path = Path(args.inputs).resolve()
+    # VPN Guard live config: the hide.me public-exit CIDR allowlist that both
+    # clients enforce (fail-closed) and that the HTTP+STUN check validates against.
+    vpn_guard_config_path = (
+        Path(args.vpn_guard_config).resolve()
+        if args.vpn_guard_config
+        else inputs_path.parent / "vpn-guard-live.local.json"
+    )
+    if not vpn_guard_config_path.is_file():
+        raise RuntimeError(
+            f"VPN guard config not found: {vpn_guard_config_path} "
+            "(required for a public soak; pass --vpn-guard-config)."
+        )
+    vpn_guard_cfg = vpn_guard_live.load_config(vpn_guard_config_path)
+    vpn_guard_cidrs = str(vpn_guard_cfg.get("allowedPublicIpCidrs") or "").strip()
+    if not vpn_guard_cidrs:
+        raise RuntimeError(
+            f"{vpn_guard_config_path} has no allowedPublicIpCidrs (hide.me exit CIDRs required)."
+        )
     mfc_profile_dir = Path(args.mfc_profile_dir).resolve() if args.mfc_profile_dir else None
     if mfc_profile_dir is None:
         # Fall back to the operator-configured persisted MFC profile from live-wire
@@ -1261,6 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             publish_emule_rust_identity=args.rust_reveal_identity,
+            vpn_guard_mode="block", vpn_guard_allowed_public_ip_cidrs=vpn_guard_cidrs,
         )
         mfc_handles = bring_up_mfc(
             live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,
@@ -1271,6 +1497,7 @@ def main(argv: list[str] | None = None) -> int:
             log_trim_bytes=args.log_trim_bytes, timeouts=timeouts,
             ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
             server_udp_port=args.mfc_server_udp_port,
+            vpn_guard_mode="block", vpn_guard_allowed_public_ip_cidrs=vpn_guard_cidrs,
         )
 
         rust_proc = rust_handles["process"]
@@ -1285,6 +1512,62 @@ def main(argv: list[str] | None = None) -> int:
         # rust config auto-connects its server but MFC is otherwise serverless.
         ensure_operator_and_kad(rust_base, RUST_API_KEY, "rust")
         ensure_operator_and_kad(mfc_base, MFC_API_KEY, "mfc")
+
+        # VPN exit-IP validation (release-gate leak check): confirm both clients
+        # egress ONLY through the hide.me tunnel. Resolve the public exit IP two
+        # independent ways from the tunnel bind IP (STUN + HTTP) and assert both
+        # agree and land inside the hide.me allowlist; also cross-check each
+        # client's REST-reported public IP. Any exit outside the allowlist is a
+        # clearnet leak and aborts the soak (evidence recorded first).
+        vpn_exit = validate_vpn_exit(
+            bind_ip=bind_ip,
+            allowed_cidrs=vpn_guard_cidrs,
+            rust_base=rust_base,
+            mfc_base=mfc_base,
+            rust_mod=rust_mod,
+            live_common=live_common,
+            skip=bool(args.skip_vpn_exit_check),
+        )
+        summary["vpnExitValidation"] = vpn_exit
+        if not vpn_exit["ok"]:
+            raise RuntimeError(
+                "VPN exit validation FAILED (possible clearnet leak): "
+                + "; ".join(vpn_exit["reasons"])
+            )
+        log(
+            "VPN exit validated: tunnel exit "
+            f"{vpn_exit['tunnel'].get('stunIp')} in {vpn_guard_cidrs} "
+            f"(STUN+HTTP agree); rust/MFC public IPs allowlisted."
+        )
+
+        # Deterministic download seed: trigger the N most-sourced common linux
+        # files on both clients and record them so re-runs re-test the same set.
+        if args.seed_downloads > 0:
+            try:
+                seed_terms = rust_mod.load_search_terms(inputs_path, args.seed_search_profile)
+            except (RuntimeError, KeyError):
+                seed_terms = []
+            if seed_terms:
+                log(f"seeding {args.seed_downloads} most-sourced common linux downloads on both clients...")
+                seed_result = seed_linux_downloads(
+                    inputs_path=inputs_path,
+                    rust_base=rust_base,
+                    mfc_base=mfc_base,
+                    rust_mod=rust_mod,
+                    terms=seed_terms,
+                    target_count=args.seed_downloads,
+                    search_timeout_seconds=args.auto_search_timeout,
+                    min_sources=args.seed_min_sources,
+                    search_interval=args.auto_search_interval,
+                )
+                summary["seedDownloads"] = seed_result
+                log(
+                    f"seed downloads: {seed_result['scheduledCount']} started, "
+                    f"{seed_result['capturedCount']} deterministic fixtures recorded "
+                    f"({seed_result['reusedFixtureCount']} reused from a prior run)."
+                )
+            else:
+                log(f"seed-downloads skipped: no '{args.seed_search_profile}' search terms in inputs.")
 
         if args.trackmulebb_cmd:
             log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")

@@ -501,6 +501,8 @@ def bring_up_rust(
     kad_port: int = RUST_KAD_PORT,
     enable_udp_reask: bool = True,
     publish_emule_rust_identity: bool = False,
+    vpn_guard_mode: str = "off",
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent runtime and returns live handles.
 
@@ -533,6 +535,8 @@ def bring_up_rust(
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_udp_reask,
         publish_emule_rust_identity=publish_emule_rust_identity,
+        vpn_guard_mode=vpn_guard_mode,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
     with config_path.open("a", encoding="utf-8") as cfg:
         cfg.write("\n[nat]\nenabled = true\n")
@@ -597,6 +601,8 @@ def bring_up_mfc(
     ed2k_port: int = MFC_ED2K_PORT,
     kad_port: int = MFC_KAD_PORT,
     server_udp_port: int = MFC_SERVER_UDP_PORT,
+    vpn_guard_mode: str = "off",
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> dict[str, Any]:
     """Launches the MFC diagnostics GUI on the persistent profile (left open)."""
 
@@ -639,6 +645,18 @@ def bring_up_mfc(
         server_udp_port=server_udp_port,
     )
     rest_smoke.apply_p2p_bind_interface_override(config_dir, "hide.me")
+    # VPN Guard on the MFC profile: Block fails the P2P plane closed on bind loss
+    # and the CIDR allowlist validates the public exit (workspace Live Test
+    # Network Policy; parity with the rust [vpnGuard] config).
+    mfc_guard_cidrs = (vpn_guard_allowed_public_ip_cidrs or "").strip()
+    mfc_guard_enabled = (vpn_guard_mode or "off").strip().lower() == "block" or bool(mfc_guard_cidrs)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("VpnGuardMode", "Block" if mfc_guard_enabled else "Off"),
+            ("VpnGuardAllowedPublicIpCidrs", mfc_guard_cidrs),
+        ),
+    )
     live_common.apply_private_harness_obfuscation(config_dir, obfuscation)
     apply_mfc_soak_preferences(
         live_common=live_common,
