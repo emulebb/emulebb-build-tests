@@ -999,7 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-request timeout for steady-state REST polls (s).",
     )
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
-    parser.add_argument("--rest-timeout", type=float, default=60.0, help="Seconds to wait for each client's REST startup.")
+    parser.add_argument("--rest-timeout", type=float, default=300.0, help="Max seconds to wait for each client's REST startup (a ceiling, not a fixed wait: rust returns in seconds; MFC is slow to become REST-ready while it loads a large shared library, so this must cover that).")
     parser.add_argument("--connect-timeout", type=float, default=240.0, help="Seconds to wait for eD2K connection evidence.")
     parser.add_argument("--correlation-window", type=float, default=sad.DEFAULT_CORRELATION_WINDOW_SECONDS, help="Max gap to pair the same action across clients (s).")
     parser.add_argument("--settle-seconds", type=float, default=sad.DEFAULT_SETTLE_SECONDS, help="Window padding after an action before diffing (s).")
