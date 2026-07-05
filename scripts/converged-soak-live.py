@@ -165,6 +165,24 @@ def _row_sources(row: dict[str, Any]) -> int:
     return int(row.get("sources") or row.get("completeSources") or 0)
 
 
+def _row_name(row: dict[str, Any]) -> str:
+    return str(row.get("name") or row.get("fileName") or "")
+
+
+# Download-content policy for the linux-ISO soak: accept only genuine `.iso`
+# files, never the `.iso.torrent` files (or pdf/zip/etc.) that peers also share on
+# eD2k. `download_name_allowed` gates every candidate + seed pick.
+def download_name_allowed(name: str, required_suffix: str | None) -> bool:
+    if not required_suffix:
+        return True
+    lowered = name.strip().lower()
+    # Explicitly reject `.torrent` (incl. `foo.iso.torrent`): we want the ISO, not
+    # a torrent of it.
+    if lowered.endswith(".torrent"):
+        return False
+    return lowered.endswith(required_suffix.lower())
+
+
 def top_common_download_candidates(
     rust_rows: list[dict[str, Any]],
     mfc_rows: list[dict[str, Any]],
@@ -174,11 +192,13 @@ def top_common_download_candidates(
     existing_hashes: set[str] | None = None,
     existing_probe: Callable[[str], bool] | None = None,
     prefer_hashes: set[str] | None = None,
+    required_suffix: str | None = None,
 ) -> list[dict[str, Any]]:
     """Safe, not-yet-present results common to both search pages, most-sourced
     first. ``prefer_hashes`` (deterministic fixtures) sort ahead of the rest so a
     re-run picks the same files; within each group the order is source count
-    desc, then smaller size. ``limit`` caps the returned list."""
+    desc, then smaller size. ``required_suffix`` (e.g. ``.iso``) restricts to that
+    file type (and always rejects ``.torrent``). ``limit`` caps the returned list."""
 
     mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
     existing_hashes = {item.strip().lower() for item in (existing_hashes or set()) if item}
@@ -189,6 +209,8 @@ def top_common_download_candidates(
         if not file_hash or file_hash not in mfc_hashes:
             continue
         if file_hash in existing_hashes:
+            continue
+        if not download_name_allowed(_row_name(row), required_suffix):
             continue
         if existing_probe is not None and existing_probe(file_hash):
             continue
@@ -211,6 +233,7 @@ def safe_common_download_candidate(
     rust_mod: Any,
     existing_hashes: set[str] | None = None,
     existing_probe: Callable[[str], bool] | None = None,
+    required_suffix: str | None = None,
 ) -> dict[str, Any] | None:
     """Selects one safe, not-yet-present, most-sourced result common to both."""
 
@@ -221,6 +244,7 @@ def safe_common_download_candidate(
         limit=1,
         existing_hashes=existing_hashes,
         existing_probe=existing_probe,
+        required_suffix=required_suffix,
     )
     return top[0] if top else None
 
@@ -407,6 +431,7 @@ def seed_linux_downloads(
     search_timeout_seconds: float,
     min_sources: int,
     search_interval: float,
+    required_suffix: str | None = None,
 ) -> dict[str, Any]:
     """Trigger the N most-sourced common linux downloads on both clients and
     record them as deterministic fixtures. Fixture hashes from a prior run sort
@@ -426,7 +451,12 @@ def seed_linux_downloads(
         rust_rows = poll_search_results(rust_base, RUST_API_KEY, rust_search_id, timeout_seconds=search_timeout_seconds)
         mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
         top = top_common_download_candidates(
-            rust_rows, mfc_rows, rust_mod=rust_mod, existing_hashes=seen, prefer_hashes=prefer
+            rust_rows,
+            mfc_rows,
+            rust_mod=rust_mod,
+            existing_hashes=seen,
+            prefer_hashes=prefer,
+            required_suffix=required_suffix,
         )
         for row in top:
             if len(scheduled) >= target_count:
@@ -463,6 +493,7 @@ def drive_automatic_cycle(
     rust_mod: Any,
     download: bool,
     search_timeout_seconds: float,
+    required_suffix: str | None = None,
 ) -> dict[str, Any]:
     """Runs one gentle synchronized search and records one candidate for later download."""
 
@@ -513,6 +544,7 @@ def drive_automatic_cycle(
             rust_mod=rust_mod,
             existing_hashes=existing_hashes,
             existing_probe=existing_hash_probe,
+            required_suffix=required_suffix,
         )
         cycle["downloadExistingHashProbeSkips"] = probe_skips
         if candidate is None:
@@ -1052,6 +1084,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Minimum source count for a discovered file to be captured as a deterministic fixture.",
     )
+    parser.add_argument(
+        "--download-ext",
+        default=".iso",
+        help="Restrict downloads (seed + auto-drive) to this file suffix; always rejects .torrent. "
+        "Empty string disables the filter. Default .iso (download only genuine linux ISOs).",
+    )
     return parser
 
 
@@ -1571,6 +1609,7 @@ def main(argv: list[str] | None = None) -> int:
                     search_timeout_seconds=args.auto_search_timeout,
                     min_sources=args.seed_min_sources,
                     search_interval=args.auto_search_interval,
+                    required_suffix=args.download_ext,
                 )
                 summary["seedDownloads"] = seed_result
                 log(
@@ -1758,6 +1797,7 @@ def main(argv: list[str] | None = None) -> int:
                             rust_mod=rust_mod,
                             download=should_download,
                             search_timeout_seconds=args.auto_search_timeout,
+                            required_suffix=args.download_ext,
                         )
                     except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
                         cycle = {
