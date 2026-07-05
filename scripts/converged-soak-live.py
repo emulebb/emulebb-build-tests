@@ -49,7 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import diag_event_diff, live_process_monitor, mfc_known_met, packet_trace_diff
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
-from emule_test_harness import soak_launch, vpn_exit_check, vpn_guard_live
+from emule_test_harness import soak_launch, vpn_guard_live
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
@@ -288,53 +288,69 @@ def trigger_download(base_url: str, api_key: str, search_id: str, file_hash: str
     return download
 
 
+def read_vpn_guard(base: str, api_key: str, name: str) -> dict[str, Any]:
+    """Read one client's own VPN Guard verdict from `/api/v1/status`
+    (`data.network.vpnGuard`). The client — not this harness — runs the bound
+    HTTP+STUN egress probes and validates its public IP against the allowlist; we
+    only observe its verdict, symmetrically for rust and MFC."""
+
+    data = _api_data(
+        retry_http_json(f"{name} status", 2, base, "/api/v1/status", api_key=api_key, timeout_seconds=20.0)
+    )
+    network = data.get("network") if isinstance(data, dict) else {}
+    guard = network.get("vpnGuard") if isinstance(network, dict) else {}
+    return guard if isinstance(guard, dict) else {}
+
+
 def validate_vpn_exit(
     *,
-    bind_ip: str,
-    allowed_cidrs: str,
     rust_base: str,
     mfc_base: str,
-    rust_mod: Any,
-    live_common: Any,
     skip: bool,
 ) -> dict[str, Any]:
-    """Confirm both clients egress only through the hide.me tunnel.
-
-    Resolves the tunnel's public exit IP two ways (STUN + HTTP, source-bound to
-    ``bind_ip``) and asserts they agree inside ``allowed_cidrs``; cross-checks each
-    client's REST-reported public IP against the same allowlist. ``ok`` is False on
-    any inconsistency or out-of-allowlist address (a clearnet leak)."""
+    """Confirm both clients egress only through the hide.me tunnel by reading each
+    client's own VPN Guard verdict over REST. The client performs the bound HTTP +
+    STUN public-IP egress probes itself (eMuleBB PublicIpProbe); a client whose
+    guard is not active, is startup-blocked, or (rust) reports egress not verified
+    is a leak/misconfig and fails the gate. ``ok`` is False on any such client."""
 
     if skip:
-        return {"ok": True, "skipped": True, "tunnel": {}, "clients": {}, "reasons": ["exit check skipped"]}
-    tunnel = vpn_exit_check.validate_exit_ip(bind_ip, allowed_cidrs, label="hide.me tunnel")
-    reasons = list(tunnel["reasons"])
+        return {"ok": True, "skipped": True, "clients": {}, "reasons": ["exit check skipped"]}
+    reasons: list[str] = []
     clients: dict[str, Any] = {}
-    client_leak = False
     for name, base, key in (("rust", rust_base, RUST_API_KEY), ("mfc", mfc_base, MFC_API_KEY)):
-        status: dict[str, Any] = {}
         try:
-            data = _api_data(
-                retry_http_json(f"{name} status", 2, base, "/api/v1/status", api_key=key, timeout_seconds=20.0)
+            guard = read_vpn_guard(base, key, name)
+        except RuntimeError as exc:
+            reasons.append(f"{name}: could not read VPN Guard status ({exc})")
+            clients[name] = {"error": str(exc)}
+            continue
+        enabled = bool(guard.get("enabled"))
+        mode = str(guard.get("mode") or "").lower()
+        startup_blocked = bool(guard.get("startupBlocked"))
+        # egressVerified/egress fields are the rust (contract >=1.2.0) enrichment;
+        # MFC encodes its PublicIpProbe verdict in startupBlocked. Treat a missing
+        # egressVerified as "not asserted here" (fall back to startupBlocked).
+        egress_verified = guard.get("egressVerified")
+        clients[name] = {
+            "enabled": enabled,
+            "mode": mode,
+            "startupBlocked": startup_blocked,
+            "startupBlockReason": guard.get("startupBlockReason"),
+            "egressVerified": egress_verified,
+            "publicIp": guard.get("publicIp"),
+            "stunProbe": guard.get("stunProbe"),
+            "httpProbe": guard.get("httpProbe"),
+        }
+        if not (enabled and mode == "block"):
+            reasons.append(f"{name}: VPN Guard is not active (enabled={enabled}, mode={mode!r})")
+        if startup_blocked:
+            reasons.append(f"{name}: VPN Guard blocked — {guard.get('startupBlockReason') or 'startup blocked'}")
+        if egress_verified is False:
+            reasons.append(
+                f"{name}: egress not verified — {guard.get('egressBlockReason') or 'probe verdict failed'}"
             )
-            status = data if isinstance(data, dict) else {}
-        except RuntimeError:
-            status = {}
-        public_ip = vpn_exit_check.rest_reported_public_ip(status)
-        in_allow = bool(public_ip and vpn_exit_check.ipv4_in_cidrs(public_ip, allowed_cidrs))
-        clients[name] = {"publicIp": public_ip, "inAllowlist": in_allow}
-        # A REST-reported public IP OUTSIDE the allowlist is a definite leak. No
-        # reported IP (pre-HighID) is fine — the tunnel STUN+HTTP check covers it.
-        if public_ip and not in_allow:
-            reasons.append(f"{name} REST public IP {public_ip} is outside the hide.me allowlist")
-            client_leak = True
-    return {
-        "ok": bool(tunnel["ok"] and not client_leak),
-        "skipped": False,
-        "tunnel": tunnel,
-        "clients": clients,
-        "reasons": reasons,
-    }
+    return {"ok": not reasons, "skipped": False, "clients": clients, "reasons": reasons}
 
 
 def load_deterministic_fixtures(inputs_path: Path) -> list[dict[str, Any]]:
@@ -1520,24 +1536,20 @@ def main(argv: list[str] | None = None) -> int:
         # client's REST-reported public IP. Any exit outside the allowlist is a
         # clearnet leak and aborts the soak (evidence recorded first).
         vpn_exit = validate_vpn_exit(
-            bind_ip=bind_ip,
-            allowed_cidrs=vpn_guard_cidrs,
             rust_base=rust_base,
             mfc_base=mfc_base,
-            rust_mod=rust_mod,
-            live_common=live_common,
             skip=bool(args.skip_vpn_exit_check),
         )
         summary["vpnExitValidation"] = vpn_exit
         if not vpn_exit["ok"]:
             raise RuntimeError(
-                "VPN exit validation FAILED (possible clearnet leak): "
+                "VPN exit validation FAILED (client VPN Guard verdict): "
                 + "; ".join(vpn_exit["reasons"])
             )
+        rust_ip = vpn_exit["clients"].get("rust", {}).get("publicIp")
         log(
-            "VPN exit validated: tunnel exit "
-            f"{vpn_exit['tunnel'].get('stunIp')} in {vpn_guard_cidrs} "
-            f"(STUN+HTTP agree); rust/MFC public IPs allowlisted."
+            "VPN exit validated via each client's own VPN Guard: guards active + "
+            f"not blocked (rust egress publicIp={rust_ip}, allowlist {vpn_guard_cidrs})."
         )
 
         # Deterministic download seed: trigger the N most-sourced common linux
