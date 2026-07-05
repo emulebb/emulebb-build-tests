@@ -1056,7 +1056,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
-    parser.add_argument("--trackmulebb-cmd", help="Optional command to launch TrackMuleBB pointed at the rust REST.")
+    parser.add_argument("--trackmulebb-cmd", help="Override command to launch TrackMuleBB (default: auto-launch the bundled UI pointed at the rust REST).")
+    parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-launch TrackMuleBB alongside the soak.")
     parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches/downloads over REST.")
     parser.add_argument("--search-profile", default="generic_open", help="live-wire search_terms profile for --auto-drive.")
     parser.add_argument("--auto-method", choices=("server", "kad", "automatic"), default="server", help="Search method for --auto-drive.")
@@ -1279,6 +1280,32 @@ def resolve_kad_bootstrap_endpoints(
         "nodesDatUrl": nodes_url,
         "nodesDatFileSelected": False,
     }
+
+
+def launch_default_trackmulebb(
+    rust_base: str, api_key: str, log: Callable[[str], None]
+) -> subprocess.Popen | None:
+    """Launch the bundled TrackMuleBB UI pointed at the running rust REST.
+
+    Auto-started as part of every soak so the operator has the live visual view;
+    opt out with --no-trackmulebb, or override with --trackmulebb-cmd. A failure to
+    launch is non-fatal (TrackMuleBB is monitoring-only).
+    """
+    repo = REPO_ROOT.parent / "trackmulebb"
+    if not (repo / "pyproject.toml").exists():
+        log(f"TrackMuleBB not launched: repo not found at {repo}")
+        return None
+    env = dict(os.environ)
+    env["TRACKMULEBB_RUST_URL"] = rust_base
+    env["TRACKMULEBB_RUST_API_KEY"] = api_key
+    env["TRACKMULEBB_QBT_ENABLED"] = "false"
+    try:
+        proc = subprocess.Popen(["uv", "run", "python", "-m", "trackmulebb"], cwd=str(repo), env=env)
+    except OSError as exc:
+        log(f"TrackMuleBB launch failed: {exc}")
+        return None
+    log(f"launched TrackMuleBB (UI on X_LOCAL_IP:8770) -> rust {rust_base}")
+    return proc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1623,6 +1650,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.trackmulebb_cmd:
             log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")
             trackmulebb_proc = subprocess.Popen(args.trackmulebb_cmd, shell=True)
+        elif not args.no_trackmulebb:
+            trackmulebb_proc = launch_default_trackmulebb(rust_base, RUST_API_KEY, log)
         log("=" * 70)
         log("SOAK LIVE. Drive searches/downloads via the MFC GUI and via TrackMuleBB:")
         log(f"  rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
