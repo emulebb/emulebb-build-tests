@@ -352,14 +352,24 @@ def seed_share_in_place_manifest(
     )
 
 
-def seed_share_in_place_manifests(db_path: Path, manifests: list[dict[str, object]]) -> None:
+def seed_share_in_place_manifests(
+    db_path: Path,
+    manifests: list[dict[str, object]],
+    *,
+    seed_piece_rows: bool = True,
+) -> None:
     """Seed many completed share-in-place manifests in one SQLite transaction."""
 
     now = _now_ms()
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         for manifest in manifests:
-            _seed_share_in_place_manifest_conn(conn, now=now, **manifest)
+            _seed_share_in_place_manifest_conn(
+                conn,
+                now=now,
+                seed_piece_rows=seed_piece_rows,
+                **manifest,
+            )
         conn.commit()
 
 
@@ -378,6 +388,7 @@ def _seed_share_in_place_manifest_conn(
     upload_priority: str = "normal",
     auto_upload_priority: bool = False,
     all_time_uploaded_bytes: int = 0,
+    seed_piece_rows: bool = True,
 ) -> None:
     md4_hashset = md4_hashset or []
     aich_hashset = aich_hashset or []
@@ -473,14 +484,15 @@ def _seed_share_in_place_manifest_conn(
     conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
     conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
     conn.execute("DELETE FROM verified_ranges WHERE known_file_id = ?", (known_file_id,))
-    for piece_index in range(piece_count):
-        conn.execute(
-            """
-            INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
-            VALUES (?, ?, 'Verified', ?, ?)
-            """,
-            (transfer_id, piece_index, expected_piece_length(size_bytes, piece_size, piece_index), now),
-        )
+    if seed_piece_rows:
+        for piece_index in range(piece_count):
+            conn.execute(
+                """
+                INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
+                VALUES (?, ?, 'Verified', ?, ?)
+                """,
+                (transfer_id, piece_index, expected_piece_length(size_bytes, piece_size, piece_index), now),
+            )
     for index, part_hash in enumerate(md4_hashset):
         conn.execute(
             "INSERT INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",

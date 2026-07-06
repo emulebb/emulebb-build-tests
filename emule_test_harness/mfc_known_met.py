@@ -174,7 +174,11 @@ def import_mfc_known_met_hashes(
                 }
             )
     if manifests:
-        rust_metadata.seed_share_in_place_manifests(metadata_db, manifests)
+        rust_metadata.seed_share_in_place_manifests(
+            metadata_db,
+            manifests,
+            seed_piece_rows=False,
+        )
 
     return {
         "knownMetRecords": len(entries),
@@ -266,6 +270,7 @@ def import_mfc_shared_file_rows_hashes(
                 }
                 for parsed, entry, source_mtime_ms in parsed_rows
             ],
+            seed_piece_rows=False,
         )
 
     return {
