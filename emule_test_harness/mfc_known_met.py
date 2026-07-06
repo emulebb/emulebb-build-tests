@@ -212,7 +212,7 @@ def import_mfc_shared_file_rows_hashes(
         rust_metadata.create_metadata_db(rust_repo, metadata_db)
 
     known_entries = {entry.ed2k_hash: entry for entry in parse_known_met(known_met)}
-    roots = [_canonical_existing_root(root) for root in shared_roots if root.is_dir()]
+    roots = {_canonical_existing_root(root) for root in shared_roots if root.is_dir()}
     parsed_rows: list[tuple[MfcSharedFileRow, KnownMetEntry, int]] = []
     reason_counts = {
         "invalid_row": 0,
@@ -228,7 +228,7 @@ def import_mfc_shared_file_rows_hashes(
         if parsed is None:
             reason_counts["invalid_row"] += 1
             continue
-        if roots and not _path_is_under_roots(parsed.path, roots):
+        if roots and not _path_is_under_root_set(parsed.path, roots):
             reason_counts["path_outside_shared_roots"] += 1
             continue
         try:
@@ -363,14 +363,16 @@ def _canonical_existing_root(path: Path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
-def _path_is_under_roots(path: Path, roots: list[str]) -> bool:
+def _path_is_under_root_set(path: Path, roots: set[str]) -> bool:
     candidate = os.path.normcase(os.path.abspath(str(path)))
-    for root in roots:
-        try:
-            if os.path.commonpath([candidate, root]) == root:
-                return True
-        except ValueError:
-            continue
+    current = candidate
+    while True:
+        if current in roots:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
     return False
 
 

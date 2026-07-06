@@ -324,6 +324,19 @@ def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path
     assert summary["skipped"]["path_outside_shared_roots"] == 1
 
 
+def test_path_root_membership_uses_parent_set_without_prefix_false_positive(tmp_path: Path) -> None:
+    root = tmp_path / "share"
+    nested = root / "nested"
+    sibling_prefix = tmp_path / "share-sibling"
+    nested.mkdir(parents=True)
+    sibling_prefix.mkdir()
+
+    roots = {mfc_known_met._canonical_existing_root(root)}
+
+    assert mfc_known_met._path_is_under_root_set(nested / "File.bin", roots) is True
+    assert mfc_known_met._path_is_under_root_set(sibling_prefix / "File.bin", roots) is False
+
+
 def test_import_mfc_shared_file_rows_requires_known_met_hashset(tmp_path: Path) -> None:
     root = tmp_path / "share"
     root.mkdir()
