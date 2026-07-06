@@ -39,6 +39,7 @@ from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
+from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.rust_client import stop_process_tree
 from emule_test_harness.soak_launch import (
@@ -61,6 +62,14 @@ from emule_test_harness.vm_guest_profiles import retry_http_json
 # TrackMuleBB lives beside this repo under repos/; it is driven entirely by env.
 TRACKMULEBB_REPO = REPO_ROOT.parent / "trackmulebb"
 TRACKMULEBB_CONTROL_PORT = 8770
+
+
+def resolve_direct_mfc_profile(inputs: LiveWireInputs, *, no_mfc: bool) -> Path | None:
+    """Returns the operator-owned MFC profile used for the soak launcher."""
+
+    if no_mfc or inputs.mfc_profile_dir is None:
+        return None
+    return inputs.mfc_profile_dir.resolve()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -210,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     inputs_path = Path(args.inputs).resolve() if args.inputs else REPO_ROOT / "live-wire-inputs.local.json"
     if not inputs_path.is_file():
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
+    inputs = load_live_wire_inputs(inputs_path)
+    direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -220,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = None if args.no_mfc else soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,
-        direct_profile_dir=None,
+        direct_profile_dir=direct_mfc_profile,
     )
     run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
     preflight_manifest = soak_run_layout.prepare_clean_run(
@@ -234,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         f"{preflight_manifest['preflightCleanup']['rust']['archivedCount']} rust file(s) and "
         f"{preflight_manifest['preflightCleanup']['mfc']['archivedCount']} MFC log file(s)"
     )
-    log(f"persistent profiles under {soak_root} - sharing {len(shared_roots)} library root(s)")
+    if direct_mfc_profile is not None:
+        log(f"MFC direct profile from live-wire inputs: {direct_mfc_profile}")
+    log(f"persistent rust profile under {soak_root} - sharing {len(shared_roots)} library root(s)")
     log(
         "P2P endpoint ports: "
         f"rust TCP {endpoint_ports['rust']['ed2kTcpPort']}/UDP {endpoint_ports['rust']['kadUdpPort']}; "
@@ -281,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                 live_common=mods["live_common"], rest_smoke=mods["rest_smoke"],
                 shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
                 seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
+                direct_profile_dir=direct_mfc_profile,
                 rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
                 server_endpoint=args.mfc_server, obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
