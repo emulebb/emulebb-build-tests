@@ -88,6 +88,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
     parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
+    parser.add_argument(
+        "--skip-actions",
+        action="store_true",
+        help="Skip searches/download fixtures and only hold the operator server connection.",
+    )
+    parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        default=0.0,
+        help="After connect/actions, hold the client open and poll REST server status for this many seconds.",
+    )
+    parser.add_argument("--hold-poll-seconds", type=float, default=5.0, help="REST poll cadence for --hold-seconds.")
     parser.add_argument("--no-obfuscation", action="store_true")
     parser.add_argument(
         "--secident",
@@ -118,6 +130,84 @@ def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: obj
     request = urllib.request.Request(base_url + path, data=data, method=method, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - trusted LAN REST
         return json.loads(response.read())
+
+
+def _status_data(payload: dict) -> dict:
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+def _server_status_snapshot(payload: dict, *, request_seconds: float, error: str | None = None) -> dict:
+    data = _status_data(payload)
+    servers = data.get("servers") if isinstance(data, dict) else {}
+    servers = servers if isinstance(servers, dict) else {}
+    current = servers.get("currentServer")
+    current = current if isinstance(current, dict) else {}
+    return {
+        "epoch": time.time(),
+        "requestSeconds": round(request_seconds, 3),
+        "restOk": error is None,
+        "error": error,
+        "connected": bool(servers.get("connected") or current.get("connected")),
+        "connecting": bool(servers.get("connecting") or current.get("connecting")),
+        "address": str(current.get("address") or ""),
+        "port": int(current.get("port") or 0),
+        "name": str(current.get("name") or ""),
+        "serverCount": int(servers.get("serverCount") or 0),
+    }
+
+
+def observe_operator_hold(
+    base_url: str,
+    api_key: str,
+    *,
+    endpoint: str,
+    hold_seconds: float,
+    poll_seconds: float,
+) -> dict:
+    """Polls REST while the selected eD2K server connection is expected to stay pinned."""
+
+    expected_host, expected_port_text = endpoint.rsplit(":", 1)
+    expected_port = int(expected_port_text)
+    deadline = time.monotonic() + hold_seconds
+    snapshots: list[dict] = []
+    log(f"hold: polling selected server connection for {int(hold_seconds)}s every {poll_seconds:g}s")
+    while time.monotonic() < deadline:
+        started = time.monotonic()
+        try:
+            payload = _http(base_url, api_key, "/api/v1/status", timeout=min(10.0, max(2.0, poll_seconds)))
+            elapsed = time.monotonic() - started
+            snapshot = _server_status_snapshot(payload, request_seconds=elapsed)
+        except Exception as exc:  # noqa: BLE001
+            elapsed = time.monotonic() - started
+            snapshot = _server_status_snapshot({}, request_seconds=elapsed, error=f"{type(exc).__name__}: {exc}")
+        snapshots.append(snapshot)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_seconds, remaining))
+
+    mismatches = [
+        row
+        for row in snapshots
+        if row["restOk"] and row["connected"] and (row["address"] != expected_host or row["port"] != expected_port)
+    ]
+    disconnected = [row for row in snapshots if row["restOk"] and not row["connected"]]
+    rest_errors = [row for row in snapshots if not row["restOk"]]
+    max_request = max((float(row["requestSeconds"]) for row in snapshots), default=0.0)
+    return {
+        "seconds": int(hold_seconds),
+        "pollSeconds": poll_seconds,
+        "expectedEndpoint": endpoint,
+        "sampleCount": len(snapshots),
+        "restErrors": len(rest_errors),
+        "disconnectedSamples": len(disconnected),
+        "endpointMismatchSamples": len(mismatches),
+        "maxRequestSeconds": round(max_request, 3),
+        "passed": not rest_errors and not disconnected and not mismatches,
+        "firstFailure": (rest_errors or disconnected or mismatches or [None])[0],
+        "snapshots": snapshots,
+    }
 
 
 def ensure_kad(base_url: str, api_key: str, *, wait_seconds: float = 120.0) -> bool:
@@ -227,6 +317,12 @@ def pack_recording(report_dir: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.skip_actions and args.hold_seconds <= 0:
+        raise RuntimeError("--skip-actions requires --hold-seconds so the run records an observable hold window.")
+    if args.hold_seconds < 0:
+        raise RuntimeError("--hold-seconds must be >= 0.")
+    if args.hold_poll_seconds <= 0:
+        raise RuntimeError("--hold-poll-seconds must be > 0.")
     client = args.client
     api_key = RUST_API_KEY if client == "rust" else MFC_API_KEY
     rest_port = args.rest_port or (4731 if client == "rust" else 4732)
@@ -304,29 +400,52 @@ def main(argv: list[str] | None = None) -> int:
         kad_ok = ensure_kad(base_url, api_key)
         log(f"{client} up: {base_url}  operator={OPERATOR_SERVER}  kad={kad_ok}")
 
-        # Resolve well-sourced download fixtures once per campaign (reused by both solo
-        # runs so rust and mfc fetch the SAME sourced files).
-        download_fixtures = campaign_fixtures(
-            campaign_dir=report_dir.parent, base_url=base_url, api_key=api_key,
-            explicit_hashes=args.fixture_hashes, download_terms=download_terms, count=args.fixture_count,
-        )
-        log(f"resolved {len(download_fixtures)} sourced download fixture(s)")
-        actions = scripted_actions.default_action_set(
-            search_terms, download_fixtures, methods=tuple(args.search_methods.split(","))
-        )
         markers_path = report_dir / "markers.jsonl"
         with markers_path.open("w", encoding="utf-8") as fh:
             def _write(marker: dict) -> None:
                 fh.write(json.dumps(marker) + "\n")
                 fh.flush()
 
-            log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
-            results = scripted_actions.execute_action_set(
-                actions, scripted_actions.make_rest_runner(base_url, api_key), _write,
-                spacing_seconds=args.spacing_seconds,
+            if args.skip_actions:
+                log("skipping scripted searches/downloads; hold-only connection capture")
+                results = []
+            else:
+                # Resolve well-sourced download fixtures once per campaign (reused by both solo
+                # runs so rust and mfc fetch the SAME sourced files).
+                download_fixtures = campaign_fixtures(
+                    campaign_dir=report_dir.parent, base_url=base_url, api_key=api_key,
+                    explicit_hashes=args.fixture_hashes, download_terms=download_terms, count=args.fixture_count,
+                )
+                log(f"resolved {len(download_fixtures)} sourced download fixture(s)")
+                actions = scripted_actions.default_action_set(
+                    search_terms, download_fixtures, methods=tuple(args.search_methods.split(","))
+                )
+                log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
+                results = scripted_actions.execute_action_set(
+                    actions, scripted_actions.make_rest_runner(base_url, api_key), _write,
+                    spacing_seconds=args.spacing_seconds,
+                )
+        if args.skip_actions:
+            log("actions skipped; no post-action settle")
+        else:
+            log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
+            time.sleep(args.settle_seconds)
+        hold_result = None
+        if args.hold_seconds > 0:
+            hold_result = observe_operator_hold(
+                base_url,
+                api_key,
+                endpoint=OPERATOR_SERVER,
+                hold_seconds=args.hold_seconds,
+                poll_seconds=args.hold_poll_seconds,
             )
-        log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
-        time.sleep(args.settle_seconds)
+            status = "passed" if hold_result["passed"] else "failed"
+            log(
+                "hold done: "
+                f"{status}, disconnected={hold_result['disconnectedSamples']}, "
+                f"endpointMismatch={hold_result['endpointMismatchSamples']}, "
+                f"restErrors={hold_result['restErrors']}"
+            )
 
         results_meta = {
             "client": client, "campaign": campaign, "baseUrl": base_url,
@@ -338,7 +457,10 @@ def main(argv: list[str] | None = None) -> int:
                 "requested": args.secident,
                 "applied": args.secident if client == "mfc" else "always-on",
             },
-            "actionResults": results, "runStartEpoch": run_start, "runEndEpoch": time.time(),
+            "actionResults": results,
+            "hold": hold_result,
+            "runStartEpoch": run_start,
+            "runEndEpoch": time.time(),
         }
     finally:
         if handles is not None:
