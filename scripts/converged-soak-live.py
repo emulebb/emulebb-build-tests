@@ -1056,6 +1056,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
+    parser.add_argument(
+        "--secident",
+        choices=("on", "off"),
+        default="on",
+        help="SecIdent campaign dimension: pins the MFC SecureIdent preference explicitly "
+        "(default on). emulebb-rust has NO secident config key (its eD2K secure-ident "
+        "identity is always provisioned), so 'off' runs an asymmetric campaign that is "
+        "recorded as such in environmentParity.",
+    )
     parser.add_argument("--trackmulebb-cmd", help="Override command to launch TrackMuleBB (default: auto-launch the bundled UI pointed at the rust REST).")
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-launch TrackMuleBB alongside the soak.")
     parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches/downloads over REST.")
@@ -1519,6 +1528,16 @@ def main(argv: list[str] | None = None) -> int:
         "rustRestPort": args.rust_rest_port,
         "mfcRestPort": args.mfc_rest_port,
         "endpointPorts": endpoint_ports,
+        # SecIdent is a tested parity dimension: the MFC pref is pinned explicitly
+        # (never inherited from the profile); rust has no config toggle - its eD2K
+        # secure-ident identity is always provisioned by the daemon.
+        "secident": {
+            "requested": args.secident,
+            "mfcPreference": "SecureIdent=1" if args.secident == "on" else "SecureIdent=0",
+            "rust": "always-on",
+            "rustConfigKey": None,
+            "parity": args.secident == "on",
+        },
     }
     known_met_import = import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile_dir,
@@ -1579,6 +1598,7 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
             server_udp_port=args.mfc_server_udp_port,
             vpn_guard_mode="block", vpn_guard_allowed_public_ip_cidrs=vpn_guard_cidrs,
+            secure_ident=args.secident == "on",
         )
 
         rust_proc = rust_handles["process"]

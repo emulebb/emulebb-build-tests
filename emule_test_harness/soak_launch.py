@@ -603,8 +603,13 @@ def bring_up_mfc(
     server_udp_port: int = MFC_SERVER_UDP_PORT,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
+    secure_ident: bool = True,
 ) -> dict[str, Any]:
-    """Launches the MFC diagnostics GUI on the persistent profile (left open)."""
+    """Launches the MFC diagnostics GUI on the persistent profile (left open).
+
+    ``secure_ident`` pins the eMule ``SecureIdent`` preference explicitly (the
+    SecIdent on/off campaign knob); it defaults to ON, the stock eMule default.
+    """
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_host}:{rest_port}"
@@ -657,6 +662,19 @@ def bring_up_mfc(
             ("VpnGuardAllowedPublicIpCidrs", mfc_guard_cidrs),
         ),
     )
+    # WHY: SecIdent must be an EXPLICIT campaign dimension, never inherited by
+    # accident. The 2026-07-04 capture launched a direct operator profile whose
+    # preferences.ini carried SecureIdent=0 (and no cryptkey.dat), so
+    # CClientCreditsList::InitalizeCrypting() never provisioned a key,
+    # CryptoAvailable() was false, and the whole SecIdent parity surface
+    # (HELLO MISCOPTIONS1 secident bits, OP_PUBLICKEY/OP_SIGNATURE/
+    # OP_SECIDENTSTATE) went silently dead for the entire run. Pinning the pref
+    # here makes the launched state deterministic for seeded AND direct profiles;
+    # with SecureIdent=1 the app creates cryptkey.dat itself on startup.
+    live_common.apply_emule_preferences(
+        config_dir,
+        (("SecureIdent", "1" if secure_ident else "0"),),
+    )
     live_common.apply_private_harness_obfuscation(config_dir, obfuscation)
     apply_mfc_soak_preferences(
         live_common=live_common,
@@ -690,4 +708,9 @@ def bring_up_mfc(
         }
         shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
     log(f"MFC diagnostics GUI up - REST {base_url}, profile {profile_base}")
-    return {"app": app, "baseUrl": base_url, "packetDumpDir": packet_dump_dir}
+    return {
+        "app": app,
+        "baseUrl": base_url,
+        "packetDumpDir": packet_dump_dir,
+        "secureIdent": secure_ident,
+    }

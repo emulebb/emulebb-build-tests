@@ -89,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
     parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
     parser.add_argument("--no-obfuscation", action="store_true")
+    parser.add_argument(
+        "--secident",
+        choices=("on", "off"),
+        default="on",
+        help="SecIdent campaign dimension: pins the MFC SecureIdent preference explicitly "
+        "(default on). emulebb-rust has NO secident config key (always provisioned), so "
+        "'off' captures an asymmetric run that is recorded as such in results.json.",
+    )
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL)
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL)
     parser.add_argument("--profile-seed-dir", default=None)
@@ -286,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                 server_endpoint=OPERATOR_SERVER, obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
+                secure_ident=args.secident == "on",
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
@@ -323,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
             "client": client, "campaign": campaign, "baseUrl": base_url,
             "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
             "restPort": rest_port, "obfuscation": obfuscation,
+            # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
+            # has no config key (its eD2K secure-ident is always provisioned).
+            "secident": {
+                "requested": args.secident,
+                "applied": args.secident if client == "mfc" else "always-on",
+            },
             "actionResults": results, "runStartEpoch": run_start, "runEndEpoch": time.time(),
         }
     finally:

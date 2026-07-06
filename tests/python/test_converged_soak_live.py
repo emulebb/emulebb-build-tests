@@ -616,6 +616,106 @@ def test_converged_soak_accepts_mfc_shared_files_inventory_arg() -> None:
     assert args.mfc_shared_files_inventory == "inventory.json"
 
 
+def test_converged_soak_secident_knob_defaults_on() -> None:
+    runner = _load_soak_runner()
+
+    default_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
+    assert default_args.secident == "on"
+
+    off_args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--secident", "off"]
+    )
+    assert off_args.secident == "off"
+
+
+def _bring_up_mfc_pref_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: object
+) -> list[tuple[Path, tuple[tuple[str, str], ...]]]:
+    """Runs bring_up_mfc on a direct profile with stub modules; returns pref writes."""
+
+    profile_dir = tmp_path / "profile"
+    config_dir = profile_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "preferences.ini").write_text("[eMule]\n[WebServer]\n", encoding="utf-16")
+    pref_calls: list[tuple[Path, tuple[tuple[str, str], ...]]] = []
+
+    class _LiveCommon:
+        @staticmethod
+        def apply_emule_preferences(config_dir_arg: Path, values: tuple[tuple[str, str], ...]) -> None:
+            pref_calls.append((config_dir_arg, values))
+
+        @staticmethod
+        def apply_private_harness_obfuscation(_config_dir: Path, _enabled: bool) -> None:
+            return None
+
+        @staticmethod
+        def launch_app(_exe_path: Path, _profile_base: Path) -> object:
+            return object()
+
+    class _RestSmoke:
+        @staticmethod
+        def configure_webserver_profile(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        @staticmethod
+        def apply_p2p_bind_interface_override(_config_dir: Path, _interface_name: str) -> None:
+            return None
+
+        @staticmethod
+        def wait_for_rest_ready(_base_url: str, _api_key: str, _timeout_seconds: float) -> None:
+            return None
+
+        @staticmethod
+        def observe_server_connect_attempt(_base_url: str, _api_key: str, _timeout_seconds: float) -> None:
+            return None
+
+        @staticmethod
+        def http_request(*_args: object, **_kwargs: object) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(soak_launch, "wait_for_mfc_core_rest_ready", lambda *_a, **_k: {})
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_a, **_k: {})
+    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_a, **_k: {})
+
+    soak_launch.bring_up_mfc(
+        live_common=_LiveCommon,
+        rest_smoke=_RestSmoke,
+        shared_dirs_mod=object(),
+        exe_path=tmp_path / "app" / "emulebb-diagnostics.exe",
+        artifacts_dir=tmp_path / "artifacts",
+        seed_config_dir=tmp_path / "seed",
+        direct_profile_dir=profile_dir,
+        rest_host="192.0.2.10",
+        rest_port=4732,
+        shared_roots=[],
+        server_endpoint="192.0.2.20:4661",
+        obfuscation=True,
+        timeouts={"rest": 0.1, "connect": 0.1},
+        **overrides,
+    )
+    return pref_calls
+
+
+def test_bring_up_mfc_pins_secure_ident_on_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SecIdent must be EXPLICIT, never inherited by accident: a direct operator
+    # profile with SecureIdent=0 silently killed the whole SecIdent parity
+    # surface in the 2026-07-04 capture.
+    pref_calls = _bring_up_mfc_pref_calls(tmp_path, monkeypatch)
+    flattened = [pair for _dir, values in pref_calls for pair in values]
+    assert ("SecureIdent", "1") in flattened
+
+
+def test_bring_up_mfc_secure_ident_off_writes_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pref_calls = _bring_up_mfc_pref_calls(tmp_path, monkeypatch, secure_ident=False)
+    flattened = [pair for _dir, values in pref_calls for pair in values]
+    assert ("SecureIdent", "0") in flattened
+    assert ("SecureIdent", "1") not in flattened
+
+
 def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
 
