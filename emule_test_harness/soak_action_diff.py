@@ -326,30 +326,227 @@ def _shared_any_opcode_present(packet_diff: dict[str, Any], alternatives: list[d
     return False
 
 
-def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, Any]:
-    """Builds the action-specific live coverage gate for one soak action."""
+def _rust_opcode_present(
+    packet_diff: dict[str, Any],
+    *,
+    channel: str,
+    direction: str,
+    protocol_marker: int,
+    opcode: int,
+) -> bool:
+    """Whether the RUST side alone exercised an opcode (shared or rust-only)."""
 
-    required: list[dict[str, Any]] = []
+    coverage = packet_diff.get("opcodeCoverage")
+    channels = coverage.get("channels") if isinstance(coverage, dict) else None
+    if not isinstance(channels, list):
+        return False
+    for item in channels:
+        if not isinstance(item, dict):
+            continue
+        if item.get("channel") != channel or item.get("direction") != direction:
+            continue
+        for bucket in ("shared", "onlyRust"):
+            rows = item.get(bucket)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if (
+                    int(row.get("protocolMarker") or 0) == protocol_marker
+                    and int(row.get("opcode") or 0) == opcode
+                    and int(row.get("rustCount") or 0) > 0
+                ):
+                    return True
+    return False
+
+
+def _rust_any_opcode_present(packet_diff: dict[str, Any], alternatives: list[dict[str, Any]]) -> bool:
+    return any(
+        _rust_opcode_present(
+            packet_diff,
+            channel=str(alternative["channel"]),
+            direction=str(alternative["direction"]),
+            protocol_marker=int(alternative["protocolMarker"]),
+            opcode=int(alternative["opcode"]),
+        )
+        for alternative in alternatives
+    )
+
+
+SEARCH_METHOD_SERVER = "server"
+SEARCH_METHOD_GLOBAL = "global"
+SEARCH_METHOD_KAD = "kad"
+
+# Server (TCP) keyword-search gate: what a server-method search must exercise.
+_SERVER_SEARCH_REQUIRED: list[dict[str, Any]] = [
+    {
+        "label": "server-search-request",
+        "channel": "server",
+        "direction": "send",
+        "protocolMarker": 0xE3,
+        "opcode": 0x16,
+        "opcodeName": "OP_SEARCHREQUEST",
+    },
+    {
+        "label": "server-search-result",
+        "channel": "server",
+        "direction": "recv",
+        "protocolMarker": 0xE3,
+        "opcode": 0x33,
+        "opcodeName": "OP_SEARCHRESULT",
+    },
+]
+
+# Global (server-UDP) keyword search: rust picks the GLOBSEARCHREQ variant from
+# the target server's advertised flags, so any of the three counts as evidence.
+_GLOBAL_SEARCH_SEND_ALTERNATIVES: list[dict[str, Any]] = [
+    {"channel": "server", "direction": "send", "protocolMarker": 0xE3, "opcode": 0x98, "opcodeName": "OP_GLOBSEARCHREQ"},
+    {"channel": "server", "direction": "send", "protocolMarker": 0xE3, "opcode": 0x92, "opcodeName": "OP_GLOBSEARCHREQ2"},
+    {"channel": "server", "direction": "send", "protocolMarker": 0xE3, "opcode": 0x90, "opcodeName": "OP_GLOBSEARCHREQ3"},
+]
+
+# Kad keyword-search opcodes (assessed from the kad diag stream, not server TCP).
+KAD2_SEARCH_KEY_REQ = 0x33  # KADEMLIA2_SEARCH_KEY_REQ
+KAD2_SEARCH_RES = 0x3B  # KADEMLIA2_SEARCH_RES
+
+
+def _kad_record_opcode(record: dict[str, Any]) -> int | str | None:
+    return packet_trace_diff._kad_opcode(record)  # noqa: SLF001 - harness-internal reuse
+
+
+def _kad_opcode_exercised(records: list[dict[str, Any]] | None, opcode: int) -> bool:
+    """Whether a kad diag/dump record list exercises an opcode in any direction."""
+
+    return any(_kad_record_opcode(record) == opcode for record in records or [])
+
+
+def _build_search_coverage(
+    packet_diff: dict[str, Any],
+    *,
+    method: str | None,
+    rust_kad_records: list[dict[str, Any]] | None,
+    mfc_kad_records: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Method-aware search gate: each search method has its own live evidence.
+
+    ``server`` keeps the original TCP OP_SEARCHREQUEST/OP_SEARCHRESULT gate.
+    ``global`` goes over server UDP: the MFC capture has NO server-UDP diagnostics
+    hook (the ServerSocket.cpp packet hooks are TCP-only), so the MFC side is
+    reported ``not-assessable`` and the gate holds on the rust evidence alone —
+    it must never be structurally impossible to pass. ``kad`` is assessed from
+    the kad stream (KADEMLIA2_SEARCH_KEY_REQ / KADEMLIA2_SEARCH_RES), never from
+    server TCP. ``automatic`` (or an unrecognized method) accepts server OR kad
+    evidence since the client picks the network itself.
+    """
+
+    normalized = str(method).strip().lower() if method is not None else None
+    full_coverage_ok = bool(packet_diff.get("coverageOk"))
+
+    server_checked = _check_action_requirements(_SERVER_SEARCH_REQUIRED, packet_diff)
+    server_ok = all(row["presentOnBoth"] for row in server_checked)
+    if normalized in (None, "", SEARCH_METHOD_SERVER):
+        return {
+            "ok": server_ok,
+            "mode": "action-required-opcodes",
+            "method": normalized or SEARCH_METHOD_SERVER,
+            "required": server_checked,
+            "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
+        }
+
+    if normalized == SEARCH_METHOD_GLOBAL:
+        rust_sent = _rust_any_opcode_present(packet_diff, _GLOBAL_SEARCH_SEND_ALTERNATIVES)
+        return {
+            "ok": rust_sent,
+            "mode": "search-global-server-udp",
+            "method": SEARCH_METHOD_GLOBAL,
+            "required": [
+                {
+                    "label": "server-udp-global-search-request",
+                    "alternatives": _GLOBAL_SEARCH_SEND_ALTERNATIVES,
+                    "rustPresent": rust_sent,
+                    "mfcAssessable": False,
+                    "mfcStatus": "not-assessable",
+                    "note": "MFC has no server-UDP packet hook (ServerSocket.cpp is TCP-only); "
+                    "the MFC side of a global search cannot fail this gate.",
+                }
+            ],
+            "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
+        }
+
+    kad_req_rust = _kad_opcode_exercised(rust_kad_records, KAD2_SEARCH_KEY_REQ)
+    kad_req_mfc = _kad_opcode_exercised(mfc_kad_records, KAD2_SEARCH_KEY_REQ)
+    kad_res_rust = _kad_opcode_exercised(rust_kad_records, KAD2_SEARCH_RES)
+    kad_res_mfc = _kad_opcode_exercised(mfc_kad_records, KAD2_SEARCH_RES)
+    kad_required = [
+        {
+            "label": "kad-search-key-request",
+            "opcode": KAD2_SEARCH_KEY_REQ,
+            "opcodeName": "KADEMLIA2_SEARCH_KEY_REQ",
+            "rustPresent": kad_req_rust,
+            "mfcPresent": kad_req_mfc,
+            "presentOnBoth": kad_req_rust and kad_req_mfc,
+        }
+    ]
+    # The result is network-driven (zero hits -> zero SEARCH_RES), so it stays an
+    # optional signal rather than a structurally unattainable requirement.
+    kad_optional = [
+        {
+            "label": "kad-search-result",
+            "opcode": KAD2_SEARCH_RES,
+            "opcodeName": "KADEMLIA2_SEARCH_RES",
+            "rustPresent": kad_res_rust,
+            "mfcPresent": kad_res_mfc,
+            "presentOnBoth": kad_res_rust and kad_res_mfc,
+        }
+    ]
+    kad_ok = kad_req_rust and kad_req_mfc
+    if normalized == SEARCH_METHOD_KAD:
+        return {
+            "ok": kad_ok,
+            "mode": "search-kad-stream",
+            "method": SEARCH_METHOD_KAD,
+            "required": kad_required,
+            "optional": kad_optional,
+            "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
+        }
+
+    # automatic / unknown method: the client chose the network itself.
+    return {
+        "ok": server_ok or kad_ok,
+        "mode": "search-automatic",
+        "method": normalized,
+        "serverOk": server_ok,
+        "kadOk": kad_ok,
+        "required": server_checked + kad_required,
+        "optional": kad_optional,
+        "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
+    }
+
+
+def build_action_coverage(
+    kind: str,
+    packet_diff: dict[str, Any],
+    *,
+    method: str | None = None,
+    rust_kad_records: list[dict[str, Any]] | None = None,
+    mfc_kad_records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Builds the action-specific live coverage gate for one soak action.
+
+    ``method`` selects the search-method gate (server/global/kad/automatic);
+    ``rust_kad_records`` / ``mfc_kad_records`` supply the kad stream slices the
+    kad-method gate is assessed from (kad packets never appear on server TCP).
+    """
+
     if kind == SEARCH:
-        required = [
-            {
-                "label": "server-search-request",
-                "channel": "server",
-                "direction": "send",
-                "protocolMarker": 0xE3,
-                "opcode": 0x16,
-                "opcodeName": "OP_SEARCHREQUEST",
-            },
-            {
-                "label": "server-search-result",
-                "channel": "server",
-                "direction": "recv",
-                "protocolMarker": 0xE3,
-                "opcode": 0x33,
-                "opcodeName": "OP_SEARCHRESULT",
-            },
-        ]
-    elif kind == DOWNLOAD:
+        return _build_search_coverage(
+            packet_diff,
+            method=method,
+            rust_kad_records=rust_kad_records,
+            mfc_kad_records=mfc_kad_records,
+        )
+    if kind == DOWNLOAD:
         required = [
             {
                 "label": "client-request-parts",
@@ -447,19 +644,11 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
             "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
         }
 
-    if not required:
-        return {
-            "ok": bool(packet_diff.get("coverageOk")),
-            "mode": "full-opcode-coverage",
-            "required": [],
-        }
-
-    checked = _check_action_requirements(required, packet_diff)
+    # Marker / unknown kinds have no action-specific requirement set.
     return {
-        "ok": all(row["presentOnBoth"] for row in checked),
-        "mode": "action-required-opcodes",
-        "required": checked,
-        "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
+        "ok": bool(packet_diff.get("coverageOk")),
+        "mode": "full-opcode-coverage",
+        "required": [],
     }
 
 
@@ -505,6 +694,19 @@ def _classify(
     return "coverage-parity" if coverage_ok and diag_ok else "divergence"
 
 
+def pair_method(pair: ActionPair) -> str | None:
+    """Returns the most specific search method recorded on either side.
+
+    ``normalize_search_items`` defaults an absent method to ``automatic``, so a
+    concrete method (server/global/kad) on either side wins over that default.
+    """
+
+    for candidate in (pair.rust.method, pair.mfc.method):
+        if candidate and candidate != "automatic":
+            return candidate
+    return pair.rust.method or pair.mfc.method
+
+
 def diff_action(
     pair: ActionPair,
     *,
@@ -527,18 +729,24 @@ def diff_action(
     mfc_slice = slice_trace(mfc_packets, t0, t1)
     packet_diff = packet_trace_diff.diff_traces(rust_slice, mfc_slice)
 
+    rust_diag_slice = slice_trace(rust_diag or [], t0, t1)
+    mfc_diag_slice = slice_trace(mfc_diag or [], t0, t1)
     diag_diff: dict[str, Any] | None = None
     if rust_diag or mfc_diag:
-        diag_diff = diag_event_diff.diff_traces(
-            slice_trace(rust_diag or [], t0, t1),
-            slice_trace(mfc_diag or [], t0, t1),
-        )
+        diag_diff = diag_event_diff.diff_traces(rust_diag_slice, mfc_diag_slice)
 
-    action_coverage = build_action_coverage(pair.kind, packet_diff)
+    action_coverage = build_action_coverage(
+        pair.kind,
+        packet_diff,
+        method=pair_method(pair),
+        rust_kad_records=packet_trace_diff.kad_records(rust_diag_slice),
+        mfc_kad_records=packet_trace_diff.kad_records(mfc_diag_slice),
+    )
     verdict = _classify(action_coverage, diag_diff, len(rust_slice), len(mfc_slice))
     return {
         "kind": pair.kind,
         "key": pair.key,
+        "method": pair_method(pair),
         "label": pair.rust.label,
         "window": {"t0": t0.isoformat(), "t1": t1.isoformat()},
         "observed": {

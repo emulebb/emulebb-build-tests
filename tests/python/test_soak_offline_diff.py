@@ -108,6 +108,62 @@ def test_diag_family_gate_fails_on_missing_oracle_body_key() -> None:
     assert result["verdict"] == "divergence"
 
 
+def test_action_windows_capture_marker_method() -> None:
+    mod = _load_offline_diff()
+    markers = [
+        {"actionId": "search-kad-ubuntu", "kind": "search", "method": "kad", "marker": "begin", "ts_utc": _ts(0)},
+        {"actionId": "search-kad-ubuntu", "kind": "search", "method": "kad", "marker": "end", "ts_utc": _ts(5)},
+    ]
+    windows = mod._action_windows(markers)
+    assert windows["search-kad-ubuntu"]["method"] == "kad"
+    assert mod._action_method("search-kad-ubuntu", windows["search-kad-ubuntu"]) == "kad"
+
+
+def test_action_method_falls_back_to_action_id_for_old_recordings() -> None:
+    mod = _load_offline_diff()
+    assert mod._action_method("search-global-ubuntu", {}) == "global"
+    assert mod._action_method("download-abcd1234", {}) is None
+
+
+def test_global_search_action_not_failed_by_missing_mfc_udp_hook() -> None:
+    # MFC's capture has no server-UDP hook, so a global search must not be
+    # structurally impossible: rust's OP_GLOBSEARCHREQ send carries the gate.
+    mod = _load_offline_diff()
+    rust_pkt = [_pkt("server", "send", 0x98, "aa11", 1.0)]
+    mfc_pkt = [_pkt("server", "send", 0x14, "bb", 1.0)]
+    rust, mfc = _sides(rust_pkt, mfc_pkt)
+    result = mod._diff_one_action(
+        "search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0, method="global"
+    )
+    assert result["method"] == "global"
+    assert result["coverageOk"] is True
+
+
+def test_kad_search_action_assessed_from_kad_stream() -> None:
+    mod = _load_offline_diff()
+
+    def _kad(opcode: int, at: float) -> dict:
+        return {
+            "schema": "diag_event_v1",
+            "ts_utc": _ts(at),
+            "family": "kad_udp",
+            "event": "packet",
+            "keys": {"opcode": opcode},
+            "body": {"direction": "send", "opcode": opcode},
+        }
+
+    rust, mfc = _sides(
+        [_pkt("client", "send", 0x99, "aa", 1.0)],
+        [_pkt("client", "send", 0x99, "bb", 1.0)],
+        [_kad(0x33, 1.0)],
+        [_kad(0x33, 1.5)],
+    )
+    result = mod._diff_one_action(
+        "search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0, method="kad"
+    )
+    assert result["coverageOk"] is True
+
+
 def test_no_window_result_carries_gate_keys() -> None:
     mod = _load_offline_diff()
     rust, mfc = _sides([], [])

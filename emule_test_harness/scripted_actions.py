@@ -119,12 +119,17 @@ def execute_action_set(
 
     results: list[dict[str, Any]] = []
     for action in actions:
+        # Search markers carry the method (server/global/kad) so the offline diff
+        # can pick the method-aware coverage gate without parsing the actionId.
+        method = action.params.get("method") if action.kind == "search" else None
+        extra = {"method": method} if method else {}
         marker_writer(
             {
                 "schema": MARKER_SCHEMA,
                 "marker": "begin",
                 "actionId": action.id,
                 "kind": action.kind,
+                **extra,
                 "ts_utc": utc_now_iso(),
             }
         )
@@ -140,6 +145,7 @@ def execute_action_set(
                 "marker": "end",
                 "actionId": action.id,
                 "kind": action.kind,
+                **extra,
                 "status": status,
                 "outcome": outcome,
                 "ts_utc": utc_now_iso(),

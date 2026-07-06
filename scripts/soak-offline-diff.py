@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -72,8 +73,25 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
     return {"markers": markers, "diag": diag, "packets": packets, "meta": meta}
 
 
+_SEARCH_ACTION_ID_METHOD = re.compile(r"^search-(?P<method>[a-z]+)-")
+
+
+def _action_method(action_id: str, window: dict[str, Any]) -> str | None:
+    """Search method for one action: marker field first, actionId fallback.
+
+    Newer recordings stamp ``method`` on the scripted-action markers; older ones
+    only encode it in the actionId (``search-<method>-<term>``).
+    """
+
+    method = window.get("method")
+    if method:
+        return str(method)
+    match = _SEARCH_ACTION_ID_METHOD.match(str(action_id))
+    return match.group("method") if match else None
+
+
 def _action_windows(markers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Maps ``actionId`` → {kind, t0, t1} from the begin/end markers."""
+    """Maps ``actionId`` → {kind, method, t0, t1} from the begin/end markers."""
 
     windows: dict[str, dict[str, Any]] = {}
     for marker in markers:
@@ -81,6 +99,8 @@ def _action_windows(markers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if not action_id:
             continue
         slot = windows.setdefault(action_id, {"kind": marker.get("kind")})
+        if marker.get("method") and not slot.get("method"):
+            slot["method"] = marker.get("method")
         stamp = soak_action_diff.parse_ts(marker.get("ts_utc"))
         if marker.get("marker") == "begin":
             slot["t0"] = stamp
@@ -98,6 +118,7 @@ def _diff_one_action(
     *,
     lead: float,
     settle: float,
+    method: str | None = None,
 ) -> dict[str, Any]:
     import datetime
 
@@ -114,7 +135,7 @@ def _diff_one_action(
     rust_span = pad(rust_win)
     mfc_span = pad(mfc_win)
     if rust_span is None or mfc_span is None:
-        return {"kind": kind, "verdict": "no-window", "conformant": False,
+        return {"kind": kind, "method": method, "verdict": "no-window", "conformant": False,
                 "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
                 "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
     r0, r1 = rust_span
@@ -126,7 +147,13 @@ def _diff_one_action(
 
     diag_diff = diag_event_diff.diff_traces(rust_diag, mfc_diag)
     packet_diff = packet_trace_diff.diff_traces(rust_pkt, mfc_pkt) if (rust_pkt or mfc_pkt) else None
-    action_coverage = soak_action_diff.build_action_coverage(kind, packet_diff or {})
+    action_coverage = soak_action_diff.build_action_coverage(
+        kind,
+        packet_diff or {},
+        method=method,
+        rust_kad_records=packet_trace_diff.kad_records(rust_diag),
+        mfc_kad_records=packet_trace_diff.kad_records(mfc_diag),
+    )
     audit = diag_event_diff.schema_audit(rust_diag, mfc_diag)
     conf = audit["conformance"]
     family_gate = diag_event_diff.family_conformance(rust_diag, mfc_diag)
@@ -145,6 +172,7 @@ def _diff_one_action(
         verdict = "conformant" if conf["conformant"] else "divergence"
     return {
         "kind": kind,
+        "method": method,
         "verdict": verdict,
         "conformant": bool(conf["conformant"]),
         # Per-family oracle-conformance gate (rust ⊇ oracle on families present on
@@ -204,9 +232,10 @@ def main(argv: list[str] | None = None) -> int:
     per_action: list[dict[str, Any]] = []
     for action_id in common:
         kind = rust_windows[action_id].get("kind") or "search"
+        method = _action_method(action_id, rust_windows[action_id]) if kind == "search" else None
         result = _diff_one_action(
             kind, rust, mfc, rust_windows[action_id], mfc_windows[action_id],
-            lead=args.lead_seconds, settle=args.settle_seconds,
+            lead=args.lead_seconds, settle=args.settle_seconds, method=method,
         )
         per_action.append({"actionId": action_id, **result})
         viol = result.get("conformanceViolations") or []

@@ -363,6 +363,110 @@ def test_diff_action_download_gate_fails_without_request_parts() -> None:
     assert report["actionCoverage"]["required"][0]["presentOnBoth"] is False
 
 
+def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
+    return {
+        "schema": "diag_event_v1",
+        "ts_utc": ts.isoformat().replace("+00:00", "Z"),
+        "family": "kad_udp",
+        "event": "packet",
+        "keys": {"opcode": opcode},
+        "body": {"direction": direction, "opcode": opcode},
+    }
+
+
+def _search_pair(method: str | None) -> sad.ActionPair:
+    rust = sad.Action(
+        client="rust", kind=sad.SEARCH, action_id="r-1", key="ubuntu", label="ubuntu",
+        observed_at=_ts(0), method=method,
+    )
+    mfc = sad.Action(
+        client="mfc", kind=sad.SEARCH, action_id="m-1", key="ubuntu", label="ubuntu",
+        observed_at=_ts(2), method="automatic",
+    )
+    return sad.ActionPair(kind=sad.SEARCH, key="ubuntu", rust=rust, mfc=mfc)
+
+
+def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
+    # A Kad search produces NO server TCP search opcodes; the gate must read the
+    # kad stream (KADEMLIA2_SEARCH_KEY_REQ / SEARCH_RES) instead of failing.
+    pair = _search_pair("kad")
+    rust_kad = [_kad_diag(0x33, "send", _ts(1)), _kad_diag(0x3B, "recv", _ts(3))]
+    mfc_kad = [_kad_diag(0x33, "send", _ts(2)), _kad_diag(0x3B, "recv", _ts(4))]
+    report = sad.diff_action(
+        pair,
+        rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
+        mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
+        rust_diag=rust_kad,
+        mfc_diag=mfc_kad,
+    )
+    assert report["method"] == "kad"
+    assert report["actionCoverage"]["mode"] == "search-kad-stream"
+    assert report["coverageOk"] is True
+    assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is True
+
+
+def test_search_gate_kad_method_fails_without_kad_request_on_both() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
+        mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
+        rust_diag=[_kad_diag(0x33, "send", _ts(1))],
+        mfc_diag=[_kad_diag(0x11, "send", _ts(2))],  # hello only, no search req
+    )
+    assert report["coverageOk"] is False
+    assert report["actionCoverage"]["required"][0]["mfcPresent"] is False
+
+
+def test_search_gate_global_method_holds_on_rust_only_evidence() -> None:
+    # MFC has no server-UDP packet hook, so the MFC side of a global search is
+    # not-assessable; the gate holds on rust's OP_GLOBSEARCHREQ send alone.
+    pair = _search_pair("global")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[_pkt("server", "send", 0x98, "aa", _ts(1), marker=0xE3)],
+        mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
+    )
+    assert report["actionCoverage"]["mode"] == "search-global-server-udp"
+    assert report["coverageOk"] is True
+    row = report["actionCoverage"]["required"][0]
+    assert row["mfcAssessable"] is False
+    assert row["mfcStatus"] == "not-assessable"
+
+
+def test_search_gate_global_method_fails_without_rust_send() -> None:
+    pair = _search_pair("global")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[_pkt("server", "send", 0x14, "aa", _ts(1), marker=0xE3)],
+        mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
+    )
+    assert report["coverageOk"] is False
+
+
+def test_search_gate_automatic_method_accepts_kad_evidence() -> None:
+    # An automatic search may resolve over Kad on both clients: the gate must not
+    # demand server TCP opcodes that never happened.
+    pair = _search_pair("automatic")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
+        mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
+        rust_diag=[_kad_diag(0x33, "send", _ts(1))],
+        mfc_diag=[_kad_diag(0x33, "send", _ts(2))],
+    )
+    assert report["actionCoverage"]["mode"] == "search-automatic"
+    assert report["coverageOk"] is True
+    assert report["actionCoverage"]["kadOk"] is True
+    assert report["actionCoverage"]["serverOk"] is False
+
+
+def test_pair_method_prefers_concrete_method_over_automatic_default() -> None:
+    pair = _search_pair("kad")
+    assert sad.pair_method(pair) == "kad"
+    assert sad.pair_method(_search_pair(None)) == "automatic"  # mfc default wins
+
+
 def test_diff_action_no_traffic_and_one_sided() -> None:
     pair = sad.ActionPair(
         kind=sad.SEARCH,

@@ -61,6 +61,19 @@ def test_execute_action_set_emits_begin_end_markers_and_spaces() -> None:
     assert slept == [7.0]
 
 
+def test_execute_action_set_markers_carry_search_method() -> None:
+    # The offline diff selects the method-aware coverage gate from the marker.
+    actions = sa.default_action_set(
+        ["ubuntu"], [{"hash": "d" * 32, "name": "n", "size": 5}], methods=("server", "kad")
+    )
+    markers: list[dict] = []
+    sa.execute_action_set(actions, lambda _a: {}, markers.append, sleep=lambda _s: None)
+    search_markers = [m for m in markers if m["kind"] == "search"]
+    download_markers = [m for m in markers if m["kind"] == "download"]
+    assert [m["method"] for m in search_markers] == ["server", "server", "kad", "kad"]
+    assert all("method" not in m for m in download_markers)
+
+
 def test_execute_action_set_isolates_a_failing_action() -> None:
     actions = sa.default_action_set(["ubuntu", "debian"], [], methods=("server", "global"))
     markers: list[dict] = []
