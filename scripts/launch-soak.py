@@ -280,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
             rest_port=args.rust_rest_port, runtime_dir=rust_runtime,
-            packet_dump_dir=rust_runtime / "packet-dump", bootstrap_nodes=bootstrap_nodes,
+            packet_dump_dir=rust_runtime / "packet-dump", incoming_dir=rust_runtime / "incoming",
+            bootstrap_nodes=bootstrap_nodes,
             shared_roots=shared_roots, server_met_url=args.server_met_url,
             server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
