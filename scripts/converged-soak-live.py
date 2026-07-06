@@ -53,6 +53,7 @@ from emule_test_harness import (
     mfc_diag_adapter,
     mfc_known_met,
     packet_trace_diff,
+    rust_metadata,
 )
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
@@ -1386,6 +1387,40 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     }
 
 
+def preseed_rust_shared_roots_for_startup(
+    *,
+    rust_runtime_dir: Path,
+    shared_roots: list[object],
+) -> dict[str, Any]:
+    """Persist Rust shared roots before daemon startup reload can prune seeds."""
+
+    roots = []
+    for root in soak_launch.dedupe_shared_roots(shared_roots):
+        normalized = soak_launch.normalize_shared_root_entry(root)
+        path = soak_launch.shared_root_path(normalized)
+        if not path.strip("\\"):
+            continue
+        roots.append(
+            {
+                "path": path,
+                "recursive": soak_launch.shared_root_is_recursive(normalized),
+                "monitorOwned": False,
+                "shareable": True,
+                "accessible": Path(path).is_dir(),
+            }
+        )
+    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    if not metadata_db.exists():
+        rust_metadata.create_metadata_db(resolve_rust_repo(), metadata_db)
+    rust_metadata.seed_shared_directory_roots(metadata_db, roots)
+    return {
+        "enabled": True,
+        "status": "seeded",
+        "rootCount": len(roots),
+        "accessibleRootCount": sum(1 for root in roots if root["accessible"]),
+    }
+
+
 def resolve_kad_bootstrap_endpoints(
     *,
     mfc_profile_dir: Path | None,
@@ -1717,6 +1752,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif shared_files_inventory_import.get("enabled"):
         log(f"MFC shared-files inventory import skipped: {shared_files_inventory_import['reason']}")
+    rust_shared_roots_preseed = preseed_rust_shared_roots_for_startup(
+        rust_runtime_dir=rust_runtime,
+        shared_roots=shared_roots,
+    )
+    summary["rustSharedRootsPreseed"] = rust_shared_roots_preseed
+    log(
+        "preseeded Rust shared roots before startup reload: "
+        f"{rust_shared_roots_preseed['rootCount']} root(s), "
+        f"{rust_shared_roots_preseed['accessibleRootCount']} accessible"
+    )
     write_summary(summary, summary_path)
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR

@@ -626,6 +626,63 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
     }
 
 
+def test_preseed_rust_shared_roots_writes_before_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    rust_repo = tmp_path / "emulebb-rust"
+    runtime = tmp_path / "runtime"
+    db_path = runtime / "metadata.sqlite"
+    shared_root = soak_launch.normalize_shared_root(str(tmp_path / "share"))
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(runner, "resolve_rust_repo", lambda: rust_repo)
+
+    def fake_create(repo: Path, db: Path) -> None:
+        calls.append(("create", (repo, db)))
+        db.parent.mkdir(parents=True, exist_ok=True)
+        db.write_bytes(b"sqlite")
+
+    def fake_seed(db: Path, roots: list[dict[str, object]]) -> None:
+        calls.append(("seed", (db, roots)))
+
+    monkeypatch.setattr(runner.rust_metadata, "create_metadata_db", fake_create)
+    monkeypatch.setattr(runner.rust_metadata, "seed_shared_directory_roots", fake_seed)
+
+    result = runner.preseed_rust_shared_roots_for_startup(
+        rust_runtime_dir=runtime,
+        shared_roots=[
+            {"path": str(tmp_path / "share"), "recursive": True},
+            str(tmp_path / "share"),
+        ],
+    )
+
+    assert calls == [
+        ("create", (rust_repo, db_path)),
+        (
+            "seed",
+            (
+                db_path,
+                [
+                    {
+                        "path": shared_root,
+                        "recursive": True,
+                        "monitorOwned": False,
+                        "shareable": True,
+                        "accessible": False,
+                    }
+                ],
+            ),
+        ),
+    ]
+    assert result == {
+        "enabled": True,
+        "status": "seeded",
+        "rootCount": 1,
+        "accessibleRootCount": 0,
+    }
+
+
 def test_converged_soak_accepts_mfc_shared_files_inventory_arg() -> None:
     runner = _load_soak_runner()
 

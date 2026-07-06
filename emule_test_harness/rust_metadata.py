@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import sys
 import time
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 ED2K_PART_SIZE = 9_728_000
 
@@ -373,6 +375,54 @@ def seed_share_in_place_manifests(
         conn.commit()
 
 
+def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:
+    """Seed Rust shared-directory roots before daemon startup.
+
+    Preseeded share-in-place manifests are pruned by Rust's startup reload when
+    no shared roots exist yet. Live parity harnesses therefore write the roots
+    into metadata before launching the daemon; the later REST patch remains an
+    idempotent confirmation of the same desired state.
+    """
+
+    now = _now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "UPDATE shared_directory_roots SET deleted_at_ms = ? WHERE deleted_at_ms IS NULL",
+            (now,),
+        )
+        for root in roots:
+            path = str(root.get("path") or "")
+            if not path.strip("\\"):
+                continue
+            path_id = _upsert_local_path(conn, path, now)
+            conn.execute(
+                """
+                INSERT INTO shared_directory_roots(
+                    path_id, recursive, monitor_owned, shareable, accessible,
+                    enabled, created_at_ms, deleted_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, 1, ?, NULL)
+                ON CONFLICT(path_id) DO UPDATE SET
+                    recursive = excluded.recursive,
+                    monitor_owned = excluded.monitor_owned,
+                    shareable = excluded.shareable,
+                    accessible = excluded.accessible,
+                    enabled = 1,
+                    deleted_at_ms = NULL
+                """,
+                (
+                    path_id,
+                    1 if root.get("recursive") else 0,
+                    1 if root.get("monitorOwned") else 0,
+                    1 if root.get("shareable", True) else 0,
+                    1 if root.get("accessible", True) else 0,
+                    now,
+                ),
+            )
+        conn.commit()
+
+
 def _seed_share_in_place_manifest_conn(
     conn: sqlite3.Connection,
     *,
@@ -655,3 +705,42 @@ def _upsert_content_object(
         "SELECT id FROM content_objects WHERE kind = 'ed2k_file' AND primary_hash_kind = 'ed2k' AND primary_hash = ?",
         (hash_blob,),
     ).fetchone()[0]
+
+
+def _upsert_local_path(conn: sqlite3.Connection, display_path: str, now: int) -> int:
+    normalized_key = normalize_path_key(display_path)
+    platform = current_platform()
+    conn.execute(
+        """
+        INSERT INTO local_paths(
+            display_path, native_path, canonical_display_path, normalized_key,
+            platform, last_stat_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform, normalized_key) DO UPDATE SET
+            display_path = excluded.display_path,
+            native_path = excluded.native_path,
+            canonical_display_path = excluded.canonical_display_path,
+            last_stat_ms = excluded.last_stat_ms
+        """,
+        (display_path, display_path.encode(), display_path, normalized_key, platform, now),
+    )
+    return conn.execute(
+        "SELECT id FROM local_paths WHERE platform = ? AND normalized_key = ?",
+        (platform, normalized_key),
+    ).fetchone()[0]
+
+
+def normalize_path_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    if current_platform() == "windows":
+        return "".join(ch.lower() for ch in normalized)
+    return normalized
+
+
+def current_platform() -> str:
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform == "win32":
+        return "windows"
+    return "unix"

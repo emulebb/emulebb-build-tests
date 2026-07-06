@@ -141,6 +141,41 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
     assert range_row == (0, payload.stat().st_size, "ed2k_transfer")
 
 
+def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> None:
+    db_path = tmp_path / "metadata.sqlite"
+    rust_metadata.create_metadata_db(_rust_repo(), db_path)
+    root = tmp_path / "share"
+
+    rust_metadata.seed_shared_directory_roots(
+        db_path,
+        [
+            {
+                "path": str(root),
+                "recursive": True,
+                "monitorOwned": False,
+                "shareable": True,
+                "accessible": False,
+            }
+        ],
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT local_paths.display_path, shared_directory_roots.recursive,
+                   shared_directory_roots.monitor_owned,
+                   shared_directory_roots.shareable,
+                   shared_directory_roots.accessible,
+                   shared_directory_roots.enabled,
+                   shared_directory_roots.deleted_at_ms
+            FROM shared_directory_roots
+            JOIN local_paths ON local_paths.id = shared_directory_roots.path_id
+            """
+        ).fetchall()
+
+    assert rows == [(str(root), 1, 0, 1, 0, 1, None)]
+
+
 def test_import_known_met_skips_ambiguous_path_match(tmp_path: Path) -> None:
     roots = [tmp_path / "one", tmp_path / "two"]
     modified_s = 1_700_000_000
