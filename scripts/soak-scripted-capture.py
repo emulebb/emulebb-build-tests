@@ -100,6 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="After connect/actions, hold the client open and poll REST server status for this many seconds.",
     )
     parser.add_argument("--hold-poll-seconds", type=float, default=5.0, help="REST poll cadence for --hold-seconds.")
+    parser.add_argument(
+        "--fresh-profile",
+        action="store_true",
+        help="Use a per-report client profile/runtime instead of the persisted soak profile.",
+    )
+    parser.add_argument(
+        "--no-shared-roots",
+        action="store_true",
+        help="Do not import live-wire shared roots; useful for a pure connection hold.",
+    )
     parser.add_argument("--no-obfuscation", action="store_true")
     parser.add_argument(
         "--secident",
@@ -344,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
 
     mods = soak_launch.load_helper_modules("capture")
     rust_mod = mods["rust"]
-    shared_roots = rust_mod.load_shared_roots(inputs_path)
+    shared_roots = [] if args.no_shared_roots else rust_mod.load_shared_roots(inputs_path)
 
     soak_root = output_root / "soak"
     campaign = args.campaign or _utc_stamp()
@@ -369,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     run_start = time.time()
     try:
         if client == "rust":
-            rust_runtime = soak_root / "rust-runtime"
+            rust_runtime = report_dir / "rust-runtime" if args.fresh_profile else soak_root / "rust-runtime"
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
                 rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
@@ -381,11 +391,13 @@ def main(argv: list[str] | None = None) -> int:
                 ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             )
         else:
+            mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
+            mfc_profile_dir = None if args.fresh_profile else inputs.mfc_profile_dir
             handles = bring_up_mfc(
                 live_common=mods["live_common"], rest_smoke=mods["rest_smoke"],
                 shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
                 seed_config_dir=Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR,
-                artifacts_dir=soak_root / "mfc-profile", direct_profile_dir=inputs.mfc_profile_dir,
+                artifacts_dir=mfc_artifacts_dir, direct_profile_dir=mfc_profile_dir,
                 rest_host=rest_addr, rest_port=rest_port, shared_roots=shared_roots,
                 server_endpoint=OPERATOR_SERVER, obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
@@ -451,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
             "client": client, "campaign": campaign, "baseUrl": base_url,
             "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
             "restPort": rest_port, "obfuscation": obfuscation,
+            "profileMode": "fresh" if args.fresh_profile else "persisted",
+            "sharedRootsEnabled": not args.no_shared_roots,
             # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
             # has no config key (its eD2K secure-ident is always provisioned).
             "secident": {
