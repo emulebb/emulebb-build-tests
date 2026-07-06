@@ -560,12 +560,6 @@ def bring_up_rust(
         endpoint=server_endpoint,
     )
     rust_mod.share_directories(base_url, shared_roots)
-    connect_operator_server(
-        base_url,
-        RUST_API_KEY,
-        description="rust server reconnect after share import",
-        endpoint=server_endpoint,
-    )
 
     def connected() -> dict[str, Any] | None:
         stats = rust_mod.get_stats(base_url)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from emule_test_harness import soak_launch
 
 
@@ -36,3 +38,9 @@ def test_rust_stats_connected_kad_gate_only_when_required() -> None:
     assert soak_launch.rust_stats_connected(
         {"ed2kConnected": True, "kadConnected": True}, require_kad=True
     ) is True
+
+
+def test_rust_bringup_does_not_force_second_server_connect() -> None:
+    source = Path(soak_launch.__file__).read_text(encoding="utf-8")
+
+    assert "rust server reconnect after share import" not in source
