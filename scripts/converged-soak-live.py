@@ -1089,6 +1089,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="live-wire search_terms profile used to discover the seed downloads.",
     )
     parser.add_argument(
+        "--seed-search-interval",
+        type=float,
+        default=30.0,
+        help="Seconds to wait between deterministic seed searches before the observer loop starts.",
+    )
+    parser.add_argument(
         "--seed-min-sources",
         type=int,
         default=5,
@@ -1412,6 +1418,8 @@ def main(argv: list[str] | None = None) -> int:
         shared_root_source = "live-wire inputs"
     if not shared_roots:
         raise RuntimeError("No shared roots resolved for the soak run.")
+    if args.seed_search_interval < 0.0:
+        raise ValueError("--seed-search-interval must be zero or greater.")
     auto_terms: list[str] = []
     if args.auto_drive:
         if args.auto_download_every < 0:
@@ -1666,7 +1674,7 @@ def main(argv: list[str] | None = None) -> int:
                     target_count=args.seed_downloads,
                     search_timeout_seconds=args.auto_search_timeout,
                     min_sources=args.seed_min_sources,
-                    search_interval=args.auto_search_interval,
+                    search_interval=args.seed_search_interval,
                     required_suffix=args.download_ext,
                 )
                 summary["seedDownloads"] = seed_result

@@ -269,6 +269,24 @@ def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
     assert args.poll_rest_timeout == 90.0
 
 
+def test_converged_soak_seed_search_interval_is_separate_from_auto_drive_interval() -> None:
+    runner = _load_soak_runner()
+
+    args = runner.build_parser().parse_args(
+        [
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--auto-search-interval",
+            "1800",
+            "--seed-search-interval",
+            "5",
+        ]
+    )
+
+    assert args.auto_search_interval == 1800.0
+    assert args.seed_search_interval == 5.0
+
+
 def _nodes_dat_with_one_contact() -> bytes:
     entry = (
         b"\x11" * 16
