@@ -58,3 +58,51 @@ def test_export_inventory_pages_shared_files(
     assert artifact["total"] == 2
     assert artifact["count"] == 2
     assert [row["hash"] for row in artifact["items"]] == ["a" * 32, "b" * 32]
+
+
+def test_export_inventory_rejects_truncated_total(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _load_script()
+
+    def fake_request_json(base_url: str, path: str, api_key: str, *, timeout_seconds: float) -> dict[str, object]:
+        if "offset=0" in path:
+            return {"data": {"items": [{"hash": "a" * 32, "path": "C:/one", "sizeBytes": 1}], "total": 2}}
+        return {"data": {"items": [], "total": 2}}
+
+    monkeypatch.setattr(script, "request_json", fake_request_json)
+
+    with pytest.raises(RuntimeError, match="ended early"):
+        script.export_inventory(
+            base_url="http://mfc",
+            api_key="key",
+            output_path=tmp_path / "inventory.json",
+            page_size=1,
+            timeout_seconds=9.0,
+            sleep_seconds=0.0,
+        )
+
+
+def test_export_inventory_rejects_changing_total(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _load_script()
+
+    def fake_request_json(base_url: str, path: str, api_key: str, *, timeout_seconds: float) -> dict[str, object]:
+        if "offset=0" in path:
+            return {"data": {"items": [{"hash": "a" * 32, "path": "C:/one", "sizeBytes": 1}], "total": 2}}
+        return {"data": {"items": [{"hash": "b" * 32, "path": "C:/two", "sizeBytes": 2}], "total": 3}}
+
+    monkeypatch.setattr(script, "request_json", fake_request_json)
+
+    with pytest.raises(RuntimeError, match="total changed"):
+        script.export_inventory(
+            base_url="http://mfc",
+            api_key="key",
+            output_path=tmp_path / "inventory.json",
+            page_size=1,
+            timeout_seconds=9.0,
+            sleep_seconds=0.0,
+        )

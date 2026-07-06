@@ -69,12 +69,20 @@ def export_inventory(
         page, page_total = extract_page(request_json(base_url, path, api_key, timeout_seconds=timeout_seconds))
         if total is None:
             total = page_total
-        rows.extend(page)
+        elif page_total is not None and page_total != total:
+            raise RuntimeError(f"shared-files total changed during export: started at {total}, now {page_total}")
         if not page:
+            if total is not None and len(rows) < total:
+                raise RuntimeError(f"shared-files inventory ended early: got {len(rows)} of {total} row(s)")
             break
+        rows.extend(page)
+        if total is not None and len(rows) > total:
+            raise RuntimeError(f"shared-files inventory exceeded reported total: got {len(rows)} of {total} row(s)")
         offset += len(page)
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+    if total is not None and len(rows) != total:
+        raise RuntimeError(f"shared-files inventory incomplete: got {len(rows)} of {total} row(s)")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {
         "schema": "mfc_shared_files_inventory_v1",

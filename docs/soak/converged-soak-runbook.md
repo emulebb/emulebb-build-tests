@@ -111,6 +111,34 @@ the rust daemon and the **MFC GUI window**, connects both to the operator server
 starts Kad, applies the shared roots, then prints the two REST endpoints and enters
 the observe loop.
 
+**Fresh Rust upload-parity path:** a fresh Rust runtime must build its share
+metadata from scratch unless it is pre-seeded. For upload/peer-protocol parity,
+first capture an exact local MFC shared-file inventory after MFC has finished
+loading its persistent profile:
+
+```powershell
+$inventory = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "soak\mfc-shared-files-inventory.json"
+uv run python scripts/export-mfc-shared-files-inventory.py `
+  --base-url "http://${env:X_LOCAL_IP}:4732" `
+  --output $inventory
+```
+
+Then pass that local artifact into the fresh-runtime soak:
+
+```powershell
+uv run python scripts/converged-soak-live.py `
+  --inputs live-wire-inputs.local.json `
+  --fresh-rust-runtime `
+  --mfc-shared-files-inventory $inventory `
+  --duration 1h
+```
+
+The inventory file contains private shared-file paths and hashes. Keep it under
+`EMULEBB_WORKSPACE_OUTPUT_ROOT` and never commit it. If the summary reports
+`parityRisks[].kind == "rust-share-cache-cold"`, server/search parity is still
+usable, but upload-side peer parity needs either this exact inventory import or a
+warmed persistent Rust runtime.
+
 ## 4. Drive the soak (human)
 
 - **MFC** — use the eMule GUI window the orchestrator opened (search, download,
