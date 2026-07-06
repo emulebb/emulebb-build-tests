@@ -252,13 +252,32 @@ def main(argv: list[str] | None = None) -> int:
     # Campaign summary over the FULL recordings (conformance + cumulative Kad coverage).
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
     conf = audit["conformance"]
+    # rust diag stamps opcode None for unknown/legacy inbound Kad opcodes; the raw
+    # udp_packet_v1 kad dump (carried in the rust recording's non-diag records)
+    # supplements the rust side so it is credited for those receives.
+    rust_udp_dump = [
+        record for record in rust["packets"] if record.get("schema") == "udp_packet_v1"
+    ]
     kad_cov = packet_trace_diff.kad_opcode_coverage(
-        packet_trace_diff.kad_records(rust["diag"]), packet_trace_diff.kad_records(mfc["diag"])
+        packet_trace_diff.kad_records(rust["diag"]),
+        packet_trace_diff.kad_records(mfc["diag"]),
+        rust_supplementary_records=rust_udp_dump,
     )
-    kad_gaps = sorted({str(e["opcodeName"] or e["opcode"]) for e in kad_cov["combined"]["onlyEmule"]})
+
+    def _kad_labels(rows: list[dict[str, Any]]) -> list[str]:
+        return sorted(f"{row['opcodeHex']} {row['opcodeName'] or '?'}" for row in rows)
+
+    kad_sent_gaps = _kad_labels(kad_cov["onlyEmuleSentGaps"])
+    kad_recv_only = _kad_labels(kad_cov["onlyEmuleReceivedOnly"])
+    kad_expected = _kad_labels(kad_cov["expectedOnlyEmule"])
     print("\n== campaign summary ==")
     print(f"  oracle conformance (rust superset-of oracle): {'PASS' if conf['conformant'] else 'FAIL'}")
-    print(f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
+    print(
+        f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "
+        f"sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} "
+        f"expectedDivergences={kad_expected} "
+        f"udpDumpCredited={kad_cov['supplementaryCreditedOpcodes']}"
+    )
     verdicts = {r["verdict"] for r in per_action}
     all_parity = verdicts <= {"conformant", "no-traffic"}
     print(f"  per-action verdicts: {sorted(verdicts)}  -> {'PARITY' if all_parity else 'REVIEW'}")
@@ -271,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
         "perAction": per_action,
         "conformance": conf["conformant"],
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
-        "kadOnlyEmule": kad_gaps,
+        "kadOnlyEmuleSentGaps": kad_sent_gaps,
+        "kadOnlyEmuleReceivedOnly": kad_recv_only,
+        "kadExpectedOnlyEmule": kad_expected,
+        "kadUdpDumpCreditedOpcodes": kad_cov["supplementaryCreditedOpcodes"],
         "allParity": all_parity,
     }
     out_path = rust_zip.parent / f"offline-diff-{rust_zip.stem}-vs-{mfc_zip.stem}.json"

@@ -103,13 +103,79 @@ def test_kad_opcode_coverage_rust_superset_is_oracle_ok() -> None:
     assert cov["ok"] is False  # strict: a one-sided (onlyRust) opcode is present
 
 
-def test_kad_opcode_coverage_flags_oracle_only_opcode() -> None:
+def test_kad_opcode_coverage_flags_oracle_sent_gap() -> None:
     from emule_test_harness import packet_trace_diff as ptd
 
-    rust = [_kad(67, "send")]
-    mfc = [_kad(67, "send"), _kad(41, "recv")]  # 41 is an oracle opcode rust never emitted
+    rust = [_kad(0x21, "send")]
+    # 0x43 is an opcode MFC actively SENT that rust never exercised: real signal.
+    mfc = [_kad(0x21, "send"), _kad(0x43, "send")]
     cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
     assert cov["oracleOk"] is False
+    gap = cov["onlyEmuleSentGaps"][0]
+    assert gap["opcodeHex"] == "0x43"
+    assert gap["opcodeName"] == "KADEMLIA2_PUBLISH_KEY_REQ"  # static table name
+
+
+def test_kad_opcode_coverage_recv_only_oracle_opcode_is_noise_not_gap() -> None:
+    # An opcode MFC merely RECEIVED is network-driven (whatever peers throw at
+    # it), not a rust parity gap; it is reported separately, not failed.
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust = [_kad(0x21, "send")]
+    mfc = [_kad(0x21, "send"), _kad(0x32, "recv")]
+    cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
+    assert cov["oracleOk"] is True
+    assert cov["onlyEmuleSentGaps"] == []
+    noise = cov["onlyEmuleReceivedOnly"][0]
+    assert noise["opcodeHex"] == "0x32"
+    assert noise["opcodeName"] == "KADEMLIA_SEARCH_NOTES_REQ"
+
+
+def test_kad_opcode_coverage_annotates_documented_intentional_divergences() -> None:
+    # Kad1 opcodes (rust never speaks Kad1) and the legacy KADEMLIA_FIREWALLED_REQ
+    # 0x50 (rust is 0x53-only) are expected-only-MFC: annotated, never re-flagged.
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust = [_kad(0x21, "send")]
+    mfc = [_kad(0x21, "send"), _kad(0x50, "send"), _kad(0x20, "recv")]
+    cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
+    assert cov["oracleOk"] is True  # 0x50 sent-tier but documented as expected
+    expected = {row["opcodeHex"]: row for row in cov["expectedOnlyEmule"]}
+    assert set(expected) == {"0x50", "0x20"}
+    assert "0x53" in expected["0x50"]["note"]
+    assert expected["0x20"]["opcodeName"] == "KADEMLIA_REQ_DEPRECATED"
+
+
+def test_kad_opcode_coverage_credits_rust_udp_dump_supplementary_source() -> None:
+    # rust diag emits opcode None for unknown/legacy inbound opcodes; the raw
+    # udp_packet_v1 dump credits those receives so rust is not falsely gapped.
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust_diag = [_kad(0x21, "send")]
+    rust_udp_dump = [
+        {"schema": "udp_packet_v1", "family": "kad", "direction": "recv", "opcode": "0x35"},
+    ]
+    mfc = [_kad(0x21, "send"), _kad(0x35, "send")]
+    without = ptd.kad_opcode_coverage(ptd.kad_records(rust_diag), ptd.kad_records(mfc))
+    assert without["oracleOk"] is False
+    cov = ptd.kad_opcode_coverage(
+        ptd.kad_records(rust_diag),
+        ptd.kad_records(mfc),
+        rust_supplementary_records=rust_udp_dump,
+    )
+    assert cov["oracleOk"] is True
+    assert cov["supplementaryCreditedOpcodes"] == ["0x35"]
+
+
+def test_kad_opcode_coverage_entries_carry_hex_and_static_names() -> None:
+    from emule_test_harness import packet_trace_diff as ptd
+
+    rust = [_kad(0x33, "send")]
+    mfc = [_kad(0x33, "recv")]
+    cov = ptd.kad_opcode_coverage(ptd.kad_records(rust), ptd.kad_records(mfc))
+    shared = cov["combined"]["shared"][0]
+    assert shared["opcodeHex"] == "0x33"
+    assert shared["opcodeName"] == "KADEMLIA2_SEARCH_KEY_REQ"
 
 
 def test_kad_records_filters_non_kad() -> None:

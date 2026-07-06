@@ -299,6 +299,65 @@ def _op_entry(
     }
 
 
+# Authoritative Kad UDP opcode names (MFC srchybrid/Opcodes.h, "KADEMLIA
+# (opcodes) (udp)" block). Reports must print hex + name, never a bare decimal;
+# this static table names opcodes even when neither client's dump carried a name
+# (the MFC diag adapter leaves many legacy opcodes unnamed).
+KAD_OPCODE_NAMES: dict[int, str] = {
+    0x00: "KADEMLIA_BOOTSTRAP_REQ_DEPRECATED",
+    0x01: "KADEMLIA2_BOOTSTRAP_REQ",
+    0x08: "KADEMLIA_BOOTSTRAP_RES_DEPRECATED",
+    0x09: "KADEMLIA2_BOOTSTRAP_RES",
+    0x10: "KADEMLIA_HELLO_REQ_DEPRECATED",
+    0x11: "KADEMLIA2_HELLO_REQ",
+    0x18: "KADEMLIA_HELLO_RES_DEPRECATED",
+    0x19: "KADEMLIA2_HELLO_RES",
+    0x20: "KADEMLIA_REQ_DEPRECATED",
+    0x21: "KADEMLIA2_REQ",
+    0x22: "KADEMLIA2_HELLO_RES_ACK",
+    0x28: "KADEMLIA_RES_DEPRECATED",
+    0x29: "KADEMLIA2_RES",
+    0x30: "KADEMLIA_SEARCH_REQ",
+    0x32: "KADEMLIA_SEARCH_NOTES_REQ",
+    0x33: "KADEMLIA2_SEARCH_KEY_REQ",
+    0x34: "KADEMLIA2_SEARCH_SOURCE_REQ",
+    0x35: "KADEMLIA2_SEARCH_NOTES_REQ",
+    0x38: "KADEMLIA_SEARCH_RES",
+    0x3A: "KADEMLIA_SEARCH_NOTES_RES",
+    0x3B: "KADEMLIA2_SEARCH_RES",
+    0x40: "KADEMLIA_PUBLISH_REQ",
+    0x42: "KADEMLIA_PUBLISH_NOTES_REQ_DEPRECATED",
+    0x43: "KADEMLIA2_PUBLISH_KEY_REQ",
+    0x44: "KADEMLIA2_PUBLISH_SOURCE_REQ",
+    0x45: "KADEMLIA2_PUBLISH_NOTES_REQ",
+    0x48: "KADEMLIA_PUBLISH_RES",
+    0x4A: "KADEMLIA_PUBLISH_NOTES_RES_DEPRECATED",
+    0x4B: "KADEMLIA2_PUBLISH_RES",
+    0x4C: "KADEMLIA2_PUBLISH_RES_ACK",
+    0x50: "KADEMLIA_FIREWALLED_REQ",
+    0x51: "KADEMLIA_FINDBUDDY_REQ",
+    0x52: "KADEMLIA_CALLBACK_REQ",
+    0x53: "KADEMLIA_FIREWALLED2_REQ",
+    0x58: "KADEMLIA_FIREWALLED_RES",
+    0x59: "KADEMLIA_FIREWALLED_ACK_RES",
+    0x5A: "KADEMLIA_FINDBUDDY_RES",
+    0x60: "KADEMLIA2_PING",
+    0x61: "KADEMLIA2_PONG",
+    0x62: "KADEMLIA2_FIREWALLUDP",
+}
+
+# Documented INTENTIONAL divergences: opcodes expected on the MFC side only.
+# These annotate (never re-flag) in coverage reports and do not fail oracleOk.
+KAD_EXPECTED_ONLY_EMULE_OPCODES: dict[int, str] = {
+    0x20: "rust never speaks Kad1: KADEMLIA_REQ_DEPRECATED is legacy Kad1 traffic only MFC handles",
+    0x30: "rust never speaks Kad1: KADEMLIA_SEARCH_REQ is legacy Kad1 traffic only MFC handles",
+    0x40: "rust never speaks Kad1: KADEMLIA_PUBLISH_REQ is legacy Kad1 traffic only MFC handles",
+    0x48: "rust never speaks Kad1: KADEMLIA_PUBLISH_RES is legacy Kad1 traffic only MFC handles",
+    0x50: "rust never sends legacy KADEMLIA_FIREWALLED_REQ: firewall-helper selection is "
+    "modern KADEMLIA_FIREWALLED2_REQ (0x53) only",
+}
+
+
 def kad_records(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Filters Kad packet records from a converged diag_event trace (or raw dump).
 
@@ -336,9 +395,17 @@ def _kad_direction(record: dict[str, Any]) -> str:
     return str(record.get("direction") or body.get("direction") or "any")
 
 
+def kad_opcode_hex(opcode: Any) -> str:
+    """Hex spelling for report output — Kad opcodes must never print as decimal."""
+
+    return f"0x{opcode:02X}" if isinstance(opcode, int) else str(opcode)
+
+
 def kad_opcode_coverage(
     rust_records: list[dict[str, Any]],
     emule_records: list[dict[str, Any]],
+    *,
+    rust_supplementary_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Direction-combined Kad opcode-set coverage — which KADEMLIA2_* opcodes each
     client *exercises*, the live-meaningful Kad parity signal (the byte-level
@@ -357,14 +424,24 @@ def kad_opcode_coverage(
     not recur in every narrow window), so feed this the widest trace available rather
     than a short slice.
 
-    Same rust-superset semantics as :func:`_opcode_coverage`: ``ok`` is strict (no
-    one-sided), ``oracleOk`` fails only on ``onlyEmule`` (an opcode the oracle exercised
-    that rust did not, in either direction). ``directions`` is retained as informational
-    per-direction detail only."""
+    ``ok`` stays the strict verdict (no one-sided opcode either way). ``oracleOk``
+    keys on the SEND tier only: an opcode MFC actively *sent* that rust never
+    exercised is the real parity signal; an opcode MFC merely *received* is
+    network noise (whatever legacy peers happen to throw at it) and is reported
+    separately (``onlyEmuleReceivedOnly``), never failing the verdict. Documented
+    intentional divergences (:data:`KAD_EXPECTED_ONLY_EMULE_OPCODES`) are
+    annotated ``expected`` and excluded from the verdict too.
+
+    ``rust_supplementary_records`` (the rust ``udp_packet_v1`` kad dump) credits
+    rust receives the diag stream misses: rust diag stamps ``opcode: None`` for
+    unknown/legacy inbound opcodes, so without the dump rust is never credited
+    for receiving them. Supplementary records only add opcodes the primary rust
+    stream did not already carry (no double counting)."""
 
     by_dir: dict[str, dict[str, dict[Any, int]]] = {}
     rust_all: dict[Any, int] = {}
     emule_all: dict[Any, int] = {}
+    emule_sent: set[Any] = set()
     names: dict[Any, str] = {}
     for side, records in (("rust", rust_records), ("emule", emule_records)):
         combined = rust_all if side == "rust" else emule_all
@@ -372,17 +449,37 @@ def kad_opcode_coverage(
             opcode = _kad_opcode(record)
             if opcode is None:
                 continue
-            slot = by_dir.setdefault(_kad_direction(record), {"rust": {}, "emule": {}})[side]
+            direction = _kad_direction(record)
+            slot = by_dir.setdefault(direction, {"rust": {}, "emule": {}})[side]
             slot[opcode] = slot.get(opcode, 0) + 1
             combined[opcode] = combined.get(opcode, 0) + 1
+            if side == "emule" and direction == "send":
+                emule_sent.add(opcode)
             name = record.get("opcode_name") or (record.get("body") or {}).get("opcodeName")
             if name and opcode not in names:
                 names[opcode] = name
 
+    supplementary_counts: dict[Any, int] = {}
+    for record in rust_supplementary_records or []:
+        opcode = _kad_opcode(record)
+        if opcode is None:
+            continue
+        supplementary_counts[opcode] = supplementary_counts.get(opcode, 0) + 1
+        name = record.get("opcode_name")
+        if name and opcode not in names:
+            names[opcode] = name
+    supplementary_credited = sorted(
+        (op for op in supplementary_counts if op not in rust_all), key=str
+    )
+    for opcode in supplementary_credited:
+        rust_all[opcode] = supplementary_counts[opcode]
+
     def entry(opcode: Any, rust_n: int, emule_n: int) -> dict[str, Any]:
+        static_name = KAD_OPCODE_NAMES.get(opcode) if isinstance(opcode, int) else None
         return {
             "opcode": opcode,
-            "opcodeName": names.get(opcode),
+            "opcodeHex": kad_opcode_hex(opcode),
+            "opcodeName": static_name or names.get(opcode),
             "rustCount": rust_n,
             "emuleCount": emule_n,
         }
@@ -415,15 +512,31 @@ def kad_opcode_coverage(
     only_rust = sorted(set(rust_all) - set(emule_all), key=str)
     only_emule = sorted(set(emule_all) - set(rust_all), key=str)
     shared = sorted(set(rust_all) & set(emule_all), key=str)
+    only_emule_entries: list[dict[str, Any]] = []
+    for opcode in only_emule:
+        row = entry(opcode, 0, emule_all[opcode])
+        row["emuleSent"] = opcode in emule_sent
+        note = (
+            KAD_EXPECTED_ONLY_EMULE_OPCODES.get(opcode) if isinstance(opcode, int) else None
+        )
+        row["expected"] = note is not None
+        if note is not None:
+            row["note"] = note
+        only_emule_entries.append(row)
+    sent_gaps = [row for row in only_emule_entries if row["emuleSent"] and not row["expected"]]
     combined = {
         "shared": [entry(op, rust_all[op], emule_all[op]) for op in shared],
         "onlyRust": [entry(op, rust_all[op], 0) for op in only_rust],
-        "onlyEmule": [entry(op, 0, emule_all[op]) for op in only_emule],
+        "onlyEmule": only_emule_entries,
     }
     return {
         "ok": not (only_rust or only_emule),
-        "oracleOk": not only_emule,
+        "oracleOk": not sent_gaps,
         "combined": combined,
+        "onlyEmuleSentGaps": sent_gaps,
+        "onlyEmuleReceivedOnly": [row for row in only_emule_entries if not row["emuleSent"]],
+        "expectedOnlyEmule": [row for row in only_emule_entries if row["expected"]],
+        "supplementaryCreditedOpcodes": [kad_opcode_hex(op) for op in supplementary_credited],
         "directions": directions,
     }
 

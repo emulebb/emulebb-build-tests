@@ -194,9 +194,16 @@ def divergence(args: argparse.Namespace) -> None:
         )
         report["kad_opcode_coverage"] = kad_cov
         kad_gaps = sorted(
-            {str(e["opcodeName"] or e["opcode"]) for e in kad_cov["combined"]["onlyEmule"]}
+            f"{e['opcodeHex']} {e['opcodeName'] or '?'}" for e in kad_cov["onlyEmuleSentGaps"]
         )
-        print(f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} onlyEmule(gap)={kad_gaps}")
+        kad_recv_noise = len(kad_cov["onlyEmuleReceivedOnly"])
+        kad_expected = sorted(
+            f"{e['opcodeHex']} {e['opcodeName'] or '?'}" for e in kad_cov["expectedOnlyEmule"]
+        )
+        print(
+            f"  [kad opcode coverage] oracleOk={kad_cov['oracleOk']} sentGaps={kad_gaps} "
+            f"recvOnlyNoise={kad_recv_noise} expectedDivergences={kad_expected}"
+        )
         # Download-parallelism parity (rotation-robust): the latest source_count body from
         # each side's already-windowed trace. MFC's rapidly-rotated diag logs are gathered
         # + concatenated above (mfc_diag_files -> mt), so this is NOT subject to the
