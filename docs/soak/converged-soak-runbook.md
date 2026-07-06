@@ -44,11 +44,23 @@ soak/
   mfc-profile/         config/ (preferences, server.met, nodes.dat, known.met cache),
                        logs/ (packet + diag dumps), Incoming/
   reports/<campaign>/  summary.json, actions/<seq>-<kind>-<key>.json, checkpoints/
+  reports/latest.json  pointer to the newest campaign summary
+  archives/<campaign>/preflight/
+                       stale logs/dumps archived before this campaign starts
+  last-run/manifest.json
+                       stable newest-run manifest with cleanup evidence
 ```
 
 Profiles are **reused** across campaigns (not timestamped), so the MD4/AICH hash
 caches survive and the shared library is hashed once, not on every launch. They
 are isolated from any production eMule install.
+
+Campaign ids use UTC `YYYYMMDDTHHMMSSZ` names, for example
+`20260706T073313Z`. Before each launch, the harness stops stale process trees
+from older converged-soak runs using command-line-scoped matching, then archives
+volatile Rust/MFC outputs into `archives/<campaign>/preflight/` and starts from a
+clean last-run state. Durable profile state is preserved: Rust metadata, MFC
+`config`, `known.met`, shared caches, and incoming/temp state are not wiped.
 
 ## 3. Launch
 
