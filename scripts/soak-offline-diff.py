@@ -114,7 +114,8 @@ def _diff_one_action(
     rust_span = pad(rust_win)
     mfc_span = pad(mfc_win)
     if rust_span is None or mfc_span is None:
-        return {"kind": kind, "verdict": "no-window", "diagOk": False, "coverageOk": None,
+        return {"kind": kind, "verdict": "no-window", "conformant": False,
+                "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
                 "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
     r0, r1 = rust_span
     m0, m1 = mfc_span
@@ -128,6 +129,7 @@ def _diff_one_action(
     action_coverage = soak_action_diff.build_action_coverage(kind, packet_diff or {})
     audit = diag_event_diff.schema_audit(rust_diag, mfc_diag)
     conf = audit["conformance"]
+    family_gate = diag_event_diff.family_conformance(rust_diag, mfc_diag)
 
     rust_total = len(rust_pkt) + len(rust_diag)
     mfc_total = len(mfc_pkt) + len(mfc_diag)
@@ -145,7 +147,14 @@ def _diff_one_action(
         "kind": kind,
         "verdict": verdict,
         "conformant": bool(conf["conformant"]),
-        "diagFamilyOk": bool(diag_diff.get("ok")),
+        # Per-family oracle-conformance gate (rust ⊇ oracle on families present on
+        # both sides) — the reported per-action diag gate. The old strict
+        # record-identity match is retained as `diagStrictMatchOk`, which is
+        # INFORMATIONAL ONLY: it can never pass across two independent live
+        # sessions and must not be read as a failure signal.
+        "diagFamilyOk": bool(family_gate["ok"]),
+        "diagFamilyGate": family_gate,
+        "diagStrictMatchOk": bool(diag_diff.get("ok")),
         "coverageOk": action_coverage.get("ok"),
         "conformanceViolations": conf.get("bodyKeyViolations") or conf.get("violations") or [],
         "rustRecords": {"packets": len(rust_pkt), "diag": len(rust_diag)},
@@ -204,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"  {action_id:<26} {result['verdict']:<12} conformant={result['conformant']} "
             f"viol={len(viol)} famOk={result['diagFamilyOk']} "
+            f"strict={result['diagStrictMatchOk']}(info) "
             f"rust(pkt/diag)={result['rustRecords']['packets']}/{result['rustRecords']['diag']} "
             f"mfc={result['mfcRecords']['packets']}/{result['mfcRecords']['diag']}"
         )

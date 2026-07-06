@@ -579,6 +579,65 @@ def schema_audit(
     return {"schema": DIAG_SCHEMA, "ok": ok, "events": events, "conformance": conformance}
 
 
+def family_conformance(
+    rust_trace: list[dict[str, Any]],
+    mfc_trace: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Per-family oracle-conformance gate for one shared action window.
+
+    The strict record-identity diff (:func:`diff_traces` ``ok``) can NEVER pass
+    across two independent live sessions — different peers, payloads and timing
+    make the per-record sequences unmatchable by construction. The per-action
+    gate that IS live-meaningful is oracle conformance scoped per family: for
+    every diag family present on both sides, rust's event-type/body-key coverage
+    must be a superset of the oracle's (MFC's) on the shared events, reusing the
+    exact :func:`schema_audit` rules (deliberate privacy omissions and
+    conditional keys excluded). Oracle events rust did not emit in-window stay
+    informational (``oracleOnlyEvents``) — window/state sampling is
+    indistinguishable from a real gap in a finite slice — as do families present
+    on only one side.
+    """
+
+    audit = schema_audit(rust_trace, mfc_trace)
+    per_family: dict[str, dict[str, Any]] = {}
+    for event in audit["events"]:
+        slot = per_family.setdefault(
+            event["family"],
+            {
+                "family": event["family"],
+                "rustEventTypes": 0,
+                "mfcEventTypes": 0,
+                "bodyKeyViolations": [],
+                "oracleOnlyEvents": [],
+                "rustOnlyEvents": [],
+            },
+        )
+        if event["rustCount"]:
+            slot["rustEventTypes"] += 1
+        if event["mfcCount"]:
+            slot["mfcEventTypes"] += 1
+        if event["presence"] == "mfc_only":
+            slot["oracleOnlyEvents"].append(event["event"])
+        elif event["presence"] == "rust_only":
+            slot["rustOnlyEvents"].append(event["event"])
+    for violation in audit["conformance"]["bodyKeyViolations"]:
+        slot = per_family.get(violation["family"])
+        if slot is not None:
+            slot["bodyKeyViolations"].append(violation)
+    families: list[dict[str, Any]] = []
+    for slot in sorted(per_family.values(), key=lambda f: str(f["family"])):
+        slot["presentOnBoth"] = slot["rustEventTypes"] > 0 and slot["mfcEventTypes"] > 0
+        # Body-key violations only exist on shared events, so a family present on
+        # one side alone is vacuously ok (informational, never a failure).
+        slot["ok"] = not slot["bodyKeyViolations"]
+        families.append(slot)
+    return {
+        "schema": DIAG_SCHEMA,
+        "ok": all(f["ok"] for f in families),
+        "families": families,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Diff two diag_event_v1 diagnostic traces.")
     parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust diag_event_v1 JSONL dump.")

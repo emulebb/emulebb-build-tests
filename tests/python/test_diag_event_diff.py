@@ -219,3 +219,68 @@ def test_conformance_ignores_deliberate_pii_omissions() -> None:
                                "fileName": "secret.mkv", "userName": "http://x"}}]
     audit = schema_audit(rust, mfc)
     assert audit["conformance"]["conformant"] is True
+
+
+# --- family_conformance (per-action oracle gate) --------------------------- #
+
+
+def test_family_conformance_passes_where_strict_diff_cannot() -> None:
+    # Two independent live sessions: same event schema, totally different record
+    # identities. The strict diff fails by construction; the per-family oracle
+    # gate (rust event-type/body-key coverage ⊇ oracle) passes.
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [
+        _pkt("ed2k_tcp", "send", 0x16, "aa11"),
+        _env("kad_event", "lookup", keys={"searchId": 1},
+             body={"milestone": "lookup_complete", "resultCount": 5}),
+    ]
+    mfc = [
+        _pkt("ed2k_tcp", "send", 0x16, "bb22"),
+        _env("kad_event", "lookup", keys={"searchId": 9},
+             body={"milestone": "lookup_complete", "resultCount": 2}),
+    ]
+    assert diff_traces(rust, mfc)["ok"] is False  # strict identity never matches
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is True
+    families = {f["family"]: f for f in gate["families"]}
+    assert families["ed2k_tcp"]["presentOnBoth"] is True
+    assert families["kad_event"]["ok"] is True
+
+
+def test_family_conformance_fails_on_missing_oracle_body_key() -> None:
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [_env("kad_event", "lookup", body={"milestone": "lookup_complete"})]
+    mfc = [_env("kad_event", "lookup",
+                body={"milestone": "lookup_complete", "resultCount": 4})]
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is False
+    fam = next(f for f in gate["families"] if f["family"] == "kad_event")
+    assert fam["bodyKeyViolations"][0]["missingOracleKeys"] == ["resultCount"]
+
+
+def test_family_conformance_one_sided_families_are_informational() -> None:
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [_env("sched", "upload_request_outcome", body={"outcome": "served"})]
+    mfc = [_env("bad_peer", "spam_wave", body={"behavior": "spam"})]
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is True  # neither family is present on both sides
+    families = {f["family"]: f for f in gate["families"]}
+    assert families["sched"]["presentOnBoth"] is False
+    assert families["bad_peer"]["presentOnBoth"] is False
+
+
+def test_family_conformance_oracle_only_event_is_reported_not_failed() -> None:
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [_env("kad_event", "lookup", body={"milestone": "lookup_complete"})]
+    mfc = [
+        _env("kad_event", "lookup", body={"milestone": "lookup_complete"}),
+        _env("kad_event", "publish", body={"milestone": "publish_done"}),
+    ]
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is True
+    fam = next(f for f in gate["families"] if f["family"] == "kad_event")
+    assert fam["oracleOnlyEvents"] == ["publish"]
