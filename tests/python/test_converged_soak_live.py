@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import struct
 from datetime import timedelta
 from pathlib import Path
@@ -1442,3 +1443,51 @@ def test_trim_log_tree_can_trim_diagnostic_evidence_when_requested(tmp_path: Pat
 
     assert [Path(row["path"]).name for row in results] == ["emulebb-rust-diag-1.jsonl"]
     assert diag.stat().st_size < len(large_payload)
+
+
+def test_load_diag_includes_mfc_bad_peer_adapter(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    diag = tmp_path / "emulebb-diagnostics-diag.log"
+    bad_peer = tmp_path / "emulebb-diagnostics-bad-peer.log"
+    diag.write_text(
+        '{"schema":"diag_event_v1","family":"sched","event":"tick","ts":"2026-07-06T12:00:00.000Z","body":{}}\n',
+        encoding="utf-8",
+    )
+    bad_peer.write_text(
+        '{"schema":"bad_peer_event_v1","event":"upload_repeat_block_request_observed",'
+        '"severity":"medium","ts_utc":"2026-07-06T12:00:01.000Z",'
+        '"peer":{"address":"192.0.2.10","user_port":4662},'
+        '"file":{"hash":"ABCDEF"},"evidence":{"repeat_count":3}}\n',
+        encoding="utf-8",
+    )
+
+    records = runner.load_diag(tmp_path, side="emule")
+
+    assert [(record["family"], record["event"]) for record in records] == [
+        ("sched", "tick"),
+        ("bad_peer", "repeat_block_request"),
+    ]
+    assert records[1]["keys"]["fileHash"] == "abcdef"
+    assert records[1]["body"]["repeatCount"] == 3
+
+
+def test_load_diag_mtime_filter_applies_to_mfc_bad_peer_adapter(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    stale = tmp_path / "emulebb-diagnostics-bad-peer-20260706-120000.log"
+    fresh = tmp_path / "emulebb-diagnostics-bad-peer.log"
+    stale.write_text(
+        '{"schema":"bad_peer_event_v1","event":"upload_repeat_block_request_observed","ts_utc":"2026-07-06T12:00:00.000Z"}\n',
+        encoding="utf-8",
+    )
+    fresh.write_text(
+        '{"schema":"bad_peer_event_v1","event":"upload_repeat_file_request_observed","ts_utc":"2026-07-06T12:00:10.000Z"}\n',
+        encoding="utf-8",
+    )
+    os.utime(stale, (100.0, 100.0))
+    os.utime(fresh, (200.0, 200.0))
+
+    records = runner.load_diag(tmp_path, side="emule", min_mtime=150.0)
+
+    assert [(record["family"], record["event"]) for record in records] == [
+        ("bad_peer", "repeat_file_request")
+    ]

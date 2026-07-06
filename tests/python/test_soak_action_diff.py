@@ -29,6 +29,18 @@ def _pkt(
     }
 
 
+def _diag(family: str, event: str, ts: datetime, body: dict | None = None) -> dict:
+    return {
+        "schema": "diag_event_v1",
+        "family": family,
+        "event": event,
+        "severity": "info",
+        "ts": ts.isoformat().replace("+00:00", "Z"),
+        "keys": {},
+        "body": body or {},
+    }
+
+
 # --------------------------------------------------------------------------- #
 # parse_ts
 # --------------------------------------------------------------------------- #
@@ -191,6 +203,27 @@ def test_slice_trace_keeps_only_in_window_records() -> None:
     assert [r["opcode"] for r in sliced] == [0x02]
 
 
+def test_slice_trace_keeps_diag_event_records_with_ts_field() -> None:
+    records = [
+        {
+            "schema": "diag_event_v1",
+            "family": "sched",
+            "event": "outside",
+            "ts": _ts(-5).isoformat().replace("+00:00", "Z"),
+        },
+        {
+            "schema": "diag_event_v1",
+            "family": "sched",
+            "event": "inside",
+            "ts": _ts(10).isoformat().replace("+00:00", "Z"),
+        },
+    ]
+
+    sliced = sad.slice_trace(records, _ts(0), _ts(30))
+
+    assert [r["event"] for r in sliced] == ["inside"]
+
+
 def test_slice_trace_drops_records_without_timestamp() -> None:
     records = [{"schema": "ed2k_packet_v1", "opcode": 1, "direction": "send"}]
     assert sad.slice_trace(records, _ts(0), _ts(30)) == []
@@ -244,6 +277,69 @@ def test_diff_action_search_gate_ignores_unrelated_background_opcodes() -> None:
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["fullCoverageOk"] is False
+
+
+def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0)),
+        mfc=_action("mfc", "ubuntu", _ts(2)),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "recv", 0x33, "cc", _ts(2), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "dd", _ts(4), marker=0xE3),
+    ]
+    rust_diag = [_diag("kad_event", "lookup", _ts(1), {"milestone": "lookup_complete", "resultCount": 1})]
+    mfc_diag = [_diag("kad_event", "lookup", _ts(3), {"milestone": "lookup_complete", "resultCount": 2})]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        rust_diag=rust_diag,
+        mfc_diag=mfc_diag,
+    )
+
+    assert report["diagStrictOk"] is False
+    assert report["diagOk"] is True
+    assert report["diagConformance"]["ok"] is True
+    assert report["verdict"] == "coverage-parity"
+
+
+def test_diff_action_fails_on_diag_oracle_body_key_gap() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0)),
+        mfc=_action("mfc", "ubuntu", _ts(2)),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "recv", 0x33, "cc", _ts(2), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "dd", _ts(4), marker=0xE3),
+    ]
+    rust_diag = [_diag("kad_event", "lookup", _ts(1), {"milestone": "lookup_complete"})]
+    mfc_diag = [_diag("kad_event", "lookup", _ts(3), {"milestone": "lookup_complete", "resultCount": 2})]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        rust_diag=rust_diag,
+        mfc_diag=mfc_diag,
+    )
+
+    assert report["diagOk"] is False
+    assert report["diagConformance"]["ok"] is False
+    assert report["verdict"] == "divergence"
 
 
 def test_diff_action_divergence_when_required_search_result_is_missing() -> None:

@@ -47,7 +47,13 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, live_process_monitor, mfc_known_met, packet_trace_diff
+from emule_test_harness import (
+    diag_event_diff,
+    live_process_monitor,
+    mfc_diag_adapter,
+    mfc_known_met,
+    packet_trace_diff,
+)
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch, soak_run_layout, vpn_guard_live
@@ -775,6 +781,13 @@ def load_diag(
     records: list[dict[str, Any]] = []
     for path in _glob_all(dump_dir, globs, min_mtime=min_mtime):
         records.extend(diag_event_diff.load_trace(path))
+    if side == "emule":
+        bad_peer_logs = _glob_all(
+            dump_dir,
+            ("emulebb-diagnostics-bad-peer*.log",),
+            min_mtime=min_mtime,
+        )
+        records.extend(mfc_diag_adapter.bad_peer_events_as_diag_v1(bad_peer_logs))
     return records
 
 

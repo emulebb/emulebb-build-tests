@@ -268,16 +268,16 @@ def slice_trace(
     t0: datetime,
     t1: datetime,
 ) -> list[dict[str, Any]]:
-    """Returns the records whose ``ts_utc`` falls within ``[t0, t1]`` (inclusive).
+    """Returns records whose timestamp falls within ``[t0, t1]`` (inclusive).
 
-    Works for both ``ed2k_packet_v1`` and ``diag_event_v1`` records — both carry a
-    top-level ``ts_utc``. Records without a parseable timestamp are dropped (they
-    cannot be placed in an action window).
+    ``ed2k_packet_v1`` records carry top-level ``ts_utc`` while ``diag_event_v1``
+    records carry top-level ``ts``. Records without a parseable timestamp are
+    dropped because they cannot be placed in an action window.
     """
 
     sliced: list[dict[str, Any]] = []
     for record in records:
-        timestamp = parse_ts(record.get("ts_utc"))
+        timestamp = parse_ts(record.get("ts_utc") or record.get("ts"))
         if timestamp is None:
             continue
         if t0 <= timestamp <= t1:
@@ -674,7 +674,7 @@ def _check_action_requirements(
 
 def _classify(
     action_coverage: dict[str, Any],
-    diag_diff: dict[str, Any] | None,
+    diag_conformance: dict[str, Any] | None,
     rust_count: int,
     mfc_count: int,
 ) -> str:
@@ -690,7 +690,7 @@ def _classify(
     if rust_count == 0 or mfc_count == 0:
         return "one-sided"
     coverage_ok = bool(action_coverage.get("ok"))
-    diag_ok = diag_diff is None or bool(diag_diff.get("ok"))
+    diag_ok = diag_conformance is None or bool(diag_conformance.get("ok"))
     return "coverage-parity" if coverage_ok and diag_ok else "divergence"
 
 
@@ -732,8 +732,10 @@ def diff_action(
     rust_diag_slice = slice_trace(rust_diag or [], t0, t1)
     mfc_diag_slice = slice_trace(mfc_diag or [], t0, t1)
     diag_diff: dict[str, Any] | None = None
+    diag_conformance: dict[str, Any] | None = None
     if rust_diag or mfc_diag:
         diag_diff = diag_event_diff.diff_traces(rust_diag_slice, mfc_diag_slice)
+        diag_conformance = diag_event_diff.family_conformance(rust_diag_slice, mfc_diag_slice)
 
     action_coverage = build_action_coverage(
         pair.kind,
@@ -742,7 +744,7 @@ def diff_action(
         rust_kad_records=packet_trace_diff.kad_records(rust_diag_slice),
         mfc_kad_records=packet_trace_diff.kad_records(mfc_diag_slice),
     )
-    verdict = _classify(action_coverage, diag_diff, len(rust_slice), len(mfc_slice))
+    verdict = _classify(action_coverage, diag_conformance, len(rust_slice), len(mfc_slice))
     return {
         "kind": pair.kind,
         "key": pair.key,
@@ -758,10 +760,12 @@ def diff_action(
         "coverageOk": bool(action_coverage.get("ok")),
         "fullCoverageOk": bool(packet_diff.get("coverageOk")),
         "byteMatch": bool(packet_diff.get("ok")),
-        "diagOk": diag_diff is None or bool(diag_diff.get("ok")),
+        "diagOk": diag_conformance is None or bool(diag_conformance.get("ok")),
+        "diagStrictOk": diag_diff is None or bool(diag_diff.get("ok")),
         "actionCoverage": action_coverage,
         "packetDiff": packet_diff,
         "diagDiff": diag_diff,
+        "diagConformance": diag_conformance,
     }
 
 
