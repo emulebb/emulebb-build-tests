@@ -82,6 +82,18 @@ across clients), `--settle-seconds` / `--lead-seconds` (window padding),
 `--no-obfuscation`, `--rust-rest-port` / `--mfc-rest-port`,
 `--mfc-variant/-arch/-configuration`, `--trackmulebb-cmd "<cmd>"`.
 
+**SecIdent campaign dimension:** `--secident on|off` (default `on`; also on
+`scripts/soak-scripted-capture.py`) pins the MFC `SecureIdent` preference
+explicitly on every launch — never inherited from the profile — and records the
+state in the summary's `environmentParity.secident` block. emulebb-rust has no
+secident config key (its eD2K secure-ident identity is always provisioned), so
+an `off` campaign is asymmetric and recorded as such. Run parity with the
+setting in BOTH states. The offline diff (`scripts/soak-offline-diff.py`) audits
+each recording for SecIdent liveness (sent-HELLO `MISCOPTIONS1` secident bits +
+`OP_PUBLICKEY`/`OP_SIGNATURE`/`OP_SECIDENTSTATE` counts) and flags
+**`secident-dead`** when a client claiming SecIdent on produced no wire evidence
+despite peer traffic — the 2026-07-04 silenced-surface failure mode.
+
 On start it: ensures the hide.me split tunnel, fetches the Kad bootstrap, brings up
 the rust daemon and the **MFC GUI window**, connects both to the operator server,
 starts Kad, applies the shared roots, then prints the two REST endpoints and enters

@@ -171,3 +171,26 @@ def test_no_window_result_carries_gate_keys() -> None:
     assert result["verdict"] == "no-window"
     assert result["diagFamilyOk"] is False
     assert result["diagStrictMatchOk"] is False
+
+
+def test_declared_secident_reads_recorded_campaign_state() -> None:
+    mod = _load_offline_diff()
+    assert mod._declared_secident({"secident": {"requested": "on", "applied": "on"}}) is True
+    assert mod._declared_secident({"secident": {"requested": "off", "applied": "off"}}) is False
+    assert mod._declared_secident({"secident": {"requested": "on", "applied": "always-on"}}) is True
+    assert mod._declared_secident({}) is None  # pre-knob recording
+
+
+def test_audit_secident_flags_dead_mfc_side() -> None:
+    mod = _load_offline_diff()
+    # MFC claims secident on but produced steady peer traffic with zero
+    # 0x85/86/87 packets -> the offline report must flag secident-dead.
+    mfc_packets = [
+        {**_pkt("client", "send", 0x58, "aa", float(i)), "protocol_marker": 0xE3}
+        for i in range(30)
+    ]
+    rust, mfc = _sides([], mfc_packets)
+    mfc["meta"] = {"secident": {"requested": "on", "applied": "on"}}
+    report = mod._audit_secident(rust, mfc)
+    assert report["mfc"]["verdict"] == "secident-dead"
+    assert report["rust"]["verdict"] == "not-assessable"  # nothing recorded rust-side

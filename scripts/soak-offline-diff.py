@@ -27,7 +27,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, packet_trace_diff, soak_action_diff
+from emule_test_harness import diag_event_diff, packet_trace_diff, secident_audit, soak_action_diff
 from emule_test_harness.paths import get_workspace_output_root
 
 DIAG_SCHEMA = "diag_event_v1"
@@ -190,6 +190,34 @@ def _diff_one_action(
     }
 
 
+def _declared_secident(meta: dict[str, Any]) -> bool | None:
+    """Reads the recorded SecIdent claim from a recording's results.json meta.
+
+    ``always-on`` (rust: no config key, identity always provisioned) counts as an
+    enabled claim; recordings older than the --secident knob return ``None``.
+    """
+
+    section = meta.get("secident")
+    if isinstance(section, dict):
+        applied = section.get("applied") or section.get("requested")
+        if applied == "always-on":
+            return True
+        if applied in ("on", "off"):
+            return applied == "on"
+    return None
+
+
+def _audit_secident(rust: dict[str, Any], mfc: dict[str, Any]) -> dict[str, Any]:
+    """Runs the SecIdent liveness audit over both full recordings."""
+
+    report: dict[str, Any] = {}
+    for name, side in (("rust", rust), ("mfc", mfc)):
+        report[name] = secident_audit.audit_client_secident(
+            side["packets"], declared_enabled=_declared_secident(side["meta"])
+        )
+    return report
+
+
 def _find_recordings(campaign_dir: Path) -> tuple[Path | None, Path | None]:
     rust = sorted(campaign_dir.glob("rust-*.zip"), key=lambda p: p.stat().st_mtime)
     mfc = sorted(campaign_dir.glob("mfc-*.zip"), key=lambda p: p.stat().st_mtime)
@@ -278,6 +306,24 @@ def main(argv: list[str] | None = None) -> int:
         f"expectedDivergences={kad_expected} "
         f"udpDumpCredited={kad_cov['supplementaryCreditedOpcodes']}"
     )
+    # SecIdent liveness: a profile claiming SecIdent on while the wire shows
+    # zero 0x85/86/87 packets + HELLO secident bits 0 is a silenced parity
+    # surface (the 2026-07-04 capture failure mode) and must be loud.
+    secident_report = _audit_secident(rust, mfc)
+    for name, audit_row in secident_report.items():
+        line = (
+            f"  secident[{name}]: {audit_row['verdict']}"
+            f" helloBits={audit_row['helloSecIdentBits']}"
+            f" packets={audit_row['secIdentPackets']['total']}"
+            f" declared={audit_row['declaredEnabled']}"
+        )
+        print(line)
+        if audit_row["verdict"] == "secident-dead":
+            print(
+                f"  !! SECIDENT-DEAD ({name}): {', '.join(audit_row['findings'])} — "
+                "the SecIdent parity surface produced NO wire evidence this run; "
+                "check the profile SecureIdent pref / cryptkey provisioning."
+            )
     verdicts = {r["verdict"] for r in per_action}
     all_parity = verdicts <= {"conformant", "no-traffic"}
     print(f"  per-action verdicts: {sorted(verdicts)}  -> {'PARITY' if all_parity else 'REVIEW'}")
@@ -294,6 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         "kadOnlyEmuleReceivedOnly": kad_recv_only,
         "kadExpectedOnlyEmule": kad_expected,
         "kadUdpDumpCreditedOpcodes": kad_cov["supplementaryCreditedOpcodes"],
+        "secident": secident_report,
+        "secidentDead": [
+            name for name, row in secident_report.items() if row["verdict"] == "secident-dead"
+        ],
         "allParity": all_parity,
     }
     out_path = rust_zip.parent / f"offline-diff-{rust_zip.stem}-vs-{mfc_zip.stem}.json"
