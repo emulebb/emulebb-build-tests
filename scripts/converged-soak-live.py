@@ -49,7 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import diag_event_diff, live_process_monitor, mfc_known_met, packet_trace_diff
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
-from emule_test_harness import soak_launch, vpn_guard_live
+from emule_test_harness import soak_launch, soak_run_layout, vpn_guard_live
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
@@ -1431,7 +1431,7 @@ def main(argv: list[str] | None = None) -> int:
         float(args.lead_seconds + args.settle_seconds + args.poll_interval),
     )
 
-    campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    campaign_id = soak_run_layout.utc_campaign_id()
     soak_root = output_root / "soak"
     rust_runtime_selection = resolve_rust_runtime_paths(
         soak_root,
@@ -1441,10 +1441,20 @@ def main(argv: list[str] | None = None) -> int:
     rust_runtime = Path(rust_runtime_selection["runtimeDir"])
     rust_packet_dump = Path(rust_runtime_selection["packetDumpDir"])
     mfc_artifacts = soak_root / "mfc-profile"
-    report_dir = soak_root / "reports" / campaign_id
-    actions_dir = report_dir / "actions"
+    mfc_log_dir = soak_run_layout.mfc_soak_log_dir(
+        mfc_artifacts_dir=mfc_artifacts,
+        direct_profile_dir=mfc_profile_dir,
+    )
+    run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
+    report_dir = run_paths.report_dir
+    actions_dir = run_paths.actions_dir
     reject_windows_temp_path(report_dir, "soak report directory")
-    report_dir.mkdir(parents=True, exist_ok=True)
+    preflight_manifest = soak_run_layout.prepare_clean_run(
+        paths=run_paths,
+        rust_runtime_dir=rust_runtime,
+        rust_packet_dump_dir=rust_packet_dump,
+        mfc_log_dir=mfc_log_dir,
+    )
     summary_path = report_dir / "summary.json"
     summary = sad.empty_summary(campaign_id)
     summary["driver"] = {
@@ -1539,6 +1549,7 @@ def main(argv: list[str] | None = None) -> int:
             "parity": args.secident == "on",
         },
     }
+    summary["preflightCleanup"] = preflight_manifest["preflightCleanup"]
     known_met_import = import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile_dir,
         rust_runtime_dir=rust_runtime,
@@ -2014,8 +2025,8 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     "totals": summary["totals"],
                 }
-                (report_dir / "checkpoints").mkdir(exist_ok=True)
-                (report_dir / "checkpoints" / f"{now.strftime('%H%M%SZ')}.json").write_text(
+                run_paths.checkpoints_dir.mkdir(exist_ok=True)
+                (run_paths.checkpoints_dir / f"{now.strftime('%H%M%SZ')}.json").write_text(
                     json.dumps(checkpoint, indent=2, sort_keys=True), encoding="utf-8"
                 )
                 log(f"checkpoint: packets rust={checkpoint['packetRecords']['rust']} "
@@ -2053,6 +2064,11 @@ def main(argv: list[str] | None = None) -> int:
     summary["mfcServer"] = args.mfc_server
     summary["bindIp"] = bind_ip
     write_summary(summary, summary_path)
+    soak_run_layout.mark_run_finished(
+        run_paths,
+        status="complete",
+        extra={"summary": str(summary_path), "totals": summary["totals"]},
+    )
     log(f"final summary: {summary_path}")
     print(json.dumps({"scenario": SCENARIO, "campaignId": campaign_id, "totals": summary["totals"], "report": str(summary_path)}, sort_keys=True))
     return 0

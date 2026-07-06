@@ -84,6 +84,14 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
     )
 
 
+def mfc_soak_log_dir(*, mfc_artifacts_dir: Path, direct_profile_dir: Path | None) -> Path:
+    """Returns the MFC log directory used by the converged soak profile."""
+
+    if direct_profile_dir is not None:
+        return direct_profile_dir / "logs"
+    return mfc_artifacts_dir / "profiles" / "converged-soak" / "profile-base" / "logs"
+
+
 def _relative_move_target(source: Path, source_root: Path, archive_root: Path) -> Path:
     try:
         relative = source.relative_to(source_root)

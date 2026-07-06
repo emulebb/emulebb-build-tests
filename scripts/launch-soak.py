@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import soak_launch
+from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root
@@ -215,8 +215,25 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
 
     soak_root = output_root / "soak"
+    campaign_id = soak_run_layout.utc_campaign_id()
     rust_runtime = soak_root / "rust-runtime"
     mfc_artifacts = soak_root / "mfc-profile"
+    mfc_log_dir = None if args.no_mfc else soak_run_layout.mfc_soak_log_dir(
+        mfc_artifacts_dir=mfc_artifacts,
+        direct_profile_dir=None,
+    )
+    run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
+    preflight_manifest = soak_run_layout.prepare_clean_run(
+        paths=run_paths,
+        rust_runtime_dir=rust_runtime,
+        rust_packet_dump_dir=rust_runtime / "packet-dump",
+        mfc_log_dir=mfc_log_dir,
+    )
+    log(
+        "preflight cleanup archived "
+        f"{preflight_manifest['preflightCleanup']['rust']['archivedCount']} rust file(s) and "
+        f"{preflight_manifest['preflightCleanup']['mfc']['archivedCount']} MFC log file(s)"
+    )
     log(f"persistent profiles under {soak_root} - sharing {len(shared_roots)} library root(s)")
     log(
         "P2P endpoint ports: "
@@ -301,6 +318,11 @@ def main(argv: list[str] | None = None) -> int:
             live_common=mods["live_common"],
             rust_base=rust_base,
         )
+    soak_run_layout.mark_run_finished(
+        run_paths,
+        status="stopped",
+        extra={"rustRuntimeDir": str(rust_runtime), "mfcArtifactsDir": str(mfc_artifacts)},
+    )
     log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))
     return 0
 

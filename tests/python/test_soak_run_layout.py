@@ -28,6 +28,17 @@ def test_build_run_paths_uses_reports_archives_and_last_run(tmp_path: Path) -> N
     assert paths.latest_report_pointer == tmp_path / "soak" / "reports" / "latest.json"
 
 
+def test_mfc_soak_log_dir_resolves_generated_and_direct_profiles(tmp_path: Path) -> None:
+    assert soak_run_layout.mfc_soak_log_dir(
+        mfc_artifacts_dir=tmp_path / "mfc-profile",
+        direct_profile_dir=None,
+    ) == tmp_path / "mfc-profile" / "profiles" / "converged-soak" / "profile-base" / "logs"
+    assert soak_run_layout.mfc_soak_log_dir(
+        mfc_artifacts_dir=tmp_path / "mfc-profile",
+        direct_profile_dir=tmp_path / "direct-mfc",
+    ) == tmp_path / "direct-mfc" / "logs"
+
+
 def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path) -> None:
     soak_root = tmp_path / "soak"
     paths = soak_run_layout.build_run_paths(soak_root, "20260706T073313Z")
