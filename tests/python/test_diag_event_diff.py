@@ -260,6 +260,70 @@ def test_family_conformance_fails_on_missing_oracle_body_key() -> None:
     assert fam["bodyKeyViolations"][0]["missingOracleKeys"] == ["resultCount"]
 
 
+def test_family_conformance_ignores_packet_meta_body_key_gap() -> None:
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [
+        _env(
+            "ed2k_tcp",
+            "packet",
+            keys={"peer": "10.0.0.1:1"},
+            body={"direction": "meta", "flow": "listener", "note": "tcp_accept"},
+        )
+    ]
+    mfc = [
+        _env(
+            "ed2k_tcp",
+            "packet",
+            keys={"peer": "10.0.0.2:2", "opcode": 1, "protocolMarker": 227},
+            body={
+                "direction": "recv",
+                "opcode": 1,
+                "opcodeName": "OP_HELLO",
+                "protocolMarker": 227,
+                "payloadHex": "aabb",
+                "payloadLen": 2,
+                "rawHex": "e30200000001aabb",
+                "rawLen": 8,
+            },
+        )
+    ]
+
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is True
+    fam = next(f for f in gate["families"] if f["family"] == "ed2k_tcp")
+    assert fam["bodyKeyViolations"] == []
+    assert fam["presentOnBoth"] is False
+
+
+def test_family_conformance_fails_on_wire_packet_body_key_gap() -> None:
+    from emule_test_harness.diag_event_diff import family_conformance
+
+    rust = [_pkt("ed2k_tcp", "recv", 0x01, "aabb")]
+    mfc = [
+        _env(
+            "ed2k_tcp",
+            "packet",
+            keys={"peer": "10.0.0.2:2", "opcode": 1, "protocolMarker": 227},
+            body={
+                "direction": "recv",
+                "opcode": 1,
+                "opcodeName": "OP_HELLO",
+                "protocolMarker": 227,
+                "payloadHex": "aabb",
+                "payloadLen": 2,
+                "rawHex": "e30200000001aabb",
+                "rawLen": 8,
+            },
+        )
+    ]
+
+    gate = family_conformance(rust, mfc)
+    assert gate["ok"] is False
+    fam = next(f for f in gate["families"] if f["family"] == "ed2k_tcp")
+    assert fam["bodyKeyViolations"][0]["missingOracleKeys"] == ["rawHex", "rawLen"]
+
+
 def test_family_conformance_one_sided_families_are_informational() -> None:
     from emule_test_harness.diag_event_diff import family_conformance
 

@@ -518,6 +518,8 @@ def schema_audit(
             event = record.get("event")
             if not isinstance(family, str) or not isinstance(event, str):
                 continue
+            if family in PACKET_FAMILIES and not _is_wire_packet(record):
+                continue
             slot = acc.setdefault((family, event), {"keys": set(), "count": 0})
             body = record.get("body")
             if isinstance(body, dict):
