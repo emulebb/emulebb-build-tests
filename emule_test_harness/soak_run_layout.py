@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from . import windows_processes
 
 CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
@@ -90,6 +93,105 @@ def mfc_soak_log_dir(*, mfc_artifacts_dir: Path, direct_profile_dir: Path | None
     if direct_profile_dir is not None:
         return direct_profile_dir / "logs"
     return mfc_artifacts_dir / "profiles" / "converged-soak" / "profile-base" / "logs"
+
+
+def mfc_profile_base_from_log_dir(mfc_log_dir: Path | None) -> Path | None:
+    """Returns the MFC profile base implied by a soak log directory."""
+
+    return mfc_log_dir.parent if mfc_log_dir is not None else None
+
+
+def _normalized_marker(value: Path | str) -> str:
+    return str(value).strip().replace("/", "\\").casefold()
+
+
+def _command_contains_path(command_line: str, path: Path | None) -> bool:
+    if path is None:
+        return False
+    marker = _normalized_marker(path)
+    return bool(marker) and marker in command_line.replace("/", "\\").casefold()
+
+
+def current_process_and_ancestor_pids(processes: list[windows_processes.WindowsProcessInfo]) -> set[int]:
+    """Returns the current process and parent-chain pids for self-protection."""
+
+    by_pid = {process.pid: process for process in processes}
+    excluded: set[int] = set()
+    pid = os.getpid()
+    while pid and pid not in excluded:
+        excluded.add(pid)
+        process = by_pid.get(pid)
+        if process is None:
+            break
+        pid = process.parent_pid
+    return excluded
+
+
+def select_stale_soak_process_roots(
+    processes: list[windows_processes.WindowsProcessInfo],
+    *,
+    rust_runtime_dir: Path,
+    mfc_profile_base: Path | None,
+    exclude_pids: set[int] | None = None,
+) -> list[windows_processes.WindowsProcessInfo]:
+    """Returns process roots that belong to an older converged soak run."""
+
+    excluded = set(exclude_pids or set())
+    selected: list[windows_processes.WindowsProcessInfo] = []
+    for process in processes:
+        if process.pid in excluded:
+            continue
+        name = process.name.casefold()
+        command_line = process.command_line
+        command_lower = command_line.casefold()
+        is_runner = (
+            "converged-soak-live.py" in command_lower
+            or "scripts\\converged-soak-live.py" in command_lower
+            or "launch-soak.py" in command_lower
+            or "scripts\\launch-soak.py" in command_lower
+        )
+        is_rust = name == "emulebb-rust-diagnostics.exe" and _command_contains_path(command_line, rust_runtime_dir)
+        is_mfc = name == "emulebb-diagnostics.exe" and _command_contains_path(command_line, mfc_profile_base)
+        if is_runner or is_rust or is_mfc:
+            selected.append(process)
+
+    selected_pids = {process.pid for process in selected}
+    return [process for process in selected if process.parent_pid not in selected_pids]
+
+
+def stop_stale_soak_processes(
+    *,
+    rust_runtime_dir: Path,
+    mfc_log_dir: Path | None,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Stops stale process trees from previous runs before logs are archived."""
+
+    if os.name != "nt":
+        return {"enabled": False, "reason": "non-windows", "targets": [], "results": []}
+    processes = windows_processes.collect_processes()
+    excluded = current_process_and_ancestor_pids(processes)
+    mfc_profile_base = mfc_profile_base_from_log_dir(mfc_log_dir)
+    targets = select_stale_soak_process_roots(
+        processes,
+        rust_runtime_dir=rust_runtime_dir,
+        mfc_profile_base=mfc_profile_base,
+        exclude_pids=excluded,
+    )
+    results = [
+        windows_processes.terminate_process_tree(
+            target.pid,
+            timeout_seconds=timeout_seconds,
+            expected_root_creation_date=target.creation_date,
+        )
+        for target in targets
+    ]
+    return {
+        "enabled": True,
+        "excludedPids": sorted(excluded),
+        "targets": [target.__dict__ for target in targets],
+        "results": results,
+    }
 
 
 def _relative_move_target(source: Path, source_root: Path, archive_root: Path) -> Path:
@@ -178,6 +280,7 @@ def prepare_clean_run(
     rust_runtime_dir: Path,
     rust_packet_dump_dir: Path,
     mfc_log_dir: Path | None,
+    stop_process_cleanup: bool = True,
 ) -> dict[str, Any]:
     """Archives stale volatile outputs and creates a clean report directory."""
 
@@ -185,6 +288,11 @@ def prepare_clean_run(
     paths.actions_dir.mkdir(parents=True, exist_ok=True)
     paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
     preflight = paths.preflight_archive_dir
+    processes = (
+        stop_stale_soak_processes(rust_runtime_dir=rust_runtime_dir, mfc_log_dir=mfc_log_dir)
+        if stop_process_cleanup
+        else {"enabled": False, "reason": "disabled", "targets": [], "results": []}
+    )
     rust = archive_rust_volatile_outputs(
         rust_runtime_dir=rust_runtime_dir,
         rust_packet_dump_dir=rust_packet_dump_dir,
@@ -201,7 +309,7 @@ def prepare_clean_run(
         "rustRuntimeDir": str(rust_runtime_dir),
         "rustPacketDumpDir": str(rust_packet_dump_dir),
         "mfcLogDir": str(mfc_log_dir) if mfc_log_dir is not None else None,
-        "preflightCleanup": {"rust": rust, "mfc": mfc},
+        "preflightCleanup": {"processes": processes, "rust": rust, "mfc": mfc},
     }
     write_last_run_manifest(paths, manifest)
     write_latest_report_pointer(paths)

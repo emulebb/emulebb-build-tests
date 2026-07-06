@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import soak_run_layout
+from emule_test_harness.windows_processes import WindowsProcessInfo
 
 
 def test_utc_campaign_id_uses_canonical_format() -> None:
@@ -54,6 +55,7 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path)
         rust_runtime_dir=rust_runtime,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        stop_process_cleanup=False,
     )
 
     assert manifest["preflightCleanup"]["rust"]["archivedCount"] == 2
@@ -83,6 +85,7 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
         rust_runtime_dir=rust_runtime,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
+        stop_process_cleanup=False,
     )
 
     archived = manifest["preflightCleanup"]["mfc"]
@@ -106,6 +109,7 @@ def test_prepare_clean_run_publishes_last_run_and_latest_pointers(tmp_path: Path
         rust_runtime_dir=rust_runtime,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        stop_process_cleanup=False,
     )
 
     manifest = paths.last_run_manifest.read_text(encoding="utf-8")
@@ -125,6 +129,7 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
         rust_runtime_dir=rust_runtime,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        stop_process_cleanup=False,
     )
 
     soak_run_layout.mark_run_finished(paths, status="complete", extra={"summary": "ok"})
@@ -133,3 +138,76 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
     assert '"status": "complete"' in manifest
     assert '"preflightCleanup"' in manifest
     assert '"summary": "ok"' in manifest
+
+
+def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) -> None:
+    rust_runtime = tmp_path / "soak" / "rust-runtime"
+    mfc_profile = tmp_path / "mfc-profile"
+    rows = [
+        WindowsProcessInfo(
+            pid=10,
+            parent_pid=1,
+            name="uv.exe",
+            command_line="uv run python scripts\\converged-soak-live.py --duration 2h",
+        ),
+        WindowsProcessInfo(
+            pid=11,
+            parent_pid=10,
+            name="python.exe",
+            command_line="python scripts\\converged-soak-live.py --duration 2h",
+        ),
+        WindowsProcessInfo(
+            pid=20,
+            parent_pid=1,
+            name="emulebb-rust-diagnostics.exe",
+            command_line=f"emulebb-rust-diagnostics.exe --config {rust_runtime}\\emulebb-rust.toml",
+        ),
+        WindowsProcessInfo(
+            pid=30,
+            parent_pid=1,
+            name="emulebb-diagnostics.exe",
+            command_line=f"emulebb-diagnostics.exe -ignoreinstances -c {mfc_profile}",
+        ),
+        WindowsProcessInfo(
+            pid=40,
+            parent_pid=1,
+            name="emulebb-diagnostics.exe",
+            command_line="emulebb-diagnostics.exe -ignoreinstances -c C:\\other-profile",
+        ),
+    ]
+
+    selected = soak_run_layout.select_stale_soak_process_roots(
+        rows,
+        rust_runtime_dir=rust_runtime,
+        mfc_profile_base=mfc_profile,
+        exclude_pids=set(),
+    )
+
+    assert [process.pid for process in selected] == [10, 20, 30]
+
+
+def test_select_stale_soak_process_roots_excludes_current_family(tmp_path: Path) -> None:
+    rust_runtime = tmp_path / "soak" / "rust-runtime"
+    rows = [
+        WindowsProcessInfo(
+            pid=10,
+            parent_pid=1,
+            name="uv.exe",
+            command_line="uv run python scripts\\converged-soak-live.py --duration 2h",
+        ),
+        WindowsProcessInfo(
+            pid=11,
+            parent_pid=10,
+            name="python.exe",
+            command_line="python scripts\\converged-soak-live.py --duration 2h",
+        ),
+    ]
+
+    selected = soak_run_layout.select_stale_soak_process_roots(
+        rows,
+        rust_runtime_dir=rust_runtime,
+        mfc_profile_base=None,
+        exclude_pids={10, 11},
+    )
+
+    assert selected == []
