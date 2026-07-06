@@ -1149,6 +1149,84 @@ def write_summary(summary: dict[str, Any], path: Path) -> None:
     path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def build_share_warmup_parity_risk(
+    summary: dict[str, Any],
+    checkpoints_dir: Path,
+) -> list[dict[str, Any]]:
+    """Return warnings when a fresh Rust runtime is still building its share cache.
+
+    Server/search packet parity can be green while upload-side parity is not yet
+    comparable: MFC may start with a persisted known.met cache, whereas a fresh
+    Rust runtime must hash shared roots unless exact MFC shared-file rows were
+    imported. Surface that distinction in the retained report.
+    """
+
+    environment = summary.get("environmentParity")
+    if not isinstance(environment, dict) or not environment.get("freshRustRuntime"):
+        return []
+
+    checkpoints = sorted(checkpoints_dir.glob("*.json"))
+    if not checkpoints:
+        return []
+    try:
+        last = json.loads(checkpoints[-1].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rest = last.get("restStatus")
+    if not isinstance(rest, dict):
+        return []
+    rust = rest.get("rust") if isinstance(rest.get("rust"), dict) else {}
+    mfc = rest.get("mfc") if isinstance(rest.get("mfc"), dict) else {}
+
+    try:
+        rust_shared = int(rust.get("sharedFileCount") or 0)
+        rust_hashing = int(rust.get("sharedHashingCount") or 0)
+        mfc_shared = int(mfc.get("sharedFileCount") or 0)
+        mfc_hashing = int(mfc.get("sharedHashingCount") or 0)
+    except (TypeError, ValueError):
+        return []
+
+    if rust_hashing <= 0 and (mfc_shared <= 0 or rust_shared >= max(1, mfc_shared // 2)):
+        return []
+
+    known_import = summary.get("mfcKnownMetImport")
+    known_import = known_import if isinstance(known_import, dict) else {}
+    inventory_import = summary.get("mfcSharedFilesInventoryImport")
+    inventory_import = inventory_import if isinstance(inventory_import, dict) else {}
+    known_records = int(known_import.get("knownMetRecords") or 0)
+    imported_records = int(known_import.get("importedRecords") or 0)
+    import_ratio = (imported_records / known_records) if known_records else None
+
+    return [
+        {
+            "kind": "rust-share-cache-cold",
+            "severity": "warning",
+            "scope": "upload-peer-protocol",
+            "checkpoint": checkpoints[-1].name,
+            "rustSharedFileCount": rust_shared,
+            "rustSharedHashingCount": rust_hashing,
+            "mfcSharedFileCount": mfc_shared,
+            "mfcSharedHashingCount": mfc_hashing,
+            "freshRustRuntime": True,
+            "mfcKnownMetImportedRecords": imported_records,
+            "mfcKnownMetRecords": known_records,
+            "mfcKnownMetImportRatio": import_ratio,
+            "mfcSharedFilesInventoryStatus": inventory_import.get("status"),
+            "mfcSharedFilesInventoryReason": inventory_import.get("reason"),
+            "impact": (
+                "Server/search action parity remains valid, but upload-side peer "
+                "traffic is not fully comparable until Rust finishes hashing or "
+                "is pre-seeded with an exact MFC shared-files inventory."
+            ),
+            "recommendedNextRun": (
+                "Use the persistent Rust runtime after warmup, or provide "
+                "--mfc-shared-files-inventory captured from MFC /api/v1/shared-files "
+                "before running a fresh-runtime upload parity soak."
+            ),
+        }
+    ]
+
+
 def trim_oversized_file(path: Path, *, max_bytes: int) -> dict[str, Any] | None:
     """Best-effort tail trim for long-running diagnostic output files."""
 
@@ -2123,6 +2201,15 @@ def main(argv: list[str] | None = None) -> int:
     summary["rustServer"] = args.rust_server
     summary["mfcServer"] = args.mfc_server
     summary["bindIp"] = bind_ip
+    summary["parityRisks"] = build_share_warmup_parity_risk(summary, run_paths.checkpoints_dir)
+    for risk in summary["parityRisks"]:
+        if risk.get("kind") == "rust-share-cache-cold":
+            log(
+                "parity warning: Rust share cache still cold "
+                f"(rust shared={risk.get('rustSharedFileCount')} "
+                f"hashing={risk.get('rustSharedHashingCount')}; "
+                f"MFC shared={risk.get('mfcSharedFileCount')})."
+            )
     write_summary(summary, summary_path)
     soak_run_layout.mark_run_finished(
         run_paths,

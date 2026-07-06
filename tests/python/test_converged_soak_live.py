@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import struct
 from datetime import timedelta
@@ -1491,3 +1492,61 @@ def test_load_diag_mtime_filter_applies_to_mfc_bad_peer_adapter(tmp_path: Path) 
     assert [(record["family"], record["event"]) for record in records] == [
         ("bad_peer", "repeat_file_request")
     ]
+
+
+def test_share_warmup_parity_risk_reports_cold_fresh_rust_runtime(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "000001Z.json").write_text(
+        json.dumps(
+            {
+                "restStatus": {
+                    "rust": {"sharedFileCount": 1200, "sharedHashingCount": 50000},
+                    "mfc": {"sharedFileCount": 60000, "sharedHashingCount": 0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "environmentParity": {"freshRustRuntime": True},
+        "mfcKnownMetImport": {"knownMetRecords": 100000, "importedRecords": 3000},
+        "mfcSharedFilesInventoryImport": {"status": "skipped", "reason": "no-inventory"},
+    }
+
+    risks = runner.build_share_warmup_parity_risk(summary, checkpoints)
+
+    assert len(risks) == 1
+    risk = risks[0]
+    assert risk["kind"] == "rust-share-cache-cold"
+    assert risk["scope"] == "upload-peer-protocol"
+    assert risk["rustSharedHashingCount"] == 50000
+    assert risk["mfcKnownMetImportRatio"] == 0.03
+    assert risk["mfcSharedFilesInventoryReason"] == "no-inventory"
+
+
+def test_share_warmup_parity_risk_ignores_persistent_or_warm_runs(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "000001Z.json").write_text(
+        json.dumps(
+            {
+                "restStatus": {
+                    "rust": {"sharedFileCount": 60000, "sharedHashingCount": 0},
+                    "mfc": {"sharedFileCount": 60000, "sharedHashingCount": 0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert runner.build_share_warmup_parity_risk(
+        {"environmentParity": {"freshRustRuntime": False}},
+        checkpoints,
+    ) == []
+    assert runner.build_share_warmup_parity_risk(
+        {"environmentParity": {"freshRustRuntime": True}},
+        checkpoints,
+    ) == []
