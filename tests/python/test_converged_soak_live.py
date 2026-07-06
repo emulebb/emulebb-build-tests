@@ -1350,3 +1350,95 @@ def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:
     assert pairs == []
     assert unpaired == []
     assert [action.action_id for action in tracker.mfc] == ["mfc:auto-download-1"]
+
+
+def test_tracker_suppresses_baseline_transfer_even_when_rest_id_changes() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    now = runner.datetime.now(runner.timezone.utc)
+    file_hash = "a" * 32
+
+    baseline = [{"id": "old-transfer-id", "key": file_hash, "label": "Private Title.pdf"}]
+    counts = tracker.prime(
+        rust_searches=[],
+        rust_transfers=baseline,
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+
+    pairs, unpaired = tracker.tick(
+        now,
+        rust_searches=[],
+        rust_transfers=[{"id": "new-transfer-id", "key": file_hash, "label": "Private Title.pdf"}],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+
+    assert counts["rustTransfers"] == 1
+    assert pairs == []
+    assert unpaired == []
+    assert tracker.rust == []
+
+
+def test_tracker_suppresses_baseline_search_even_when_rest_id_changes() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    now = runner.datetime.now(runner.timezone.utc)
+
+    tracker.prime(
+        rust_searches=[{"id": "old-search-id", "key": "ubuntu", "label": "Ubuntu"}],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+
+    pairs, unpaired = tracker.tick(
+        now,
+        rust_searches=[{"id": "new-search-id", "key": "ubuntu", "label": "Ubuntu"}],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+
+    assert pairs == []
+    assert unpaired == []
+    assert tracker.rust == []
+
+
+def test_trim_log_tree_preserves_diagnostic_evidence_by_default(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    dump_dir = tmp_path / "packet-dump"
+    dump_dir.mkdir()
+    diag = dump_dir / "emulebb-rust-diag-1.jsonl"
+    packet = dump_dir / "emulebb-diagnostics-packet.log"
+    daemon = tmp_path / "daemon.out"
+    large_payload = (b"first\n" + (b"x" * (2 * 1024 * 1024)) + b"\n")
+
+    diag.write_bytes(large_payload)
+    packet.write_bytes(large_payload)
+    daemon.write_bytes(large_payload)
+
+    results = runner.trim_log_tree([dump_dir, daemon], max_bytes=1024)
+
+    assert [Path(row["path"]).name for row in results] == ["daemon.out"]
+    assert diag.stat().st_size == len(large_payload)
+    assert packet.stat().st_size == len(large_payload)
+    assert daemon.stat().st_size < len(large_payload)
+
+
+def test_trim_log_tree_can_trim_diagnostic_evidence_when_requested(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    dump_dir = tmp_path / "packet-dump"
+    dump_dir.mkdir()
+    diag = dump_dir / "emulebb-rust-diag-1.jsonl"
+    large_payload = (b"first\n" + (b"x" * (2 * 1024 * 1024)) + b"\n")
+    diag.write_bytes(large_payload)
+
+    results = runner.trim_log_tree(
+        [dump_dir],
+        max_bytes=1024,
+        preserve_diagnostic_evidence=False,
+    )
+
+    assert [Path(row["path"]).name for row in results] == ["emulebb-rust-diag-1.jsonl"]
+    assert diag.stat().st_size < len(large_payload)

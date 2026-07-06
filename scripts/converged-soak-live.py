@@ -29,6 +29,7 @@ half-hour cadence.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import queue
@@ -76,6 +77,15 @@ from emule_test_harness.vm_guest_profiles import retry_http_json
 from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_repo
 
 SCENARIO = "emulebb.flow.converged.soak.hideme.v1"
+DIAGNOSTIC_EVIDENCE_LOG_PATTERNS = (
+    "*.jsonl",
+    "*packet*.log",
+    "*diag*.log",
+    "*bad-peer*.log",
+    "*kad*.log",
+    "*upload-slot*.log",
+    "*download-slot*.log",
+)
 
 
 def parse_duration(text: str) -> float:
@@ -803,6 +813,7 @@ class ActionTracker:
         )
         self.lead = lead_seconds
         self.seen: dict[tuple[str, str], set[str]] = {}
+        self.baseline_keys: dict[tuple[str, str], set[str]] = {}
         self.rust: list[sad.Action] = []
         self.mfc: list[sad.Action] = []
         self.processed: set[str] = set()
@@ -818,7 +829,13 @@ class ActionTracker:
         fresh, self.seen[key] = sad.detect_actions(
             self.seen.get(key), items, client=client, kind=kind, observed_at=now
         )
-        fresh = [action for action in fresh if (action.kind, action.key) not in self.synchronized_keys]
+        baseline_keys = self.baseline_keys.get(key, set())
+        fresh = [
+            action
+            for action in fresh
+            if (action.kind, action.key) not in self.synchronized_keys
+            and action.key not in baseline_keys
+        ]
         bucket = self.rust if client == "rust" else self.mfc
         bucket.extend(fresh)
         for action in fresh:
@@ -842,6 +859,7 @@ class ActionTracker:
         }
         for key, items in snapshots.items():
             self.seen[key] = {item["id"] for item in items}
+            self.baseline_keys[key] = {item["key"] for item in items}
         return {
             "rustSearches": len(rust_searches),
             "rustTransfers": len(rust_transfers),
@@ -1052,6 +1070,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS, help="Upload cap to apply to both clients.")
     parser.add_argument("--log-trim-bytes", type=int, default=DEFAULT_LOG_TRIM_BYTES, help="Best-effort log tail-trim threshold; 0 disables.")
+    parser.add_argument(
+        "--trim-diagnostic-evidence",
+        action="store_true",
+        help="Allow checkpoint log trimming to truncate packet/diag evidence files. Default preserves them.",
+    )
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
@@ -1144,7 +1167,19 @@ def trim_oversized_file(path: Path, *, max_bytes: int) -> dict[str, Any] | None:
     return {"path": str(path), "beforeBytes": size, "afterBytes": after}
 
 
-def trim_log_tree(paths: list[Path], *, max_bytes: int) -> list[dict[str, Any]]:
+def is_diagnostic_evidence_log(path: Path) -> bool:
+    """Returns true for packet/diag files the soak uses as protocol evidence."""
+
+    name = path.name.lower()
+    return any(fnmatch.fnmatch(name, pattern) for pattern in DIAGNOSTIC_EVIDENCE_LOG_PATTERNS)
+
+
+def trim_log_tree(
+    paths: list[Path],
+    *,
+    max_bytes: int,
+    preserve_diagnostic_evidence: bool = True,
+) -> list[dict[str, Any]]:
     """Trims known soak output logs and returns compact evidence rows."""
 
     if max_bytes <= 0:
@@ -1158,6 +1193,8 @@ def trim_log_tree(paths: list[Path], *, max_bytes: int) -> list[dict[str, Any]]:
                 candidates.extend(path.glob(pattern))
     results: list[dict[str, Any]] = []
     for candidate in sorted(set(candidates)):
+        if preserve_diagnostic_evidence and is_diagnostic_evidence_log(candidate):
+            continue
         result = trim_oversized_file(candidate, max_bytes=max_bytes)
         if result is not None:
             results.append(result)
@@ -1541,6 +1578,7 @@ def main(argv: list[str] | None = None) -> int:
         "rustRuntimeDirName": rust_runtime.name,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
+        "preserveDiagnosticEvidence": not bool(args.trim_diagnostic_evidence),
         "pollRestTimeoutSeconds": args.poll_rest_timeout,
         "restLanAddress": rest_addr,
         "rustRestPort": args.rust_rest_port,
@@ -2030,6 +2068,7 @@ def main(argv: list[str] | None = None) -> int:
                     "logTrim": trim_log_tree(
                         [rust_runtime / "daemon.out", rust_dump_dir, mfc_dump_dir],
                         max_bytes=args.log_trim_bytes,
+                        preserve_diagnostic_evidence=not bool(args.trim_diagnostic_evidence),
                     ),
                     "totals": summary["totals"],
                 }
