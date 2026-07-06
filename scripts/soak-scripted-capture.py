@@ -53,7 +53,6 @@ from emule_test_harness.soak_launch import (
     RUST_KAD_PORT,
     bring_up_mfc,
     bring_up_rust,
-    connect_operator_server,
     log,
 )
 
@@ -408,7 +407,6 @@ def main(argv: list[str] | None = None) -> int:
         assert handles is not None
         base_url = handles["baseUrl"]
 
-        connect_operator_server(base_url, api_key, description=f"{client} capture connect", endpoint=OPERATOR_SERVER)
         kad_ok = ensure_kad(base_url, api_key)
         log(f"{client} up: {base_url}  operator={OPERATOR_SERVER}  kad={kad_ok}")
 
