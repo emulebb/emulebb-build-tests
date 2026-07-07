@@ -1183,7 +1183,7 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
         runner,
         "poll_search_results",
         lambda *_a, **_k: [
-            {"hash": want, "name": "Linux Ubuntu 7.14 Desktop i386.iso", "sources": 30, "sizeBytes": 629 * 1024 * 1024}
+            {"hash": want, "name": "synthetic-test-file.iso", "sources": 30, "sizeBytes": 629 * 1024 * 1024}
         ],
     )
     # Both clients ALREADY hold the file: download_hash must ignore the existing skip.
@@ -1204,7 +1204,7 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
 
     assert cycle["download"]["scheduled"] is True
     assert cycle["download"]["hash"] == want
-    assert cycle["download"]["name"] == "Linux Ubuntu 7.14 Desktop i386.iso"
+    assert cycle["download"]["name"] == "synthetic-test-file.iso"
 
 
 def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
