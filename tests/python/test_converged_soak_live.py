@@ -909,6 +909,47 @@ def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
     assert candidate["hash"] == "b" * 32
 
 
+def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
+    runner = _load_soak_runner()
+    mib = 1024 * 1024
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(_row: dict[str, object]) -> str | None:
+            return None
+
+    rust_rows = [
+        {"hash": "a" * 32, "name": "small-linux.iso", "sources": 99, "sizeBytes": 100 * mib},  # < 500 MiB
+        {"hash": "b" * 32, "name": "linux-mint.zip", "sources": 80, "sizeBytes": 900 * mib},   # not .iso
+        {"hash": "c" * 32, "name": "ubuntu.iso", "sources": 5, "sizeBytes": 700 * mib},
+        {"hash": "d" * 32, "name": "debian.iso", "sources": 5, "sizeBytes": 900 * mib},
+        {"hash": "e" * 32, "name": "fedora.iso", "sources": 20, "sizeBytes": 800 * mib},
+    ]
+    mfc_rows = [{"hash": h * 32} for h in "abcde"]
+
+    # Rejects the sub-500 MiB ISO (a) and the non-ISO (b); among valid .iso >= 500 MiB
+    # picks the most-sourced (fedora, e). Same file on both clients (intersection).
+    candidate = runner.safe_common_download_candidate(
+        rust_rows,
+        mfc_rows,
+        rust_mod=_RustFilter,
+        required_suffix=".iso",
+        min_size_bytes=500 * mib,
+    )
+    assert candidate is not None
+    assert candidate["hash"] == "e" * 32
+
+    # Deterministic ordering: most-sourced first, then larger ISO at equal sources.
+    top = runner.top_common_download_candidates(
+        rust_rows,
+        mfc_rows,
+        rust_mod=_RustFilter,
+        required_suffix=".iso",
+        min_size_bytes=500 * mib,
+    )
+    assert [row["hash"] for row in top] == ["e" * 32, "d" * 32, "c" * 32]
+
+
 def test_safe_common_download_candidate_skips_existing_hashes() -> None:
     runner = _load_soak_runner()
 
@@ -1140,7 +1181,8 @@ def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
         search_timeout_seconds=1.0,
     )
 
-    assert cycle["download"] == {"ok": False, "reason": "no common safe candidate"}
+    assert cycle["download"]["ok"] is False
+    assert cycle["download"]["reason"].startswith("no common safe candidate")
     assert cycle["downloadExistingHashCounts"] == {"rust": 1, "mfc": 0, "combined": 1}
     assert cycle["downloadExistingHashProbeSkips"] == {"rust": 0, "mfc": 0, "combined": 0}
 
@@ -1185,7 +1227,8 @@ def test_automatic_cycle_does_not_schedule_probe_existing_hash(
         search_timeout_seconds=1.0,
     )
 
-    assert cycle["download"] == {"ok": False, "reason": "no common safe candidate"}
+    assert cycle["download"]["ok"] is False
+    assert cycle["download"]["reason"].startswith("no common safe candidate")
     assert cycle["downloadExistingHashCounts"] == {"rust": 0, "mfc": 0, "combined": 0}
     assert cycle["downloadExistingHashProbeSkips"] == {"rust": 1, "mfc": 0, "combined": 1}
 

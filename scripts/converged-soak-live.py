@@ -182,6 +182,10 @@ def _row_sources(row: dict[str, Any]) -> int:
     return int(row.get("sources") or row.get("completeSources") or 0)
 
 
+def _row_size(row: dict[str, Any]) -> int:
+    return int(row.get("sizeBytes") or row.get("size") or 0)
+
+
 def _row_name(row: dict[str, Any]) -> str:
     return str(row.get("name") or row.get("fileName") or "")
 
@@ -210,12 +214,16 @@ def top_common_download_candidates(
     existing_probe: Callable[[str], bool] | None = None,
     prefer_hashes: set[str] | None = None,
     required_suffix: str | None = None,
+    min_size_bytes: int = 0,
 ) -> list[dict[str, Any]]:
     """Safe, not-yet-present results common to both search pages, most-sourced
     first. ``prefer_hashes`` (deterministic fixtures) sort ahead of the rest so a
     re-run picks the same files; within each group the order is source count
-    desc, then smaller size. ``required_suffix`` (e.g. ``.iso``) restricts to that
-    file type (and always rejects ``.torrent``). ``limit`` caps the returned list."""
+    desc, then larger size (the most-sourced, biggest ISO is the "best"
+    candidate). ``required_suffix`` (e.g. ``.iso``) restricts to that file type
+    (and always rejects ``.torrent``). ``min_size_bytes`` drops anything smaller
+    (e.g. 500 MiB, so we grab a real ISO not a checksum/stub). ``limit`` caps the
+    returned list."""
 
     mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
     existing_hashes = {item.strip().lower() for item in (existing_hashes or set()) if item}
@@ -227,6 +235,8 @@ def top_common_download_candidates(
             continue
         if file_hash in existing_hashes:
             continue
+        if _row_size(row) < min_size_bytes:
+            continue
         if not download_name_allowed(_row_name(row), required_suffix):
             continue
         if existing_probe is not None and existing_probe(file_hash):
@@ -237,7 +247,8 @@ def top_common_download_candidates(
         key=lambda row: (
             0 if _row_hash(row) in prefer_hashes else 1,
             -_row_sources(row),
-            int(row.get("sizeBytes") or row.get("size") or 0),
+            -_row_size(row),
+            _row_hash(row),
         )
     )
     return candidates if limit is None else candidates[: max(0, limit)]
@@ -251,6 +262,7 @@ def safe_common_download_candidate(
     existing_hashes: set[str] | None = None,
     existing_probe: Callable[[str], bool] | None = None,
     required_suffix: str | None = None,
+    min_size_bytes: int = 0,
 ) -> dict[str, Any] | None:
     """Selects one safe, not-yet-present, most-sourced result common to both."""
 
@@ -262,6 +274,7 @@ def safe_common_download_candidate(
         existing_hashes=existing_hashes,
         existing_probe=existing_probe,
         required_suffix=required_suffix,
+        min_size_bytes=min_size_bytes,
     )
     return top[0] if top else None
 
@@ -449,6 +462,7 @@ def seed_linux_downloads(
     min_sources: int,
     search_interval: float,
     required_suffix: str | None = None,
+    min_size_bytes: int = 0,
 ) -> dict[str, Any]:
     """Trigger the N most-sourced common linux downloads on both clients and
     record them as deterministic fixtures. Fixture hashes from a prior run sort
@@ -474,6 +488,7 @@ def seed_linux_downloads(
             existing_hashes=seen,
             prefer_hashes=prefer,
             required_suffix=required_suffix,
+            min_size_bytes=min_size_bytes,
         )
         for row in top:
             if len(scheduled) >= target_count:
@@ -511,6 +526,7 @@ def drive_automatic_cycle(
     download: bool,
     search_timeout_seconds: float,
     required_suffix: str | None = None,
+    min_size_bytes: int = 0,
 ) -> dict[str, Any]:
     """Runs one gentle synchronized search and records one candidate for later download."""
 
@@ -562,18 +578,30 @@ def drive_automatic_cycle(
             existing_hashes=existing_hashes,
             existing_probe=existing_hash_probe,
             required_suffix=required_suffix,
+            min_size_bytes=min_size_bytes,
         )
         cycle["downloadExistingHashProbeSkips"] = probe_skips
+        cycle["downloadCandidateConstraints"] = {
+            "requiredSuffix": required_suffix,
+            "minSizeBytes": min_size_bytes,
+        }
         if candidate is None:
-            cycle["download"] = {"ok": False, "reason": "no common safe candidate"}
+            cycle["download"] = {
+                "ok": False,
+                "reason": (
+                    f"no common safe candidate matching suffix={required_suffix!r} "
+                    f"size>={min_size_bytes}B on both clients"
+                ),
+            }
         else:
             file_hash = _row_hash(candidate)
             cycle["download"] = {
                 "ok": None,
                 "scheduled": True,
                 "hash": file_hash,
-                "sizeBytes": candidate.get("sizeBytes") or candidate.get("size"),
-                "sources": candidate.get("sources"),
+                "name": _row_name(candidate),
+                "sizeBytes": _row_size(candidate),
+                "sources": _row_sources(candidate),
                 "searchIds": {"rust": rust_search_id, "mfc": mfc_search_id},
             }
     return cycle
@@ -1142,6 +1170,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=".iso",
         help="Restrict downloads (seed + auto-drive) to this file suffix; always rejects .torrent. "
         "Empty string disables the filter. Default .iso (download only genuine linux ISOs).",
+    )
+    parser.add_argument(
+        "--download-query",
+        default="linux iso",
+        help="Search query the auto-drive uses on download cycles; the best common candidate "
+        "from this search (same file on both clients) is what gets downloaded. Default 'linux iso'.",
+    )
+    parser.add_argument(
+        "--download-min-bytes",
+        type=int,
+        default=500 * 1024 * 1024,
+        help="Minimum file size for an auto-drive/seed download candidate. Default 500 MiB "
+        "(skip checksums/stubs; grab a real ISO).",
     )
     return parser
 
@@ -1854,6 +1895,7 @@ def main(argv: list[str] | None = None) -> int:
                     min_sources=args.seed_min_sources,
                     search_interval=args.seed_search_interval,
                     required_suffix=args.download_ext,
+                    min_size_bytes=args.download_min_bytes,
                 )
                 summary["seedDownloads"] = seed_result
                 log(
@@ -2027,11 +2069,14 @@ def main(argv: list[str] | None = None) -> int:
                     log("auto cycle delayed: both clients are not connected to the operator server")
                 else:
                     auto_cycle += 1
-                    query = auto_terms[(auto_cycle - 1) % len(auto_terms)]
                     should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
+                    # Download cycles search the dedicated download query ('linux iso')
+                    # so the common candidate we pick + trigger is a real ISO; non-download
+                    # cycles keep rotating the profile's search terms for wire variety.
+                    query = args.download_query if should_download else auto_terms[(auto_cycle - 1) % len(auto_terms)]
                     log(
                         f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
-                        f"(download={str(should_download).lower()})"
+                        f"'{query}' (download={str(should_download).lower()})"
                     )
                     try:
                         cycle = drive_automatic_cycle(
@@ -2044,6 +2089,7 @@ def main(argv: list[str] | None = None) -> int:
                             download=should_download,
                             search_timeout_seconds=args.auto_search_timeout,
                             required_suffix=args.download_ext,
+                            min_size_bytes=args.download_min_bytes,
                         )
                     except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
                         cycle = {
