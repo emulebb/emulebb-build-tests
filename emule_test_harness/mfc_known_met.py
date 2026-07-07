@@ -131,12 +131,11 @@ def import_mfc_known_met_hashes(
     reason_counts = {
         "missing_identity": 0,
         "md4_count_mismatch": 0,
-        "no_unique_path_match": 0,
         "no_path_match": 0,
-        "ambiguous_path_match": 0,
         "aich_count_mismatch": 0,
     }
     matched = 0
+    duplicate_records = 0
     manifests: list[dict[str, Any]] = []
     for entry in entries:
         if entry.name is None or entry.size_bytes is None:
@@ -147,32 +146,38 @@ def import_mfc_known_met_hashes(
             continue
         matches = by_key.get((entry.name.casefold(), entry.size_bytes, entry.modified_s), [])
         if len(matches) == 0:
-            reason_counts["no_unique_path_match"] += 1
             reason_counts["no_path_match"] += 1
-            continue
-        if len(matches) > 1:
-            reason_counts["no_unique_path_match"] += 1
-            reason_counts["ambiguous_path_match"] += 1
             continue
         if entry.aich_root is not None and len(entry.aich_hashset) != expected_aich_hash_count(entry.size_bytes):
             reason_counts["aich_count_mismatch"] += 1
             continue
 
+        # A known.met record whose (name, size, whole-second mtime) identity matches
+        # more than one shared file is a set of byte-identical duplicates: same content
+        # -> same ed2k/MD4/AICH hashset. Seed EVERY duplicate path with the shared hash
+        # so Rust's share-in-place reload skips re-hashing all of them, instead of
+        # discarding the record (which previously cost ~68% of MFC's known.met). This
+        # extends the same (name,size,mtime)->hash trust the unique-match path already
+        # applies without a content re-hash; a rare false collision (distinct content
+        # sharing that identity) is caught by the downloader's AICH/hash verification
+        # and self-corrects on the next share scan.
         matched += 1
+        if len(matches) > 1:
+            duplicate_records += 1
         if not dry_run:
-            candidate = matches[0]
-            manifests.append(
-                {
-                    "ed2k_hash": entry.ed2k_hash,
-                    "name": entry.name,
-                    "size_bytes": entry.size_bytes,
-                    "source_path": str(candidate.path),
-                    "source_mtime_ms": candidate.mtime_ms,
-                    "md4_hashset": entry.md4_hashset,
-                    "aich_root": entry.aich_root,
-                    "aich_hashset": entry.aich_hashset,
-                }
-            )
+            for candidate in matches:
+                manifests.append(
+                    {
+                        "ed2k_hash": entry.ed2k_hash,
+                        "name": entry.name,
+                        "size_bytes": entry.size_bytes,
+                        "source_path": str(candidate.path),
+                        "source_mtime_ms": candidate.mtime_ms,
+                        "md4_hashset": entry.md4_hashset,
+                        "aich_root": entry.aich_root,
+                        "aich_hashset": entry.aich_hashset,
+                    }
+                )
     if manifests:
         rust_metadata.seed_share_in_place_manifests(
             metadata_db,
@@ -184,7 +189,9 @@ def import_mfc_known_met_hashes(
         "knownMetRecords": len(entries),
         "sharedFilesScanned": len(candidates),
         "matchedRecords": matched,
-        "importedRecords": len(manifests),
+        "duplicateRecords": duplicate_records,
+        "importedRecords": matched,
+        "importedSourcePaths": len(manifests),
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),

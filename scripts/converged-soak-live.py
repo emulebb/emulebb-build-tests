@@ -1341,7 +1341,9 @@ def import_mfc_known_met_for_rust_profile(
         "knownMetRecords": raw["knownMetRecords"],
         "sharedFilesScanned": raw["sharedFilesScanned"],
         "matchedRecords": raw["matchedRecords"],
+        "duplicateRecords": raw.get("duplicateRecords", 0),
         "importedRecords": raw["importedRecords"],
+        "importedSourcePaths": raw.get("importedSourcePaths", raw["importedRecords"]),
         "dryRun": raw["dryRun"],
         "skipped": raw["skipped"],
     }
@@ -1732,7 +1734,9 @@ def main(argv: list[str] | None = None) -> int:
     if known_met_import["status"] == "imported":
         log(
             "imported MFC known.met into Rust metadata: "
-            f"{known_met_import['importedRecords']} safe record(s), "
+            f"{known_met_import['importedRecords']} hash record(s) covering "
+            f"{known_met_import.get('importedSourcePaths', known_met_import['importedRecords'])} "
+            f"shared-file path(s) ({known_met_import.get('duplicateRecords', 0)} duplicate set(s)), "
             f"{known_met_import['sharedFilesScanned']} shared file(s) scanned"
         )
     else:

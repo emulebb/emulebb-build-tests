@@ -176,14 +176,16 @@ def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> N
     assert rows == [(str(root), 1, 0, 1, 0, 1, None)]
 
 
-def test_import_known_met_skips_ambiguous_path_match(tmp_path: Path) -> None:
+def test_import_known_met_seeds_all_duplicate_paths(tmp_path: Path) -> None:
     roots = [tmp_path / "one", tmp_path / "two"]
     modified_s = 1_700_000_000
+    payloads = []
     for root in roots:
         root.mkdir()
         payload = root / "Duplicate.bin"
         payload.write_bytes(b"same")
         os.utime(payload, (modified_s, modified_s))
+        payloads.append(payload)
     known_met = tmp_path / "known.met"
     _write_known_met(
         known_met,
@@ -196,19 +198,28 @@ def test_import_known_met_skips_ambiguous_path_match(tmp_path: Path) -> None:
             )
         ],
     )
+    db_path = tmp_path / "metadata.sqlite"
+    rust_metadata.create_metadata_db(_rust_repo(), db_path)
 
     summary = mfc_known_met.import_mfc_known_met_hashes(
         rust_repo=_rust_repo(),
-        metadata_db=tmp_path / "metadata.sqlite",
+        metadata_db=db_path,
         known_met=known_met,
         shared_roots=roots,
-        dry_run=True,
     )
 
-    assert summary["matchedRecords"] == 0
-    assert summary["skipped"]["no_unique_path_match"] == 1
+    # A known.met record matching two byte-identical duplicates seeds the shared hash
+    # for BOTH paths (same content -> same ed2k hash) instead of being discarded.
+    assert summary["matchedRecords"] == 1
+    assert summary["duplicateRecords"] == 1
+    assert summary["importedRecords"] == 1
+    assert summary["importedSourcePaths"] == 2
     assert summary["skipped"]["no_path_match"] == 0
-    assert summary["skipped"]["ambiguous_path_match"] == 1
+    with sqlite3.connect(db_path) as conn:
+        seeded = {
+            row[0] for row in conn.execute("SELECT source_path FROM share_in_place_sources")
+        }
+    assert seeded == {str(payloads[0]), str(payloads[1])}
 
 
 def test_import_known_met_reports_missing_path_match(tmp_path: Path) -> None:
@@ -236,9 +247,7 @@ def test_import_known_met_reports_missing_path_match(tmp_path: Path) -> None:
     )
 
     assert summary["matchedRecords"] == 0
-    assert summary["skipped"]["no_unique_path_match"] == 1
     assert summary["skipped"]["no_path_match"] == 1
-    assert summary["skipped"]["ambiguous_path_match"] == 0
 
 
 def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> None:
