@@ -1161,6 +1161,52 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
     assert cycle["downloadExistingHashProbeSkips"] == {"rust": 0, "mfc": 0, "combined": 0}
 
 
+def test_automatic_cycle_download_hash_forces_repeatable_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    want = "0123456789abcdef0123456789abcdef"
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(_row: dict[str, object]) -> str | None:
+            return "tooLarge"  # the normal picker would reject; download_hash bypasses it
+
+    monkeypatch.setattr(
+        runner,
+        "create_search",
+        lambda base_url, api_key, *, query, method: "rust-search"
+        if api_key == runner.RUST_API_KEY
+        else "mfc-search",
+    )
+    monkeypatch.setattr(
+        runner,
+        "poll_search_results",
+        lambda *_a, **_k: [
+            {"hash": want, "name": "Linux Ubuntu 7.14 Desktop i386.iso", "sources": 30, "sizeBytes": 629 * 1024 * 1024}
+        ],
+    )
+    # Both clients ALREADY hold the file: download_hash must ignore the existing skip.
+    monkeypatch.setattr(runner, "_get_list", lambda *_a, **_k: [{"hash": want}])
+    monkeypatch.setattr(runner, "transfer_exists", lambda *_a, **_k: True)
+
+    cycle = runner.drive_automatic_cycle(
+        cycle_index=1,
+        query="linux iso",
+        method="server",
+        rust_base="http://rust",
+        mfc_base="http://mfc",
+        rust_mod=_RustFilter,
+        download=True,
+        search_timeout_seconds=1.0,
+        download_hash=want,
+    )
+
+    assert cycle["download"]["scheduled"] is True
+    assert cycle["download"]["hash"] == want
+    assert cycle["download"]["name"] == "Linux Ubuntu 7.14 Desktop i386.iso"
+
+
 def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -541,6 +541,7 @@ def drive_automatic_cycle(
     required_suffix: str | None = None,
     min_size_bytes: int = 0,
     max_size_bytes: int = 0,
+    download_hash: str | None = None,
 ) -> dict[str, Any]:
     """Runs one gentle synchronized search and records one candidate for later download."""
 
@@ -585,16 +586,26 @@ def drive_automatic_cycle(
                 return True
             return False
 
-        candidate = safe_common_download_candidate(
-            rust_rows,
-            mfc_rows,
-            rust_mod=rust_mod,
-            existing_hashes=existing_hashes,
-            existing_probe=existing_hash_probe,
-            required_suffix=required_suffix,
-            min_size_bytes=min_size_bytes,
-            max_size_bytes=max_size_bytes,
-        )
+        if download_hash:
+            # Repeatable deterministic candidate: always (re)download this exact,
+            # well-sourced ISO hash on both clients whenever it appears in both
+            # search pages, ignoring the most-sourced pick and the existing-transfer
+            # skip so parity re-tests use the identical file every run.
+            want = download_hash.strip().lower()
+            r_row = next((r for r in rust_rows if _row_hash(r) == want), None)
+            m_present = any(_row_hash(r) == want for r in mfc_rows)
+            candidate = r_row if (r_row is not None and m_present) else None
+        else:
+            candidate = safe_common_download_candidate(
+                rust_rows,
+                mfc_rows,
+                rust_mod=rust_mod,
+                existing_hashes=existing_hashes,
+                existing_probe=existing_hash_probe,
+                required_suffix=required_suffix,
+                min_size_bytes=min_size_bytes,
+                max_size_bytes=max_size_bytes,
+            )
         cycle["downloadExistingHashProbeSkips"] = probe_skips
         cycle["downloadCandidateConstraints"] = {
             "requiredSuffix": required_suffix,
@@ -1207,6 +1218,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum file size for an auto-drive/seed download candidate. Overrides the shared "
         "safe filter's tiny 8 MiB gentle cap so the ISO soak can pull a real >500 MiB image. "
         "Default 5 GiB.",
+    )
+    parser.add_argument(
+        "--download-hash",
+        default="",
+        help="Repeatable deterministic download candidate: an exact ed2k hash the auto-drive "
+        "(re)downloads on BOTH clients every download cycle when the --download-query search "
+        "returns it, bypassing most-sourced selection + existing-transfer skip. Empty = pick "
+        "the best common candidate dynamically.",
     )
     return parser
 
@@ -2116,6 +2135,7 @@ def main(argv: list[str] | None = None) -> int:
                             required_suffix=args.download_ext,
                             min_size_bytes=args.download_min_bytes,
                             max_size_bytes=args.download_max_bytes,
+                            download_hash=args.download_hash or None,
                         )
                     except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
                         cycle = {
