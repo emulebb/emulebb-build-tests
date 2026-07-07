@@ -215,6 +215,7 @@ def top_common_download_candidates(
     prefer_hashes: set[str] | None = None,
     required_suffix: str | None = None,
     min_size_bytes: int = 0,
+    max_size_bytes: int = 0,
 ) -> list[dict[str, Any]]:
     """Safe, not-yet-present results common to both search pages, most-sourced
     first. ``prefer_hashes`` (deterministic fixtures) sort ahead of the rest so a
@@ -241,7 +242,15 @@ def top_common_download_candidates(
             continue
         if existing_probe is not None and existing_probe(file_hash):
             continue
-        if rust_mod.safe_download_rejection_reason(row) is None:
+        reason = rust_mod.safe_download_rejection_reason(row)
+        # The shared safe filter caps downloads at a tiny gentle size (8 MiB) so
+        # live tests never leech a real file. The ISO parity soak deliberately
+        # wants a >500 MiB ISO, so accept the "tooLarge" verdict when the file is
+        # within our explicit ceiling; every other safety check (unsafe tokens,
+        # hash shape, source floor) still applies.
+        if reason is None or (
+            reason == "tooLarge" and max_size_bytes > 0 and _row_size(row) <= max_size_bytes
+        ):
             candidates.append(row)
     candidates.sort(
         key=lambda row: (
@@ -263,6 +272,7 @@ def safe_common_download_candidate(
     existing_probe: Callable[[str], bool] | None = None,
     required_suffix: str | None = None,
     min_size_bytes: int = 0,
+    max_size_bytes: int = 0,
 ) -> dict[str, Any] | None:
     """Selects one safe, not-yet-present, most-sourced result common to both."""
 
@@ -275,6 +285,7 @@ def safe_common_download_candidate(
         existing_probe=existing_probe,
         required_suffix=required_suffix,
         min_size_bytes=min_size_bytes,
+        max_size_bytes=max_size_bytes,
     )
     return top[0] if top else None
 
@@ -463,6 +474,7 @@ def seed_linux_downloads(
     search_interval: float,
     required_suffix: str | None = None,
     min_size_bytes: int = 0,
+    max_size_bytes: int = 0,
 ) -> dict[str, Any]:
     """Trigger the N most-sourced common linux downloads on both clients and
     record them as deterministic fixtures. Fixture hashes from a prior run sort
@@ -489,6 +501,7 @@ def seed_linux_downloads(
             prefer_hashes=prefer,
             required_suffix=required_suffix,
             min_size_bytes=min_size_bytes,
+            max_size_bytes=max_size_bytes,
         )
         for row in top:
             if len(scheduled) >= target_count:
@@ -527,6 +540,7 @@ def drive_automatic_cycle(
     search_timeout_seconds: float,
     required_suffix: str | None = None,
     min_size_bytes: int = 0,
+    max_size_bytes: int = 0,
 ) -> dict[str, Any]:
     """Runs one gentle synchronized search and records one candidate for later download."""
 
@@ -579,11 +593,13 @@ def drive_automatic_cycle(
             existing_probe=existing_hash_probe,
             required_suffix=required_suffix,
             min_size_bytes=min_size_bytes,
+            max_size_bytes=max_size_bytes,
         )
         cycle["downloadExistingHashProbeSkips"] = probe_skips
         cycle["downloadCandidateConstraints"] = {
             "requiredSuffix": required_suffix,
             "minSizeBytes": min_size_bytes,
+            "maxSizeBytes": max_size_bytes,
         }
         if candidate is None:
             cycle["download"] = {
@@ -1183,6 +1199,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=500 * 1024 * 1024,
         help="Minimum file size for an auto-drive/seed download candidate. Default 500 MiB "
         "(skip checksums/stubs; grab a real ISO).",
+    )
+    parser.add_argument(
+        "--download-max-bytes",
+        type=int,
+        default=5 * 1024 * 1024 * 1024,
+        help="Maximum file size for an auto-drive/seed download candidate. Overrides the shared "
+        "safe filter's tiny 8 MiB gentle cap so the ISO soak can pull a real >500 MiB image. "
+        "Default 5 GiB.",
     )
     return parser
 
@@ -1896,6 +1920,7 @@ def main(argv: list[str] | None = None) -> int:
                     search_interval=args.seed_search_interval,
                     required_suffix=args.download_ext,
                     min_size_bytes=args.download_min_bytes,
+                    max_size_bytes=args.download_max_bytes,
                 )
                 summary["seedDownloads"] = seed_result
                 log(
@@ -2090,6 +2115,7 @@ def main(argv: list[str] | None = None) -> int:
                             search_timeout_seconds=args.auto_search_timeout,
                             required_suffix=args.download_ext,
                             min_size_bytes=args.download_min_bytes,
+                            max_size_bytes=args.download_max_bytes,
                         )
                     except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
                         cycle = {

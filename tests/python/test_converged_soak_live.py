@@ -950,6 +950,35 @@ def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
     assert [row["hash"] for row in top] == ["e" * 32, "d" * 32, "c" * 32]
 
 
+def test_common_candidate_overrides_toolarge_within_max_ceiling() -> None:
+    runner = _load_soak_runner()
+    mib = 1024 * 1024
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(row: dict[str, object]) -> str | None:
+            # Mirrors the shared safe filter's tiny 8 MiB gentle download cap.
+            return "tooLarge" if int(row.get("sizeBytes") or 0) > 8 * mib else None
+
+    rows = [
+        {"hash": "a" * 32, "name": "ubuntu.iso", "sources": 30, "sizeBytes": 629 * mib},
+        {"hash": "b" * 32, "name": "huge.iso", "sources": 99, "sizeBytes": 9000 * mib},
+    ]
+    mfc = [{"hash": "a" * 32}, {"hash": "b" * 32}]
+
+    # Within [500 MiB, 5 GiB] the 629 MiB ISO is accepted despite the safe filter's
+    # "tooLarge" verdict; the 9000 MiB one exceeds the ceiling and stays rejected.
+    top = runner.top_common_download_candidates(
+        rows,
+        mfc,
+        rust_mod=_RustFilter,
+        required_suffix=".iso",
+        min_size_bytes=500 * mib,
+        max_size_bytes=5 * 1024 * mib,
+    )
+    assert [row["hash"] for row in top] == ["a" * 32]
+
+
 def test_safe_common_download_candidate_skips_existing_hashes() -> None:
     runner = _load_soak_runner()
 
