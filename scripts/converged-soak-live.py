@@ -34,6 +34,7 @@ import json
 import os
 import queue
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -1395,6 +1396,24 @@ def resolve_rust_repo() -> Path:
     return resolve_workspace_repo(get_default_workspace_root(REPO_ROOT), "emulebb_rust")
 
 
+def rust_share_in_place_row_count(metadata_db: Path) -> int:
+    """Number of share-in-place hash rows already seeded in a Rust runtime DB.
+    Non-zero means a prior run already imported known.met into this (persistent)
+    runtime, so the slow scan + re-seed can be skipped entirely."""
+
+    if not metadata_db.is_file():
+        return 0
+    try:
+        conn = sqlite3.connect(f"file:{metadata_db}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT count(*) FROM share_in_place_sources").fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return 0
+
+
 def import_mfc_known_met_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
@@ -1409,13 +1428,26 @@ def import_mfc_known_met_for_rust_profile(
     if mfc_profile_dir is None:
         return {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
 
+    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    # Only import when the Rust DB is empty (a fresh runtime). A persistent runtime
+    # that a prior run already seeded keeps its 187k share-in-place rows, so
+    # re-scanning ~200k files and re-seeding on every launch is pure waste.
+    already_seeded = rust_share_in_place_row_count(metadata_db)
+    if already_seeded > 0:
+        return {
+            "enabled": True,
+            "status": "skipped",
+            "reason": "rust-db-already-seeded",
+            "existingSourcePaths": already_seeded,
+        }
+
     known_met = mfc_profile_dir / "config" / "known.met"
     if not known_met.is_file():
         return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
 
     raw = mfc_known_met.import_mfc_known_met_hashes(
         rust_repo=resolve_rust_repo(),
-        metadata_db=rust_runtime_dir / "metadata.sqlite",
+        metadata_db=metadata_db,
         known_met=known_met,
         shared_roots=[Path(root) for root in soak_launch.shared_root_paths(shared_roots)],
     )

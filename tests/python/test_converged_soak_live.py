@@ -451,6 +451,35 @@ def test_mfc_known_met_import_skips_without_direct_mfc_profile(tmp_path: Path) -
     assert result == {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
 
 
+def test_mfc_known_met_import_skips_when_rust_db_already_seeded(tmp_path: Path) -> None:
+    import sqlite3
+
+    runner = _load_soak_runner()
+
+    # Missing DB reads as empty.
+    assert runner.rust_share_in_place_row_count(tmp_path / "nope.sqlite") == 0
+
+    # A persistent runtime already carrying share-in-place rows must NOT re-import.
+    db = tmp_path / "rust-runtime" / "metadata.sqlite"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE share_in_place_sources (source_path TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
+    conn.commit()
+    conn.close()
+    assert runner.rust_share_in_place_row_count(db) == 1
+
+    result = runner.import_mfc_known_met_for_rust_profile(
+        mfc_profile_dir=tmp_path / "mfc",  # need not exist: the seeded check runs first
+        rust_runtime_dir=tmp_path / "rust-runtime",
+        shared_roots=[],
+        enabled=True,
+    )
+    assert result["status"] == "skipped"
+    assert result["reason"] == "rust-db-already-seeded"
+    assert result["existingSourcePaths"] == 1
+
+
 def test_mfc_known_met_import_skips_when_disabled(tmp_path: Path) -> None:
     runner = _load_soak_runner()
 
