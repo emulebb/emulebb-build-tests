@@ -109,34 +109,30 @@ def resolve_mfc_diagnostics_exe(
 # emulebb-rust --diagnostics` writes it next to the cargo output (target-triple
 # release dir) and into the staged tools bin; search both, plus the no-triple dir.
 RUST_DIAGNOSTICS_EXE_NAME = "emulebb-rust-diagnostics.exe"
-RUST_DIAGNOSTICS_EXE_GLOBS = (
-    "builds/rust/target/*/release/emulebb-rust-diagnostics.exe",
-    "builds/rust/target/release/emulebb-rust-diagnostics.exe",
-    "tools/emulebb-rust/bin/emulebb-rust-diagnostics.exe",
-)
+# The single canonical location: the build stages exactly one copy here
+# (`emule_workspace` `stage_emulebb_rust_runtime`, which clears the dir first).
+# The cargo `target/` tree is intermediate build cache and is intentionally NOT
+# consulted, so the soak always runs the one exe the VPN split-tunnel whitelists —
+# no glob-newest ambiguity across duplicate copies.
+RUST_DIAGNOSTICS_EXE_STAGED_PARTS = ("tools", "emulebb-rust", "bin", RUST_DIAGNOSTICS_EXE_NAME)
 
 
 def resolve_rust_diagnostics_exe(output_root: Path, *, require_exists: bool = True) -> Path:
-    """Resolves the eMuleBB Rust diagnostics exe from the output build layout.
+    """Resolves the single staged eMuleBB Rust diagnostics exe.
 
-    Searches the known staged/build-tree locations for ``emulebb-rust-diagnostics.exe``
-    and returns the most recently built match. When ``require_exists`` is true and
-    none is found, raises with the exact build command so the operator knows how to
+    Returns the one canonical staged path. When ``require_exists`` is true and it is
+    missing, raises with the exact build command so the operator knows how to
     produce it.
     """
 
-    matches: list[Path] = []
-    for pattern in RUST_DIAGNOSTICS_EXE_GLOBS:
-        matches.extend(p for p in output_root.glob(pattern) if p.is_file())
-    if matches:
-        return max(matches, key=lambda p: p.stat().st_mtime)
-    if require_exists:
-        raise RuntimeError(
-            f"eMuleBB Rust diagnostics exe '{RUST_DIAGNOSTICS_EXE_NAME}' was not found under "
-            f"'{output_root}'. Build it with: python -m emule_workspace build clients "
-            "--client emulebb-rust --diagnostics."
-        )
-    return output_root / "builds" / "rust" / "target" / "release" / RUST_DIAGNOSTICS_EXE_NAME
+    exe = output_root.joinpath(*RUST_DIAGNOSTICS_EXE_STAGED_PARTS)
+    if exe.is_file() or not require_exists:
+        return exe
+    raise RuntimeError(
+        f"eMuleBB Rust diagnostics exe '{RUST_DIAGNOSTICS_EXE_NAME}' was not found at "
+        f"'{exe}'. Build it with: python -m emule_workspace build clients "
+        "--client emulebb-rust --diagnostics."
+    )
 
 
 def build_search_payload(term: str) -> dict[str, Any]:
