@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import queue
@@ -94,6 +95,7 @@ DIAGNOSTIC_EVIDENCE_LOG_PATTERNS = (
     "*upload-slot*.log",
     "*download-slot*.log",
 )
+KNOWN_MET_IMPORT_MARKER = "mfc-known-met-import.json"
 
 
 def parse_duration(text: str) -> float:
@@ -1414,6 +1416,67 @@ def rust_share_in_place_row_count(metadata_db: Path) -> int:
         return 0
 
 
+def known_met_import_signature(known_met: Path, shared_roots: list[object]) -> dict[str, Any]:
+    """Return a redacted freshness signature for the current MFC known.met import.
+
+    The signature intentionally stores no operator paths: shared roots are folded
+    into a digest, while known.met freshness is represented by size + mtime.
+    """
+
+    stat = known_met.stat()
+    root_markers = sorted(
+        str(root).replace("/", "\\").rstrip("\\").casefold()
+        for root in soak_launch.shared_root_paths(shared_roots)
+    )
+    digest = hashlib.sha256()
+    for marker in root_markers:
+        digest.update(marker.encode("utf-8"))
+        digest.update(b"\0")
+    return {
+        "schema": "emulebb.mfc-known-met-import.v1",
+        "knownMetSizeBytes": stat.st_size,
+        "knownMetMtimeNs": stat.st_mtime_ns,
+        "sharedRootCount": len(root_markers),
+        "sharedRootDigest": digest.hexdigest(),
+    }
+
+
+def load_known_met_import_marker(rust_runtime_dir: Path) -> dict[str, Any] | None:
+    marker = rust_runtime_dir / KNOWN_MET_IMPORT_MARKER
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def write_known_met_import_marker(
+    rust_runtime_dir: Path,
+    signature: dict[str, Any],
+    *,
+    imported_records: int,
+    imported_source_paths: int,
+) -> None:
+    marker = rust_runtime_dir / KNOWN_MET_IMPORT_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        **signature,
+        "importedRecords": imported_records,
+        "importedSourcePaths": imported_source_paths,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    marker.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def known_met_import_marker_matches(
+    marker: dict[str, Any] | None,
+    signature: dict[str, Any],
+) -> bool:
+    if marker is None:
+        return False
+    return all(marker.get(key) == value for key, value in signature.items())
+
+
 def import_mfc_known_met_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
@@ -1428,28 +1491,37 @@ def import_mfc_known_met_for_rust_profile(
     if mfc_profile_dir is None:
         return {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
 
+    known_met = mfc_profile_dir / "config" / "known.met"
+    if not known_met.is_file():
+        return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
+
     metadata_db = rust_runtime_dir / "metadata.sqlite"
-    # Only import when the Rust DB is empty (a fresh runtime). A persistent runtime
-    # that a prior run already seeded keeps its 187k share-in-place rows, so
-    # re-scanning ~200k files and re-seeding on every launch is pure waste.
+    signature = known_met_import_signature(known_met, shared_roots)
     already_seeded = rust_share_in_place_row_count(metadata_db)
-    if already_seeded > 0:
+    if already_seeded > 0 and known_met_import_marker_matches(
+        load_known_met_import_marker(rust_runtime_dir),
+        signature,
+    ):
         return {
             "enabled": True,
             "status": "skipped",
             "reason": "rust-db-already-seeded",
             "existingSourcePaths": already_seeded,
+            "freshness": "matched",
         }
-
-    known_met = mfc_profile_dir / "config" / "known.met"
-    if not known_met.is_file():
-        return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
 
     raw = mfc_known_met.import_mfc_known_met_hashes(
         rust_repo=resolve_rust_repo(),
         metadata_db=metadata_db,
         known_met=known_met,
         shared_roots=[Path(root) for root in soak_launch.shared_root_paths(shared_roots)],
+    )
+    imported_source_paths = raw.get("importedSourcePaths", raw["importedRecords"])
+    write_known_met_import_marker(
+        rust_runtime_dir,
+        signature,
+        imported_records=raw["importedRecords"],
+        imported_source_paths=imported_source_paths,
     )
     return {
         "enabled": True,
@@ -1459,7 +1531,7 @@ def import_mfc_known_met_for_rust_profile(
         "matchedRecords": raw["matchedRecords"],
         "duplicateRecords": raw.get("duplicateRecords", 0),
         "importedRecords": raw["importedRecords"],
-        "importedSourcePaths": raw.get("importedSourcePaths", raw["importedRecords"]),
+        "importedSourcePaths": imported_source_paths,
         "dryRun": raw["dryRun"],
         "skipped": raw["skipped"],
     }
