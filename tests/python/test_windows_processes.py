@@ -201,6 +201,25 @@ def test_terminate_process_treats_wmi_dispatch_type_error_as_success_when_proces
     assert result == {"pid": 10, "terminated": True, "return_code": 0}
 
 
+def test_terminate_process_treats_wmi_not_found_race_as_already_gone(monkeypatch) -> None:
+    class FakeProcess:
+        CreationDate = "20260527010101.000000+000"
+
+        @property
+        def Terminate(self):
+            raise RuntimeError("SWbemObjectEx: Not found -2147217406")
+
+    class FakeService:
+        def ExecQuery(self, _query: str):
+            return [FakeProcess()]
+
+    monkeypatch.setattr(windows_processes, "process_service", lambda: FakeService())
+
+    result = windows_processes.terminate_process(10, expected_creation_date="20260527010101.000000+000")
+
+    assert result == {"pid": 10, "terminated": False, "reason": "process no longer exists"}
+
+
 def test_remaining_target_pids_ignores_reused_pid(monkeypatch) -> None:
     target = windows_processes.WindowsProcessInfo(
         pid=10,

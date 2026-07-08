@@ -151,6 +151,11 @@ def command_line_contains_markers(command_line: str, markers: list[str] | tuple[
     return all(marker.strip().lower() in normalized for marker in markers if marker.strip())
 
 
+def _wmi_process_not_found(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    return "not found" in text and ("swbemobjectex" in text or "-2147217406" in text)
+
+
 def terminate_process(process_id: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
@@ -181,6 +186,10 @@ def terminate_process(process_id: int, exit_code: int = 1, expected_creation_dat
                 result = 0
             else:
                 raise
+    except Exception as exc:
+        if _wmi_process_not_found(exc):
+            return {"pid": process_id, "terminated": False, "reason": "process no longer exists"}
+        raise
     return {"pid": process_id, "terminated": result == 0, "return_code": result}
 
 
