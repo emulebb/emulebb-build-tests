@@ -737,6 +737,37 @@ def ensure_operator_and_kad(
     return ok
 
 
+def ensure_configured_server_connectivity(
+    *,
+    rust_base: str,
+    mfc_base: str,
+    rust_endpoint: str,
+    mfc_endpoint: str,
+) -> dict[str, Any]:
+    """Ensure both clients reached their configured eD2K server endpoint."""
+
+    rust_ok = ensure_operator_and_kad(
+        rust_base,
+        RUST_API_KEY,
+        "rust",
+        endpoint=rust_endpoint,
+    )
+    mfc_ok = ensure_operator_and_kad(
+        mfc_base,
+        MFC_API_KEY,
+        "mfc",
+        endpoint=mfc_endpoint,
+    )
+    result = {
+        "rust": {"ok": rust_ok, "endpoint": rust_endpoint},
+        "mfc": {"ok": mfc_ok, "endpoint": mfc_endpoint},
+    }
+    if not (rust_ok and mfc_ok):
+        failed = ", ".join(name for name, item in result.items() if not item["ok"])
+        raise RuntimeError(f"configured server connectivity failed for: {failed}")
+    return result
+
+
 def operator_connected(status: dict[str, Any], *, endpoint: str = OPERATOR_SERVER) -> bool:
     """Returns true when a redacted status snapshot is on the required server."""
 
@@ -1993,11 +2024,15 @@ def main(argv: list[str] | None = None) -> int:
         rust_dump_dir = Path(rust_handles["packetDumpDir"])
         mfc_dump_dir = Path(mfc_handles["packetDumpDir"])
 
-        # HARD REQUIREMENT: both clients must ALWAYS be on the single operator eD2K
-        # server (45.82.80.155:5687) AND Kad — deterministically, every launch. The
-        # rust config auto-connects its server but MFC is otherwise serverless.
-        ensure_operator_and_kad(rust_base, RUST_API_KEY, "rust")
-        ensure_operator_and_kad(mfc_base, MFC_API_KEY, "mfc")
+        # HARD REQUIREMENT: both clients must be on their configured eD2K server
+        # endpoint AND Kad — deterministically, every launch. The rust config
+        # auto-connects its server but MFC is otherwise serverless.
+        summary["configuredServerConnectivity"] = ensure_configured_server_connectivity(
+            rust_base=rust_base,
+            mfc_base=mfc_base,
+            rust_endpoint=args.rust_server,
+            mfc_endpoint=args.mfc_server,
+        )
 
         # VPN exit-IP validation (release-gate leak check): confirm both clients
         # egress ONLY through the hide.me tunnel. Resolve the public exit IP two

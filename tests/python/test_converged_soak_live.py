@@ -1471,6 +1471,55 @@ def test_connectivity_gate_supports_split_servers() -> None:
     assert gate["mfcOnOperator"] is True
 
 
+def test_configured_server_connectivity_uses_configured_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    calls: list[tuple[str, str, str, str]] = []
+
+    def fake_ensure(base_url: str, api_key: str, label: str, *, endpoint: str, **_kwargs: object) -> bool:
+        calls.append((base_url, api_key, label, endpoint))
+        return True
+
+    monkeypatch.setattr(runner, "ensure_operator_and_kad", fake_ensure)
+
+    result = runner.ensure_configured_server_connectivity(
+        rust_base="http://rust",
+        mfc_base="http://mfc",
+        rust_endpoint="198.51.100.2:4661",
+        mfc_endpoint="203.0.113.3:5687",
+    )
+
+    assert calls == [
+        ("http://rust", runner.RUST_API_KEY, "rust", "198.51.100.2:4661"),
+        ("http://mfc", runner.MFC_API_KEY, "mfc", "203.0.113.3:5687"),
+    ]
+    assert result == {
+        "rust": {"ok": True, "endpoint": "198.51.100.2:4661"},
+        "mfc": {"ok": True, "endpoint": "203.0.113.3:5687"},
+    }
+
+
+def test_configured_server_connectivity_fails_when_client_not_connected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+
+    def fake_ensure(_base_url: str, _api_key: str, label: str, *, endpoint: str, **_kwargs: object) -> bool:
+        del endpoint
+        return label == "rust"
+
+    monkeypatch.setattr(runner, "ensure_operator_and_kad", fake_ensure)
+
+    with pytest.raises(RuntimeError, match="mfc"):
+        runner.ensure_configured_server_connectivity(
+            rust_base="http://rust",
+            mfc_base="http://mfc",
+            rust_endpoint="198.51.100.2:4661",
+            mfc_endpoint="203.0.113.3:5687",
+        )
+
+
 def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_soak_runner()
     calls: list[tuple[str, str, str, str]] = []
