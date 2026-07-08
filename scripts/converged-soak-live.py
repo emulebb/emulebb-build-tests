@@ -9,8 +9,9 @@ nodes.dat, and share the SAME library roots from the gitignored live-wire inputs
 
 A human can drive interactive searches/downloads through each client's own UI
 (the MFC native GUI window this script opens, and TrackMuleBB pointed at the rust
-REST), or ``--auto-drive`` can issue sparse synchronized REST searches/downloads
-for an unattended overnight run. In both modes the harness OBSERVES the clients:
+REST), or ``--auto-drive`` can issue sparse synchronized REST searches for an
+unattended overnight run. Automated downloads are opt-in only. In both modes the
+harness OBSERVES the clients:
 it polls both ``/api/v1/searches`` and ``/api/v1/transfers``, correlates the same
 search term / ed2k hash across the two clients within a window, and runs the
 converged ``ed2k_packet_v1`` / ``diag_event_v1`` diff over each action's time
@@ -1193,21 +1194,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--trackmulebb-cmd", help="Override command to launch TrackMuleBB (default: auto-launch the bundled UI pointed at the rust REST).")
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-launch TrackMuleBB alongside the soak.")
-    parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches/downloads over REST.")
+    parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches over REST. Downloads remain opt-in.")
     parser.add_argument("--search-profile", default="generic_open", help="live-wire search_terms profile for --auto-drive.")
     parser.add_argument("--auto-method", choices=("server", "kad", "automatic"), default="server", help="Search method for --auto-drive.")
     parser.add_argument("--auto-start-delay", type=float, default=60.0, help="Seconds to wait before the first automated action.")
     parser.add_argument("--auto-search-interval", type=float, default=1800.0, help="Gentle interval between automated search cycles.")
     parser.add_argument("--auto-search-timeout", type=float, default=90.0, help="Seconds to wait for each client's search page.")
-    parser.add_argument("--auto-download-every", type=int, default=2, help="Start one common safe download every N automated search cycles; 0 disables.")
+    parser.add_argument("--auto-download-every", type=int, default=0, help="Start one common safe download every N automated search cycles; 0 disables. Default 0.")
     parser.add_argument("--auto-download-delay", type=float, default=90.0, help="Seconds to wait after selecting a download candidate before starting it.")
     parser.add_argument("--auto-max-cycles", type=int, default=0, help="Maximum automated cycles; 0 means bounded only by --duration/quit.")
     parser.add_argument(
         "--seed-downloads",
         type=int,
-        default=12,
-        help="After VPN validation, trigger the N most-sourced common linux downloads on both clients "
-        "(the deterministic-download seed) and record them in deterministic_downloads; 0 disables.",
+        default=0,
+        help="After VPN validation, trigger the N most-sourced common downloads on both clients "
+        "(the deterministic-download seed) and record them in deterministic_downloads; 0 disables. Default 0.",
     )
     parser.add_argument(
         "--seed-search-profile",
@@ -1229,13 +1230,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--download-ext",
         default=".iso",
-        help="Restrict downloads (seed + auto-drive) to this file suffix; always rejects .torrent. "
-        "Empty string disables the filter. Default .iso (download only genuine linux ISOs).",
+        help="Restrict explicitly enabled downloads (seed + auto-drive) to this file suffix; always rejects .torrent. "
+        "Empty string disables the filter. Default .iso.",
     )
     parser.add_argument(
         "--download-query",
         default="linux iso",
-        help="Search query the auto-drive uses on download cycles; the best common candidate "
+        help="Search query used only when download cycles are explicitly enabled; the best common candidate "
         "from this search (same file on both clients) is what gets downloaded. Default 'linux iso'.",
     )
     parser.add_argument(
@@ -2264,9 +2265,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     auto_cycle += 1
                     should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
-                    # Download cycles search the dedicated download query ('linux iso')
-                    # so the common candidate we pick + trigger is a real ISO; non-download
-                    # cycles keep rotating the profile's search terms for wire variety.
+                    # Download cycles are opt-in. Non-download cycles keep
+                    # rotating the profile's search terms for wire variety.
                     query = args.download_query if should_download else auto_terms[(auto_cycle - 1) % len(auto_terms)]
                     log(
                         f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "

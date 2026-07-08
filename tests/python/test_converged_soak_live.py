@@ -271,6 +271,30 @@ def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
     assert args.poll_rest_timeout == 90.0
 
 
+def test_converged_soak_downloads_are_opt_in_by_default() -> None:
+    runner = _load_soak_runner()
+
+    default_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
+    auto_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json", "--auto-drive"])
+    enabled_args = runner.build_parser().parse_args(
+        [
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--seed-downloads",
+            "3",
+            "--auto-download-every",
+            "2",
+        ]
+    )
+
+    assert default_args.seed_downloads == 0
+    assert default_args.auto_download_every == 0
+    assert auto_args.seed_downloads == 0
+    assert auto_args.auto_download_every == 0
+    assert enabled_args.seed_downloads == 3
+    assert enabled_args.auto_download_every == 2
+
+
 def test_converged_soak_seed_search_interval_is_separate_from_auto_drive_interval() -> None:
     runner = _load_soak_runner()
 

@@ -9,6 +9,10 @@ harness observes both `/api/v1` surfaces, correlates the same action across
 clients, and diffs the `ed2k_packet_v1` / `diag_event_v1` capture for each action's
 time window.
 
+Automated live downloads are disabled by default. Normal soak runs may observe
+manual downloads, but the runner must not seed or auto-trigger public downloads
+unless the operator passes explicit nonzero download flags.
+
 See also: `emule_test_harness/soak_action_diff.py` (the action engine),
 `docs/diagnostics/diag-event-v1-schema.md` (the diag schema).
 
@@ -93,6 +97,11 @@ Useful flags: `--duration 0` (run until you type `quit`), `--poll-interval`,
 across clients), `--settle-seconds` / `--lead-seconds` (window padding),
 `--no-obfuscation`, `--rust-rest-port` / `--mfc-rest-port`,
 `--mfc-variant/-arch/-configuration`, `--trackmulebb-cmd "<cmd>"`.
+
+The observer does not trigger downloads by default: `--seed-downloads` defaults
+to `0`, and `--auto-download-every` defaults to `0` even when `--auto-drive` is
+enabled. Use `--auto-drive` for synchronized searches only unless a specific
+test plan explicitly enables downloads.
 
 **SecIdent campaign dimension:** `--secident on|off` (default `on`; also on
 `scripts/soak-scripted-capture.py`) pins the MFC `SecureIdent` preference
