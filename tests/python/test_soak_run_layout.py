@@ -29,6 +29,14 @@ def test_build_run_paths_uses_reports_archives_and_last_run(tmp_path: Path) -> N
     assert paths.latest_report_pointer == tmp_path / "soak" / "reports" / "latest.json"
 
 
+def test_require_output_soak_root_rejects_non_output_report_tree(tmp_path: Path) -> None:
+    output_root = tmp_path / "out"
+
+    assert soak_run_layout.require_output_soak_root(output_root / "soak", output_root) == (output_root / "soak").resolve()
+    with pytest.raises(RuntimeError, match="EMULEBB_WORKSPACE_OUTPUT_ROOT"):
+        soak_run_layout.require_output_soak_root(tmp_path / "repo" / "reports", output_root)
+
+
 def test_mfc_soak_log_dir_resolves_generated_and_direct_profiles(tmp_path: Path) -> None:
     assert soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=tmp_path / "mfc-profile",

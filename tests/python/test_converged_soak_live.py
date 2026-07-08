@@ -59,6 +59,80 @@ def test_soak_endpoint_ports_reject_duplicates() -> None:
         )
 
 
+def test_build_upload_evidence_classifies_passive_serving(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    rust_dump_dir = tmp_path / "rust" / "packet-dump"
+    mfc_dump_dir = tmp_path / "mfc" / "logs"
+    rust_dump_dir.mkdir(parents=True)
+    mfc_dump_dir.mkdir(parents=True)
+    (rust_dump_dir / "emulebb-rust-diag-123.jsonl").write_text(
+        json.dumps(
+            {
+                "family": "sched",
+                "event": "upload_request_outcome",
+                "body": {
+                    "outcome": "partial",
+                    "firstSkipReason": "duplicateDone",
+                    "requestedBytes": 300,
+                    "servedBytes": 100,
+                    "throttleDelayMs": 4,
+                    "verifiedReaderOpenMs": 1,
+                    "payloadReadMs": 2,
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "family": "sched",
+                "event": "upload_payload_accounting",
+                "body": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (mfc_dump_dir / "emulebb-diagnostics-upload-slot.log").write_text(
+        "2026-01-01 00:00:00 UploadSlotDiagnostics: summary "
+        "waiting=2 activeSlots=12 effectiveSlotCap=16 datarateBytesPerSec=3145728\n"
+        "2026-01-01 00:00:01 UploadSlotDiagnostics: slot=1 live=1 "
+        "state=Uploading rateBytesPerSec=1048576 pendingIO=0 reqRejected=0\n",
+        encoding="utf-8",
+    )
+
+    evidence = runner.build_upload_evidence(
+        rust_packets=[
+            {"opcode_name": "OP_REQUESTPARTS"},
+            {"opcode_name": "OP_SENDINGPART"},
+        ],
+        mfc_packets=[
+            {"opcode_name": "OP_REQUESTPARTS"},
+            {"opcode_name": "OP_COMPRESSEDPART"},
+            {"opcode_name": "OP_QUEUERANKING"},
+        ],
+        rust_status={"activeUploads": 1, "waitingUploads": 0},
+        mfc_status={"activeUploads": 12, "waitingUploads": 2},
+        rust_stats={"uploadSpeedKiBps": 900.0, "activeUploads": 1, "waitingUploads": 0},
+        mfc_stats={"uploadSpeedKiBps": 3072.0, "activeUploads": 12, "waitingUploads": 2},
+        rust_dump_dir=rust_dump_dir,
+        mfc_dump_dir=mfc_dump_dir,
+        upload_limit_kibps=3072,
+    )
+
+    assert evidence["classification"]["uploadDemandPresent"] is True
+    assert evidence["classification"]["rustServingProven"] is True
+    assert evidence["classification"]["mfcServingProven"] is True
+    assert evidence["classification"]["mfcCapSaturated"] is True
+    assert evidence["classification"]["rustThroughputGap"] is True
+    assert evidence["classification"]["visibilityGap"] is True
+    assert evidence["packetOpcodes"]["rust"]["OP_SENDINGPART"] == 1
+    assert evidence["packetOpcodes"]["mfc"]["OP_COMPRESSEDPART"] == 1
+    assert evidence["diagnostics"]["rustSched"]["requestedBytes"] == 300
+    assert evidence["diagnostics"]["rustSched"]["servedBytes"] == 100
+    assert evidence["diagnostics"]["rustSched"]["servedOrDuplicateDoneToRequestedRatio"] == 1.0
+    assert evidence["diagnostics"]["mfcUpload"]["summaryRateKiBps"] == 3072.0
+
+
 def test_apply_mfc_endpoint_ports_persists_emule_preferences(tmp_path: Path) -> None:
     calls: list[tuple[Path, tuple[tuple[str, str], ...]]] = []
 

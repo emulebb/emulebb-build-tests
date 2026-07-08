@@ -57,6 +57,7 @@ from emule_test_harness import (
     mfc_known_met,
     packet_trace_diff,
     rust_metadata,
+    upload_parity_monitor,
 )
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
@@ -97,6 +98,19 @@ DIAGNOSTIC_EVIDENCE_LOG_PATTERNS = (
     "*download-slot*.log",
 )
 KNOWN_MET_IMPORT_MARKER = "mfc-known-met-import.json"
+UPLOAD_EVIDENCE_OPCODES = (
+    "OP_REQUESTPARTS",
+    "OP_REQUESTPARTS_I64",
+    "OP_STARTUPLOADREQ",
+    "OP_ACCEPTUPLOADREQ",
+    "OP_SENDINGPART",
+    "OP_SENDINGPART_I64",
+    "OP_COMPRESSEDPART",
+    "OP_COMPRESSEDPART_I64",
+    "OP_QUEUERANKING",
+    "OP_CANCELTRANSFER",
+    "OP_OUTOFPARTREQS",
+)
 
 
 def parse_duration(text: str) -> float:
@@ -683,6 +697,195 @@ def status_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.
         "waitingUploads": runtime.get("waitingUploads"),
         "sharedFileCount": runtime.get("sharedFileCount"),
         "sharedHashingCount": runtime.get("sharedHashingCount"),
+    }
+
+
+def stats_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
+    """Returns upload-focused /stats fields without failing the checkpoint."""
+
+    try:
+        stats = retry_http_json(
+            "soak stats",
+            1,
+            base_url,
+            "/api/v1/stats",
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    data = _api_data(stats)
+    return {
+        "activeUploads": data.get("activeUploads"),
+        "waitingUploads": data.get("waitingUploads"),
+        "uploadSpeedKiBps": data.get("uploadSpeedKiBps"),
+        "sessionUploadedBytes": data.get("sessionUploadedBytes"),
+        "uploadLimitBytesPerSec": data.get("uploadLimitBytesPerSec"),
+        "uploadBaseSlots": data.get("uploadBaseSlots"),
+        "uploadEffectiveSlotCap": data.get("uploadEffectiveSlotCap"),
+        "uploadElasticSlots": data.get("uploadElasticSlots"),
+        "uploadElasticUnderfill": data.get("uploadElasticUnderfill"),
+    }
+
+
+def _latest_file(root: Path, pattern: str) -> Path | None:
+    matches = [path for path in root.glob(pattern) if path.is_file()]
+    if not matches:
+        return None
+    return max(matches, key=lambda path: path.stat().st_mtime)
+
+
+def _opcode_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {name: 0 for name in UPLOAD_EVIDENCE_OPCODES}
+    for record in records:
+        name = str(record.get("opcode_name") or "")
+        if name in counts:
+            counts[name] += 1
+    return {name: count for name, count in counts.items() if count > 0}
+
+
+def _numeric(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _active_uploads(status: dict[str, Any], stats: dict[str, Any]) -> int:
+    return int(_numeric(stats.get("activeUploads")) or _numeric(status.get("activeUploads")) or 0)
+
+
+def _waiting_uploads(status: dict[str, Any], stats: dict[str, Any]) -> int:
+    return int(_numeric(stats.get("waitingUploads")) or _numeric(status.get("waitingUploads")) or 0)
+
+
+def build_upload_evidence(
+    *,
+    rust_packets: list[dict[str, Any]],
+    mfc_packets: list[dict[str, Any]],
+    rust_status: dict[str, Any],
+    mfc_status: dict[str, Any],
+    rust_stats: dict[str, Any],
+    mfc_stats: dict[str, Any],
+    rust_dump_dir: Path,
+    mfc_dump_dir: Path,
+    upload_limit_kibps: int,
+) -> dict[str, Any]:
+    """Builds a passive upload-parity checkpoint from local logs and REST counters."""
+
+    rust_diag_log = _latest_file(rust_dump_dir, "emulebb-rust-diag-*.jsonl")
+    mfc_upload_log = mfc_dump_dir / "emulebb-diagnostics-upload-slot.log"
+    rust_sched = upload_parity_monitor.rust_sched_summary(rust_diag_log)
+    mfc_upload = upload_parity_monitor.mfc_upload_summary(mfc_upload_log)
+    rust_opcodes = _opcode_counts(rust_packets)
+    mfc_opcodes = _opcode_counts(mfc_packets)
+    rust_payload_packets = sum(
+        rust_opcodes.get(name, 0)
+        for name in ("OP_SENDINGPART", "OP_SENDINGPART_I64", "OP_COMPRESSEDPART", "OP_COMPRESSEDPART_I64")
+    )
+    mfc_payload_packets = sum(
+        mfc_opcodes.get(name, 0)
+        for name in ("OP_SENDINGPART", "OP_SENDINGPART_I64", "OP_COMPRESSEDPART", "OP_COMPRESSEDPART_I64")
+    )
+    rust_request_packets = rust_opcodes.get("OP_REQUESTPARTS", 0) + rust_opcodes.get("OP_REQUESTPARTS_I64", 0)
+    mfc_request_packets = mfc_opcodes.get("OP_REQUESTPARTS", 0) + mfc_opcodes.get("OP_REQUESTPARTS_I64", 0)
+    rust_served_bytes = int(_numeric(rust_sched.get("servedBytes")) or 0)
+    mfc_rate_kibps = _numeric(mfc_upload.get("summaryRateKiBps")) or _numeric(mfc_upload.get("sumRateKiBps")) or 0.0
+    rust_rate_kibps = _numeric(rust_stats.get("uploadSpeedKiBps")) or 0.0
+    rust_active = _active_uploads(rust_status, rust_stats)
+    rust_waiting = _waiting_uploads(rust_status, rust_stats)
+    mfc_active = _active_uploads(mfc_status, mfc_stats)
+    mfc_waiting = _waiting_uploads(mfc_status, mfc_stats)
+    demand_present = any(
+        (
+            rust_active > 0,
+            rust_waiting > 0,
+            mfc_active > 0,
+            mfc_waiting > 0,
+            rust_request_packets > 0,
+            mfc_request_packets > 0,
+        )
+    )
+    rust_serving = (rust_request_packets > 0 and rust_payload_packets > 0) or rust_served_bytes > 0
+    mfc_serving = (mfc_request_packets > 0 and mfc_payload_packets > 0) or mfc_rate_kibps > 0.0
+    budget_kibps = float(upload_limit_kibps)
+    mfc_cap_saturated = budget_kibps > 0.0 and mfc_rate_kibps >= budget_kibps * 0.98
+    throughput_gap = (
+        mfc_cap_saturated
+        and rust_rate_kibps > 0.0
+        and rust_rate_kibps < mfc_rate_kibps * 0.85
+        and (mfc_rate_kibps - rust_rate_kibps) >= 512.0
+    )
+    visibility_gap = (
+        demand_present
+        and mfc_waiting > 0
+        and rust_waiting == 0
+        and rust_active < mfc_active
+    )
+    instrumentation_gap = bool(rust_stats.get("error")) or bool(mfc_stats.get("error")) or not mfc_upload.get("logPresent")
+    return {
+        "schema": "soak_upload_evidence_v1",
+        "rest": {
+            "rust": {
+                "activeUploads": rust_active,
+                "waitingUploads": rust_waiting,
+                "uploadSpeedKiBps": rust_stats.get("uploadSpeedKiBps"),
+                "sessionUploadedBytes": rust_stats.get("sessionUploadedBytes"),
+                "uploadEffectiveSlotCap": rust_stats.get("uploadEffectiveSlotCap"),
+            },
+            "mfc": {
+                "activeUploads": mfc_active,
+                "waitingUploads": mfc_waiting,
+                "uploadSpeedKiBps": mfc_stats.get("uploadSpeedKiBps"),
+                "sessionUploadedBytes": mfc_stats.get("sessionUploadedBytes"),
+                "uploadEffectiveSlotCap": mfc_stats.get("uploadEffectiveSlotCap"),
+            },
+        },
+        "packetOpcodes": {
+            "rust": rust_opcodes,
+            "mfc": mfc_opcodes,
+        },
+        "diagnostics": {
+            "rustSched": {
+                "logPresent": rust_sched.get("logPresent"),
+                "schedEvents": rust_sched.get("schedEvents"),
+                "requestOutcomes": rust_sched.get("requestOutcomes"),
+                "requestedBytes": rust_sched.get("requestedBytes"),
+                "servedBytes": rust_sched.get("servedBytes"),
+                "duplicateDoneSuppressedBytes": rust_sched.get("duplicateDoneSuppressedBytes"),
+                "servedToRequestedRatio": rust_sched.get("servedToRequestedRatio"),
+                "servedOrDuplicateDoneToRequestedRatio": rust_sched.get("servedOrDuplicateDoneToRequestedRatio"),
+                "payloadAccountingEvents": rust_sched.get("payloadAccountingEvents"),
+                "lastCapacity": rust_sched.get("lastCapacity"),
+            },
+            "mfcUpload": {
+                "logPresent": mfc_upload.get("logPresent"),
+                "summaryPresent": mfc_upload.get("summaryPresent"),
+                "summaryRateKiBps": mfc_upload.get("summaryRateKiBps"),
+                "uploadingSlots": mfc_upload.get("uploadingSlots"),
+                "liveSlots": mfc_upload.get("liveSlots"),
+                "waiting": mfc_upload.get("waiting"),
+                "activeSlots": mfc_upload.get("activeSlots"),
+                "effectiveSlotCap": mfc_upload.get("effectiveSlotCap"),
+                "pendingIOSum": mfc_upload.get("pendingIOSum"),
+                "reqRejectedSum": mfc_upload.get("reqRejectedSum"),
+            },
+        },
+        "classification": {
+            "uploadDemandPresent": demand_present,
+            "rustServingProven": rust_serving,
+            "mfcServingProven": mfc_serving,
+            "mfcCapSaturated": mfc_cap_saturated,
+            "rustThroughputGap": throughput_gap,
+            "visibilityGap": visibility_gap,
+            "instrumentationGap": instrumentation_gap,
+        },
     }
 
 
@@ -1836,7 +2039,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     campaign_id = soak_run_layout.utc_campaign_id()
-    soak_root = output_root / "soak"
+    soak_root = soak_run_layout.require_output_soak_root(output_root / "soak", output_root)
     rust_runtime_selection = resolve_rust_runtime_paths(
         soak_root,
         campaign_id,
@@ -2422,6 +2625,10 @@ def main(argv: list[str] | None = None) -> int:
                 last_checkpoint = time.monotonic()
                 rust_status = status_snapshot(rust_base, RUST_API_KEY, timeout_seconds=args.poll_rest_timeout)
                 mfc_status = status_snapshot(mfc_base, MFC_API_KEY, timeout_seconds=args.poll_rest_timeout)
+                rust_stats = stats_snapshot(rust_base, RUST_API_KEY, timeout_seconds=args.poll_rest_timeout)
+                mfc_stats = stats_snapshot(mfc_base, MFC_API_KEY, timeout_seconds=args.poll_rest_timeout)
+                rust_packets = load_packets(rust_dump_dir, side="rust")
+                mfc_packets = load_packets(mfc_dump_dir, side="emule")
                 checkpoint = {
                     "schema": "soak_checkpoint_v1",
                     "ts_utc": now.isoformat(),
@@ -2429,13 +2636,28 @@ def main(argv: list[str] | None = None) -> int:
                     "rust": rust_mon.sample(),
                     "mfc": mfc_mon.sample() if mfc_mon else None,
                     "packetRecords": {
-                        "rust": len(load_packets(rust_dump_dir, side="rust")),
-                        "mfc": len(load_packets(mfc_dump_dir, side="emule")),
+                        "rust": len(rust_packets),
+                        "mfc": len(mfc_packets),
                     },
                     "restStatus": {
                         "rust": rust_status,
                         "mfc": mfc_status,
                     },
+                    "restStats": {
+                        "rust": rust_stats,
+                        "mfc": mfc_stats,
+                    },
+                    "uploadEvidence": build_upload_evidence(
+                        rust_packets=rust_packets,
+                        mfc_packets=mfc_packets,
+                        rust_status=rust_status,
+                        mfc_status=mfc_status,
+                        rust_stats=rust_stats,
+                        mfc_stats=mfc_stats,
+                        rust_dump_dir=rust_dump_dir,
+                        mfc_dump_dir=mfc_dump_dir,
+                        upload_limit_kibps=args.upload_limit_kibps,
+                    ),
                     "reconnect": {
                         "rust": checkpoint_operator_reconnect(
                             rust_base,
@@ -2492,6 +2714,14 @@ def main(argv: list[str] | None = None) -> int:
     summary["rustServer"] = args.rust_server
     summary["mfcServer"] = args.mfc_server
     summary["bindIp"] = bind_ip
+    latest_checkpoints = sorted(run_paths.checkpoints_dir.glob("*.json"))
+    if latest_checkpoints:
+        try:
+            latest_checkpoint = json.loads(latest_checkpoints[-1].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            latest_checkpoint = {}
+        if isinstance(latest_checkpoint, dict) and isinstance(latest_checkpoint.get("uploadEvidence"), dict):
+            summary["latestUploadEvidence"] = latest_checkpoint["uploadEvidence"]
     summary["parityRisks"] = build_share_warmup_parity_risk(summary, run_paths.checkpoints_dir)
     for risk in summary["parityRisks"]:
         if risk.get("kind") == "rust-share-cache-cold":

@@ -197,7 +197,9 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
         "requestOutcomes": {},
         "recycleReasons": {},
         "payloadAccountingEvents": 0,
+        "requestedBytes": 0,
         "servedBytes": 0,
+        "duplicateDoneSuppressedBytes": 0,
         "throttleDelayMs": 0,
         "verifiedReaderOpenMs": 0,
         "payloadReadMs": 0,
@@ -217,7 +219,9 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
     request_outcomes: Counter[str] = Counter()
     recycle_reasons: Counter[str] = Counter()
     payload_accounting_events = 0
+    requested_bytes = 0
     served_bytes = 0
+    duplicate_done_suppressed_bytes = 0
     throttle_delay_ms = 0
     verified_reader_open_ms = 0
     payload_read_ms = 0
@@ -271,7 +275,12 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
             recycle_reasons[str(body.get("reason") or "unknown")] += 1
         elif event == "upload_request_outcome":
             request_outcomes[str(body.get("outcome") or "unknown")] += 1
-            served_bytes += int(body.get("servedBytes") or 0)
+            row_requested_bytes = int(body.get("requestedBytes") or 0)
+            row_served_bytes = int(body.get("servedBytes") or 0)
+            requested_bytes += row_requested_bytes
+            served_bytes += row_served_bytes
+            if body.get("firstSkipReason") == "duplicateDone" and row_requested_bytes > row_served_bytes:
+                duplicate_done_suppressed_bytes += row_requested_bytes - row_served_bytes
             throttle_delay_ms += int(body.get("throttleDelayMs") or 0)
             verified_reader_open_ms += int(body.get("verifiedReaderOpenMs") or 0)
             payload_read_ms += int(body.get("payloadReadMs") or 0)
@@ -289,7 +298,15 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
     summary["requestOutcomes"] = dict(request_outcomes)
     summary["recycleReasons"] = dict(recycle_reasons)
     summary["payloadAccountingEvents"] = payload_accounting_events
+    summary["requestedBytes"] = requested_bytes
     summary["servedBytes"] = served_bytes
+    summary["duplicateDoneSuppressedBytes"] = duplicate_done_suppressed_bytes
+    if requested_bytes > 0:
+        summary["servedToRequestedRatio"] = round(served_bytes / requested_bytes, 4)
+        summary["servedOrDuplicateDoneToRequestedRatio"] = round(
+            (served_bytes + duplicate_done_suppressed_bytes) / requested_bytes,
+            4,
+        )
     summary["throttleDelayMs"] = throttle_delay_ms
     summary["verifiedReaderOpenMs"] = verified_reader_open_ms
     summary["payloadReadMs"] = payload_read_ms

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import windows_processes
+from .paths import path_is_relative_to
 
 CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
@@ -85,6 +86,19 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
         last_run_manifest=soak_root / "last-run" / "manifest.json",
         latest_report_pointer=reports_root / "latest.json",
     )
+
+
+def require_output_soak_root(soak_root: Path, output_root: Path) -> Path:
+    """Returns the canonical soak root, rejecting repo/workspace-local reports."""
+
+    resolved_output = output_root.resolve()
+    resolved_soak = soak_root.resolve()
+    expected = (resolved_output / "soak").resolve()
+    if resolved_soak != expected:
+        raise RuntimeError(f"converged soak output must be under EMULEBB_WORKSPACE_OUTPUT_ROOT\\soak: {resolved_soak}")
+    if not path_is_relative_to(resolved_soak, resolved_output):
+        raise RuntimeError(f"converged soak output escaped EMULEBB_WORKSPACE_OUTPUT_ROOT: {resolved_soak}")
+    return resolved_soak
 
 
 def mfc_soak_log_dir(*, mfc_artifacts_dir: Path, direct_profile_dir: Path | None) -> Path:
