@@ -98,6 +98,7 @@ DIAGNOSTIC_EVIDENCE_LOG_PATTERNS = (
     "*download-slot*.log",
 )
 KNOWN_MET_IMPORT_MARKER = "mfc-known-met-import.json"
+PASSIVE_UPLOAD_SEARCH_PROFILE = "passive_upload"
 UPLOAD_EVIDENCE_OPCODES = (
     "OP_REQUESTPARTS",
     "OP_REQUESTPARTS_I64",
@@ -1398,7 +1399,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trackmulebb-cmd", help="Override command to launch TrackMuleBB (default: auto-launch the bundled UI pointed at the rust REST).")
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-launch TrackMuleBB alongside the soak.")
     parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches over REST. Downloads remain opt-in.")
-    parser.add_argument("--search-profile", default="generic_open", help="live-wire search_terms profile for --auto-drive.")
+    parser.add_argument(
+        "--search-profile",
+        default=PASSIVE_UPLOAD_SEARCH_PROFILE,
+        help=(
+            "live-wire search_terms profile for --auto-drive. The default passive profile is "
+            "optional; when absent, auto-drive observes upload traffic without issuing searches."
+        ),
+    )
     parser.add_argument("--auto-method", choices=("server", "kad", "automatic"), default="server", help="Search method for --auto-drive.")
     parser.add_argument("--auto-start-delay", type=float, default=60.0, help="Seconds to wait before the first automated action.")
     parser.add_argument("--auto-search-interval", type=float, default=1800.0, help="Gentle interval between automated search cycles.")
@@ -2029,10 +2037,17 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--auto-search-interval must be at least 300 seconds to keep public live traffic gentle.")
         if args.auto_download_delay < 0.0:
             raise ValueError("--auto-download-delay must be zero or greater.")
-        auto_terms = clw.select_search_terms(
-            rust_mod.load_search_terms(inputs_path, args.search_profile),
-            max_terms=1000,
-        )
+        try:
+            auto_terms = clw.select_search_terms(
+                rust_mod.load_search_terms(inputs_path, args.search_profile),
+                max_terms=1000,
+            )
+        except (RuntimeError, KeyError):
+            auto_terms = []
+            log(
+                f"auto-drive passive observer: no search terms for profile "
+                f"'{args.search_profile}', so no automated searches will run."
+            )
     auto_download_delay = max(
         float(args.auto_download_delay),
         float(args.lead_seconds + args.settle_seconds + args.poll_interval),
@@ -2466,51 +2481,69 @@ def main(argv: list[str] | None = None) -> int:
                     next_auto = time.monotonic() + min(60.0, args.auto_search_interval)
                     log("auto cycle delayed: both clients are not connected to the operator server")
                 else:
-                    auto_cycle += 1
-                    should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
-                    # Download cycles are opt-in. Non-download cycles keep
-                    # rotating the profile's search terms for wire variety.
-                    query = args.download_query if should_download else auto_terms[(auto_cycle - 1) % len(auto_terms)]
-                    log(
-                        f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
-                        f"'{query}' (download={str(should_download).lower()})"
-                    )
-                    try:
-                        cycle = drive_automatic_cycle(
-                            cycle_index=auto_cycle,
-                            query=query,
-                            method=args.auto_method,
-                            rust_base=rust_base,
-                            mfc_base=mfc_base,
-                            rust_mod=rust_mod,
-                            download=should_download,
-                            search_timeout_seconds=args.auto_search_timeout,
-                            required_suffix=args.download_ext,
-                            min_size_bytes=args.download_min_bytes,
-                            max_size_bytes=args.download_max_bytes,
-                            download_hash=args.download_hash or None,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
-                        cycle = {
-                            "cycle": auto_cycle,
-                            "queryIndex": auto_cycle - 1,
-                            "method": args.auto_method,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                        log(f"auto cycle {auto_cycle}: {cycle['error']}")
-                    summary["driver"]["cycles"].append(cycle)
-                    download = cycle.get("download")
-                    if isinstance(download, dict) and download.get("scheduled"):
-                        pending_downloads.append(
+                    next_cycle = auto_cycle + 1
+                    next_cycle_download = args.auto_download_every > 0 and next_cycle % args.auto_download_every == 0
+                    if not auto_terms and not next_cycle_download:
+                        auto_cycle = next_cycle
+                        summary["driver"]["connectivitySkips"].append(
                             {
+                                "ts": now.isoformat(),
+                                "kind": "search",
                                 "cycle": auto_cycle,
-                                "download": download,
-                                "dueAtMono": time.monotonic() + auto_download_delay,
+                                "ok": True,
+                                "reason": "passive-upload-profile-without-search-terms",
+                                "searchProfile": args.search_profile,
                             }
                         )
-                        download["delaySeconds"] = auto_download_delay
-                    write_summary(summary, summary_path)
-                    next_auto = time.monotonic() + args.auto_search_interval
+                        write_summary(summary, summary_path)
+                        next_auto = time.monotonic() + args.auto_search_interval
+                        log("auto cycle skipped: passive upload observer has no search terms")
+                    else:
+                        auto_cycle = next_cycle
+                        should_download = next_cycle_download
+                        # Download cycles are opt-in. Non-download cycles keep
+                        # rotating the profile's search terms for wire variety.
+                        query = args.download_query if should_download else auto_terms[(auto_cycle - 1) % len(auto_terms)]
+                        log(
+                            f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
+                            f"'{query}' (download={str(should_download).lower()})"
+                        )
+                        try:
+                            cycle = drive_automatic_cycle(
+                                cycle_index=auto_cycle,
+                                query=query,
+                                method=args.auto_method,
+                                rust_base=rust_base,
+                                mfc_base=mfc_base,
+                                rust_mod=rust_mod,
+                                download=should_download,
+                                search_timeout_seconds=args.auto_search_timeout,
+                                required_suffix=args.download_ext,
+                                min_size_bytes=args.download_min_bytes,
+                                max_size_bytes=args.download_max_bytes,
+                                download_hash=args.download_hash or None,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
+                            cycle = {
+                                "cycle": auto_cycle,
+                                "queryIndex": auto_cycle - 1,
+                                "method": args.auto_method,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                            log(f"auto cycle {auto_cycle}: {cycle['error']}")
+                        summary["driver"]["cycles"].append(cycle)
+                        download = cycle.get("download")
+                        if isinstance(download, dict) and download.get("scheduled"):
+                            pending_downloads.append(
+                                {
+                                    "cycle": auto_cycle,
+                                    "download": download,
+                                    "dueAtMono": time.monotonic() + auto_download_delay,
+                                }
+                            )
+                            download["delaySeconds"] = auto_download_delay
+                        write_summary(summary, summary_path)
+                        next_auto = time.monotonic() + args.auto_search_interval
 
             if gate["ok"]:
                 pairs, aged_unpaired = tracker.tick(

@@ -365,6 +365,7 @@ def test_converged_soak_downloads_are_opt_in_by_default() -> None:
     assert default_args.auto_download_every == 0
     assert auto_args.seed_downloads == 0
     assert auto_args.auto_download_every == 0
+    assert auto_args.search_profile == runner.PASSIVE_UPLOAD_SEARCH_PROFILE
     assert enabled_args.seed_downloads == 3
     assert enabled_args.auto_download_every == 2
 

@@ -98,10 +98,12 @@ across clients), `--settle-seconds` / `--lead-seconds` (window padding),
 `--no-obfuscation`, `--rust-rest-port` / `--mfc-rest-port`,
 `--mfc-variant/-arch/-configuration`, `--trackmulebb-cmd "<cmd>"`.
 
-The observer does not trigger downloads by default: `--seed-downloads` defaults
-to `0`, and `--auto-download-every` defaults to `0` even when `--auto-drive` is
-enabled. Use `--auto-drive` for synchronized searches only unless a specific
-test plan explicitly enables downloads.
+The observer does not trigger downloads or public searches by default:
+`--seed-downloads` and `--auto-download-every` default to `0`, and the
+`--auto-drive` search profile defaults to the optional passive upload profile. If
+that profile is absent, auto-drive records a passive skip and only observes
+organic upload demand. Use an explicit `--search-profile` only when a specific
+test plan calls for synchronized searches.
 
 **SecIdent campaign dimension:** `--secident on|off` (default `on`; also on
 `scripts/soak-scripted-capture.py`) pins the MFC `SecureIdent` preference
