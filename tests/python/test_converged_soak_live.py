@@ -451,7 +451,7 @@ def test_mfc_known_met_import_skips_without_direct_mfc_profile(tmp_path: Path) -
     assert result == {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
 
 
-def test_mfc_known_met_import_skips_when_rust_db_already_seeded_and_marker_matches(tmp_path: Path) -> None:
+def test_mfc_known_met_import_skips_when_rust_db_already_seeded(tmp_path: Path) -> None:
     import sqlite3
 
     runner = _load_soak_runner()
@@ -459,8 +459,8 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded_and_marker_match
     # Missing DB reads as empty.
     assert runner.rust_share_in_place_row_count(tmp_path / "nope.sqlite") == 0
 
-    # A persistent runtime already carrying share-in-place rows skips only when
-    # its redacted known.met import marker matches the current import inputs.
+    # A persistent runtime already carrying share-in-place rows does not need
+    # the expensive MFC import preseed; that path is only for empty profiles.
     mfc_profile = tmp_path / "mfc"
     known_met = mfc_profile / "config" / "known.met"
     known_met.parent.mkdir(parents=True)
@@ -473,14 +473,6 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded_and_marker_match
     conn.commit()
     conn.close()
     assert runner.rust_share_in_place_row_count(db) == 1
-    signature = runner.known_met_import_signature(known_met, [str(tmp_path / "share")])
-    runner.write_known_met_import_marker(
-        tmp_path / "rust-runtime",
-        signature,
-        imported_records=1,
-        imported_source_paths=1,
-    )
-
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile,
         rust_runtime_dir=tmp_path / "rust-runtime",
@@ -490,12 +482,11 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded_and_marker_match
     assert result["status"] == "skipped"
     assert result["reason"] == "rust-db-already-seeded"
     assert result["existingSourcePaths"] == 1
-    assert result["freshness"] == "matched"
+    assert result["freshness"] == "not-required"
 
 
-def test_mfc_known_met_import_refreshes_seeded_db_when_marker_is_missing_or_stale(
+def test_mfc_known_met_import_uses_marker_freshness_when_already_seeded(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import sqlite3
 
@@ -512,6 +503,31 @@ def test_mfc_known_met_import_refreshes_seeded_db_when_marker_is_missing_or_stal
     conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
     conn.commit()
     conn.close()
+    signature = runner.known_met_import_signature(known_met, [str(tmp_path / "share")])
+    runner.write_known_met_import_marker(runtime, signature, imported_records=1, imported_source_paths=1)
+
+    result = runner.import_mfc_known_met_for_rust_profile(
+        mfc_profile_dir=mfc_profile,
+        rust_runtime_dir=runtime,
+        shared_roots=[str(tmp_path / "share")],
+        enabled=True,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "rust-db-already-seeded"
+    assert result["freshness"] == "matched"
+
+
+def test_mfc_known_met_import_runs_for_empty_rust_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    mfc_profile = tmp_path / "mfc"
+    known_met = mfc_profile / "config" / "known.met"
+    known_met.parent.mkdir(parents=True)
+    known_met.write_bytes(b"placeholder")
+    runtime = tmp_path / "rust-runtime"
     calls: list[dict[str, object]] = []
 
     def fake_import(**kwargs: object) -> dict[str, object]:
@@ -722,6 +738,45 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
             "md4_count_mismatch": 0,
             "aich_count_mismatch": 0,
         },
+    }
+
+
+def test_mfc_shared_files_inventory_import_skips_when_rust_db_already_seeded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlite3
+
+    runner = _load_soak_runner()
+    mfc_profile = tmp_path / "mfc"
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text('{"data":{"items":[]}}', encoding="utf-8")
+    runtime = tmp_path / "rust-runtime"
+    db = runtime / "metadata.sqlite"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE share_in_place_sources (source_path TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        runner.mfc_known_met,
+        "load_shared_file_rows_json",
+        lambda _path: pytest.fail("inventory import should not load rows for a seeded Rust profile"),
+    )
+
+    result = runner.import_mfc_shared_files_inventory_for_rust_profile(
+        mfc_profile_dir=mfc_profile,
+        rust_runtime_dir=runtime,
+        shared_roots=[str(tmp_path / "share")],
+        inventory_path=inventory,
+    )
+
+    assert result == {
+        "enabled": True,
+        "status": "skipped",
+        "reason": "rust-db-already-seeded",
+        "existingSourcePaths": 1,
     }
 
 

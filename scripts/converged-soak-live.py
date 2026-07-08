@@ -1431,8 +1431,8 @@ def resolve_rust_repo() -> Path:
 
 def rust_share_in_place_row_count(metadata_db: Path) -> int:
     """Number of share-in-place hash rows already seeded in a Rust runtime DB.
-    Non-zero means a prior run already imported known.met into this (persistent)
-    runtime, so the slow scan + re-seed can be skipped entirely."""
+    Non-zero means this persistent runtime already has shared-file hashes, so
+    MFC import preseed work is only useful for empty-profile bootstraps."""
 
     if not metadata_db.is_file():
         return 0
@@ -1529,16 +1529,17 @@ def import_mfc_known_met_for_rust_profile(
     metadata_db = rust_runtime_dir / "metadata.sqlite"
     signature = known_met_import_signature(known_met, shared_roots)
     already_seeded = rust_share_in_place_row_count(metadata_db)
-    if already_seeded > 0 and known_met_import_marker_matches(
-        load_known_met_import_marker(rust_runtime_dir),
-        signature,
-    ):
+    if already_seeded > 0:
+        marker_freshness = "matched" if known_met_import_marker_matches(
+            load_known_met_import_marker(rust_runtime_dir),
+            signature,
+        ) else "not-required"
         return {
             "enabled": True,
             "status": "skipped",
             "reason": "rust-db-already-seeded",
             "existingSourcePaths": already_seeded,
-            "freshness": "matched",
+            "freshness": marker_freshness,
         }
 
     raw = mfc_known_met.import_mfc_known_met_hashes(
@@ -1584,6 +1585,16 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     if not inventory_path.is_file():
         return {"enabled": True, "status": "skipped", "reason": "inventory-missing"}
 
+    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    already_seeded = rust_share_in_place_row_count(metadata_db)
+    if already_seeded > 0:
+        return {
+            "enabled": True,
+            "status": "skipped",
+            "reason": "rust-db-already-seeded",
+            "existingSourcePaths": already_seeded,
+        }
+
     known_met = mfc_profile_dir / "config" / "known.met"
     if not known_met.is_file():
         return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
@@ -1591,7 +1602,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     rows = mfc_known_met.load_shared_file_rows_json(inventory_path)
     raw = mfc_known_met.import_mfc_shared_file_rows_hashes(
         rust_repo=resolve_rust_repo(),
-        metadata_db=rust_runtime_dir / "metadata.sqlite",
+        metadata_db=metadata_db,
         known_met=known_met,
         shared_file_rows=rows,
         shared_roots=[Path(root) for root in soak_launch.shared_root_paths(shared_roots)],
