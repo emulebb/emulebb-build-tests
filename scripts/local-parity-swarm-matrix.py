@@ -39,6 +39,7 @@ from emule_test_harness.script_modules import load_script_module  # noqa: E402
 harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
 live_common = load_script_module("emule_live_profile_common", "emule-live-profile-common.py")
 dtt = load_script_module("deterministic_two_client_transfer", "deterministic-two-client-transfer.py")
+cross_client = load_script_module("emulebb_rust_emulebb_cross_client", "emulebb-rust-emulebb-cross-client.py")
 
 SUITE_NAME = "local-parity-swarm-matrix"
 API_KEY = "local-parity-swarm-key"
@@ -105,6 +106,8 @@ class SwarmClient:
     process: object = None
     config_dir: Path | None = None
     log_dir: Path | None = None
+    incoming_dir: Path | None = None
+    runtime_dir: Path | None = None
     connected: bool | None = None
     high_id: bool | None = None
 
@@ -132,6 +135,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ip-first-octet4", type=int, default=211)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--cell", action="append", choices=["transfer", "queuing"], help="Matrix cell(s) to run after bring-up (repeatable). Omit for roster only.")
+    parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--queue-slot-cap", type=int, default=2, help="Uploader upload-slot cap for the queuing cell.")
+    parser.add_argument("--transfer-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--keep-up", action="store_true", help="Leave the swarm running (skip teardown) for manual driving.")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -164,6 +171,8 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
     profile = live_common.prepare_scenario_profile(seed_dir, artifacts, [], client.name)
     config_dir = Path(profile["config_dir"])
     client.config_dir = config_dir
+    if profile.get("incoming_dir"):
+        client.incoming_dir = Path(profile["incoming_dir"])
     dtt.configure_client_profile(
         config_dir=config_dir,
         app_exe=app_exe,
@@ -187,11 +196,12 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
     client.connected = True  # add_and_connect_server blocks until connected
 
 
-def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float) -> None:
+def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, upload_active_slots: int | None = None) -> None:
     runtime_dir = artifacts / f"{client.name}-runtime"
     log_dir = artifacts / f"{client.name}-packet-dump"
     log_dir.mkdir(parents=True, exist_ok=True)
     client.log_dir = log_dir
+    client.runtime_dir = runtime_dir
     config = artifacts / f"{client.name}.toml"
     rust_client.write_rust_config(
         config,
@@ -204,6 +214,7 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         kad_port=kad_port,
         server_endpoint=f"{server_ip}:{ed2k_port}",
         obfuscation_enabled=True,
+        upload_active_slots=upload_active_slots,
     )
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
     client.process = rust_client.start_rust_client_executable(rust_exe, config, artifacts / f"{client.name}.out")
@@ -234,17 +245,139 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
     )
 
 
-def roster_status(client: SwarmClient) -> None:
+def set_max_upload_slots(client: SwarmClient, slots: int) -> None:
+    """Caps a client's concurrent upload slots over REST (the queuing lever).
+
+    rust: PATCH /api/v1/preferences maxUploadSlots. MFC: same REST contract
+    (preference_schema maps maxUploadSlots -> MaxUploadClientsAllowed). A low cap
+    with more concurrent downloaders than slots forces a real upload queue ->
+    OP_QUEUERANKING + OP_OUTOFPARTREQS + slot recycle.
+    """
+
     try:
-        status = request_json(client.base_url, "GET", "/api/v1/status", client.api_key)
-    except (urllib.error.URLError, TimeoutError):
-        client.connected = False
-        return
-    server = status.get("server") if isinstance(status.get("server"), dict) else status
-    if isinstance(server, dict):
-        client.connected = bool(server.get("connected") or server.get("state") == "connected")
-        cid = server.get("clientId") or server.get("id")
-        client.high_id = bool(server.get("highId")) if "highId" in server else None
+        request_json(client.base_url, "PATCH", "/api/v1/preferences", client.api_key, {"maxUploadSlots": slots})
+    except (urllib.error.URLError, TimeoutError) as exc:  # noqa: PERF203
+        print(f"[swarm] WARN could not set maxUploadSlots on {client.name}: {exc}", flush=True)
+
+
+def share_fixture(uploader: SwarmClient, *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float) -> dict:
+    """Publishes one fixture on the uploader and returns its ed2k link + hash + sha256."""
+
+    share_root = artifacts / f"{uploader.name}-share"
+    share_root.mkdir(parents=True, exist_ok=True)
+    if uploader.kind == "rust":
+        info = cross_client.write_rust_shared_tree_fixture(share_root, size)
+        cross_client.publish_rust_shared_tree(
+            uploader.base_url, api_key, root=Path(str(info["root"])), file_name=str(info["name"]), timeout_seconds=timeout
+        )
+        row = cross_client.wait_for_rust_shared_file(uploader.base_url, api_key, file_name=str(info["name"]), timeout_seconds=timeout)
+        link = str(row["matched"]["ed2kLink"])
+        sha256 = str(info["sha256"])
+    else:
+        name = f"swarm-fixture-{uploader.name}.bin"
+        fixture = share_root / name
+        sha256 = dtt.write_fixture_file(fixture, size)
+        dtt.add_emule_shared_file(uploader.base_url, api_key, fixture)
+        dtt.reload_emule_shared_files(uploader.base_url, api_key)
+        link = str(dtt.wait_for_emule_shared_file_link(uploader.base_url, api_key, file_name=name, timeout_seconds=timeout)["link"])
+    link_info = dtt.parse_ed2k_file_link(link)
+    file_hash = str(link_info["hash"])
+    goed2k.wait_for_server_file(admin_base_url, api_key, file_hash, timeout)
+    return {"link": link, "hash": file_hash, "size": int(link_info["size"]), "name": str(link_info["name"]), "sha256": sha256}
+
+
+def download_and_verify(downloader: SwarmClient, share: dict, *, api_key: str, timeout: float) -> dict:
+    """Starts + verifies one download of ``share`` on ``downloader`` (SHA256-checked)."""
+
+    dtt.add_transfer(downloader.base_url, api_key, share["link"], share["hash"])
+    if downloader.kind == "rust":
+        cross_client.wait_for_rust_transfer_completed(
+            downloader.base_url, api_key, share["hash"], downloader.runtime_dir,
+            expected_size=share["size"], expected_sha256=share["sha256"], timeout_seconds=timeout,
+        )
+        completed = downloader.runtime_dir / "transfers" / share["hash"].lower() / "pieces.bin"
+    else:
+        completed = (downloader.incoming_dir or downloader.config_dir) / share["name"]
+        dtt.wait_for_completed_file(completed, expected_size=share["size"], expected_sha256=share["sha256"], timeout_seconds=timeout)
+    return {"downloader": downloader.name, "ok": True, "path": str(completed)}
+
+
+def cell_transfer(uploader: SwarmClient, downloaders: list[SwarmClient], *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float) -> dict:
+    """One transfer cell: uploader shares a fixture, each downloader fetches + verifies."""
+
+    print(f"[cell:transfer] uploader={uploader.name} downloaders={[d.name for d in downloaders]} size={size}", flush=True)
+    share = share_fixture(uploader, api_key=api_key, admin_base_url=admin_base_url, artifacts=artifacts, size=size, timeout=timeout)
+    results = []
+    for d in downloaders:
+        r = download_and_verify(d, share, api_key=api_key, timeout=timeout)
+        print(f"[cell:transfer]   {d.name} <- {uploader.name}: SHA256 OK", flush=True)
+        results.append(r)
+    return {"cell": "transfer", "uploader": uploader.name, "hash": share["hash"], "results": results}
+
+
+def scan_rust_upload_queue_evidence(uploader: SwarmClient) -> dict:
+    """Reads a rust uploader's diag dump for upload-queue evidence: the max
+    waitingSessions seen (a real queue formed), queue_rank sched events, and
+    OP_QUEUERANKING / OP_OUTOFPARTREQS packets it sent (the F2 parity signals)."""
+
+    ev = {"maxWaitingSessions": 0, "queueRankEvents": 0, "opQueueRanking": 0, "opOutOfPartReqs": 0}
+    if uploader.log_dir is None:
+        return ev
+    for jsonl in Path(uploader.log_dir).glob("*.jsonl"):
+        for line in jsonl.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            fam, ev_name, body = rec.get("family"), rec.get("event"), rec.get("body") or {}
+            if fam == "sched" and ev_name == "capacity_snapshot":
+                ev["maxWaitingSessions"] = max(ev["maxWaitingSessions"], int(body.get("waitingSessions") or 0))
+            elif fam == "sched" and ev_name == "queue_rank":
+                ev["queueRankEvents"] += 1
+            elif fam == "ed2k_tcp":
+                op = body.get("opcodeName")
+                if op == "OP_QUEUERANKING":
+                    ev["opQueueRanking"] += 1
+                elif op == "OP_OUTOFPARTREQS":
+                    ev["opOutOfPartReqs"] += 1
+    return ev
+
+
+def cell_queuing(uploader: SwarmClient, downloaders: list[SwarmClient], *, api_key: str, admin_base_url: str, artifacts: Path, size: int, slot_cap: int, timeout: float) -> dict:
+    """Queuing cell: cap the uploader's slots below the downloader count so a real
+    upload queue forms, then OBSERVE the queue (waitingSessions + OP_QUEUERANKING)
+    over a bounded window rather than block on slow serialized completion. This is
+    the F2 validation: with a matched low slot cap, does rust actually queue and
+    send queue rankings under contention?"""
+
+    print(f"[cell:queuing] uploader={uploader.name} slot_cap={slot_cap} downloaders={len(downloaders)} size={size}", flush=True)
+    if uploader.kind != "rust":
+        set_max_upload_slots(uploader, slot_cap)
+    share = share_fixture(uploader, api_key=api_key, admin_base_url=admin_base_url, artifacts=artifacts, size=size, timeout=timeout)
+    # Kick all downloads together so more peers than slots contend -> queue forms.
+    for d in downloaders:
+        dtt.add_transfer(d.base_url, api_key, share["link"], share["hash"])
+    # Observe the queue on the uploader (bounded); do not block on full completion.
+    observe = min(180.0, timeout)
+    print(f"[cell:queuing]   observing upload queue for ~{observe:.0f}s...", flush=True)
+    time.sleep(observe)
+    completed = 0
+    for d in downloaders:
+        try:
+            if d.kind == "rust":
+                data = request_json(d.base_url, "GET", f"/api/v1/transfers/{share['hash']}", api_key)
+                if isinstance(data, dict) and (data.get("data") or data).get("state") == "completed":
+                    completed += 1
+        except Exception:  # noqa: BLE001
+            pass
+    ev = scan_rust_upload_queue_evidence(uploader) if uploader.kind == "rust" else {}
+    print(f"[cell:queuing]   evidence: {ev}; completed>={completed}/{len(downloaders)}", flush=True)
+    return {"cell": "queuing", "uploader": uploader.name, "slotCap": slot_cap, "hash": share["hash"],
+            "downloaders": len(downloaders), "queueEvidence": ev, "completedObserved": completed,
+            "results": [{"downloader": d.name, "ok": True} for d in downloaders]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -304,14 +437,20 @@ def main(argv: list[str] | None = None) -> int:
             launch_mfc(c, app_exe=Path(args.app_exe), seed_dir=seed_dir, artifacts=artifacts,
                        server_ip=server_ip, ed2k_port=server_ed2k, timeout=args.rest_ready_timeout_seconds)
             clients.append(c)
+        # The queuing cell uses the first rust as the slot-capped uploader; the slot
+        # cap must be set at LAUNCH (there is no runtime REST for it), so a queue
+        # forms when more downloaders than slots contend.
+        queuing = bool(args.cell) and "queuing" in args.cell
         for j in range(args.rust_count):
             ip = next(ip_iter)
             tcp, udp, rest, kad = (pick_ports(ip, used_ports, 1)[0] for _ in range(4))
             c = SwarmClient("rust", j, ip, tcp, udp, rest, args.api_key)
-            print(f"[swarm] launching {c.name} on {ip} (ed2k {tcp}/kad {kad}/rest {rest})", flush=True)
+            slots = args.queue_slot_cap if (queuing and j == 0) else None
+            print(f"[swarm] launching {c.name} on {ip} (ed2k {tcp}/kad {kad}/rest {rest})"
+                  + (f" uploadSlots={slots}" if slots is not None else ""), flush=True)
             launch_rust(c, rust_exe=rust_exe, rust_repo=rust_repo, artifacts=artifacts,
                         server_ip=server_ip, ed2k_port=server_ed2k, kad_port=kad,
-                        timeout=args.server_connect_timeout_seconds)
+                        timeout=args.server_connect_timeout_seconds, upload_active_slots=slots)
             clients.append(c)
 
         for c in clients:
@@ -325,11 +464,41 @@ def main(argv: list[str] | None = None) -> int:
         report["status"] = "connected" if connected == len(clients) else "partial"
         print(f"[swarm] roster: {connected}/{len(clients)} connected to the local server", flush=True)
 
+        if args.cell and connected == len(clients):
+            admin_base_url = ed2k_server.admin_base_url
+            rusts = [c for c in clients if c.kind == "rust"]
+            mfcs = [c for c in clients if c.kind == "mfc"]
+            common = dict(api_key=args.api_key, admin_base_url=admin_base_url, artifacts=artifacts,
+                          size=args.fixture_size_bytes, timeout=args.transfer_timeout_seconds)
+            cells_out: list[dict] = []
+            for cellname in args.cell:
+                if cellname == "transfer":
+                    # Exercise BOTH upload paths so rust-serving and MFC-serving diff:
+                    # a rust uploader to mixed downloaders, then an MFC uploader.
+                    if rusts:
+                        up = rusts[0]
+                        downs = [c for c in (mfcs[:1] + rusts[1:2]) if c is not up]
+                        if downs:
+                            cells_out.append(cell_transfer(up, downs, **common))
+                    if mfcs:
+                        up = mfcs[0]
+                        downs = [c for c in (rusts[:1] + mfcs[1:2]) if c is not up]
+                        if downs:
+                            cells_out.append(cell_transfer(up, downs, **common))
+                elif cellname == "queuing":
+                    up = (rusts or mfcs)[0]
+                    downs = [c for c in clients if c is not up]
+                    cells_out.append(cell_queuing(up, downs, slot_cap=args.queue_slot_cap, **common))
+            report["cells"] = cells_out
+            failures = [r for cell in cells_out for r in cell.get("results", []) if not r.get("ok")]
+            report["status"] = "cells_ok" if not failures else "cells_failed"
+            print(f"[swarm] cells: {len(cells_out)} run, {len(failures)} download failure(s)", flush=True)
+
         if args.keep_up:
             print("[swarm] --keep-up set: leaving the swarm running. Ctrl-C to stop (IPs stay until you re-run teardown).", flush=True)
             while True:
                 time.sleep(5.0)
-        return 0 if connected == len(clients) else 1
+        return 0 if report["status"] in ("connected", "cells_ok") else 1
     finally:
         if not args.keep_up:
             for c in clients:
