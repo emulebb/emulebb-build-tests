@@ -148,6 +148,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cell", action="append", choices=["transfer", "queuing"], help="Matrix cell(s) to run after bring-up (repeatable). Omit for roster only.")
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--compressible", action="store_true", help="Use a compressible fixture so the transfer cell exercises OP_COMPRESSEDPART.")
+    parser.add_argument("--crypt", choices=["on", "off"], default="on", help="Protocol obfuscation for all clients at launch (on=RC4 obfuscated, off=clear).")
     parser.add_argument("--queue-slot-cap", type=int, default=2, help="Uploader upload-slot cap for the queuing cell.")
     parser.add_argument("--transfer-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--keep-up", action="store_true", help="Leave the swarm running (skip teardown) for manual driving.")
@@ -178,7 +179,7 @@ def stop_client(client: "SwarmClient") -> None:
         _sp.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
 
 
-def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts: Path, server_ip: str, ed2k_port: int, timeout: float) -> None:
+def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts: Path, server_ip: str, ed2k_port: int, timeout: float, crypt: bool = True) -> None:
     profile = live_common.prepare_scenario_profile(seed_dir, artifacts, [], client.name)
     config_dir = Path(profile["config_dir"])
     client.config_dir = config_dir
@@ -197,6 +198,9 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
         rest_port=client.rest_port,
         lan_bind_addr=client.ip,
         p2p_bind_addr=client.ip,
+        crypt_layer_supported=crypt,
+        crypt_layer_requested=crypt,
+        crypt_layer_required=False,
     )
     dtt.write_server_met(config_dir / "server.met", address=server_ip, port=ed2k_port, name="swarm-local")
     client.process = live_common.launch_app(app_exe, Path(profile["profile_base"]), minimized_to_tray=True)
@@ -208,7 +212,7 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
     client.connected = True  # add_and_connect_server blocks until connected
 
 
-def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, upload_active_slots: int | None = None) -> None:
+def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, upload_active_slots: int | None = None, crypt: bool = True) -> None:
     runtime_dir = artifacts / f"{client.name}-runtime"
     log_dir = artifacts / f"{client.name}-packet-dump"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -225,7 +229,7 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         ed2k_port=client.tcp_port,
         kad_port=kad_port,
         server_endpoint=f"{server_ip}:{ed2k_port}",
-        obfuscation_enabled=True,
+        obfuscation_enabled=crypt,
         upload_active_slots=upload_active_slots,
     )
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
@@ -525,7 +529,8 @@ def main(argv: list[str] | None = None) -> int:
             c = SwarmClient("mfc", i, ip, tcp, udp, rest, args.api_key)
             print(f"[swarm] launching {c.name} on {ip} (tcp {tcp}/udp {udp}/rest {rest})", flush=True)
             launch_mfc(c, app_exe=Path(args.app_exe), seed_dir=seed_dir, artifacts=artifacts,
-                       server_ip=server_ip, ed2k_port=server_ed2k, timeout=args.rest_ready_timeout_seconds)
+                       server_ip=server_ip, ed2k_port=server_ed2k, timeout=args.rest_ready_timeout_seconds,
+                       crypt=args.crypt == "on")
             clients.append(c)
         # The queuing cell uses the first rust as the slot-capped uploader; the slot
         # cap must be set at LAUNCH (there is no runtime REST for it), so a queue
@@ -540,7 +545,8 @@ def main(argv: list[str] | None = None) -> int:
                   + (f" uploadSlots={slots}" if slots is not None else ""), flush=True)
             launch_rust(c, rust_exe=rust_exe, rust_repo=rust_repo, artifacts=artifacts,
                         server_ip=server_ip, ed2k_port=server_ed2k, kad_port=kad,
-                        timeout=args.server_connect_timeout_seconds, upload_active_slots=slots)
+                        timeout=args.server_connect_timeout_seconds, upload_active_slots=slots,
+                        crypt=args.crypt == "on")
             clients.append(c)
 
         for c in clients:
