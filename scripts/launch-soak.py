@@ -300,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             shared_roots=shared_roots, server_met_url=args.server_met_url,
             server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
+            enable_packet_dump=not args.rust_regular,
         )
         rust_proc = rust_handles["process"]
         rust_base = rust_handles["baseUrl"]

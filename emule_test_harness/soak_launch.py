@@ -503,6 +503,7 @@ def bring_up_rust(
     publish_emule_rust_identity: bool = False,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
+    enable_packet_dump: bool = True,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent runtime and returns live handles.
 
@@ -541,7 +542,15 @@ def bring_up_rust(
     with config_path.open("a", encoding="utf-8") as cfg:
         cfg.write("\n[nat]\nenabled = true\n")
 
-    os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
+    # EMULEBB_RUST_LOG_DIR runtime-gates the rust diag writers: the ed2k/kad
+    # PACKET families are additionally behind the cargo `packet-diagnostics`
+    # feature, but the kad-udp wire dump and the sched/kad_event diag_event_v1
+    # families are env-gated ONLY — a plain-release soak must therefore clear
+    # the variable or the "no diagnostics" run still writes diag JSONL.
+    if enable_packet_dump:
+        os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
+    else:
+        os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
     handle = (runtime_dir / "daemon.out").open("a", encoding="utf-8")
     process = start_rust_client_executable_with_output(exe_path, config_path, handle)
 
