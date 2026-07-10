@@ -135,6 +135,27 @@ def resolve_rust_diagnostics_exe(output_root: Path, *, require_exists: bool = Tr
     )
 
 
+# The plain release binary (no `packet-diagnostics` feature, no ed2k_packet_v1 /
+# diag_event_v1 dumps) is staged into the same canonical bin dir under its own
+# name. Staging clears the dir, so exactly ONE flavor is staged at a time — the
+# resolver errors name the build command for the flavor you asked for.
+RUST_REGULAR_EXE_NAME = "emulebb-rust.exe"
+RUST_REGULAR_EXE_STAGED_PARTS = ("tools", "emulebb-rust", "bin", RUST_REGULAR_EXE_NAME)
+
+
+def resolve_rust_regular_exe(output_root: Path, *, require_exists: bool = True) -> Path:
+    """Resolves the single staged plain-release eMuleBB Rust exe."""
+
+    exe = output_root.joinpath(*RUST_REGULAR_EXE_STAGED_PARTS)
+    if exe.is_file() or not require_exists:
+        return exe
+    raise RuntimeError(
+        f"eMuleBB Rust release exe '{RUST_REGULAR_EXE_NAME}' was not found at "
+        f"'{exe}'. Build it with: python -m emule_workspace build clients "
+        "--client emulebb-rust."
+    )
+
+
 def build_search_payload(term: str) -> dict[str, Any]:
     """Builds the shared ``POST /api/v1/searches`` body used by both clients."""
 

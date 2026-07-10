@@ -88,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
     parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
     parser.add_argument("--no-mfc", action="store_true", help="Do not launch the MFC diagnostics GUI.")
+    parser.add_argument(
+        "--rust-regular",
+        action="store_true",
+        help=(
+            "Run the plain-release emulebb-rust.exe (no packet-diagnostics feature, "
+            "no packet/diag dumps) instead of the diagnostics flavor. Build it with "
+            "'python -m emule_workspace build clients --client emulebb-rust'."
+        ),
+    )
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-start TrackMuleBB.")
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both).")
@@ -208,10 +217,16 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
     output_root = get_workspace_output_root()
 
-    rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
-    mfc_exe = clw.resolve_mfc_diagnostics_exe(
-        output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
+    rust_exe = (
+        clw.resolve_rust_regular_exe(output_root)
+        if args.rust_regular
+        else clw.resolve_rust_diagnostics_exe(output_root)
     )
+    mfc_exe = None
+    if not args.no_mfc:
+        mfc_exe = clw.resolve_mfc_diagnostics_exe(
+            output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
+        )
 
     mods = soak_launch.load_helper_modules("launcher")
     rust_mod = mods["rust"]
