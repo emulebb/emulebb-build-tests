@@ -108,8 +108,18 @@ class SwarmClient:
     log_dir: Path | None = None
     incoming_dir: Path | None = None
     runtime_dir: Path | None = None
+    profile_base: Path | None = None
     connected: bool | None = None
     high_id: bool | None = None
+
+    def diag_files(self) -> list[Path]:
+        """Converged diag_event_v1 JSONL/log files this client writes."""
+
+        if self.kind == "rust":
+            return sorted(self.log_dir.glob("*.jsonl")) if self.log_dir else []
+        if self.profile_base is None:
+            return []
+        return sorted(self.profile_base.rglob("emulebb-diagnostics-diag.log"))
 
     @property
     def name(self) -> str:
@@ -137,6 +147,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--cell", action="append", choices=["transfer", "queuing"], help="Matrix cell(s) to run after bring-up (repeatable). Omit for roster only.")
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--compressible", action="store_true", help="Use a compressible fixture so the transfer cell exercises OP_COMPRESSEDPART.")
     parser.add_argument("--queue-slot-cap", type=int, default=2, help="Uploader upload-slot cap for the queuing cell.")
     parser.add_argument("--transfer-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--keep-up", action="store_true", help="Leave the swarm running (skip teardown) for manual driving.")
@@ -171,6 +182,7 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
     profile = live_common.prepare_scenario_profile(seed_dir, artifacts, [], client.name)
     config_dir = Path(profile["config_dir"])
     client.config_dir = config_dir
+    client.profile_base = Path(profile["profile_base"])
     if profile.get("incoming_dir"):
         client.incoming_dir = Path(profile["incoming_dir"])
     dtt.configure_client_profile(
@@ -260,23 +272,51 @@ def set_max_upload_slots(client: SwarmClient, slots: int) -> None:
         print(f"[swarm] WARN could not set maxUploadSlots on {client.name}: {exc}", flush=True)
 
 
-def share_fixture(uploader: SwarmClient, *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float) -> dict:
+def write_compressible(path: Path, size: int) -> str:
+    """Writes a highly compressible fixture (repeating text) so the upload path
+    exercises OP_COMPRESSEDPART; returns its SHA256. Random fixtures never compress
+    below raw size (both clients decline compression), so this is the only way to
+    exercise the compression combination on the wire."""
+
+    import hashlib
+
+    # Salt the repeating block with the file stem so each uploader's fixture has a
+    # DISTINCT ed2k hash (identical content would collide, and a downloader that
+    # already shared that hash would short-circuit the transfer) while staying
+    # highly compressible.
+    unit = f"emulebb-swarm-{path.stem}-compressible-block\n".encode()
+    block = (unit * (8192 // max(1, len(unit)) + 1))[:8192]
+    digest = hashlib.sha256()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle:
+        written = 0
+        while written < size:
+            chunk = block[: min(len(block), size - written)]
+            handle.write(chunk)
+            digest.update(chunk)
+            written += len(chunk)
+    return digest.hexdigest()
+
+
+def share_fixture(uploader: SwarmClient, *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float, compressible: bool = False) -> dict:
     """Publishes one fixture on the uploader and returns its ed2k link + hash + sha256."""
 
     share_root = artifacts / f"{uploader.name}-share"
     share_root.mkdir(parents=True, exist_ok=True)
     if uploader.kind == "rust":
         info = cross_client.write_rust_shared_tree_fixture(share_root, size)
+        # Overwrite with compressible content BEFORE publish (rust hashes on
+        # publish/reload, so the served bytes + hash stay consistent).
+        sha256 = write_compressible(Path(str(info["path"])), size) if compressible else str(info["sha256"])
         cross_client.publish_rust_shared_tree(
             uploader.base_url, api_key, root=Path(str(info["root"])), file_name=str(info["name"]), timeout_seconds=timeout
         )
         row = cross_client.wait_for_rust_shared_file(uploader.base_url, api_key, file_name=str(info["name"]), timeout_seconds=timeout)
         link = str(row["matched"]["ed2kLink"])
-        sha256 = str(info["sha256"])
     else:
         name = f"swarm-fixture-{uploader.name}.bin"
         fixture = share_root / name
-        sha256 = dtt.write_fixture_file(fixture, size)
+        sha256 = write_compressible(fixture, size) if compressible else dtt.write_fixture_file(fixture, size)
         dtt.add_emule_shared_file(uploader.base_url, api_key, fixture)
         dtt.reload_emule_shared_files(uploader.base_url, api_key)
         link = str(dtt.wait_for_emule_shared_file_link(uploader.base_url, api_key, file_name=name, timeout_seconds=timeout)["link"])
@@ -302,11 +342,61 @@ def download_and_verify(downloader: SwarmClient, share: dict, *, api_key: str, t
     return {"downloader": downloader.name, "ok": True, "path": str(completed)}
 
 
-def cell_transfer(uploader: SwarmClient, downloaders: list[SwarmClient], *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float) -> dict:
+def serving_summary(client: SwarmClient) -> dict:
+    """Serving-side (flow=listener) ed2k_tcp opcode + transportMode histogram from a
+    client's converged diag_event_v1, so a rust uploader and an MFC uploader that
+    served the same fixture can be compared feature-by-feature."""
+
+    import collections
+    opcodes: collections.Counter = collections.Counter()
+    tmodes: collections.Counter = collections.Counter()
+    for f in client.diag_files():
+        try:
+            text = f.read_text(encoding="utf-8-sig", errors="ignore")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("schema") != "diag_event_v1" or rec.get("family") != "ed2k_tcp":
+                continue
+            body = rec.get("body") or {}
+            if body.get("flow") != "listener":
+                continue
+            if body.get("opcodeName"):
+                opcodes[body["opcodeName"]] += 1
+            if body.get("transportMode"):
+                tmodes[body["transportMode"]] += 1
+    return {"opcodes": dict(opcodes), "transportModes": dict(tmodes)}
+
+
+def print_serving_diff(rust_up: SwarmClient | None, mfc_up: SwarmClient | None) -> dict:
+    """Prints a side-by-side rust-vs-MFC serving diff and returns it. Feature keys
+    that appear on one side only are the interesting divergences to investigate."""
+
+    rs = serving_summary(rust_up) if rust_up else {"opcodes": {}, "transportModes": {}}
+    ms = serving_summary(mfc_up) if mfc_up else {"opcodes": {}, "transportModes": {}}
+    print("[diff] serving-side ed2k_tcp (rust uploader vs MFC uploader):", flush=True)
+    keys = sorted(set(rs["opcodes"]) | set(ms["opcodes"]), key=lambda k: -(rs["opcodes"].get(k, 0) + ms["opcodes"].get(k, 0)))
+    for k in keys:
+        r, m = rs["opcodes"].get(k, 0), ms["opcodes"].get(k, 0)
+        flag = "  <- only-one-side" if (r == 0) != (m == 0) else ""
+        print(f"[diff]   {k:28s} rust={r:4d}  mfc={m:4d}{flag}", flush=True)
+    print(f"[diff]   transportModes rust={rs['transportModes']} mfc={ms['transportModes']}", flush=True)
+    return {"rustUploader": rust_up.name if rust_up else None, "mfcUploader": mfc_up.name if mfc_up else None,
+            "rustServing": rs, "mfcServing": ms}
+
+
+def cell_transfer(uploader: SwarmClient, downloaders: list[SwarmClient], *, api_key: str, admin_base_url: str, artifacts: Path, size: int, timeout: float, compressible: bool = False) -> dict:
     """One transfer cell: uploader shares a fixture, each downloader fetches + verifies."""
 
-    print(f"[cell:transfer] uploader={uploader.name} downloaders={[d.name for d in downloaders]} size={size}", flush=True)
-    share = share_fixture(uploader, api_key=api_key, admin_base_url=admin_base_url, artifacts=artifacts, size=size, timeout=timeout)
+    print(f"[cell:transfer] uploader={uploader.name} downloaders={[d.name for d in downloaders]} size={size} compressible={compressible}", flush=True)
+    share = share_fixture(uploader, api_key=api_key, admin_base_url=admin_base_url, artifacts=artifacts, size=size, timeout=timeout, compressible=compressible)
     results = []
     for d in downloaders:
         r = download_and_verify(d, share, api_key=api_key, timeout=timeout)
@@ -479,16 +569,26 @@ def main(argv: list[str] | None = None) -> int:
                         up = rusts[0]
                         downs = [c for c in (mfcs[:1] + rusts[1:2]) if c is not up]
                         if downs:
-                            cells_out.append(cell_transfer(up, downs, **common))
+                            cells_out.append(cell_transfer(up, downs, compressible=args.compressible, **common))
                     if mfcs:
                         up = mfcs[0]
                         downs = [c for c in (rusts[:1] + mfcs[1:2]) if c is not up]
                         if downs:
-                            cells_out.append(cell_transfer(up, downs, **common))
+                            cells_out.append(cell_transfer(up, downs, compressible=args.compressible, **common))
                 elif cellname == "queuing":
                     up = (rusts or mfcs)[0]
                     downs = [c for c in clients if c is not up]
                     cells_out.append(cell_queuing(up, downs, slot_cap=args.queue_slot_cap, **common))
+            # Per-combination diff: rust-serving vs MFC-serving the same fixture.
+            transfer_cells = [c for c in cells_out if c.get("cell") == "transfer"]
+            if transfer_cells:
+                by_name = {c.name: c for c in clients}
+                rust_up = next((by_name[c["uploader"]] for c in transfer_cells
+                                if by_name.get(c["uploader"]) and by_name[c["uploader"]].kind == "rust"), None)
+                mfc_up = next((by_name[c["uploader"]] for c in transfer_cells
+                               if by_name.get(c["uploader"]) and by_name[c["uploader"]].kind == "mfc"), None)
+                if rust_up or mfc_up:
+                    report["servingDiff"] = print_serving_diff(rust_up, mfc_up)
             report["cells"] = cells_out
             failures = [r for cell in cells_out for r in cell.get("results", []) if not r.get("ok")]
             report["status"] = "cells_ok" if not failures else "cells_failed"
