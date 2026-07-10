@@ -43,6 +43,15 @@
       "C:\\example\\public-video-corpus"
     ]
   },
+  "shared_directories": {
+    "shareddir_file": "%EMULEBB_MFC_SOAK_PROFILE_DIR%\\config\\shareddir.dat",
+    "roots": [
+      {
+        "path": "C:\\example\\fallback-shared-root",
+        "recursive": true
+      }
+    ]
+  },
   "local_package_install": {
     "target_path": "%EMULEBB_LOCAL_INSTALL_PATH%",
     "import_profile_dir": "%EMULEBB_LOCAL_TEST_PROFILE_PATH%",

@@ -13,6 +13,7 @@ machine-specific is baked in.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -198,6 +199,33 @@ def load_shareddir_root_entries(path: Path, *, extra_roots: list[Path] | None = 
             roots.append(root)
     for extra_root in extra_roots or []:
         roots.append(str(extra_root))
+    return dedupe_shared_roots(roots)
+
+
+def load_live_wire_shared_root_entries(path: Path) -> list[object]:
+    """Loads shared-root intent from live-wire inputs.
+
+    ``shared_directories.shareddir_file`` is the preferred source when present:
+    it preserves the MFC persisted tree, including recursive monitored roots via
+    sibling ``shareddir.monitored.dat`` and ``shareddir.monitor-owned.dat``.
+    ``shared_directories.roots`` remains the explicit fallback.
+    """
+
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    shared = data.get("shared_directories", {})
+    if not isinstance(shared, dict):
+        return []
+    shareddir_file = str(shared.get("shareddir_file") or "").strip()
+    if shareddir_file:
+        extra_roots = [
+            Path(str(root))
+            for root in shared.get("extra_roots", [])
+            if isinstance(root, str) and root.strip()
+        ]
+        return load_shareddir_root_entries(Path(shareddir_file), extra_roots=extra_roots)
+    roots = shared.get("roots", [])
+    if not isinstance(roots, list):
+        return []
     return dedupe_shared_roots(roots)
 
 

@@ -18,18 +18,21 @@ def main() -> int:
     parser.add_argument("--rust-repo", type=Path, required=True)
     parser.add_argument("--metadata-db", type=Path, required=True)
     parser.add_argument("--known-met", type=Path, required=True)
+    parser.add_argument("--inputs", type=Path, help="live-wire inputs JSON with shared_directories intent")
     parser.add_argument("--shared-root", type=Path, action="append", default=[])
     parser.add_argument("--shared-dir-file", type=Path)
     parser.add_argument("--incoming-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    shared_roots = list(args.shared_root)
+    shared_roots: list[object] = list(args.shared_root)
+    if args.inputs is not None:
+        shared_roots.extend(soak_launch.load_live_wire_shared_root_entries(args.inputs))
     if args.shared_dir_file is not None:
         extra_roots = [args.incoming_dir] if args.incoming_dir is not None else None
-        shared_roots.extend(Path(path) for path in soak_launch.load_shareddir_roots(args.shared_dir_file, extra_roots=extra_roots))
+        shared_roots.extend(soak_launch.load_shareddir_root_entries(args.shared_dir_file, extra_roots=extra_roots))
     if not shared_roots:
-        parser.error("provide at least one --shared-root or --shared-dir-file")
+        parser.error("provide --inputs, --shared-root, or --shared-dir-file")
 
     summary = mfc_known_met.import_mfc_known_met_hashes(
         rust_repo=args.rust_repo,

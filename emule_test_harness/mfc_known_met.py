@@ -109,7 +109,7 @@ def import_mfc_known_met_hashes(
     rust_repo: Path,
     metadata_db: Path,
     known_met: Path,
-    shared_roots: list[Path],
+    shared_roots: list[object],
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if not dry_run and not metadata_db.exists():
@@ -310,29 +310,51 @@ def load_shared_file_rows_json(path: Path) -> list[dict[str, Any]]:
     return []
 
 
-def scan_shared_file_candidates(roots: list[Path]) -> list[SharedFileCandidate]:
+def scan_shared_file_candidates(roots: list[object]) -> list[SharedFileCandidate]:
     candidates: list[SharedFileCandidate] = []
     for root in roots:
-        if not root.is_dir():
+        root_path, recursive = _shared_root_scan_parts(root)
+        if not root_path.is_dir():
             continue
-        for dirpath, _, filenames in os.walk(root):
-            for filename in filenames:
-                path = Path(dirpath) / filename
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                if not path.is_file():
-                    continue
-                candidates.append(
-                    SharedFileCandidate(
-                        path=path,
-                        size_bytes=stat.st_size,
-                        mtime_s=int(stat.st_mtime),
-                        mtime_ms=stat.st_mtime_ns // 1_000_000,
-                    )
+        paths = _recursive_file_paths(root_path) if recursive else _direct_file_paths(root_path)
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if not path.is_file():
+                continue
+            candidates.append(
+                SharedFileCandidate(
+                    path=path,
+                    size_bytes=stat.st_size,
+                    mtime_s=int(stat.st_mtime),
+                    mtime_ms=stat.st_mtime_ns // 1_000_000,
                 )
+            )
     return candidates
+
+
+def _shared_root_scan_parts(root: object) -> tuple[Path, bool]:
+    if isinstance(root, dict):
+        return Path(str(root.get("path") or "")), bool(root.get("recursive"))
+    if isinstance(root, str):
+        return Path(root), False
+    return Path(root), True
+
+
+def _direct_file_paths(root: Path) -> list[Path]:
+    try:
+        return [path for path in root.iterdir() if path.is_file()]
+    except OSError:
+        return []
+
+
+def _recursive_file_paths(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for dirpath, _, filenames in os.walk(root):
+        paths.extend(Path(dirpath) / filename for filename in filenames)
+    return paths
 
 
 def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:

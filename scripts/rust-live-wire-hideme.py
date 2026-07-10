@@ -39,6 +39,7 @@ from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_config,
 )
+from emule_test_harness.soak_launch import load_live_wire_shared_root_entries
 from emule_test_harness.vm_guest_profiles import (
     api_data,
     api_rows,
@@ -668,21 +669,14 @@ def hold_soak(base_url: str, soak_seconds: float) -> dict[str, Any]:
     return {"seconds": int(soak_seconds), "snapshots": snapshots}
 
 
-def load_shared_roots(inputs_path: Path) -> list[str]:
-    """Loads `shared_directories.roots[].path` from the gitignored live-wire inputs.
+def load_shared_roots(inputs_path: Path) -> list[object]:
+    """Loads shared-root intent from the gitignored live-wire inputs.
 
     These are the operator's real shared (seeding) directories; the client shares
     them so it becomes a source and the upload path is exercised live.
     """
 
-    data = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
-    roots = data.get("shared_directories", {}).get("roots", [])
-    paths: list[str] = []
-    for root in roots:
-        path = str(root.get("path", "")).strip() if isinstance(root, dict) else ""
-        if path:
-            paths.append(path)
-    return paths
+    return load_live_wire_shared_root_entries(inputs_path)
 
 
 def _shared_root_path(root: object) -> str:

@@ -250,6 +250,34 @@ def test_import_known_met_reports_missing_path_match(tmp_path: Path) -> None:
     assert summary["skipped"]["no_path_match"] == 1
 
 
+def test_scan_shared_file_candidates_respects_flat_and_recursive_roots(tmp_path: Path) -> None:
+    flat = tmp_path / "flat"
+    recursive = tmp_path / "recursive"
+    flat_child = flat / "child"
+    recursive_child = recursive / "child"
+    flat_child.mkdir(parents=True)
+    recursive_child.mkdir(parents=True)
+    flat_payload = flat / "Flat.bin"
+    flat_nested = flat_child / "FlatNested.bin"
+    recursive_payload = recursive / "Recursive.bin"
+    recursive_nested = recursive_child / "RecursiveNested.bin"
+    for payload in [flat_payload, flat_nested, recursive_payload, recursive_nested]:
+        payload.write_bytes(payload.name.encode("utf-8"))
+
+    candidates = mfc_known_met.scan_shared_file_candidates(
+        [
+            {"path": str(flat), "recursive": False},
+            {"path": str(recursive), "recursive": True},
+        ]
+    )
+
+    scanned = {candidate.path for candidate in candidates}
+    assert flat_payload in scanned
+    assert flat_nested not in scanned
+    assert recursive_payload in scanned
+    assert recursive_nested in scanned
+
+
 def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> None:
     root = tmp_path / "share"
     root.mkdir()
