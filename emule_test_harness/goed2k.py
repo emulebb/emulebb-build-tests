@@ -185,8 +185,8 @@ def catalog_file(
 
 
 def build_server_met(ip: str, port: int, name: str) -> bytes:
-    """Builds a minimal single-server ``server.met`` pointing a client (aMule,
-    emulebb) at a goed2k-server endpoint, so live suites can drive a real ED2K
+    """Builds a minimal single-server ``server.met`` pointing an eMule-compatible
+    client at a goed2k-server endpoint, so live suites can drive a real ED2K
     client connection without scraping a public server list.
 
     Layout: MET header (0x0E), uint32 server count, then per server the 4 IPv4

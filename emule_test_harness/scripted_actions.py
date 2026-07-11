@@ -53,7 +53,7 @@ def utc_now_iso() -> str:
 def build_ed2k_link(fixture: dict[str, Any]) -> str:
     """``ed2k://|file|<name>|<size>|<hash>|/`` from a direct-transfer fixture row.
 
-    Mirrors the harness link format (auto-browse-live/amule). Raises on a fixture
+    Mirrors the harness link format used by local ED2K campaigns. Raises on a fixture
     missing the fields the REST transfer-add requires.
     """
 

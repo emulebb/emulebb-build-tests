@@ -126,12 +126,6 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
             rf"{output_root}\tools\goed2k-server\goed2k-server.exe -config {run_root}\ed2k-server\config.json",
         ),
         module.ProcessInfo(
-            202,
-            200,
-            "amuled.exe",
-            rf"{output_root}\tools\amule\bin\amuled.exe --config-dir={run_root}\clients\cl-amule-004\config",
-        ),
-        module.ProcessInfo(
             203,
             200,
             "node.exe",
@@ -141,7 +135,7 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
 
     selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
-    assert selected == {200, 201, 202, 203}
+    assert selected == {200, 201, 203}
     assert reasons[200] == "workspace test runner command line"
     assert module.termination_roots(selected, processes) == [200]
 

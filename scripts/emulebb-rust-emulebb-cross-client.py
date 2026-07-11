@@ -241,9 +241,9 @@ def require_rust_download_manifest_metadata(
         raise RuntimeError("Rust cross-client manifest did not preserve the file size.")
     if manifest.get("md4_hashset_acquired") is not True or not isinstance(md4_hashset, list):
         raise RuntimeError("Rust did not acquire the MD4 hashset from the cross-client source.")
-    # WHY: an eD2K single-part file carries an optional MD4 part-hash list. eMule/emulebb
-    # omit it (the file hash IS that single part hash) so the hashset is empty, while aMule
-    # surfaces the one part hash. Accept 0 or 1 for a single-part file; require the exact
+    # WHY: an eD2K single-part file carries an optional MD4 part-hash list. Some clients
+    # omit it (the file hash IS that single part hash) while others surface the one part
+    # hash. Accept 0 or 1 for a single-part file; require the exact
     # part count for multi-part files. expectedHashsetCount stays 0 for single-part (part
     # hashes beyond the file hash), which the REST manifest contract asserts.
     if expected_part_count > 1:

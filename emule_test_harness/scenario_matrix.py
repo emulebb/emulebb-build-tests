@@ -264,7 +264,7 @@ def summarize_matrix_gaps(suites: list[dict[str, Any]]) -> list[dict[str, str]]:
             gaps.append(
                 {
                     "suite": suite["name"],
-                    "gap": "mixed-client runtime readiness can downgrade aMule evidence inside the hammer",
+                    "gap": "mixed-client runtime readiness can downgrade required parity evidence inside the hammer",
                 }
             )
     return gaps

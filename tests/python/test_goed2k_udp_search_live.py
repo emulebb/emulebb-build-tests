@@ -3,7 +3,7 @@
 Drives the server's UDP global path directly (OP_GLOBSEARCHREQ2 -> 0x99,
 OP_GLOBGETSOURCES -> 0x9b) from a real UDP socket on X_LOCAL_IP, asserting both
 the decoded replies and the server packet trace. This is the feature-specific
-campaign for UDP search/sources; aMule/emulebb-rust cover the TCP paths.
+campaign for UDP search/sources; MFC and emulebb-rust cover the TCP paths.
 """
 
 from __future__ import annotations
