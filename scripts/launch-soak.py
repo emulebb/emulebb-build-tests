@@ -3,9 +3,8 @@
 A pure launcher: it brings up emulebb-rust (diagnostics) and the MFC diagnostics
 GUI on the persistent, isolated profiles under
 ``$EMULEBB_WORKSPACE_OUTPUT_ROOT/soak/`` (same operator eD2K server, same nodes.dat
-bootstrap, same shared library roots), auto-starts TrackMuleBB pointed at the rust
-REST, then idles until Ctrl-C. You drive searches/downloads by hand (MFC GUI +
-TrackMuleBB); both diagnostics builds write their ``ed2k_packet_v1`` /
+bootstrap, same shared library roots), then idles until Ctrl-C. Drive the clients
+through their REST APIs; both diagnostics builds write their ``ed2k_packet_v1`` /
 ``diag_event_v1`` dumps continuously into the persistent profile dirs.
 
 No test/diff logic lives here. Analysis runs separately from this repo
@@ -25,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -58,10 +56,6 @@ from emule_test_harness.soak_launch import (
     log,
 )
 from emule_test_harness.vm_guest_profiles import retry_http_json
-
-# TrackMuleBB lives beside this repo under repos/; it is driven entirely by env.
-TRACKMULEBB_REPO = REPO_ROOT.parent / "trackmulebb"
-TRACKMULEBB_CONTROL_PORT = 8770
 
 
 def resolve_direct_mfc_profile(inputs: LiveWireInputs, *, no_mfc: bool) -> Path | None:
@@ -98,7 +92,6 @@ def build_parser() -> argparse.ArgumentParser:
             "'python -m emule_workspace build clients --client emulebb-rust'."
         ),
     )
-    parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-start TrackMuleBB.")
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both).")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
@@ -110,33 +103,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def start_trackmulebb(*, rust_url: str, control_host: str) -> subprocess.Popen:
-    """Starts TrackMuleBB (NiceGUI) pointed at the soak rust REST, qBt disabled."""
-
-    if not (TRACKMULEBB_REPO / "trackmulebb" / "__main__.py").is_file():
-        raise RuntimeError(f"TrackMuleBB repo not found at '{TRACKMULEBB_REPO}'.")
-    env = os.environ.copy()
-    env.update(
-        {
-            "TRACKMULEBB_RUST_URL": rust_url,
-            "TRACKMULEBB_RUST_API_KEY": RUST_API_KEY,
-            "TRACKMULEBB_RUST_ENABLED": "1",
-            "TRACKMULEBB_QBT_ENABLED": "0",
-            "TRACKMULEBB_CONTROL_HOST": control_host,
-            "TRACKMULEBB_CONTROL_PORT": str(TRACKMULEBB_CONTROL_PORT),
-        }
-    )
-    return subprocess.Popen(
-        ["uv", "run", "--project", str(TRACKMULEBB_REPO), "python", "-m", "trackmulebb"],
-        env=env,
-    )
-
-
 def graceful_teardown(
     *,
     rust_handles: dict | None,
     mfc_handles: dict | None,
-    trackmulebb_proc: subprocess.Popen | None,
     live_common,
     rust_base: str,
     wait_seconds: float = 15.0,
@@ -145,9 +115,9 @@ def graceful_teardown(
 
     Asks each component to stop cleanly (rust via ``POST /api/v1/app/shutdown`` →
     its graceful network teardown; the MFC GUI via ``close_app_cleanly`` → the
-    eMule save-and-exit path that persists known.met; TrackMuleBB via terminate),
-    then waits up to ``wait_seconds`` for the processes to exit before force-killing
-    any straggler. A second Ctrl-C during the wait jumps straight to the kill.
+    eMule save-and-exit path that persists known.met), then waits up to
+    ``wait_seconds`` for the processes to exit before force-killing any straggler.
+    A second Ctrl-C during the wait jumps straight to the kill.
     """
 
     if rust_handles is not None and rust_handles["process"].poll() is None:
@@ -168,19 +138,9 @@ def graceful_teardown(
                 mfc_handles["app"].kill()
             except Exception:  # noqa: BLE001
                 pass
-    if trackmulebb_proc is not None and trackmulebb_proc.poll() is None:
-        log("TrackMuleBB: requesting stop...")
-        try:
-            trackmulebb_proc.terminate()
-        except Exception:  # noqa: BLE001
-            pass
-
     watched = [
         proc
-        for proc in (
-            rust_handles["process"] if rust_handles is not None else None,
-            trackmulebb_proc,
-        )
+        for proc in (rust_handles["process"] if rust_handles is not None else None,)
         if proc is not None
     ]
     deadline = time.monotonic() + wait_seconds
@@ -190,8 +150,6 @@ def graceful_teardown(
     except KeyboardInterrupt:
         log("second interrupt - force-killing now.")
 
-    if trackmulebb_proc is not None and trackmulebb_proc.poll() is None:
-        stop_process_tree(trackmulebb_proc)
     if rust_handles is not None:
         if rust_handles["process"].poll() is None:
             log("rust did not exit in time - force-killing.")
@@ -288,7 +246,6 @@ def main(argv: list[str] | None = None) -> int:
 
     rust_handles: dict | None = None
     mfc_handles: dict | None = None
-    trackmulebb_proc: subprocess.Popen | None = None
     rust_base = ""
     try:
         rust_handles = bring_up_rust(
@@ -318,16 +275,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             mfc_base = mfc_handles["baseUrl"]
 
-        if not args.no_trackmulebb:
-            trackmulebb_proc = start_trackmulebb(rust_url=rust_base, control_host=rest_addr)
-
         log("=" * 70)
-        log("SOAK ENVIRONMENT UP. Drive searches/downloads by hand:")
+        log("SOAK ENVIRONMENT UP. Drive searches/downloads through REST automation:")
         log(f"  emulebb-rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
         if not args.no_mfc:
             log(f"  MFC diagnostics   : {mfc_base}   (X-API-Key: {MFC_API_KEY}) + its GUI window")
-        if not args.no_trackmulebb:
-            log(f"  TrackMuleBB UI    : http://{rest_addr}:{TRACKMULEBB_CONTROL_PORT}  (drives rust)")
         log(f"  operator server   : {OPERATOR_SERVER}")
         log("Dumps accumulate under the persistent profiles; analyze later from this repo.")
         log("Press Ctrl-C to stop everything (profiles + dumps are kept).")
@@ -344,7 +296,6 @@ def main(argv: list[str] | None = None) -> int:
         graceful_teardown(
             rust_handles=rust_handles,
             mfc_handles=mfc_handles,
-            trackmulebb_proc=trackmulebb_proc,
             live_common=mods["live_common"],
             rust_base=rust_base,
         )

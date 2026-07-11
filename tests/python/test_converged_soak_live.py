@@ -70,43 +70,6 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
     assert args.lan_bind_addr == "192.0.2.10"
 
 
-def test_launch_default_trackmulebb_binds_control_host_to_lan_addr(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = _load_soak_runner()
-    repo_root = tmp_path / "repos" / "emulebb-build-tests"
-    trackmulebb_repo = tmp_path / "repos" / "trackmulebb"
-    trackmulebb_repo.mkdir(parents=True)
-    (trackmulebb_repo / "pyproject.toml").write_text("[project]\nname='trackmulebb'\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "REPO_ROOT", repo_root)
-    popen_calls: list[dict[str, object]] = []
-
-    class FakeProcess:
-        pass
-
-    def fake_popen(command: list[str], *, cwd: str, env: dict[str, str]) -> FakeProcess:
-        popen_calls.append({"command": command, "cwd": cwd, "env": env})
-        return FakeProcess()
-
-    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-    logs: list[str] = []
-
-    process = runner.launch_default_trackmulebb(
-        "http://192.0.2.10:4731",
-        "api-key",
-        "192.0.2.10",
-        logs.append,
-    )
-
-    assert isinstance(process, FakeProcess)
-    assert popen_calls[0]["cwd"] == str(trackmulebb_repo)
-    env = popen_calls[0]["env"]
-    assert env["TRACKMULEBB_RUST_URL"] == "http://192.0.2.10:4731"
-    assert env["TRACKMULEBB_CONTROL_HOST"] == "192.0.2.10"
-    assert "192.0.2.10:8770" in logs[0]
-
-
 def test_soak_endpoint_ports_are_distinct_by_default() -> None:
     ports = soak_launch.require_distinct_endpoint_ports(
         rust_ed2k_port=soak_launch.RUST_ED2K_PORT,

@@ -7,9 +7,8 @@ diagnostics builds up on **persistent, isolated** profiles under
 Both connect to the SAME operator eD2K server, bootstrap Kad from the SAME
 nodes.dat, and share the SAME library roots from the gitignored live-wire inputs.
 
-A human can drive interactive searches/downloads through each client's own UI
-(the MFC native GUI window this script opens, and TrackMuleBB pointed at the rust
-REST), or ``--auto-drive`` can issue sparse synchronized REST searches for an
+A human can drive interactive searches/downloads through the clients' REST APIs,
+or ``--auto-drive`` can issue sparse synchronized REST searches for an
 unattended overnight run. Automated downloads are opt-in only. In both modes the
 harness OBSERVES the clients:
 it polls both ``/api/v1/searches`` and ``/api/v1/transfers``, correlates the same
@@ -33,11 +32,9 @@ import argparse
 import fnmatch
 import hashlib
 import json
-import os
 import queue
 import re
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -1397,8 +1394,6 @@ def build_parser() -> argparse.ArgumentParser:
         "identity is always provisioned), so 'off' runs an asymmetric campaign that is "
         "recorded as such in environmentParity.",
     )
-    parser.add_argument("--trackmulebb-cmd", help="Override command to launch TrackMuleBB (default: auto-launch the bundled UI pointed at the rust REST).")
-    parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-launch TrackMuleBB alongside the soak.")
     parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches over REST. Downloads remain opt-in.")
     parser.add_argument(
         "--search-profile",
@@ -1905,33 +1900,6 @@ def resolve_kad_bootstrap_endpoints(
     }
 
 
-def launch_default_trackmulebb(
-    rust_base: str, api_key: str, control_host: str, log: Callable[[str], None]
-) -> subprocess.Popen | None:
-    """Launch the bundled TrackMuleBB UI pointed at the running rust REST.
-
-    Auto-started as part of every soak so the operator has the live visual view;
-    opt out with --no-trackmulebb, or override with --trackmulebb-cmd. A failure to
-    launch is non-fatal (TrackMuleBB is monitoring-only).
-    """
-    repo = REPO_ROOT.parent / "trackmulebb"
-    if not (repo / "pyproject.toml").exists():
-        log(f"TrackMuleBB not launched: repo not found at {repo}")
-        return None
-    env = dict(os.environ)
-    env["TRACKMULEBB_RUST_URL"] = rust_base
-    env["TRACKMULEBB_RUST_API_KEY"] = api_key
-    env["TRACKMULEBB_CONTROL_HOST"] = control_host
-    env["TRACKMULEBB_QBT_ENABLED"] = "false"
-    try:
-        proc = subprocess.Popen(["uv", "run", "python", "-m", "trackmulebb"], cwd=str(repo), env=env)
-    except OSError as exc:
-        log(f"TrackMuleBB launch failed: {exc}")
-        return None
-    log(f"launched TrackMuleBB (UI on {control_host}:8770) -> rust {rust_base}")
-    return proc
-
-
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
@@ -2222,7 +2190,6 @@ def main(argv: list[str] | None = None) -> int:
 
     rust_handles: dict[str, Any] | None = None
     mfc_handles: dict[str, Any] | None = None
-    trackmulebb_proc: subprocess.Popen | None = None
     try:
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
@@ -2319,13 +2286,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 log(f"seed-downloads skipped: no '{args.seed_search_profile}' search terms in inputs.")
 
-        if args.trackmulebb_cmd:
-            log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")
-            trackmulebb_proc = subprocess.Popen(args.trackmulebb_cmd, shell=True)
-        elif not args.no_trackmulebb:
-            trackmulebb_proc = launch_default_trackmulebb(rust_base, RUST_API_KEY, rest_addr, log)
         log("=" * 70)
-        log("SOAK LIVE. Drive searches/downloads via the MFC GUI and via TrackMuleBB:")
+        log("SOAK LIVE. Drive searches/downloads via REST automation:")
         log(f"  rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
         log(f"  MFC  REST : {mfc_base}   (X-API-Key: {MFC_API_KEY})")
         log("Console commands: 'begin [label]' / 'end' to bracket a manual action, "
@@ -2726,8 +2688,6 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         log("interrupted - winding down.")
     finally:
-        if trackmulebb_proc is not None:
-            stop_process_tree(trackmulebb_proc)
         if mfc_handles is not None and mfc_handles.get("app") is not None:
             try:
                 live_common.close_app_cleanly(mfc_handles["app"])

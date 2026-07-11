@@ -2,9 +2,9 @@
 
 The converged single-pass orchestrator (``scripts/converged-live-wire-diff.py``)
 *issues* the same gentle exchange to both clients and diffs the whole capture. The
-long soak is different: a human drives interactive searches/downloads through each
-client's own UI (MFC native GUI, TrackMuleBB for emulebb-rust), so the harness
-cannot issue the synchronized action — it must **observe** it.
+long soak is different: a human or a thin REST driver starts searches/downloads
+through each client's API, so the harness cannot assume it owns every synchronized
+action — it must **observe** it.
 
 This module is the side-effect-free core the soak orchestrator builds on:
 
