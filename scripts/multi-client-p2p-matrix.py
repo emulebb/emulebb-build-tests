@@ -25,19 +25,12 @@ from emule_test_harness.script_modules import load_script_module  # noqa: E402
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
 HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
-AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
-THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
-RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange"
 OPTIONAL_SCENARIO_DEFINITIONS = (
     ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
-    (AMULE_TRANSFER_SCENARIO_ID, "amule"),
-    (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
     (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
     (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
-    (RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "amule"),
-    ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
 )
 
 
@@ -69,8 +62,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
-    parser.add_argument("--amule-daemon-exe")
-    parser.add_argument("--amule-control-exe")
     parser.add_argument("--require-optional-clients", action="store_true")
     parser.add_argument(
         "--require-scenario",
@@ -232,50 +223,6 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
     )
 
 
-def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the eMuleBB download from a headless aMule seed scenario."""
-
-    scenario_artifacts = paths.source_artifacts_dir / "a4"
-    command = build_child_script_command("deterministic-amule-transfer.py", scenario_artifacts, args)
-    if args.amule_daemon_exe:
-        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
-    if args.amule_control_exe:
-        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
-
-    return run_child_scenario(
-        scenario_id=AMULE_TRANSFER_SCENARIO_ID,
-        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
-        command=command,
-        cwd=REPO_ROOT,
-        report_path=scenario_artifacts / "deterministic-amule-transfer.json",
-    )
-
-
-def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the full eMuleBB, tracing-harness, and aMule concurrent swarm."""
-
-    scenario_artifacts = paths.source_artifacts_dir / "sw3"
-    command = build_child_script_command("three-client-swarm-transfer.py", scenario_artifacts, args)
-    if args.client2_app_exe:
-        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
-    if args.amule_daemon_exe:
-        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
-    if args.amule_control_exe:
-        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
-
-    return run_child_scenario(
-        scenario_id=THREE_CLIENT_SWARM_SCENARIO_ID,
-        clients=[
-            CLIENT_IDENTITIES["emulebb"].profile_id,
-            CLIENT_IDENTITIES["harness"].profile_id,
-            CLIENT_IDENTITIES["amule"].profile_id,
-        ],
-        command=command,
-        cwd=REPO_ROOT,
-        report_path=scenario_artifacts / "three-client-swarm-transfer.json",
-    )
-
-
 def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the existing Rust local-client suite for bidirectional peer exchange."""
 
@@ -328,25 +275,6 @@ def run_emulebb_rust_emulebb_bidirectional_scenario(paths, args: argparse.Namesp
         command=command,
         cwd=REPO_ROOT,
         report_path=scenario_artifacts / "emulebb-rust-emulebb-cross-client-result.json",
-    )
-
-
-def run_emulebb_rust_amule_bidirectional_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the bidirectional Rust/aMule compatibility scenario."""
-
-    scenario_artifacts = paths.source_artifacts_dir / "r5-a4"
-    command = build_child_script_command("emulebb-rust-amule-cross-client.py", scenario_artifacts, args)
-    if args.amule_daemon_exe:
-        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
-    if args.amule_control_exe:
-        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
-
-    return run_child_scenario(
-        scenario_id=RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID,
-        clients=[CLIENT_IDENTITIES["emulebb_rust"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
-        command=command,
-        cwd=REPO_ROOT,
-        report_path=scenario_artifacts / "emulebb-rust-amule-cross-client-result.json",
     )
 
 
@@ -451,8 +379,6 @@ def main(argv: list[str] | None = None) -> int:
             configuration=args.configuration,
             harness_exe=args.client2_app_exe,
             emuleai_exe=args.emuleai_exe,
-            amule_daemon_exe=args.amule_daemon_exe,
-            amule_control_exe=args.amule_control_exe,
         )
         report["client_inventory"] = {key: value.as_report() for key, value in inventory.items()}
         mandatory_missing = [
@@ -474,17 +400,6 @@ def main(argv: list[str] | None = None) -> int:
         completed_optional_ids: set[str] = set()
         selected_optional_ids = set(args.require_scenario or ())
         run_all_optional = not selected_optional_ids
-        amule = inventory["amule"]
-        if amule.available and amule.deterministic_transfer_adapter and (
-            run_all_optional or AMULE_TRANSFER_SCENARIO_ID in selected_optional_ids
-        ):
-            scenarios.append(run_amule_transfer_scenario(paths, args))
-            completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
-        if amule.available and amule.deterministic_transfer_adapter and (
-            run_all_optional or THREE_CLIENT_SWARM_SCENARIO_ID in selected_optional_ids
-        ):
-            scenarios.append(run_three_client_swarm_scenario(paths, args))
-            completed_optional_ids.add(THREE_CLIENT_SWARM_SCENARIO_ID)
         rust = inventory["emulebb_rust"]
         rust_peer = inventory["emulebb_rust_peer"]
         if (
@@ -503,15 +418,6 @@ def main(argv: list[str] | None = None) -> int:
         ):
             scenarios.append(run_emulebb_rust_emulebb_bidirectional_scenario(paths, args))
             completed_optional_ids.add(RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID)
-        if (
-            (run_all_optional or RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID in selected_optional_ids)
-            and rust.available
-            and rust.deterministic_transfer_adapter
-            and amule.available
-            and amule.deterministic_transfer_adapter
-        ):
-            scenarios.append(run_emulebb_rust_amule_bidirectional_scenario(paths, args))
-            completed_optional_ids.add(RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,
