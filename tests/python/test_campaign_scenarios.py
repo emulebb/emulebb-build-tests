@@ -22,7 +22,7 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
     assert matrix["scenarios"][0]["localTestNetwork"] == "default"
     assert matrix["scenarios"][0]["localAllowedNetworkScopes"] == ["offline", "lan"]
     assert matrix["localSwarm"] == {
-        "clientProducts": ["emulebb", "emulebb-rust", "amule", "tracing-harness"],
+        "clientProducts": ["emulebb", "emulebb-rust", "amule", "mfc-peer"],
         "tiers": [1, 2, 3],
         "defaultTier": 1,
         "tierOptions": campaign_scenarios.LOCAL_SWARM_TIER_OPTIONS,

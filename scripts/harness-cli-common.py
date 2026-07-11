@@ -29,12 +29,11 @@ except ImportError:  # pragma: no cover - non-Windows import guard
     winreg = None  # type: ignore[assignment]
 
 WORKSPACE_NAME = "workspace"
-DEFAULT_APP_VARIANTS = ("main", "community", "tracing-harness")
+DEFAULT_APP_VARIANTS = ("main", "community")
 MAIN_APP_EXE_NAME = "emulebb.exe"
 LEGACY_APP_EXE_NAME = "emule.exe"
 APP_VARIANT_WORKTREE_NAMES = {
     "community": "emulebb-community-baseline",
-    "tracing-harness": "emulebb-community-tracing-harness",
 }
 PROTECTED_VOLUME_DIRECTORY_NAMES = frozenset(("system volume information", "$recycle.bin"))
 # Admin fixture storage roots are runtime-only; reports keep harness artifacts, not mounted volume trees or VHD images.

@@ -559,20 +559,6 @@ def test_write_fixture_file_seed_changes_bytes(tmp_path: Path) -> None:
     assert second_hash == module.file_sha256(second)
 
 
-def test_build_client2_harness_args_uses_single_dash_parser_form(tmp_path: Path) -> None:
-    module = load_suite_module()
-
-    args = module.build_client2_harness_args(
-        ready_path=tmp_path / "ready.txt",
-        fixture_file=tmp_path / "shared.bin",
-        export_link_path=tmp_path / "link.txt",
-        source_ip="10.1.2.3",
-    )
-
-    assert args[0::2] == ["-readyfile", "-sharefile", "-exportlinkfile", "-exportsourceip"]
-    assert "--sharefile" not in args
-
-
 def test_configure_client_profile_disables_private_server_filter(tmp_path: Path) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"

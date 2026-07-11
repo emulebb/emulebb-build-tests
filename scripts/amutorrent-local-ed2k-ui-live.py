@@ -185,15 +185,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def choose_ports() -> dict[str, int]:
+def choose_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
     """Allocates local ED2K, eMuleBB, aMule, and aMuTorrent ports."""
 
-    ports = amule_transfer.choose_amule_ports(dtt.choose_distinct_ports())
+    ports = amule_transfer.choose_amule_ports(dtt.choose_distinct_ports(lan_bind_addr), lan_bind_addr)
     used = set(ports.values())
     for name in ("amutorrent", "rust_rest", "rust_ed2k", "rust_kad"):
         for _ in range(100):
-            candidate = rest_smoke.choose_listen_port()
-            if candidate not in used and dtt.is_port_available(candidate):
+            candidate = rest_smoke.choose_listen_port(lan_bind_addr)
+            if candidate not in used and dtt.is_port_available(candidate, host=lan_bind_addr):
                 ports[name] = candidate
                 used.add(candidate)
                 break
@@ -1190,7 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["amutorrent_frontend_bundle"] = amutorrent_ui.build_and_verify_frontend_bundle(amutorrent_root, node_path)
 
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-        ports = choose_ports()
+        ports = choose_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
@@ -1272,6 +1272,9 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         for config_dir in (Path(client1["config_dir"]), Path(client2["config_dir"]), amule_profile.config_dir):
@@ -1310,27 +1313,28 @@ def main(argv: list[str] | None = None) -> int:
                 "profile_id": CLIENT05.profile_id,
             }
 
-        export_link_path = paths.source_artifacts_dir / "seed-export" / "fixture.ed2k.txt"
-        ready_path = paths.source_artifacts_dir / "seed-export" / "ready.txt"
-        export_link_path.parent.mkdir(parents=True, exist_ok=True)
-
-        current_phase = "launch_seed_harness"
+        current_phase = "launch_seed_peer"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
             minimized_to_tray=True,
-            extra_args=dtt.build_client2_harness_args(
-                ready_path=ready_path,
-                fixture_file=fixture_file,
-                export_link_path=export_link_path,
-                source_ip=p2p_address,
-            ),
         )
-        report["checks"]["seed_ready"] = dtt.wait_for_file(ready_path, 90.0, "local ED2K seed harness ready file")
-        exported_link = dtt.wait_for_exported_link(export_link_path, args.link_export_timeout_seconds)
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+        report["checks"]["seed_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+        )
+        report["checks"]["seed_shared_file_add"] = dtt.add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
+        report["checks"]["seed_shared_files_reload"] = dtt.reload_emule_shared_files(client2_base_url, args.api_key)
+        shared_link = dtt.wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        exported_link = str(shared_link["link"])
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
-        report["checks"]["seed_exported_link"] = {"path": str(export_link_path), "link": exported_link, "parsed": link_info}
+        report["checks"]["seed_shared_file_link"] = {**shared_link, "parsed": link_info}
         report["checks"]["seed_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,

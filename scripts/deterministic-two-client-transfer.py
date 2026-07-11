@@ -740,21 +740,6 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     return snapshot
 
 
-def build_client2_harness_args(*, ready_path: Path, fixture_file: Path, export_link_path: Path, source_ip: str) -> list[str]:
-    """Builds tracing-harness CLI args using the single-dash form parsed by eMule."""
-
-    return [
-        "-readyfile",
-        str(ready_path),
-        "-sharefile",
-        str(fixture_file),
-        "-exportlinkfile",
-        str(export_link_path),
-        "-exportsourceip",
-        source_ip,
-    ]
-
-
 def main(argv: list[str] | None = None) -> int:
     """Runs the deterministic two-client transfer suite."""
 

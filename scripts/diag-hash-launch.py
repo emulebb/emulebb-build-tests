@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     workspace_root = get_default_workspace_root(test_repo_root).resolve()
     app_root = args.app_root.resolve() if args.app_root else resolve_workspace_app_root(
         workspace_root,
-        preferred_variant_names=("main", "community", "tracing-harness"),
+        preferred_variant_names=("main", "community"),
     )
     emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emulebb.exe")).resolve()
     report_root = (args.report_root or (get_test_reports_root(workspace_root) / "diag-hash-launch")).resolve()

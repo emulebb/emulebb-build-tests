@@ -4427,11 +4427,11 @@ def arr_fake_release_name(kind: str, title: str) -> str:
     return f"{cleaned} 2026 1080p WEB-DL eMuleBB.mkv"
 
 
-def choose_local_ed2k_ports(avoid_ports: set[int]) -> dict[str, int]:
+def choose_local_ed2k_ports(avoid_ports: set[int], lan_bind_addr: str | None = None) -> dict[str, int]:
     """Chooses deterministic local ED2K ports without colliding with existing listeners."""
 
     for _ in range(25):
-        ports = dtt.choose_distinct_ports()
+        ports = dtt.choose_distinct_ports(lan_bind_addr)
         if not avoid_ports.intersection(ports.values()):
             return ports
     raise RuntimeError(f"Could not allocate local ED2K ports outside {sorted(avoid_ports)}.")
@@ -4766,7 +4766,7 @@ def main() -> int:
         if args.deterministic_local_ed2k:
             record_phase("local_ed2k_prepare")
             p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-            local_ports = choose_local_ed2k_ports({port})
+            local_ports = choose_local_ed2k_ports({port}, bind_addr)
             local_server_dir = artifacts_dir / "local-ed2k-server"
             local_catalog_path = local_server_dir / "catalog.json"
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
@@ -4823,6 +4823,9 @@ def main() -> int:
                 udp_port=local_ports["client2_udp"],
                 ed2k_enabled=True,
                 autoconnect=True,
+                rest_api_key=args.emule_api_key,
+                rest_port=local_ports["client2_rest"],
+                lan_bind_addr=bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
             )
             for config_dir in (Path(profile["config_dir"]), Path(seed_profile["config_dir"])):
@@ -4832,22 +4835,31 @@ def main() -> int:
                     port=local_ports["ed2k_tcp"],
                     name="emulebb-local-e2e",
                 )
-            export_dir = artifacts_dir / "local-arr-seed-export"
-            export_dir.mkdir(parents=True, exist_ok=True)
-            ready_path = export_dir / "ready.txt"
-            export_link_path = export_dir / "fixture.ed2k.txt"
             local_ed2k_seed_app = live_common.launch_app(
                 client2_app_exe,
                 Path(seed_profile["profile_base"]),
                 minimized_to_tray=True,
-                extra_args=dtt.build_client2_harness_args(
-                    ready_path=ready_path,
-                    fixture_file=fixture_file,
-                    export_link_path=export_link_path,
-                    source_ip=p2p_address,
-                ),
             )
-            exported_link = dtt.wait_for_exported_link(export_link_path, args.result_timeout_seconds)
+            seed_base_url = f"http://{bind_addr}:{local_ports['client2_rest']}"
+            report["checks"]["local_ed2k_seed_rest_ready"] = rest_smoke.compact_http_result(
+                rest_smoke.wait_for_rest_ready(seed_base_url, args.emule_api_key, args.emule_connection_timeout_seconds)
+            )
+            report["checks"]["local_ed2k_seed_shared_file_add"] = dtt.add_emule_shared_file(
+                seed_base_url,
+                args.emule_api_key,
+                fixture_file,
+            )
+            report["checks"]["local_ed2k_seed_shared_files_reload"] = dtt.reload_emule_shared_files(
+                seed_base_url,
+                args.emule_api_key,
+            )
+            shared_link = dtt.wait_for_emule_shared_file_link(
+                seed_base_url,
+                args.emule_api_key,
+                file_name=fixture_file.name,
+                timeout_seconds=args.result_timeout_seconds,
+            )
+            exported_link = str(shared_link["link"])
             link_info = dtt.parse_ed2k_file_link(exported_link)
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
                 {
@@ -4858,7 +4870,7 @@ def main() -> int:
                         "sha256": fixture_sha256,
                     },
                     "exported_link": {
-                        "path": str(export_link_path),
+                        "link": exported_link,
                         "parsed": link_info,
                     },
                     "seed_profile": {
@@ -4867,7 +4879,7 @@ def main() -> int:
                     },
                 }
             )
-            report["checks"]["local_ed2k_seed_ready"] = dtt.wait_for_file(ready_path, 30.0, "ARR local seed ready file")
+            report["checks"]["local_ed2k_seed_shared_file_link"] = {**shared_link, "parsed": link_info}
             report["checks"]["local_ed2k_seed_client"] = goed2k.wait_for_server_client(
                 local_admin_base_url,
                 args.emule_api_key,
