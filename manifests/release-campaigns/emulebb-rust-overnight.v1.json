@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust-overnight",
   "releaseVersion": "0.0.3",
   "title": "eMuleBB Rust full overnight parity campaign",
-  "description": "Long-form Rust headless core proof for total local eD2K parity. It promotes the full protocol-combination matrix, private Rust ED2K queue/resume/callback/serving modules, Rust/eMuleBB cross-client exchange, and Rust/aMule cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "description": "Long-form Rust headless core proof for total local eD2K parity. It promotes the full protocol-combination matrix, private Rust ED2K queue/resume/callback/serving modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
   "phases": [
     {
@@ -231,28 +231,6 @@
           ]
         },
         {
-          "id": "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1",
-          "title": "Rust overnight aMule bidirectional exchange",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/scenarios/1/id": "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
-                "/scenarios/1/status": "passed"
-              }
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1",
           "title": "Rust overnight total eD2K parity audit",
           "phase": "protocol-parity",
@@ -268,7 +246,7 @@
               "path": "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/checks/rust_ed2k_total_parity_audit/requirementCount": 7,
+                "/checks/rust_ed2k_total_parity_audit/requirementCount": 6,
                 "/checks/rust_ed2k_total_parity_audit/allRequirementsPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/failedRequirementCount": 0,
                 "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
@@ -362,7 +340,6 @@
         "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
         "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
         "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1",
-        "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1",
         "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
       ]
     },

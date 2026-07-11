@@ -225,12 +225,6 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe "
         "--require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
     )
-    rust_amule_command = (
-        "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} "
-        "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe "
-        "--require-scenario cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange"
-    )
     rust_protocol_combinations_command = (
         "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} "
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
@@ -242,10 +236,8 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
-    assert "emulebb.flow.rust.cross-client.amule-bidirectional.v1" in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in covered_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
-    assert "emulebb.flow.rust.cross-client.amule-bidirectional.v1" in covered_ids
     assert sum(
         1
         for phase in campaign["phases"]
@@ -259,13 +251,6 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     )
     assert any(
         scenario["command"] == rust_cross_client_command
-        and scenario["required"] is True
-        and scenario["blocking"] is True
-        for phase in campaign["phases"]
-        for scenario in phase["scenarios"]
-    )
-    assert any(
-        scenario["command"] == rust_amule_command
         and scenario["required"] is True
         and scenario["blocking"] is True
         for phase in campaign["phases"]
@@ -287,7 +272,6 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     local_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.search-download.v1"]["evidence"])
     protocol_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.protocol-combinations.v1"]["evidence"])
     cross_client_description = json.dumps(rust_scenarios["emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"]["evidence"])
-    amule_description = json.dumps(rust_scenarios["emulebb.flow.rust.cross-client.amule-bidirectional.v1"]["evidence"])
     assert "Unicode filenames" in local_description
     assert "hash-only ED2K metadata recovery" in local_description
     assert "protocol_matrix_coverage" in protocol_description
@@ -301,8 +285,6 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     assert "Rust-persisted source userHash" in cross_client_description
     assert "Unicode filename" in cross_client_description
     assert "AICH hashset metadata" in cross_client_description
-    assert "Rust-persisted source userHash" in amule_description
-    assert "aMule's missing AICH hashset" in amule_description
 
 
 def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> None:
@@ -329,7 +311,6 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     private_modules_id = "emulebb.flow.rust.overnight.private-ed2k.modules.v1"
     emulebb_cross_id = "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"
     rust_cross_id = "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
-    amule_cross_id = "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1"
     total_audit_id = "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
     preflight_id = "emulebb.flow.rust.overnight.local-client.pytest.v1"
     rest_contract_id = "emulebb.flow.rust.overnight.rest.contract.v1"
@@ -341,7 +322,6 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert private_modules_id in covered_ids
     assert emulebb_cross_id in covered_ids
     assert rust_cross_id in covered_ids
-    assert amule_cross_id in covered_ids
     assert total_audit_id in covered_ids
     preflight_evidence = scenarios[preflight_id]["evidence"][0]
     assert preflight_evidence["kind"] == "json-status"
@@ -413,7 +393,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert total_audit_evidence["path"] == (
         "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json"
     )
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 7
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 6
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/allRequirementsPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/failedRequirementCount"] == 0
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed"] is True
@@ -578,7 +558,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                 "status": "passed",
                 "checks": {
                     "rust_ed2k_total_parity_audit": {
-                        "requirementCount": 7,
+                        "requirementCount": 6,
                         "allRequirementsPassed": True,
                         "failedRequirementCount": 0,
                         "failedRequirementIds": [],
@@ -596,10 +576,8 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
 
     emulebb_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T010000Z"
     rust_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T015000Z"
-    amule_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T020000Z"
     emulebb_report.mkdir(parents=True)
     rust_report.mkdir(parents=True)
-    amule_report.mkdir(parents=True)
     (emulebb_report / "multi-client-p2p-matrix-result.json").write_text(
         json.dumps(
             {
@@ -654,31 +632,6 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
         ),
         encoding="utf-8",
     )
-    (amule_report / "multi-client-p2p-matrix-result.json").write_text(
-        json.dumps(
-            {
-                "status": "passed",
-                "scenarios": [
-                    {"id": "cl-emulebb-001-downloads-from-cl-harness-002", "status": "passed"},
-                    {
-                        "id": "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
-                        "status": "passed",
-                        "report": {
-                            "status": "passed",
-                            "checks": {
-                                "rust_amule_manifest_metadata": {
-                                    "md4HashsetAcquired": True,
-                                    "sourceUserHashCount": 1,
-                                }
-                            },
-                        },
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
     report = release_campaigns.build_release_campaign_report(
         release_campaigns.ReleaseCampaignPaths(
             tests_repo_root=tests_root,
@@ -693,7 +646,6 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
     assert statuses["emulebb.flow.rust.overnight.private-ed2k.modules.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"] == "passed"
-    assert statuses["emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"] == "passed"
 
 

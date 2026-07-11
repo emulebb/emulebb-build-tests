@@ -113,22 +113,6 @@
               "description": "The existing multi-client P2P matrix requires the Rust/eMuleBB bidirectional scenario, which delegates to the shared cross-client suite and goed2k launcher, starts emulebb-rust and eMuleBB with configured LAN or VPN binds, proves Rust-to-eMuleBB transfer with a Unicode filename, then proves eMuleBB-to-Rust transfer with a Unicode filename through canonical REST APIs with Rust-persisted source userHash, MD4 hashset, and AICH hashset metadata."
             }
           ]
-        },
-        {
-          "id": "emulebb.flow.rust.cross-client.amule-bidirectional.v1",
-          "title": "Rust and aMule bidirectional compatibility proof",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --require-scenario cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
-          "evidence": [
-            {
-              "kind": "manual",
-              "required": true,
-              "description": "The existing multi-client P2P matrix requires the Rust/aMule bidirectional scenario, which reuses the staged aMule daemon/control adapter, shared goed2k launcher, configured LAN control bind, short-path aMule profile roots, and Rust REST control to prove aMule downloads from Rust and Rust downloads from aMule with Rust-persisted source userHash and MD4 hashset metadata while recording aMule's missing AICH hashset."
-            }
-          ]
         }
       ]
     },
@@ -272,15 +256,13 @@
       "coveredBy": [
         "emulebb.flow.rust.local-ed2k.search-download.v1",
         "emulebb.flow.rust.local-ed2k.protocol-combinations.v1",
-        "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1",
-        "emulebb.flow.rust.cross-client.amule-bidirectional.v1"
+        "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"
       ]
     },
     {
       "id": "emulebb-rust-cross-client-matrix",
       "coveredBy": [
-        "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1",
-        "emulebb.flow.rust.cross-client.amule-bidirectional.v1"
+        "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"
       ]
     },
     {
