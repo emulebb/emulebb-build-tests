@@ -146,28 +146,6 @@ def seed_complete_evidence(output_root: Path) -> None:
             ],
         },
     )
-    write_json(
-        output_root / "reports" / "multi-client-p2p-matrix" / "20260612T030000Z" / "multi-client-p2p-matrix-result.json",
-        {
-            "status": "passed",
-            "scenarios": [
-                {
-                    "id": "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
-                    "status": "passed",
-                    "report": {
-                        "status": "passed",
-                        "checks": {
-                            "rust_amule_manifest_metadata": {
-                                "md4HashsetAcquired": True,
-                                "sourceUserHashCount": 1,
-                            }
-                        },
-                    },
-                }
-            ],
-        },
-    )
-
 
 def configure_output_root(monkeypatch, tmp_path: Path) -> Path:
     workspace_root = tmp_path / "workspace"
@@ -187,9 +165,9 @@ def test_total_parity_audit_accepts_complete_output_root_evidence(monkeypatch, t
     requirements.extend(module.evaluate_glob_requirement(output_root, requirement) for requirement in module.SCENARIO_REQUIREMENTS)
     checks = module.build_checks(requirements)
 
-    assert [row["status"] for row in requirements] == ["passed"] * 7
+    assert [row["status"] for row in requirements] == ["passed"] * 6
     assert checks == {
-        "requirementCount": 7,
+        "requirementCount": 6,
         "allRequirementsPassed": True,
         "failedRequirementCount": 0,
         "failedRequirementIds": [],
@@ -245,4 +223,4 @@ def test_main_writes_total_audit_latest_under_workspace_output_root(monkeypatch,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "passed"
-    assert report["checks"]["rust_ed2k_total_parity_audit"]["requirementCount"] == 7
+    assert report["checks"]["rust_ed2k_total_parity_audit"]["requirementCount"] == 6

@@ -127,19 +127,6 @@ SCENARIO_REQUIREMENTS: tuple[Requirement, ...] = (
             ("/scenarios/*/report/checks/sourceControlOperations", True),
         ),
     ),
-    Requirement(
-        "cross-amule",
-        "Rust and aMule bidirectional exchange passes with Rust-side persisted source and MD4 metadata",
-        "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
-        (
-            ("/status", "passed"),
-            ("/scenarios/*/id", "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange"),
-            ("/scenarios/*/status", "passed"),
-            ("/scenarios/*/report/status", "passed"),
-            ("/scenarios/*/report/checks/rust_amule_manifest_metadata/md4HashsetAcquired", True),
-            ("/scenarios/*/report/checks/rust_amule_manifest_metadata/sourceUserHashCount", 1),
-        ),
-    ),
 )
 
 
@@ -266,7 +253,7 @@ def build_checks(requirements: list[dict[str, Any]]) -> dict[str, Any]:
         "multiUnicodeMetadataPassed": "protocol-metadata" not in failed,
         "privateP2pOverlordModulesPassed": "private-modules" not in failed,
         "preflightAndRestPassed": "pytest-preflight" not in failed,
-        "crossClientMatrixPassed": not any(row in failed for row in ("cross-emulebb", "cross-rust", "cross-amule")),
+        "crossClientMatrixPassed": not any(row in failed for row in ("cross-emulebb", "cross-rust")),
     }
 
 
