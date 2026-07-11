@@ -1,4 +1,4 @@
-"""Large local eMuleBB, tracing-harness, and aMule swarm stress campaign."""
+"""Large local eMuleBB MFC peer and aMule swarm stress campaign."""
 
 from __future__ import annotations
 
@@ -170,7 +170,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--vhd-runtime-root",
         choices=["drive-letter"],
         default="drive-letter",
-        help="Runtime root for generated Godzilla profiles. Mixed aMule/tracing-harness runs must stay on the short VHD drive-letter root.",
+        help="Runtime root for generated Godzilla profiles. Mixed aMule/MFC-peer runs must stay on the short VHD drive-letter root.",
     )
     parser.add_argument("--capture-final-dump", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--procdump-path")
@@ -973,7 +973,7 @@ def build_file_link(row: GeneratedFile, *, source_ip: str, source_port: int) -> 
 
 
 def write_download_link_file(path: Path, links: list[str]) -> dict[str, object]:
-    """Writes newline-delimited ED2K links for the tracing harness."""
+    """Writes newline-delimited ED2K links for diagnostic retention."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(f"{link}\n" for link in links), encoding="utf-8", newline="\n")
@@ -1059,7 +1059,7 @@ def classify_godzilla_mixed_client_evidence(
     else:
         classification = "emulebb-harness-only"
         evidence_strength = "degraded"
-        reason = "aMule daemon/control client did not reach runtime readiness; Godzilla continued with eMuleBB and tracing-harness peers."
+        reason = "aMule daemon/control client did not reach runtime readiness; Godzilla continued with eMuleBB MFC peers."
     return {
         "classification": classification,
         "evidence_strength": evidence_strength,
@@ -1546,31 +1546,35 @@ def ui_cycle_hammer(*, args: argparse.Namespace, apps: list[tuple[str, object]])
     return events
 
 
-def build_harness_args(download_link_file: Path, download_report_file: Path) -> list[str]:
-    """Builds tracing-harness arguments for later link-file driven downloads."""
-
-    return ["-downloadlinkfile", str(download_link_file), "-downloadreportfile", str(download_report_file)]
-
-
-def restart_tracing_harness_client(
+def restart_mfc_peer_client(
     *,
     app,
     app_exe: Path,
     profile_base: Path,
-    extra_args: list[str],
+    base_url: str,
     admin_base_url: str,
     api_key: str,
+    p2p_address: str,
+    ed2k_port: int,
     timeout_seconds: float,
     visible_ui: bool,
 ) -> tuple[object, dict[str, object]]:
-    """Restarts the tracing harness client and waits for server visibility."""
+    """Restarts the REST-controlled MFC peer and waits for server visibility."""
 
     event: dict[str, object] = {"client": CLIENT02.profile_id, "operation": "restart", "started_at": round(time.time(), 3)}
     if app is not None:
         live_common.close_app_cleanly(app)
         event["terminate"] = {"ok": True}
-    restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=not visible_ui, extra_args=extra_args)
+    restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=not visible_ui)
     event["pid"] = app_process_id(restarted)
+    event["rest_ready"] = rest_smoke.compact_http_result(rest_smoke.wait_for_rest_ready(base_url, api_key, timeout_seconds))
+    event["server_connect"] = dtt.add_and_connect_server(
+        base_url,
+        api_key,
+        address=p2p_address,
+        port=ed2k_port,
+        timeout_seconds=timeout_seconds,
+    )
     event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
@@ -1816,7 +1820,8 @@ def rotate_source_clients(
     client2_app,
     client2_app_exe: Path,
     client2_profile_base: Path,
-    client2_extra_args: list[str],
+    client2_base_url: str,
+    client2_download_links: list[str],
     extra_emulebb_clients: list[dict[str, object]],
     amule_process: subprocess.Popen | None,
     amule_daemon_exe: Path,
@@ -1844,16 +1849,20 @@ def rotate_source_clients(
         time.sleep(args.client_rotation_interval_seconds)
         target = targets[cycle % len(targets)]
         if target == "harness":
-            client2_app, event = restart_tracing_harness_client(
+            client2_app, event = restart_mfc_peer_client(
                 app=client2_app,
                 app_exe=client2_app_exe,
                 profile_base=client2_profile_base,
-                extra_args=client2_extra_args,
+                base_url=client2_base_url,
                 admin_base_url=admin_base_url,
                 api_key=api_key,
+                p2p_address=p2p_address,
+                ed2k_port=ed2k_port,
                 timeout_seconds=args.server_connect_timeout_seconds,
                 visible_ui=args.visible_ui,
             )
+            if client2_download_links:
+                event["peer_download_add"] = queue_emulebb_downloads(client2_base_url, api_key, client2_download_links)
         elif target == "amule":
             amule_process, event = restart_amule_client(
                 process=amule_process,
@@ -1897,7 +1906,7 @@ def run_adverse_kill_recovery(
     client2_app,
     client2_app_exe: Path,
     client2_profile_base: Path,
-    harness_dir: Path,
+    client2_base_url: str,
     harness_links: list[str],
     base_url: str,
     admin_base_url: str,
@@ -1963,19 +1972,20 @@ def run_adverse_kill_recovery(
             process_id=app_process_id(client1_app),
             dump_dir=procdump_dump_dir,
         )
-        cycle_links_path = harness_dir / f"downloads-cycle-{cycle + 1:02d}.ed2k.txt"
-        cycle_report_path = harness_dir / f"download-report-cycle-{cycle + 1:02d}.json"
-        event["harness_download_links"] = write_download_link_file(cycle_links_path, harness_links)
-        client2_app, event["harness_relaunch"] = restart_tracing_harness_client(
+        client2_app, event["harness_relaunch"] = restart_mfc_peer_client(
             app=None,
             app_exe=client2_app_exe,
             profile_base=client2_profile_base,
-            extra_args=build_harness_args(cycle_links_path, cycle_report_path),
+            base_url=client2_base_url,
             admin_base_url=admin_base_url,
             api_key=api_key,
+            p2p_address=p2p_address,
+            ed2k_port=ed2k_port,
             timeout_seconds=args.adverse_recovery_timeout_seconds,
             visible_ui=args.visible_ui,
         )
+        if harness_links:
+            event["harness_relaunch"]["peer_download_add"] = queue_emulebb_downloads(client2_base_url, api_key, harness_links)
         event["after"] = sample_transfer_state(base_url, api_key, f"adverse-cycle-{cycle + 1}-after")
         event["finished_at"] = round(time.time(), 3)
         events.append(event)
@@ -2375,6 +2385,9 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
             **client_protocol_preferences,
@@ -2439,7 +2452,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             amule_skip = {
                 "skipped": True,
-                "reason": "aMule EC did not become ready; continuing eMuleBB/tracing-harness swarm without optional aMule peer.",
+                "reason": "aMule EC did not become ready; continuing eMuleBB MFC-peer swarm without optional aMule peer.",
                 "type": type(exc).__name__,
                 "message": str(exc) or repr(exc),
                 "daemon": amule_daemon_diagnostics(amule_process, amule_profile),
@@ -2478,21 +2491,28 @@ def main(argv: list[str] | None = None) -> int:
                 "extra_emulebb_clients_launched": len(
                     [client for client in extra_emulebb_clients if client.get("app") is not None]
                 ),
-                "next_phase": "launch_harness",
+                "next_phase": "launch_mfc_peer",
             }
             report["current_phase"] = current_phase
             report["status"] = "passed"
             return 0
 
-        current_phase = "launch_harness"
-        harness_dir = paths.source_artifacts_dir / "harness-control"
-        harness_download_links_path = harness_dir / "downloads.ed2k.txt"
-        harness_download_report_path = harness_dir / "download-report.json"
+        current_phase = "launch_mfc_peer"
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
             minimized_to_tray=not args.visible_ui,
-            extra_args=build_harness_args(harness_download_links_path, harness_download_report_path),
+        )
+        report["checks"]["mfc_peer_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+        )
+        report["checks"]["mfc_peer_server_connect"] = dtt.add_and_connect_server(
+            client2_base_url,
+            args.api_key,
+            address=p2p_address,
+            port=ports["ed2k_tcp"],
+            timeout_seconds=args.server_connect_timeout_seconds,
         )
 
         current_phase = "launch_emulebb"
@@ -2651,13 +2671,15 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             }
         harness_known_met = try_wait_for_known_met_size(Path(client2["config_dir"]), args.harness_files, min(args.publish_timeout_seconds, 20.0))
-        client2_app, harness_republish = restart_tracing_harness_client(
+        client2_app, harness_republish = restart_mfc_peer_client(
             app=client2_app,
             app_exe=client2_app_exe,
             profile_base=Path(client2["profile_base"]),
-            extra_args=build_harness_args(harness_download_links_path, harness_download_report_path),
+            base_url=client2_base_url,
             admin_base_url=admin_base_url,
             api_key=args.api_key,
+            p2p_address=p2p_address,
+            ed2k_port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
             visible_ui=args.visible_ui,
         )
@@ -2757,7 +2779,11 @@ def main(argv: list[str] | None = None) -> int:
             if amule_enabled
             else {"skipped": True, "reason": "optional aMule client unavailable"}
         )
-        report["checks"]["harness_download_links"] = write_download_link_file(harness_download_links_path, harness_links)
+        report["checks"]["mfc_peer_download_links"] = write_download_link_file(
+            paths.source_artifacts_dir / "mfc-peer-downloads.ed2k.txt",
+            harness_links,
+        )
+        report["checks"]["mfc_peer_download_add"] = queue_emulebb_downloads(client2_base_url, args.api_key, harness_links)
         extra_download_counts: dict[str, int] = {}
         extra_download_checks: dict[str, list[dict[str, object]]] = {}
         if extra_emulebb_clients and emulebb_rows:
@@ -2792,7 +2818,7 @@ def main(argv: list[str] | None = None) -> int:
             client2_app=client2_app,
             client2_app_exe=client2_app_exe,
             client2_profile_base=Path(client2["profile_base"]),
-            harness_dir=harness_dir,
+            client2_base_url=client2_base_url,
             harness_links=harness_links,
             base_url=base_url,
             admin_base_url=admin_base_url,
@@ -2869,13 +2895,13 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         current_phase = "client_rotation"
-        client2_extra_args = build_harness_args(harness_download_links_path, harness_download_report_path)
         client2_app, amule_process, report["checks"]["client_rotation"] = rotate_source_clients(
             args=args,
             client2_app=client2_app,
             client2_app_exe=client2_app_exe,
             client2_profile_base=Path(client2["profile_base"]),
-            client2_extra_args=client2_extra_args,
+            client2_base_url=client2_base_url,
+            client2_download_links=harness_links,
             extra_emulebb_clients=extra_emulebb_clients,
             amule_process=amule_process,
             amule_daemon_exe=amule_daemon_exe,
