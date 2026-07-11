@@ -220,10 +220,10 @@ def build_local_amutorrent_environment(
     data_dir: Path,
     emulebb_rest_port: int,
     emulebb_api_key: str,
-    amule_ec_port: int,
-    amule_password: str,
+    amule_ec_port: int | None = None,
+    amule_password: str | None = None,
 ) -> dict[str, str]:
-    """Builds a workspace-local aMuTorrent environment with both ED2K clients enabled."""
+    """Builds a workspace-local aMuTorrent environment with the MFC ED2K client enabled."""
 
     reject_windows_temp_path(data_dir, "aMuTorrent local ED2K data directory")
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -242,12 +242,7 @@ def build_local_amutorrent_environment(
             "EMULEBB_USE_SSL": "false",
             "EMULEBB_ID": AMUTORRENT_EMULEBB_ID,
             "EMULEBB_NAME": CLIENT01.profile_id,
-            "AMULE_ENABLED": "true",
-            "AMULE_HOST": lan_bind_addr,
-            "AMULE_PORT": str(amule_ec_port),
-            "AMULE_PASSWORD": amule_password,
-            "AMULE_ID": AMUTORRENT_AMULE_ID,
-            "AMULE_NAME": CLIENT04.profile_id,
+            "AMULE_ENABLED": "false",
         }
     )
     if node_path.is_absolute():

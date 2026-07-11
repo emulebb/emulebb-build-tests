@@ -68,7 +68,7 @@ def test_write_rust_shared_tree_fixture_uses_nested_unicode_fixture(tmp_path: Pa
     assert len(str(fixture["sha256"])) == 64
 
 
-def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkeypatch) -> None:
+def test_amutorrent_environment_enables_mfc_ed2k_client(tmp_path: Path, monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "reject_windows_temp_path", lambda _path, _description: None)
     node_path = Path(r"C:\tools\node\node.exe") if os.name == "nt" else Path("/opt/node/bin/node")
@@ -81,8 +81,6 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
         data_dir=tmp_path / "amutorrent-data",
         emulebb_rest_port=19002,
         emulebb_api_key="api-key",
-        amule_ec_port=19003,
-        amule_password="amule-password",
     )
 
     assert env["PORT"] == "19001"
@@ -96,12 +94,12 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     assert env["EMULEBB_API_KEY"] == "api-key"
     assert env["EMULEBB_ID"] == module.CLIENT01.profile_id
     assert env["EMULEBB_NAME"] == module.CLIENT01.profile_id
-    assert env["AMULE_ENABLED"] == "true"
-    assert env["AMULE_HOST"] == "10.55.0.10"
-    assert env["AMULE_PORT"] == "19003"
-    assert env["AMULE_PASSWORD"] == "amule-password"
-    assert env["AMULE_ID"] == module.CLIENT04.profile_id
-    assert env["AMULE_NAME"] == module.CLIENT04.profile_id
+    assert env["AMULE_ENABLED"] == "false"
+    assert "AMULE_HOST" not in env
+    assert "AMULE_PORT" not in env
+    assert "AMULE_PASSWORD" not in env
+    assert "AMULE_ID" not in env
+    assert "AMULE_NAME" not in env
     assert env["UNRELATED"] == "kept"
 
 

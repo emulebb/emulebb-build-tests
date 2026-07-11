@@ -251,10 +251,6 @@ def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
         observed["dtt_host"] = host
         return {"ed2k_tcp": 4662, "ed2k_udp": 4672, "client1_tcp": 4663, "client1_udp": 4673, "client1_rest": 4711}
 
-    def fake_choose_amule_ports(base_ports: dict[str, int], host: str | None = None) -> dict[str, int]:
-        observed["amule_host"] = host
-        return {**base_ports, "amule_tcp": 4664, "amule_udp": 4674, "amule_ec": 4712}
-
     def fake_choose_listen_port(host: str | None = None) -> int:
         observed["extra_host"] = host
         return next(next_port)
@@ -264,15 +260,13 @@ def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
         return True
 
     monkeypatch.setattr(godzilla.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
-    monkeypatch.setattr(godzilla.amule_seed, "choose_amule_ports", fake_choose_amule_ports)
     monkeypatch.setattr(godzilla.rest_smoke, "choose_listen_port", fake_choose_listen_port)
     monkeypatch.setattr(godzilla.dtt, "is_port_available", fake_is_port_available)
 
     ports = godzilla.choose_ports(extra_emulebb_clients=1, lan_bind_addr="172.24.112.3")
 
-    assert ports["amule_ec"] == 4712
     assert ports["extra_emulebb_0_rest"] == 6302
-    assert observed == {"dtt_host": "172.24.112.3", "amule_host": "172.24.112.3", "extra_host": "172.24.112.3"}
+    assert observed == {"dtt_host": "172.24.112.3", "extra_host": "172.24.112.3"}
     assert all(host == "172.24.112.3" for _port, host, _udp in availability_checks)
 
 
@@ -720,8 +714,6 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
             "1",
             "--harness-files",
             "1",
-            "--amule-files",
-            "1",
             "--vhd-size-mb",
             "4103",
         ]
@@ -742,8 +734,8 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
     assert "emulebb-godzilla-00000" in message
 
 
-def test_godzilla_spiral_hammer_skips_missing_optional_amule(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_optional_amule_spiral_test")
+def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_rest_spiral_test")
 
     monkeypatch.setattr(godzilla, "server_telemetry_snapshot", lambda *_args: {"stats": {"clients": 2}})
     monkeypatch.setattr(godzilla.time, "sleep", lambda *_args: None)
@@ -754,60 +746,24 @@ def test_godzilla_spiral_hammer_skips_missing_optional_amule(monkeypatch) -> Non
         base_url="http://127.0.0.1:1",
         api_key="secret",
         admin_base_url="http://127.0.0.1:2",
-        amule_control_exe=None,
-        amule_profile=None,
         links=["ed2k://|file|a.bin|1|0123456789ABCDEF0123456789ABCDEF|/"],
         queries=["emulebb-godzilla-"],
         waves=1,
         sleep_seconds=0.0,
     )
 
-    assert report["waves"][0]["actions"][-1] == {
-        "kind": "amulecmd",
-        "skipped": True,
-        "reason": "optional aMule client unavailable",
-    }
+    assert {action["kind"] for action in report["waves"][0]["actions"]} == {"rest-search", "rest-add", "rest-churn"}
 
 
-def test_godzilla_amule_command_hammer_skips_missing_optional_amule() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_optional_amule_command_test")
+def test_godzilla_mixed_client_evidence_reports_mfc_peer_swarm() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_mfc_peer_evidence_test")
 
-    assert godzilla.run_amule_command_hammer(None, None, links=[], queries=["linux"], rounds=3) == {
-        "skipped": True,
-        "reason": "optional aMule client unavailable",
-    }
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"harness": 7})
 
-
-def test_godzilla_mixed_client_evidence_reports_full_amule_readiness() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_full_mixed_evidence_test")
-
-    evidence = godzilla.classify_godzilla_mixed_client_evidence(
-        amule_available={"available": True, "executable": "amuled.exe"},
-        amule_enabled=True,
-        queued_transfer_counts={"amule": 7},
-    )
-
-    assert evidence["classification"] == "full-mixed-client"
+    assert evidence["classification"] == "emulebb-mfc-peer-swarm"
     assert evidence["evidence_strength"] == "full"
-    assert evidence["amule"]["readiness"] == "ready"
-    assert evidence["amule"]["queued_transfer_count"] == 7
-
-
-def test_godzilla_mixed_client_evidence_reports_degraded_amule_skip() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_degraded_mixed_evidence_test")
-
-    evidence = godzilla.classify_godzilla_mixed_client_evidence(
-        amule_available={"available": True, "executable": "amuled.exe"},
-        amule_enabled=False,
-        amule_skip={"skipped": True, "reason": "EC not ready"},
-        queued_transfer_counts={"amule": 0},
-    )
-
-    assert evidence["classification"] == "emulebb-harness-only"
-    assert evidence["evidence_strength"] == "degraded"
-    assert evidence["amule"]["available"] is True
-    assert evidence["amule"]["readiness"] == "skipped"
-    assert evidence["amule"]["skip"] == {"skipped": True, "reason": "EC not ready"}
+    assert evidence["optional_clients"] == []
+    assert evidence["mfc_peer"]["queued_transfer_count"] == 7
 
 
 def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
@@ -868,8 +824,6 @@ def test_godzilla_spiral_hammer_searches_use_retry_rest_request(monkeypatch) -> 
         base_url="http://127.0.0.1:4711",
         api_key="key",
         admin_base_url="http://127.0.0.1:8080",
-        amule_control_exe=None,
-        amule_profile=None,
         links=[],
         queries=["alpha", "beta", "gamma"],
         waves=1,
@@ -959,8 +913,6 @@ def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
             "--emulebb-files",
             "1",
             "--harness-files",
-            "1",
-            "--amule-files",
             "1",
             "--vhd-size-mb",
             "4103",
