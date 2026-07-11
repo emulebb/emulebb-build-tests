@@ -66,7 +66,9 @@ def test_explicit_rest_bootstrap_plan_covers_available_targeted_paths() -> None:
 
     assert plan == [
         ("emulebb_to_harness", "cl-emulebb-001", "cl-harness-002"),
+        ("harness_to_emulebb", "cl-harness-002", "cl-emulebb-001"),
         ("emulebb_to_amule", "cl-emulebb-001", "cl-amule-004"),
+        ("harness_to_amule", "cl-harness-002", "cl-amule-004"),
     ]
 
 
@@ -80,8 +82,6 @@ def test_preseed_autoconnect_paths_cover_non_rest_clients() -> None:
     rows = module.preseed_autoconnect_paths(specs)
 
     assert {(row["source"], row["target"]) for row in rows} == {
-        ("cl-harness-002", "cl-emulebb-001"),
-        ("cl-harness-002", "cl-amule-004"),
         ("cl-amule-004", "cl-emulebb-001"),
         ("cl-amule-004", "cl-harness-002"),
     }

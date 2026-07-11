@@ -1,4 +1,4 @@
-"""Local Kad swarm matrix across eMuleBB, tracing harness, and aMule."""
+"""Local Kad swarm matrix across eMuleBB MFC peers and aMule."""
 
 from __future__ import annotations
 
@@ -83,15 +83,15 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("bootstrap throttle must be zero or greater.")
 
 
-def choose_amule_ports(used_ports: set[int]) -> dict[str, int]:
+def choose_amule_ports(used_ports: set[int], host: str | None = None) -> dict[str, int]:
     """Allocates distinct aMule TCP, UDP, and EC ports outside the eMule set."""
 
     ports: dict[str, int] = {}
     for name in ("tcp", "udp", "ec"):
         udp = name == "udp"
         for _ in range(200):
-            candidate = rest_smoke.choose_listen_port()
-            if candidate not in used_ports and dtt.is_port_available(candidate, udp=udp):
+            candidate = rest_smoke.choose_listen_port(host)
+            if candidate not in used_ports and dtt.is_port_available(candidate, host=host, udp=udp):
                 ports[name] = candidate
                 used_ports.add(candidate)
                 break
@@ -143,7 +143,9 @@ def explicit_rest_bootstrap_plan(specs: dict[str, Any]) -> list[tuple[str, Any, 
     amule = specs["amule"]
     return [
         ("emulebb_to_harness", emulebb, "harness", harness),
+        ("harness_to_emulebb", harness, "emulebb", emulebb),
         ("emulebb_to_amule", emulebb, "amule", amule),
+        ("harness_to_amule", harness, "amule", amule),
     ]
 
 
@@ -151,14 +153,6 @@ def preseed_autoconnect_paths(specs: dict[str, Any]) -> list[dict[str, object]]:
     """Documents non-REST outbound paths driven by preseed plus network start."""
 
     return [
-        {
-            "source": specs["harness"].profile_id,
-            "target": specs[key].profile_id,
-            "target_udp_port": specs[key].udp_port,
-            "mechanism": "nodes.dat preseed loaded before tracing harness Kad autoconnect",
-        }
-        for key in ("emulebb", "amule")
-    ] + [
         {
             "source": specs["amule"].profile_id,
             "target": specs[key].profile_id,
@@ -170,11 +164,11 @@ def preseed_autoconnect_paths(specs: dict[str, Any]) -> list[dict[str, object]]:
 
 
 def resolve_required_harness(paths, args: argparse.Namespace):
-    """Resolves the tracing harness executable or raises an actionable error."""
+    """Resolves the MFC peer executable or raises an actionable error."""
 
     availability = resolve_harness_client(paths.workspace_root, args.configuration, args.harness_exe)
     if not availability.available or availability.executable is None:
-        raise RuntimeError(f"tracing harness is unavailable for mixed Kad E2E: {availability.reason}")
+        raise RuntimeError(f"MFC peer is unavailable for mixed Kad E2E: {availability.reason}")
     return availability
 
 
@@ -287,9 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         amule_control_exe = amule_client.control_executable
 
         current_phase = "allocate_ports"
-        emule_ports = local_kad.choose_local_kad_ports(2)
+        emule_ports = local_kad.choose_local_kad_ports(2, args.lan_bind_addr)
         used_ports = {port for triple in emule_ports for port in triple}
-        amule_ports = choose_amule_ports(used_ports)
+        amule_ports = choose_amule_ports(used_ports, args.lan_bind_addr)
         specs = build_participant_specs(emule_ports, amule_ports)
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
         all_specs = [specs["emulebb"], specs["harness"], specs["amule"]]
@@ -332,15 +326,6 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
             )
-            if key == "harness":
-                live_common.apply_emule_preferences(
-                    Path(profile["config_dir"]),
-                    (
-                        ("Autoconnect", "1"),
-                        ("Reconnect", "0"),
-                    ),
-                )
-                configured["preferences"] = dtt.read_preferences_snapshot(Path(profile["config_dir"]))
             preseed = local_kad.write_nodes_dat(
                 Path(profile["config_dir"]) / "nodes.dat",
                 owner=spec,
@@ -399,11 +384,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.rest_ready_timeout_seconds,
             )
         )
-        report["checks"][f"{CLIENT02.profile_id}_startup_log_ready"] = wait_for_log_patterns(
-            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "emulebb.log",
-            ("eMule Version", "ready"),
-            args.rest_ready_timeout_seconds,
-            "tracing harness startup log readiness",
+        report["checks"][f"{CLIENT02.profile_id}_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(
+                local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+                args.api_key,
+                args.rest_ready_timeout_seconds,
+            )
         )
 
         current_phase = "launch_amule"
@@ -424,11 +410,14 @@ def main(argv: list[str] | None = None) -> int:
             args.api_key,
             args.kad_running_timeout_seconds,
         )
-        report["checks"][f"{CLIENT02.profile_id}_kad_log_started"] = wait_for_log_patterns(
-            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "emulebb.log",
-            ("Connecting", "contacts from file."),
+        report["checks"][f"{CLIENT02.profile_id}_kad_start"] = local_kad.start_kad(
+            local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+            args.api_key,
+        )
+        report["checks"][f"{CLIENT02.profile_id}_kad_running"] = rest_smoke.wait_for_kad_running(
+            local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+            args.api_key,
             args.kad_running_timeout_seconds,
-            "tracing harness Kad startup from preseeded nodes.dat",
         )
         connect_kad = amule_harness.run_amulecmd(
             amule_client.control_executable,
@@ -472,11 +461,11 @@ def main(argv: list[str] | None = None) -> int:
             "min_contacts_per_emule_client": args.min_contacts_per_emule_client,
             "require_connected": True,
             "single_lan_bind_address_limit": "Kad accepts one contact per IP in this local single-address matrix; multi-contact assertions require per-client local IP aliases or adapters.",
-            "tracing_harness_policy": "Kad autostarts from preferences and preseeded nodes.dat; no eMuleBB JSON REST API is expected on the harness branch.",
+            "mfc_peer_policy": "Both MFC eMule-family clients expose REST and are explicitly bootstrapped through the API.",
             "amule_policy": "Kad must be running through EC; outbound paths are driven by nodes.dat preseed.",
         }
         report["checks"]["emule_family_swarm_ready"] = local_kad.wait_for_local_swarm(
-            specs=[specs["emulebb"]],
+            specs=[specs["emulebb"], specs["harness"]],
             lan_bind_addr=args.lan_bind_addr,
             api_key=args.api_key,
             min_contacts_per_client=args.min_contacts_per_emule_client,
@@ -488,14 +477,7 @@ def main(argv: list[str] | None = None) -> int:
                 local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["emulebb"]), args.api_key)
             ),
             CLIENT02.profile_id: local_kad.compact_local_kad_status(
-                {
-                    "running": True,
-                    "connected": None,
-                    "firewalled": None,
-                    "contactCount": None,
-                    "lanMode": True,
-                    "source": "tracing harness log evidence",
-                }
+                local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["harness"]), args.api_key)
             ),
             CLIENT04.profile_id: amule_harness.parse_kad_status(
                 amule_harness.run_amulecmd(
