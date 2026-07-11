@@ -7,20 +7,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import get_workspace_output_root
-
-
 CLIENT01_EMULEBB = "cl-emulebb-001"
 CLIENT02_HARNESS = "cl-harness-002"
 CLIENT03_EMULEAI = "cl-emuleai-003"
-CLIENT04_AMULE = "cl-amule-004"
 CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
 CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
 NICK_CLIENT02_HARNESS = "cl-harness-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
-NICK_CLIENT04_AMULE = "cl-amule-004"
 NICK_CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
 NICK_CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 
@@ -93,14 +88,6 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT03_EMULEAI,
         product="eMuleAI",
         role="optional Windows eMule-family comparison client",
-        supports_long_paths=False,
-    ),
-    "amule": ClientIdentity(
-        key="amule",
-        profile_id=CLIENT04_AMULE,
-        nick=NICK_CLIENT04_AMULE,
-        product="aMule",
-        role="optional Windows aMule daemon/control comparison client",
         supports_long_paths=False,
     ),
     "emulebb_rust": ClientIdentity(
@@ -272,54 +259,6 @@ def resolve_emuleai_client(workspace_root: Path, configuration: str, override: s
     )
 
 
-def resolve_amule_client(
-    workspace_root: Path,
-    override_daemon: str | None = None,
-    override_control: str | None = None,
-) -> ClientAvailability:
-    """Resolves optional Windows aMule daemon and command binaries when present."""
-
-    identity = CLIENT_IDENTITIES["amule"]
-    daemon_candidates = (
-        [Path(override_daemon)]
-        if override_daemon
-        else [
-            get_workspace_output_root() / "tools" / "amule" / "bin" / "amuled.exe",
-        ]
-    )
-    control_candidates = (
-        [Path(override_control)]
-        if override_control
-        else [
-            get_workspace_output_root() / "tools" / "amule" / "bin" / "amulecmd.exe",
-        ]
-    )
-    daemon = first_existing_file(daemon_candidates)
-    control = first_existing_file(control_candidates)
-    available = daemon is not None and control is not None
-    if available:
-        reason = "available"
-    elif daemon is None and control is None:
-        reason = (
-            "no built aMule daemon/control binaries found in overrides"
-            if override_daemon or override_control
-            else "no built aMule daemon/control binaries found under output tools"
-        )
-    elif daemon is None:
-        reason = "missing amuled.exe"
-    else:
-        reason = "missing amulecmd.exe"
-    return ClientAvailability(
-        identity=identity,
-        available=available,
-        executable=daemon,
-        control_executable=control,
-        reason=reason,
-        launch_adapter="amuled-amulecmd",
-        deterministic_transfer_adapter=available,
-    )
-
-
 def resolve_emulebb_rust_client(
     workspace_root: Path,
     repo_key: str = "emulebb_rust",
@@ -351,8 +290,6 @@ def resolve_windows_client_inventory(
     configuration: str,
     harness_exe: str | None = None,
     emuleai_exe: str | None = None,
-    amule_daemon_exe: str | None = None,
-    amule_control_exe: str | None = None,
 ) -> dict[str, ClientAvailability]:
     """Resolves the current Windows multi-client inventory for live E2E scenarios."""
 
@@ -360,7 +297,6 @@ def resolve_windows_client_inventory(
         "emulebb": resolve_emulebb_client(app_exe),
         "harness": resolve_harness_client(workspace_root, configuration, harness_exe),
         "emuleai": resolve_emuleai_client(workspace_root, configuration, emuleai_exe),
-        "amule": resolve_amule_client(workspace_root, amule_daemon_exe, amule_control_exe),
         "emulebb_rust": resolve_emulebb_rust_client(workspace_root),
         "emulebb_rust_peer": resolve_emulebb_rust_client(workspace_root, identity_key="emulebb_rust_peer"),
     }
