@@ -22,7 +22,7 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
     assert matrix["scenarios"][0]["localTestNetwork"] == "default"
     assert matrix["scenarios"][0]["localAllowedNetworkScopes"] == ["offline", "lan"]
     assert matrix["localSwarm"] == {
-        "clientProducts": ["emulebb", "emulebb-rust", "amule", "mfc-peer"],
+        "clientProducts": ["emulebb", "emulebb-rust", "mfc-peer"],
         "tiers": [1, 2, 3],
         "defaultTier": 1,
         "tierOptions": campaign_scenarios.LOCAL_SWARM_TIER_OPTIONS,
@@ -186,8 +186,6 @@ def test_all_reusable_campaign_local_modes_plan_declared_local_suites(tmp_path: 
             str(tier_options["extra_emulebb_files"]),
             "--godzilla-harness-files",
             str(tier_options["harness_files"]),
-            "--godzilla-amule-files",
-            str(tier_options["amule_files"]),
             "--godzilla-adverse-kill-cycles",
             str(tier_options["adverse_kill_cycles"]),
             "--godzilla-adverse-kill-warmup-seconds",

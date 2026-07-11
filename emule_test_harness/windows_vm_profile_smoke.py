@@ -77,8 +77,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--harness-root", type=Path)
     parser.add_argument("--ed2k-server-exe", type=Path)
     parser.add_argument("--client2-app-exe", type=Path)
-    parser.add_argument("--amule-daemon-exe", type=Path)
-    parser.add_argument("--amule-control-exe", type=Path)
     parser.add_argument("--prowlarr-exe", type=Path)
     parser.add_argument("--radarr-exe", type=Path)
     parser.add_argument("--sonarr-exe", type=Path)
@@ -342,8 +340,6 @@ def run_profile_checks(
                 artifacts,
                 ed2k_server_exe=args.ed2k_server_exe,
                 client2_app_exe=args.client2_app_exe,
-                amule_daemon_exe=args.amule_daemon_exe,
-                amule_control_exe=args.amule_control_exe,
                 prowlarr_exe=args.prowlarr_exe,
                 radarr_exe=args.radarr_exe,
                 sonarr_exe=args.sonarr_exe,
@@ -512,8 +508,6 @@ def local_swarm_plan_check(
     artifacts: Path,
     ed2k_server_exe: Path | None = None,
     client2_app_exe: Path | None = None,
-    amule_daemon_exe: Path | None = None,
-    amule_control_exe: Path | None = None,
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
     sonarr_exe: Path | None = None,
@@ -579,8 +573,6 @@ def local_swarm_plan_check(
             str(tier_options["extra_emulebb_files"]),
             "--godzilla-harness-files",
             str(tier_options["harness_files"]),
-            "--godzilla-amule-files",
-            str(tier_options["amule_files"]),
             "--godzilla-adverse-kill-cycles",
             str(tier_options["adverse_kill_cycles"]),
             "--godzilla-adverse-kill-warmup-seconds",
@@ -609,10 +601,6 @@ def local_swarm_plan_check(
             argv.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
         if client2_app_exe is not None:
             argv.extend(["--client2-app-exe", str(client2_app_exe.resolve())])
-        if amule_daemon_exe is not None:
-            argv.extend(["--amule-daemon-exe", str(amule_daemon_exe.resolve())])
-        if amule_control_exe is not None:
-            argv.extend(["--amule-control-exe", str(amule_control_exe.resolve())])
         if prowlarr_exe is not None:
             argv.extend(["--prowlarr-exe", str(prowlarr_exe.resolve())])
         if radarr_exe is not None:
@@ -695,8 +683,6 @@ def local_swarm_plan_check(
                 "lanBindAddr": lan_bind_addr,
                 "ed2kServerExe": str(ed2k_server_exe) if ed2k_server_exe is not None else "",
                 "client2AppExe": str(client2_app_exe) if client2_app_exe is not None else "",
-                "amuleDaemonExe": str(amule_daemon_exe) if amule_daemon_exe is not None else "",
-                "amuleControlExe": str(amule_control_exe) if amule_control_exe is not None else "",
                 "prowlarrExe": str(prowlarr_exe) if prowlarr_exe is not None else "",
                 "radarrExe": str(radarr_exe) if radarr_exe is not None else "",
                 "sonarrExe": str(sonarr_exe) if sonarr_exe is not None else "",

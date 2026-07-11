@@ -117,7 +117,6 @@ DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT = 300
 DEFAULT_GODZILLA_EMULEBB_FILES = 600
 DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES = 50
 DEFAULT_GODZILLA_HARNESS_FILES = 400
-DEFAULT_GODZILLA_AMULE_FILES = 100
 DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES = 2
 DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS = 45.0
 DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
@@ -142,12 +141,6 @@ CLIENT2_APP_EXE_SUITE_NAMES = {
     "amutorrent-local-ed2k-ui-live",
     "radarr-emulebb-local",
     "sonarr-emulebb-local",
-}
-AMULE_EXE_SUITE_NAMES = {
-    "multi-client-p2p-matrix",
-    "godzilla-local-swarm",
-    "local-kad-mixed-client-swarm",
-    "amutorrent-local-ed2k-ui-live",
 }
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
@@ -1116,7 +1109,6 @@ def build_suite_command(
     godzilla_emulebb_files: int = DEFAULT_GODZILLA_EMULEBB_FILES,
     godzilla_extra_emulebb_files: int = DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES,
     godzilla_harness_files: int = DEFAULT_GODZILLA_HARNESS_FILES,
-    godzilla_amule_files: int = DEFAULT_GODZILLA_AMULE_FILES,
     godzilla_adverse_kill_cycles: int = DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES,
     godzilla_adverse_kill_warmup_seconds: float = DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS,
     godzilla_adverse_recovery_timeout_seconds: float = DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS,
@@ -1175,8 +1167,6 @@ def build_suite_command(
     refresh_dependencies: bool = False,
     ed2k_server_exe: Path | None = None,
     client2_app_exe: Path | None = None,
-    amule_daemon_exe: Path | None = None,
-    amule_control_exe: Path | None = None,
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
     sonarr_exe: Path | None = None,
@@ -1331,11 +1321,6 @@ def build_suite_command(
         command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
     if spec.name in CLIENT2_APP_EXE_SUITE_NAMES and client2_app_exe is not None:
         command.extend(["--client2-app-exe", str(client2_app_exe.resolve())])
-    if spec.name in AMULE_EXE_SUITE_NAMES:
-        if amule_daemon_exe is not None:
-            command.extend(["--amule-daemon-exe", str(amule_daemon_exe.resolve())])
-        if amule_control_exe is not None:
-            command.extend(["--amule-control-exe", str(amule_control_exe.resolve())])
     if (
         spec.name
         in {
@@ -1385,7 +1370,6 @@ def build_suite_command(
         command.extend(["--emulebb-files", str(godzilla_emulebb_files)])
         command.extend(["--extra-emulebb-files", str(godzilla_extra_emulebb_files)])
         command.extend(["--harness-files", str(godzilla_harness_files)])
-        command.extend(["--amule-files", str(godzilla_amule_files)])
         command.extend(["--adverse-kill-cycles", str(godzilla_adverse_kill_cycles)])
         command.extend(["--adverse-kill-warmup-seconds", str(godzilla_adverse_kill_warmup_seconds)])
         command.extend(["--adverse-recovery-timeout-seconds", str(godzilla_adverse_recovery_timeout_seconds)])
@@ -2015,8 +1999,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--refresh-dependencies", action="store_true")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--client2-app-exe")
-    parser.add_argument("--amule-daemon-exe")
-    parser.add_argument("--amule-control-exe")
     parser.add_argument("--prowlarr-exe")
     parser.add_argument("--radarr-exe")
     parser.add_argument("--sonarr-exe")
@@ -2230,7 +2212,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-emulebb-files", type=int, default=DEFAULT_GODZILLA_EMULEBB_FILES)
     parser.add_argument("--godzilla-extra-emulebb-files", type=int, default=DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES)
     parser.add_argument("--godzilla-harness-files", type=int, default=DEFAULT_GODZILLA_HARNESS_FILES)
-    parser.add_argument("--godzilla-amule-files", type=int, default=DEFAULT_GODZILLA_AMULE_FILES)
     parser.add_argument("--godzilla-adverse-kill-cycles", type=int, default=DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)
     parser.add_argument("--godzilla-adverse-kill-warmup-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS)
     parser.add_argument("--godzilla-adverse-recovery-timeout-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS)
@@ -2258,7 +2239,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"Godzilla total client count must be between 3 and {DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT}.")
     if args.godzilla_peer_transfer_count <= 0 or args.godzilla_harness_transfer_count <= 0:
         raise ValueError("Godzilla transfer counts must be greater than zero.")
-    if min(args.godzilla_emulebb_files, args.godzilla_extra_emulebb_files, args.godzilla_harness_files, args.godzilla_amule_files) <= 0:
+    if min(args.godzilla_emulebb_files, args.godzilla_extra_emulebb_files, args.godzilla_harness_files) <= 0:
         raise ValueError("Godzilla generated library file counts must be greater than zero.")
     if args.godzilla_adverse_kill_cycles < 0:
         raise ValueError("Godzilla adverse kill cycles must be zero or greater.")
@@ -2608,7 +2589,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "emulebb_files": args.godzilla_emulebb_files,
             "extra_emulebb_files": args.godzilla_extra_emulebb_files,
             "harness_files": args.godzilla_harness_files,
-            "amule_files": args.godzilla_amule_files,
             "adverse_kill_cycles": args.godzilla_adverse_kill_cycles,
             "adverse_kill_warmup_seconds": args.godzilla_adverse_kill_warmup_seconds,
             "adverse_recovery_timeout_seconds": args.godzilla_adverse_recovery_timeout_seconds,
@@ -2653,8 +2633,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "local_dependency_overrides": {
             "ed2k_server_exe": args.ed2k_server_exe,
             "client2_app_exe": args.client2_app_exe,
-            "amule_daemon_exe": args.amule_daemon_exe,
-            "amule_control_exe": args.amule_control_exe,
         },
         "arr_live_wire_suites": [
             spec.name
@@ -2750,7 +2728,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_emulebb_files=args.godzilla_emulebb_files,
             godzilla_extra_emulebb_files=args.godzilla_extra_emulebb_files,
             godzilla_harness_files=args.godzilla_harness_files,
-            godzilla_amule_files=args.godzilla_amule_files,
             godzilla_adverse_kill_cycles=args.godzilla_adverse_kill_cycles,
             godzilla_adverse_kill_warmup_seconds=args.godzilla_adverse_kill_warmup_seconds,
             godzilla_adverse_recovery_timeout_seconds=args.godzilla_adverse_recovery_timeout_seconds,
@@ -2810,8 +2787,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             refresh_dependencies=args.refresh_dependencies,
             ed2k_server_exe=Path(args.ed2k_server_exe) if args.ed2k_server_exe else None,
             client2_app_exe=Path(args.client2_app_exe) if args.client2_app_exe else None,
-            amule_daemon_exe=Path(args.amule_daemon_exe) if args.amule_daemon_exe else None,
-            amule_control_exe=Path(args.amule_control_exe) if args.amule_control_exe else None,
             prowlarr_exe=Path(args.prowlarr_exe) if args.prowlarr_exe else None,
             radarr_exe=Path(args.radarr_exe) if args.radarr_exe else None,
             sonarr_exe=Path(args.sonarr_exe) if args.sonarr_exe else None,

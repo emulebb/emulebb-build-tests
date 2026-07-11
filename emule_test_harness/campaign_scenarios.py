@@ -10,7 +10,7 @@ EXECUTION_MODES = ("local", "vm")
 VM_LOCAL_SWARM_MODES = ("plan", "execute")
 LOCAL_CAMPAIGN_TEST_NETWORK = "default"
 LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES = ("offline", "lan")
-LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "emulebb-rust", "amule", "mfc-peer")
+LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "emulebb-rust", "mfc-peer")
 CONTROL_BIND_SCOPES = ("lan",)
 P2P_MODES = ("local-swarm", "live-wire")
 P2P_BIND_SCOPES = ("lan", "hide.me")
@@ -26,7 +26,6 @@ LOCAL_SWARM_TIER_OPTIONS: dict[int, dict[str, object]] = {
         "emulebb_files": 80,
         "extra_emulebb_files": 8,
         "harness_files": 60,
-        "amule_files": 20,
         "adverse_kill_cycles": 0,
         "adverse_kill_warmup_seconds": 0.0,
         "adverse_recovery_timeout_seconds": 180.0,
@@ -41,7 +40,6 @@ LOCAL_SWARM_TIER_OPTIONS: dict[int, dict[str, object]] = {
         "emulebb_files": 240,
         "extra_emulebb_files": 24,
         "harness_files": 180,
-        "amule_files": 60,
         "adverse_kill_cycles": 0,
         "adverse_kill_warmup_seconds": 0.0,
         "adverse_recovery_timeout_seconds": 180.0,
@@ -56,7 +54,6 @@ LOCAL_SWARM_TIER_OPTIONS: dict[int, dict[str, object]] = {
         "emulebb_files": 720,
         "extra_emulebb_files": 72,
         "harness_files": 480,
-        "amule_files": 120,
         "adverse_kill_cycles": 2,
         "adverse_kill_warmup_seconds": 20.0,
         "adverse_recovery_timeout_seconds": 180.0,

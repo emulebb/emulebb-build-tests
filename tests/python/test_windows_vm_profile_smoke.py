@@ -43,10 +43,6 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "C:/tmp/harness/tools/goed2k-server.exe",
             "--client2-app-exe",
             "C:/tmp/harness/tools/tracing-harness/emule.exe",
-            "--amule-daemon-exe",
-            "C:/tmp/harness/tools/amule/bin/amuled.exe",
-            "--amule-control-exe",
-            "C:/tmp/harness/tools/amule/bin/amulecmd.exe",
             "--prowlarr-exe",
             "C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe",
             "--radarr-exe",
@@ -64,8 +60,6 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert str(args.harness_root).replace("\\", "/").endswith("C:/tmp/harness")
     assert str(args.ed2k_server_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/goed2k-server.exe")
     assert str(args.client2_app_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/tracing-harness/emule.exe")
-    assert str(args.amule_daemon_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amuled.exe")
-    assert str(args.amule_control_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amulecmd.exe")
     assert str(args.prowlarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe")
     assert str(args.radarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/radarr/Radarr/Radarr.exe")
     assert str(args.sonarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/sonarr/Sonarr/Sonarr.exe")
@@ -175,9 +169,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     ed2k_server_exe.parent.mkdir(parents=True)
     ed2k_server_exe.write_text("", encoding="utf-8")
     client2_app_exe = tmp_path / "harness" / "tools" / "tracing-harness" / "emule.exe"
-    amule_daemon_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amuled.exe"
-    amule_control_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amulecmd.exe"
-    for path in (client2_app_exe, amule_daemon_exe, amule_control_exe):
+    for path in (client2_app_exe,):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
 
@@ -190,8 +182,6 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
         tmp_path / "artifacts",
         ed2k_server_exe=ed2k_server_exe,
         client2_app_exe=client2_app_exe,
-        amule_daemon_exe=amule_daemon_exe,
-        amule_control_exe=amule_control_exe,
         lan_bind_addr="192.0.2.10",
     )
 
@@ -204,8 +194,6 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     assert check["details"]["tierOptions"]["total_client_count"] == 4
     assert check["details"]["ed2kServerExe"] == str(ed2k_server_exe)
     assert check["details"]["client2AppExe"] == str(client2_app_exe)
-    assert check["details"]["amuleDaemonExe"] == str(amule_daemon_exe)
-    assert check["details"]["amuleControlExe"] == str(amule_control_exe)
     assert check["details"]["lanBindAddr"] == "192.0.2.10"
     for command in check["details"]["commands"]:
         assert "--lan-bind-addr" in command
@@ -214,8 +202,6 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
             assert "--ed2k-server-exe" in command
         if Path(command[1]).name == "godzilla-local-swarm.py":
             assert "--client2-app-exe" in command
-            assert "--amule-daemon-exe" in command
-            assert "--amule-control-exe" in command
 
 
 def test_arr_local_acquisition_vm_profile_passes_arr_executables(tmp_path) -> None:
@@ -263,9 +249,7 @@ def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) 
     (app_root / "emulebb.exe").write_text("", encoding="utf-8")
     ed2k_server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
     client2_app_exe = tmp_path / "harness" / "tools" / "tracing-harness" / "emule.exe"
-    amule_daemon_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amuled.exe"
-    amule_control_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amulecmd.exe"
-    for path in (ed2k_server_exe, client2_app_exe, amule_daemon_exe, amule_control_exe):
+    for path in (ed2k_server_exe, client2_app_exe):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
 
@@ -279,8 +263,6 @@ def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) 
             tmp_path / profile / "artifacts",
             ed2k_server_exe=ed2k_server_exe,
             client2_app_exe=client2_app_exe,
-            amule_daemon_exe=amule_daemon_exe,
-            amule_control_exe=amule_control_exe,
             lan_bind_addr="192.0.2.10",
         )
         expected_suites = set(scenario.local_suites)

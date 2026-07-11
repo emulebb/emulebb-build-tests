@@ -1275,7 +1275,6 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert option_values(commands[0], "--emulebb-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_EMULEBB_FILES)]
     assert option_values(commands[0], "--extra-emulebb-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES)]
     assert option_values(commands[0], "--harness-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_HARNESS_FILES)]
-    assert option_values(commands[0], "--amule-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_AMULE_FILES)]
     assert option_values(commands[0], "--adverse-kill-cycles") == [str(live_e2e_suite.DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert summary["suites"][0]["timeout_seconds"] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
@@ -1297,10 +1296,6 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
             str(tmp_path / "tools" / "goed2k-server.exe"),
             "--client2-app-exe",
             str(tmp_path / "tools" / "tracing-harness" / "emule.exe"),
-            "--amule-daemon-exe",
-            str(tmp_path / "tools" / "amule" / "bin" / "amuled.exe"),
-            "--amule-control-exe",
-            str(tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe"),
             "--godzilla-stage",
             "launch-scale",
             "--godzilla-total-client-count",
@@ -1317,14 +1312,10 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
     assert script_name(command) == "godzilla-local-swarm.py"
     assert option_values(command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "goed2k-server.exe").resolve())]
     assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
-    assert option_values(command, "--amule-daemon-exe") == [str((tmp_path / "tools" / "amule" / "bin" / "amuled.exe").resolve())]
-    assert option_values(command, "--amule-control-exe") == [str((tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe").resolve())]
     assert option_values(command, "--stage") == ["launch-scale"]
     assert option_values(command, "--total-client-count") == ["4"]
     assert summary["local_dependency_overrides"]["ed2k_server_exe"] == str(tmp_path / "tools" / "goed2k-server.exe")
     assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "tracing-harness" / "emule.exe")
-    assert summary["local_dependency_overrides"]["amule_daemon_exe"] == str(tmp_path / "tools" / "amule" / "bin" / "amuled.exe")
-    assert summary["local_dependency_overrides"]["amule_control_exe"] == str(tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe")
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:
@@ -1375,8 +1366,6 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "70",
             "--godzilla-harness-files",
             "500",
-            "--godzilla-amule-files",
-            "120",
             "--godzilla-adverse-kill-cycles",
             "3",
             "--godzilla-adverse-kill-warmup-seconds",
@@ -1402,7 +1391,6 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert option_values(commands[0], "--emulebb-files") == ["700"]
     assert option_values(commands[0], "--extra-emulebb-files") == ["70"]
     assert option_values(commands[0], "--harness-files") == ["500"]
-    assert option_values(commands[0], "--amule-files") == ["120"]
     assert option_values(commands[0], "--adverse-kill-cycles") == ["3"]
     assert option_values(commands[0], "--adverse-kill-warmup-seconds") == ["0.5"]
     assert option_values(commands[0], "--adverse-recovery-timeout-seconds") == ["45.0"]
@@ -1418,7 +1406,6 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
         "emulebb_files": 700,
         "extra_emulebb_files": 70,
         "harness_files": 500,
-        "amule_files": 120,
         "adverse_kill_cycles": 3,
         "adverse_kill_warmup_seconds": 0.5,
         "adverse_recovery_timeout_seconds": 45.0,
