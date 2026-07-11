@@ -45,21 +45,17 @@ def test_build_participant_specs_uses_stable_client_names() -> None:
 
     specs = module.build_participant_specs(
         [(4701, 4801, 4901), (4702, 4802, 4902)],
-        {"tcp": 4804, "udp": 4904, "ec": 4714},
     )
 
     assert specs["emulebb"].profile_id == "cl-emulebb-001"
     assert specs["harness"].profile_id == "cl-harness-002"
-    assert specs["amule"].profile_id == "cl-amule-004"
-    assert specs["amule"].rest_port == 0
-    assert specs["amule"].udp_port == 4904
+    assert set(specs) == {"emulebb", "harness"}
 
 
 def test_explicit_rest_bootstrap_plan_covers_available_targeted_paths() -> None:
     module = load_suite_module()
     specs = module.build_participant_specs(
         [(4701, 4801, 4901), (4702, 4802, 4902)],
-        {"tcp": 4804, "udp": 4904, "ec": 4714},
     )
 
     plan = [(path_id, source.profile_id, target.profile_id) for path_id, source, _target_key, target in module.explicit_rest_bootstrap_plan(specs)]
@@ -67,25 +63,18 @@ def test_explicit_rest_bootstrap_plan_covers_available_targeted_paths() -> None:
     assert plan == [
         ("emulebb_to_harness", "cl-emulebb-001", "cl-harness-002"),
         ("harness_to_emulebb", "cl-harness-002", "cl-emulebb-001"),
-        ("emulebb_to_amule", "cl-emulebb-001", "cl-amule-004"),
-        ("harness_to_amule", "cl-harness-002", "cl-amule-004"),
     ]
 
 
-def test_preseed_autoconnect_paths_cover_non_rest_clients() -> None:
+def test_preseed_autoconnect_paths_are_empty_without_non_rest_clients() -> None:
     module = load_suite_module()
     specs = module.build_participant_specs(
         [(4701, 4801, 4901), (4702, 4802, 4902)],
-        {"tcp": 4804, "udp": 4904, "ec": 4714},
     )
 
     rows = module.preseed_autoconnect_paths(specs)
 
-    assert {(row["source"], row["target"]) for row in rows} == {
-        ("cl-amule-004", "cl-emulebb-001"),
-        ("cl-amule-004", "cl-harness-002"),
-    }
-    assert all("nodes.dat preseed" in str(row["mechanism"]) for row in rows)
+    assert rows == []
 
 
 def test_read_client_log_text_accepts_utf16_logs(tmp_path: Path) -> None:

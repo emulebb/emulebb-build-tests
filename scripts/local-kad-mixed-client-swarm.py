@@ -1,11 +1,10 @@
-"""Local Kad swarm matrix across eMuleBB MFC peers and aMule."""
+"""Local Kad swarm matrix across eMuleBB MFC peers."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
 import importlib.util
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,8 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import amule as amule_harness  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_amule_client, resolve_harness_client  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -42,7 +40,6 @@ SUITE_NAME = "local-kad-mixed-client-swarm"
 API_KEY = "local-kad-mixed-client-swarm-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
-CLIENT04 = CLIENT_IDENTITIES["amule"]
 DEFAULT_MIN_CONTACTS_PER_EMULE_CLIENT = 1
 DEFAULT_BOOTSTRAP_THROTTLE_SECONDS = 11.0
 
@@ -62,13 +59,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--harness-exe")
-    parser.add_argument("--amule-daemon-exe")
-    parser.add_argument("--amule-control-exe")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--amule-ec-ready-timeout-seconds", type=float, default=90.0)
-    parser.add_argument("--amule-kad-ready-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--bootstrap-throttle-seconds", type=float, default=DEFAULT_BOOTSTRAP_THROTTLE_SECONDS)
     parser.add_argument("--min-contacts-per-emule-client", type=int, default=DEFAULT_MIN_CONTACTS_PER_EMULE_CLIENT)
     return parser.parse_args(argv)
@@ -83,24 +76,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("bootstrap throttle must be zero or greater.")
 
 
-def choose_amule_ports(used_ports: set[int], host: str | None = None) -> dict[str, int]:
-    """Allocates distinct aMule TCP, UDP, and EC ports outside the eMule set."""
-
-    ports: dict[str, int] = {}
-    for name in ("tcp", "udp", "ec"):
-        udp = name == "udp"
-        for _ in range(200):
-            candidate = rest_smoke.choose_listen_port(host)
-            if candidate not in used_ports and dtt.is_port_available(candidate, host=host, udp=udp):
-                ports[name] = candidate
-                used_ports.add(candidate)
-                break
-        else:
-            raise RuntimeError(f"Could not allocate a local aMule {name} port.")
-    return ports
-
-
-def build_participant_specs(ports: list[tuple[int, int, int]], amule_ports: dict[str, int]) -> dict[str, Any]:
+def build_participant_specs(ports: list[tuple[int, int, int]]) -> dict[str, Any]:
     """Builds stable participant descriptors for the mixed Kad swarm."""
 
     if len(ports) != 2:
@@ -124,14 +100,6 @@ def build_participant_specs(ports: list[tuple[int, int, int]], amule_ports: dict
             udp_port=harness_udp,
             rest_port=harness_rest,
         ),
-        "amule": local_kad.KadClientSpec(
-            index=4,
-            profile_id=CLIENT04.profile_id,
-            nick=CLIENT04.nick,
-            tcp_port=amule_ports["tcp"],
-            udp_port=amule_ports["udp"],
-            rest_port=0,
-        ),
     }
 
 
@@ -140,27 +108,16 @@ def explicit_rest_bootstrap_plan(specs: dict[str, Any]) -> list[tuple[str, Any, 
 
     emulebb = specs["emulebb"]
     harness = specs["harness"]
-    amule = specs["amule"]
     return [
         ("emulebb_to_harness", emulebb, "harness", harness),
         ("harness_to_emulebb", harness, "emulebb", emulebb),
-        ("emulebb_to_amule", emulebb, "amule", amule),
-        ("harness_to_amule", harness, "amule", amule),
     ]
 
 
 def preseed_autoconnect_paths(specs: dict[str, Any]) -> list[dict[str, object]]:
     """Documents non-REST outbound paths driven by preseed plus network start."""
 
-    return [
-        {
-            "source": specs["amule"].profile_id,
-            "target": specs[key].profile_id,
-            "target_udp_port": specs[key].udp_port,
-            "mechanism": "nodes.dat preseed loaded before amulecmd 'Connect Kad'",
-        }
-        for key in ("emulebb", "harness")
-    ]
+    return []
 
 
 def resolve_required_harness(paths, args: argparse.Namespace):
@@ -170,51 +127,6 @@ def resolve_required_harness(paths, args: argparse.Namespace):
     if not availability.available or availability.executable is None:
         raise RuntimeError(f"MFC peer is unavailable for mixed Kad E2E: {availability.reason}")
     return availability
-
-
-def resolve_required_amule(paths, args: argparse.Namespace):
-    """Resolves the staged aMule daemon/control pair or raises an actionable error."""
-
-    availability = resolve_amule_client(paths.workspace_root, args.amule_daemon_exe, args.amule_control_exe)
-    if not availability.available or availability.executable is None or availability.control_executable is None:
-        raise RuntimeError(f"aMule is unavailable for mixed Kad E2E: {availability.reason}")
-    return availability
-
-
-def amule_command_summary(completed: subprocess.CompletedProcess) -> dict[str, object]:
-    """Returns a bounded diagnostic summary for one `amulecmd` invocation."""
-
-    return {
-        "return_code": completed.returncode,
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-2000:],
-    }
-
-
-def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
-    """Requests graceful aMule daemon shutdown through EC when possible."""
-
-    if control_exe is None or profile is None:
-        return {"skipped": True}
-    completed = amule_harness.run_amulecmd(control_exe, profile, "Shutdown", timeout_seconds=30.0, check=False)
-    return amule_command_summary(completed)
-
-
-def terminate_process(process: subprocess.Popen | None) -> dict[str, object]:
-    """Terminates a process that did not exit during graceful cleanup."""
-
-    if process is None:
-        return {"skipped": True}
-    if process.poll() is not None:
-        return {"already_exited": True, "return_code": process.returncode}
-    process.terminate()
-    try:
-        process.wait(timeout=10.0)
-        return {"terminated": True, "return_code": process.returncode}
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=10.0)
-        return {"killed": True, "return_code": process.returncode}
 
 
 def read_client_log_text(log_path: Path) -> str:
@@ -269,24 +181,17 @@ def main(argv: list[str] | None = None) -> int:
         "checks": {},
     }
     apps: dict[str, object] = {}
-    amule_process: subprocess.Popen | None = None
-    amule_profile: amule_harness.AmuleRuntimeProfile | None = None
-    amule_control_exe: Path | None = None
     current_phase = "initializing"
 
     try:
         current_phase = "resolve_clients"
         harness_client = resolve_required_harness(paths, args)
-        amule_client = resolve_required_amule(paths, args)
-        amule_control_exe = amule_client.control_executable
 
         current_phase = "allocate_ports"
         emule_ports = local_kad.choose_local_kad_ports(2, args.lan_bind_addr)
-        used_ports = {port for triple in emule_ports for port in triple}
-        amule_ports = choose_amule_ports(used_ports, args.lan_bind_addr)
-        specs = build_participant_specs(emule_ports, amule_ports)
+        specs = build_participant_specs(emule_ports)
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-        all_specs = [specs["emulebb"], specs["harness"], specs["amule"]]
+        all_specs = [specs["emulebb"], specs["harness"]]
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
@@ -294,7 +199,6 @@ def main(argv: list[str] | None = None) -> int:
             "participants": {key: asdict(value) for key, value in specs.items()},
             "client_inventory": {
                 "harness": harness_client.as_report(),
-                "amule": amule_client.as_report(),
             },
         }
 
@@ -341,29 +245,6 @@ def main(argv: list[str] | None = None) -> int:
                 "nodes_dat_preseed": preseed,
             }
 
-        current_phase = "prepare_amule_profile"
-        amule_profile = amule_harness.prepare_amule_profile(
-            root_dir=paths.source_artifacts_dir / "profiles" / CLIENT04.profile_id,
-            profile_id=CLIENT04.profile_id,
-            nick=CLIENT04.nick,
-            tcp_port=specs["amule"].tcp_port,
-            udp_port=specs["amule"].udp_port,
-            ec_port=amule_ports["ec"],
-            advertised_address=p2p_address,
-            connect_to_kad=True,
-            connect_to_ed2k=False,
-        )
-        amule_preseed = local_kad.write_nodes_dat(
-            amule_profile.config_dir / "nodes.dat",
-            owner=specs["amule"],
-            peers=all_specs,
-            peer_address=p2p_address,
-        )
-        profile_reports[CLIENT04.profile_id] = {
-            **amule_profile.as_report(),
-            "nodes_dat_preseed": amule_preseed,
-            "preferences": (amule_profile.config_dir / "amule.conf").read_text(encoding="utf-8"),
-        }
         report["profiles"] = profile_reports
 
         current_phase = "launch_emule_family_clients"
@@ -392,14 +273,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-        current_phase = "launch_amule"
-        amule_process = amule_harness.start_amuled(amule_client.executable, amule_profile)
-        report["checks"]["amule_ec_ready"] = amule_harness.wait_for_ec_ready(
-            amule_client.control_executable,
-            amule_profile,
-            args.amule_ec_ready_timeout_seconds,
-        )
-
         current_phase = "start_kad"
         report["checks"][f"{CLIENT01.profile_id}_kad_start"] = local_kad.start_kad(
             local_kad.base_url(args.lan_bind_addr, specs["emulebb"]),
@@ -419,21 +292,6 @@ def main(argv: list[str] | None = None) -> int:
             args.api_key,
             args.kad_running_timeout_seconds,
         )
-        connect_kad = amule_harness.run_amulecmd(
-            amule_client.control_executable,
-            amule_profile,
-            "Connect Kad",
-            timeout_seconds=30.0,
-            check=False,
-        )
-        report["checks"]["amule_connect_kad"] = amule_command_summary(connect_kad)
-        report["checks"]["amule_kad_running"] = amule_harness.wait_for_kad_status(
-            amule_client.control_executable,
-            amule_profile,
-            args.amule_kad_ready_timeout_seconds,
-            require_connected=False,
-        )
-
         current_phase = "bootstrap_all_rest_paths"
         bootstrap_rows: list[dict[str, object]] = []
         for path_id, source, target_key, target in explicit_rest_bootstrap_plan(specs):
@@ -462,7 +320,6 @@ def main(argv: list[str] | None = None) -> int:
             "require_connected": True,
             "single_lan_bind_address_limit": "Kad accepts one contact per IP in this local single-address matrix; multi-contact assertions require per-client local IP aliases or adapters.",
             "mfc_peer_policy": "Both MFC eMule-family clients expose REST and are explicitly bootstrapped through the API.",
-            "amule_policy": "Kad must be running through EC; outbound paths are driven by nodes.dat preseed.",
         }
         report["checks"]["emule_family_swarm_ready"] = local_kad.wait_for_local_swarm(
             specs=[specs["emulebb"], specs["harness"]],
@@ -479,15 +336,6 @@ def main(argv: list[str] | None = None) -> int:
             CLIENT02.profile_id: local_kad.compact_local_kad_status(
                 local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["harness"]), args.api_key)
             ),
-            CLIENT04.profile_id: amule_harness.parse_kad_status(
-                amule_harness.run_amulecmd(
-                    amule_client.control_executable,
-                    amule_profile,
-                    "Status",
-                    timeout_seconds=15.0,
-                    check=False,
-                ).stdout
-            ),
         }
         report["status"] = "passed"
         return 0
@@ -498,11 +346,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         cleanup: dict[str, object] = {}
-        try:
-            cleanup["amule_shutdown"] = shutdown_amule(amule_control_exe, amule_profile)
-        except Exception as exc:
-            cleanup["amule_shutdown"] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        cleanup["amule_process"] = terminate_process(amule_process)
         for profile_id, app in apps.items():
             try:
                 live_common.close_app_cleanly(app)
