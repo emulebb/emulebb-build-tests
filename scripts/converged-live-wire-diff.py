@@ -48,6 +48,7 @@ from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import converged_scenarios as cs
 from emule_test_harness import diag_event_diff
 from emule_test_harness import packet_trace_diff
+from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
@@ -90,13 +91,6 @@ DEFAULT_SEED_BYTES = b"eMuleBB converged live-wire seed fixture\r\n"
 
 def log(message: str) -> None:
     print(f"[converged] {message}", flush=True)
-
-
-def require_env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(f"{name} must be set (no local fallbacks are baked in).")
-    return value
 
 
 def load_local_module(module_name: str, filename: str) -> ModuleType:
@@ -584,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL (empty to disable).")
     parser.add_argument("--rust-rest-port", type=int, default=4731, help="Rust REST port on X_LOCAL_IP.")
     parser.add_argument("--mfc-rest-port", type=int, default=4732, help="MFC REST port on X_LOCAL_IP.")
+    parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
     parser.add_argument("--bootstrap-limit", type=int, default=40, help="Max Kad bootstrap contacts to seed.")
     parser.add_argument(
         "--max-terms", type=int, default=DEFAULT_MAX_TERMS,
@@ -886,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
     selected = cs.select_scenarios(cs.parse_scenarios_arg(args.scenarios))
     log(f"selected scenarios (gentle single pass each): {', '.join(s.name for s in selected)}")
 
-    rest_addr = require_env("X_LOCAL_IP")
+    rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
 
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)

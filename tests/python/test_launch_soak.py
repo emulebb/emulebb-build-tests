@@ -54,6 +54,13 @@ def test_launch_soak_resolves_direct_mfc_profile_from_live_wire_inputs(tmp_path:
     ) is None
 
 
+def test_launch_soak_parser_accepts_lan_bind_addr() -> None:
+    module = load_launch_soak_module()
+    args = module.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
+
+    assert args.lan_bind_addr == "192.0.2.10"
+
+
 def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     module = load_launch_soak_module()
     source = inspect.getsource(module.main)

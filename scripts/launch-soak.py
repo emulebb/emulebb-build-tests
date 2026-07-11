@@ -78,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--inputs",
         help="live-wire-inputs.local.json (shared roots). Default: repo-root copy.",
     )
+    parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
@@ -212,9 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         mfc_server_udp_port=args.mfc_server_udp_port,
     )
 
-    rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
-    if not rest_addr:
-        raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
+    rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
 
     rust_exe = (

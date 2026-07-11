@@ -13,6 +13,7 @@ machine-specific is baked in.
 from __future__ import annotations
 
 import importlib.util
+import ipaddress
 import json
 import os
 import sys
@@ -49,6 +50,21 @@ DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
 
 def log(message: str) -> None:
     print(f"[soak] {message}", flush=True)
+
+
+def resolve_lan_rest_bind_addr(lan_bind_addr: str = "") -> str:
+    """Returns the explicit LAN address used by soak REST/control surfaces."""
+
+    candidate = str(lan_bind_addr or "").strip() or os.environ.get("X_LOCAL_IP", "").strip()
+    if not candidate:
+        raise RuntimeError("Soak REST/control binding requires --lan-bind-addr or X_LOCAL_IP.")
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError as exc:
+        raise ValueError(f"LAN REST/control bind address must be an IP literal, got {candidate!r}.") from exc
+    if parsed.is_unspecified or parsed.is_loopback:
+        raise ValueError(f"LAN REST/control bind address must not be loopback or wildcard, got {candidate!r}.")
+    return candidate
 
 
 def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) -> str:

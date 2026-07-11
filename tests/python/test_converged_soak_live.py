@@ -33,6 +33,80 @@ def test_soak_launch_requires_same_vpn_bind_ip() -> None:
         soak_launch.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.0.0.5"})
 
 
+def test_resolve_lan_rest_bind_addr_honors_explicit_cli_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+
+    assert soak_launch.resolve_lan_rest_bind_addr("192.0.2.44") == "192.0.2.44"
+
+
+def test_resolve_lan_rest_bind_addr_uses_x_local_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+
+    assert soak_launch.resolve_lan_rest_bind_addr() == "192.0.2.10"
+
+
+@pytest.mark.parametrize("candidate", ["", "127.0.0.1", "0.0.0.0", "localhost"])
+def test_resolve_lan_rest_bind_addr_rejects_missing_loopback_wildcard_or_host(
+    candidate: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    with pytest.raises((RuntimeError, ValueError)):
+        soak_launch.resolve_lan_rest_bind_addr(candidate)
+
+
+def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
+    runner = _load_soak_runner()
+    args = runner.build_parser().parse_args(
+        [
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--lan-bind-addr",
+            "192.0.2.10",
+        ]
+    )
+
+    assert args.lan_bind_addr == "192.0.2.10"
+
+
+def test_launch_default_trackmulebb_binds_control_host_to_lan_addr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    repo_root = tmp_path / "repos" / "emulebb-build-tests"
+    trackmulebb_repo = tmp_path / "repos" / "trackmulebb"
+    trackmulebb_repo.mkdir(parents=True)
+    (trackmulebb_repo / "pyproject.toml").write_text("[project]\nname='trackmulebb'\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "REPO_ROOT", repo_root)
+    popen_calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command: list[str], *, cwd: str, env: dict[str, str]) -> FakeProcess:
+        popen_calls.append({"command": command, "cwd": cwd, "env": env})
+        return FakeProcess()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    logs: list[str] = []
+
+    process = runner.launch_default_trackmulebb(
+        "http://192.0.2.10:4731",
+        "api-key",
+        "192.0.2.10",
+        logs.append,
+    )
+
+    assert isinstance(process, FakeProcess)
+    assert popen_calls[0]["cwd"] == str(trackmulebb_repo)
+    env = popen_calls[0]["env"]
+    assert env["TRACKMULEBB_RUST_URL"] == "http://192.0.2.10:4731"
+    assert env["TRACKMULEBB_CONTROL_HOST"] == "192.0.2.10"
+    assert "192.0.2.10:8770" in logs[0]
+
+
 def test_soak_endpoint_ports_are_distinct_by_default() -> None:
     ports = soak_launch.require_distinct_endpoint_ports(
         rust_ed2k_port=soak_launch.RUST_ED2K_PORT,
@@ -397,7 +471,9 @@ def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) ->
 def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
     runner = _load_soak_runner()
 
-    args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
+    args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--lan-bind-addr", "192.0.2.10"]
+    )
 
     assert args.poll_rest_timeout == 90.0
 
@@ -405,12 +481,18 @@ def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
 def test_converged_soak_downloads_are_opt_in_by_default() -> None:
     runner = _load_soak_runner()
 
-    default_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
-    auto_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json", "--auto-drive"])
+    default_args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--lan-bind-addr", "192.0.2.10"]
+    )
+    auto_args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--lan-bind-addr", "192.0.2.10", "--auto-drive"]
+    )
     enabled_args = runner.build_parser().parse_args(
         [
             "--inputs",
             "live-wire-inputs.local.json",
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--seed-downloads",
             "3",
             "--auto-download-every",
@@ -434,6 +516,8 @@ def test_converged_soak_seed_search_interval_is_separate_from_auto_drive_interva
         [
             "--inputs",
             "live-wire-inputs.local.json",
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--auto-search-interval",
             "1800",
             "--seed-search-interval",
@@ -997,7 +1081,14 @@ def test_converged_soak_accepts_mfc_shared_files_inventory_arg() -> None:
     runner = _load_soak_runner()
 
     args = runner.build_parser().parse_args(
-        ["--inputs", "live-wire-inputs.local.json", "--mfc-shared-files-inventory", "inventory.json"]
+        [
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--mfc-shared-files-inventory",
+            "inventory.json",
+        ]
     )
 
     assert args.mfc_shared_files_inventory == "inventory.json"
@@ -1006,11 +1097,13 @@ def test_converged_soak_accepts_mfc_shared_files_inventory_arg() -> None:
 def test_converged_soak_secident_knob_defaults_on() -> None:
     runner = _load_soak_runner()
 
-    default_args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
+    default_args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--lan-bind-addr", "192.0.2.10"]
+    )
     assert default_args.secident == "on"
 
     off_args = runner.build_parser().parse_args(
-        ["--inputs", "live-wire-inputs.local.json", "--secident", "off"]
+        ["--inputs", "live-wire-inputs.local.json", "--lan-bind-addr", "192.0.2.10", "--secident", "off"]
     )
     assert off_args.secident == "off"
 

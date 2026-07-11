@@ -36,6 +36,20 @@ def test_default_mfc_seed_config_dir_passes_allowlist_validation() -> None:
     live_profile_seed.validate_seed_config_dir(DEFAULT_MFC_SEED_CONFIG_DIR)
 
 
+def test_converged_live_wire_parser_accepts_lan_bind_addr() -> None:
+    runner = _load_converged_runner()
+    args = runner.build_parser().parse_args(
+        [
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--lan-bind-addr",
+            "192.0.2.10",
+        ]
+    )
+
+    assert args.lan_bind_addr == "192.0.2.10"
+
+
 def test_mfc_diagnostics_build_dir_uses_canonical_layout(tmp_path: Path) -> None:
     build_dir = clw.mfc_diagnostics_build_dir(tmp_path)
     assert build_dir == (

@@ -1333,6 +1333,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
+    parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
@@ -1905,7 +1906,7 @@ def resolve_kad_bootstrap_endpoints(
 
 
 def launch_default_trackmulebb(
-    rust_base: str, api_key: str, log: Callable[[str], None]
+    rust_base: str, api_key: str, control_host: str, log: Callable[[str], None]
 ) -> subprocess.Popen | None:
     """Launch the bundled TrackMuleBB UI pointed at the running rust REST.
 
@@ -1920,13 +1921,14 @@ def launch_default_trackmulebb(
     env = dict(os.environ)
     env["TRACKMULEBB_RUST_URL"] = rust_base
     env["TRACKMULEBB_RUST_API_KEY"] = api_key
+    env["TRACKMULEBB_CONTROL_HOST"] = control_host
     env["TRACKMULEBB_QBT_ENABLED"] = "false"
     try:
         proc = subprocess.Popen(["uv", "run", "python", "-m", "trackmulebb"], cwd=str(repo), env=env)
     except OSError as exc:
         log(f"TrackMuleBB launch failed: {exc}")
         return None
-    log(f"launched TrackMuleBB (UI on X_LOCAL_IP:8770) -> rust {rust_base}")
+    log(f"launched TrackMuleBB (UI on {control_host}:8770) -> rust {rust_base}")
     return proc
 
 
@@ -1960,9 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
         mfc_server_udp_port=args.mfc_server_udp_port,
     )
 
-    rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
-    if not rest_addr:
-        raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
+    rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
 
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
@@ -2323,7 +2323,7 @@ def main(argv: list[str] | None = None) -> int:
             log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")
             trackmulebb_proc = subprocess.Popen(args.trackmulebb_cmd, shell=True)
         elif not args.no_trackmulebb:
-            trackmulebb_proc = launch_default_trackmulebb(rust_base, RUST_API_KEY, log)
+            trackmulebb_proc = launch_default_trackmulebb(rust_base, RUST_API_KEY, rest_addr, log)
         log("=" * 70)
         log("SOAK LIVE. Drive searches/downloads via the MFC GUI and via TrackMuleBB:")
         log(f"  rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
