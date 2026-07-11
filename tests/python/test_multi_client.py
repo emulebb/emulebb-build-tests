@@ -23,14 +23,14 @@ def test_client_long_path_capabilities_are_explicit() -> None:
         ["emulebb", "emulebb_rust", "emulebb_rust_peer", "harness", "amule"]
     )
 
-    # The eMuleBB family (MFC master + the Rust client) is long-path capable;
-    # the Rust client's support is scoped to operator content path classes
+    # The eMuleBB family (MFC master + the Rust client) is long-path capable.
+    # The Rust client's support is scoped to operator content path classes
     # (shared trees / incoming / categories) via a longPathAware manifest + a
-    # verbatim \\?\ helper. The compatibility clients are not long-path capable.
+    # verbatim \\?\ helper. Non-eMuleBB compatibility clients are not long-path capable.
     assert report["emulebb"]["supports_long_paths"] is True
     assert report["emulebb_rust"]["supports_long_paths"] is True
     assert report["emulebb_rust_peer"]["supports_long_paths"] is True
-    assert report["harness"]["supports_long_paths"] is False
+    assert report["harness"]["supports_long_paths"] is True
     assert report["amule"]["supports_long_paths"] is False
 
 
@@ -54,12 +54,9 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
     workspace = root / "workspaces" / "workspace"
     app_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
-    harness_exe = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release" / "emule.exe"
     app_exe.parent.mkdir(parents=True)
-    harness_exe.parent.mkdir(parents=True)
     write_workspace_manifest(workspace, root)
     app_exe.write_bytes(b"")
-    harness_exe.write_bytes(b"")
 
     inventory = multi_client.resolve_windows_client_inventory(
         workspace_root=workspace,
@@ -83,17 +80,17 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
 
 def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
-    harness_dir = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release"
+    harness_dir = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release"
     harness_dir.mkdir(parents=True)
-    legacy_exe = harness_dir / "emule.exe"
     renamed_exe = harness_dir / "emulebb.exe"
+    legacy_exe = harness_dir / "emule.exe"
 
-    legacy_exe.write_bytes(b"")
-    assert multi_client.resolve_harness_client(workspace, "Release").executable == legacy_exe.resolve()
-
-    legacy_exe.unlink()
     renamed_exe.write_bytes(b"")
     assert multi_client.resolve_harness_client(workspace, "Release").executable == renamed_exe.resolve()
+
+    renamed_exe.unlink()
+    legacy_exe.write_bytes(b"")
+    assert multi_client.resolve_harness_client(workspace, "Release").executable == legacy_exe.resolve()
 
 
 def test_resolve_optional_clients_accepts_output_root_amule_tools(tmp_path: Path, monkeypatch) -> None:

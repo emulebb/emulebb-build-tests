@@ -83,9 +83,9 @@ CLIENT_IDENTITIES = {
         key="harness",
         profile_id=CLIENT02_HARNESS,
         nick=NICK_CLIENT02_HARNESS,
-        product="eMule community tracing harness",
-        role="deterministic parity seed client",
-        supports_long_paths=False,
+        product="eMuleBB MFC",
+        role="MFC parity peer client",
+        supports_long_paths=True,
     ),
     "emuleai": ClientIdentity(
         key="emuleai",
@@ -215,7 +215,12 @@ def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
 
 
 def resolve_harness_client(workspace_root: Path, configuration: str, override: str | None = None) -> ClientAvailability:
-    """Resolves the mandatory tracing-harness executable used as the deterministic seed."""
+    """Resolves the MFC parity peer executable.
+
+    The historical key stays `harness` for report/profile compatibility, but
+    current parity tests use the active emulebb-main worktree instead of the
+    retired tracing-harness worktree.
+    """
 
     identity = CLIENT_IDENTITIES["harness"]
     if override:
@@ -224,19 +229,19 @@ def resolve_harness_client(workspace_root: Path, configuration: str, override: s
         base_dir = (
             workspace_root
             / "app"
-            / "emulebb-community-tracing-harness"
+            / "emulebb-main"
             / "srchybrid"
             / "x64"
             / configuration
         )
-        executable = first_existing_file([base_dir / "emule.exe", base_dir / "emulebb.exe"])
-    reason = "available" if executable is not None else "missing tracing-harness executable"
+        executable = first_existing_file([base_dir / "emulebb.exe", base_dir / "emule.exe"])
+    reason = "available" if executable is not None else "missing eMuleBB main executable"
     return ClientAvailability(
         identity=identity,
         available=executable is not None,
         executable=executable,
-        reason=reason if executable is not None else f"{reason} under {workspace_root / 'app' / 'emulebb-community-tracing-harness'}",
-        launch_adapter="tracing-harness-gui-profile",
+        reason=reason if executable is not None else f"{reason} under {workspace_root / 'app' / 'emulebb-main'}",
+        launch_adapter="emulebb-main-rest-profile",
         deterministic_transfer_adapter=True,
     )
 
