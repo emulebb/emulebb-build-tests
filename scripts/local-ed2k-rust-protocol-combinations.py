@@ -26,6 +26,7 @@ rust_emulebb = load_script_module("emulebb_rust_emulebb_cross_client_for_protoco
 dtt = protocol_matrix.dtt
 harness_cli_common = protocol_matrix.harness_cli_common
 live_common = protocol_matrix.live_common
+rest_smoke = protocol_matrix.rest_smoke
 
 SUITE_NAME = "local-ed2k-rust-protocol-combinations"
 API_KEY = "local-ed2k-rust-protocol-combinations-key"
@@ -553,6 +554,9 @@ def run_protocol_case(
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
         )
@@ -568,33 +572,33 @@ def run_protocol_case(
         )
 
         current_phase = "launch_harness_seed"
-        export_dir = case_dir / "client2-export"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        ready_path = export_dir / "ready.txt"
-        export_link_path = export_dir / "fixture.ed2k.txt"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(harness["profile_base"]),
             minimized_to_tray=True,
-            extra_args=dtt.build_client2_harness_args(
-                ready_path=ready_path,
-                fixture_file=fixture_file,
-                export_link_path=export_link_path,
-                source_ip=p2p_address,
-            ),
         )
-        report["checks"]["harness_ready"] = dtt.wait_for_file(ready_path, 90.0, "tracing harness ready file")
-        exported_link = dtt.wait_for_exported_link(export_link_path, args.link_export_timeout_seconds)
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+        report["checks"]["harness_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+        )
+        report["checks"]["harness_shared_file_add"] = dtt.add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
+        report["checks"]["harness_shared_files_reload"] = dtt.reload_emule_shared_files(client2_base_url, args.api_key)
+        shared_link = dtt.wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        exported_link = str(shared_link["link"])
         link_info = dtt.parse_ed2k_file_link(exported_link)
         decoded_link_name = decoded_ed2k_link_name(link_info)
         if decoded_link_name != fixture_file.name:
             raise RuntimeError(
-                f"Tracing harness exported ED2K link name {decoded_link_name!r}, expected {fixture_file.name!r}."
+                f"MFC parity peer exported ED2K link name {decoded_link_name!r}, expected {fixture_file.name!r}."
             )
         transfer_hash = str(link_info["hash"])
-        report["checks"]["harness_exported_link"] = {
-            "path": str(export_link_path),
-            "link": exported_link,
+        report["checks"]["harness_shared_file_link"] = {
+            **shared_link,
             "parsed": link_info,
             "decodedName": decoded_link_name,
         }
