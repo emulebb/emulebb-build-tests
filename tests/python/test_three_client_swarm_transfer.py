@@ -44,36 +44,6 @@ def test_seed_files_are_distinct_per_client(tmp_path: Path) -> None:
     assert all(seed.path.is_file() and seed.path.stat().st_size == 4096 for seed in seeds.values())
 
 
-def test_harness_args_include_download_link_and_report_files(tmp_path: Path) -> None:
-    module = load_suite_module()
-
-    args = module.build_harness_args(
-        ready_path=tmp_path / "ready.txt",
-        fixture_file=tmp_path / "seed.bin",
-        export_link_path=tmp_path / "seed.ed2k.txt",
-        source_ip="10.1.2.3",
-        download_link_file=tmp_path / "downloads.ed2k.txt",
-        download_report_file=tmp_path / "download-report.json",
-    )
-
-    assert "-readyfile" in args
-    assert "-sharefile" in args
-    assert "-downloadlinkfile" in args
-    assert "-downloadreportfile" in args
-    assert str(tmp_path / "downloads.ed2k.txt") in args
-    assert str(tmp_path / "download-report.json") in args
-
-
-def test_write_download_link_file_uses_one_link_per_line(tmp_path: Path) -> None:
-    module = load_suite_module()
-    path = tmp_path / "downloads.ed2k.txt"
-
-    result = module.write_download_link_file(path, ["ed2k://|file|a.bin|1|0123456789abcdef0123456789abcdef|/"])
-
-    assert result["count"] == 1
-    assert path.read_text(encoding="utf-8") == "ed2k://|file|a.bin|1|0123456789abcdef0123456789abcdef|/\n"
-
-
 def test_ed2k_link_with_source_adds_local_source_hint() -> None:
     module = load_suite_module()
 

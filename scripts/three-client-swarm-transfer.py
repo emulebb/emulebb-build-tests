@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import random
 import shutil
 import subprocess
@@ -141,10 +140,10 @@ def create_seed_file(root_dir: Path, client_key: str, profile_id: str, size_byte
     return SeedFile(client_key=client_key, profile_id=profile_id, path=path, name=name, size=size_bytes, sha256=sha256)
 
 
-def choose_swarm_ports() -> dict[str, int]:
-    """Allocates ports for eMuleBB, tracing harness, aMule, and ED2K server."""
+def choose_swarm_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
+    """Allocates ports for eMuleBB, the MFC parity peer, aMule, and ED2K server."""
 
-    return amule_seed.choose_amule_ports(dtt.choose_distinct_ports())
+    return amule_seed.choose_amule_ports(dtt.choose_distinct_ports(lan_bind_addr), lan_bind_addr)
 
 
 def resolve_required_amule(paths, args: argparse.Namespace):
@@ -154,41 +153,6 @@ def resolve_required_amule(paths, args: argparse.Namespace):
     if not availability.available or availability.executable is None or availability.control_executable is None:
         raise RuntimeError(f"aMule is unavailable for three-client E2E: {availability.reason}")
     return availability
-
-
-def build_harness_args(
-    *,
-    ready_path: Path,
-    fixture_file: Path,
-    export_link_path: Path,
-    source_ip: str,
-    download_link_file: Path,
-    download_report_file: Path,
-) -> list[str]:
-    """Builds tracing-harness CLI args for simultaneous seed and download roles."""
-
-    return [
-        *dtt.build_client2_harness_args(
-            ready_path=ready_path,
-            fixture_file=fixture_file,
-            export_link_path=export_link_path,
-            source_ip=source_ip,
-        ),
-        "-downloadlinkfile",
-        str(download_link_file),
-        "-downloadreportfile",
-        str(download_report_file),
-    ]
-
-
-def write_download_link_file(path: Path, links: list[str]) -> dict[str, object]:
-    """Writes one newline-delimited download-link file for the tracing harness."""
-
-    if not links:
-        raise ValueError("At least one download link is required.")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(f"{link.strip()}\n" for link in links), encoding="utf-8", newline="\n")
-    return {"path": str(path), "count": len(links), "links": links}
 
 
 def ed2k_link_with_source(link: str, *, source_ip: str, source_port: int) -> str:
@@ -282,36 +246,6 @@ def wait_for_emule_shared_file_link(
         timeout_seconds=timeout_seconds,
     )
     return seed.with_link(str(linked["link"]))
-
-
-def wait_for_harness_download_report(path: Path, timeout_seconds: float) -> dict[str, object]:
-    """Waits for the tracing harness to report all requested downloads complete."""
-
-    observations: list[dict[str, object]] = []
-
-    def resolve():
-        if not path.is_file():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        if isinstance(payload, dict):
-            observations.append(
-                {
-                    "complete": payload.get("complete"),
-                    "download_count": payload.get("download_count"),
-                    "observed_at": round(time.time(), 3),
-                }
-            )
-            if payload.get("complete") is True:
-                return payload
-        return None
-
-    try:
-        return live_common.wait_for(resolve, timeout_seconds, 1.0, "tracing harness download report completion")
-    except Exception as exc:
-        raise RuntimeError(f"Timed out waiting for tracing harness download report. Observations: {observations[-20:]!r}") from exc
 
 
 def wait_for_seed_completed_at(
@@ -432,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-        ports = choose_swarm_ports()
+        ports = choose_swarm_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
@@ -509,6 +443,9 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         for config_dir in (Path(client1["config_dir"]), Path(client2["config_dir"]), amule_profile.config_dir):
@@ -576,37 +513,32 @@ def main(argv: list[str] | None = None) -> int:
             args.server_publish_timeout_seconds,
         )
 
-        current_phase = "launch_harness"
-        harness_dir = paths.source_artifacts_dir / "harness-control"
-        harness_ready_path = harness_dir / "ready.txt"
-        harness_export_link_path = harness_dir / "seed.ed2k.txt"
-        harness_download_links_path = harness_dir / "downloads.ed2k.txt"
-        harness_download_report_path = harness_dir / "download-report.json"
-        harness_dir.mkdir(parents=True, exist_ok=True)
+        current_phase = "launch_mfc_peer"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
             minimized_to_tray=True,
-            extra_args=build_harness_args(
-                ready_path=harness_ready_path,
-                fixture_file=seeds[CLIENT02.key].path,
-                export_link_path=harness_export_link_path,
-                source_ip=p2p_address,
-                download_link_file=harness_download_links_path,
-                download_report_file=harness_download_report_path,
-            ),
         )
-        seeds[CLIENT02.key] = seeds[CLIENT02.key].with_link(
-            dtt.wait_for_exported_link(harness_export_link_path, args.link_export_timeout_seconds)
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+        report["checks"]["mfc_peer_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
         )
-        report["checks"]["harness_exported_link"] = seeds[CLIENT02.key].as_report()
-        report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["mfc_peer_shared_add"] = add_emule_shared_file(client2_base_url, args.api_key, seeds[CLIENT02.key].path)
+        report["checks"]["mfc_peer_shared_reload"] = reload_emule_shared_files(client2_base_url, args.api_key)
+        seeds[CLIENT02.key] = wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            seeds[CLIENT02.key],
+            args.link_export_timeout_seconds,
+        )
+        report["checks"]["mfc_peer_shared_file"] = seeds[CLIENT02.key].as_report()
+        report["checks"]["mfc_peer_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["mfc_peer_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             str(seeds[CLIENT02.key].file_hash),
@@ -667,9 +599,13 @@ def main(argv: list[str] | None = None) -> int:
             ),
         }
         report["checks"]["source_annotated_links"] = source_links
-        report["checks"]["harness_download_links"] = write_download_link_file(
-            harness_download_links_path,
-            [source_links[CLIENT01.key], source_links[CLIENT04.key]],
+        report["checks"]["mfc_peer_download_add"] = add_emule_downloads(
+            client2_base_url,
+            args.api_key,
+            [
+                seeds[CLIENT01.key].with_link(source_links[CLIENT01.key]),
+                seeds[CLIENT04.key].with_link(source_links[CLIENT04.key]),
+            ],
         )
         report["checks"]["emulebb_download_add"] = add_emule_downloads(
             base_url,
@@ -696,15 +632,6 @@ def main(argv: list[str] | None = None) -> int:
             incoming_dirs=incoming_dirs,
             seeds=seeds,
             timeout_seconds=args.transfer_completion_timeout_seconds,
-        )
-        report["checks"]["harness_download_report"] = wait_for_harness_download_report(
-            harness_download_report_path,
-            args.transfer_completion_timeout_seconds,
-        )
-        report["checks"]["harness_ready_after_completion"] = dtt.wait_for_file(
-            harness_ready_path,
-            30.0,
-            "tracing harness ready file after download completion",
         )
         report["checks"]["transfer_completions"] = completions
         report["checks"]["role_proofs"] = build_role_proofs(completions)
