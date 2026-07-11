@@ -85,6 +85,13 @@ def test_rust_protocol_fixture_name_is_unicode_for_every_case() -> None:
     assert set(secondary_names).isdisjoint(hash_only_names)
 
 
+def test_hash_only_fixture_is_large_enough_for_server_publication() -> None:
+    module = load_suite_module()
+
+    assert module.HASH_ONLY_FIXTURE_SIZE_BYTES > module.ED2K_PART_SIZE_BYTES
+    assert module.HASH_ONLY_FIXTURE_SIZE_BYTES != module.SECONDARY_FIXTURE_SIZE_BYTES
+
+
 def test_decoded_ed2k_link_name_preserves_unicode_filename() -> None:
     module = load_suite_module()
 
@@ -92,6 +99,21 @@ def test_decoded_ed2k_link_name_preserves_unicode_filename() -> None:
 
     assert decoded == "rust-plain-Unicode-\u00e9-\u6f22.bin"
     assert not decoded.isascii()
+
+
+def test_ed2k_link_with_source_appends_stock_source_hint() -> None:
+    module = load_suite_module()
+
+    link = module.ed2k_link_with_source(
+        "ed2k://|file|Alpha.bin|4096|00112233445566778899AABBCCDDEEFF|/",
+        "192.0.2.10",
+        4662,
+    )
+
+    assert (
+        link
+        == "ed2k://|file|Alpha.bin|4096|00112233445566778899AABBCCDDEEFF|sources,192.0.2.10:4662|/"
+    )
 
 
 def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
@@ -238,6 +260,28 @@ def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     assert metadata["hasUserHash"] is True
     assert metadata["obfuscatedSourceIdentityRequired"] is True
     assert metadata["userHash"] == "00112233445566778899aabbccddeeff"
+
+
+def test_rust_source_metadata_accepts_public_rest_address_and_port() -> None:
+    module = load_suite_module()
+    case = module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+
+    metadata = module.require_rust_source_metadata(
+        case,
+        [
+            {
+                "address": "192.0.2.44",
+                "port": 4662,
+                "clientId": "192.0.2.44:4662",
+                "userHash": None,
+            }
+        ],
+        expected_ip="192.0.2.44",
+        expected_tcp_port=4662,
+    )
+
+    assert metadata["endpoint"] == "192.0.2.44:4662"
+    assert metadata["sourceCount"] == 1
 
 
 def test_obfuscated_rust_source_metadata_rejects_missing_peer_user_hash() -> None:

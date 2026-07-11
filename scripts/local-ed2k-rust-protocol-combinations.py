@@ -40,7 +40,7 @@ SERVER_UDP_FLAG_UDPOBFUSCATION = 0x0000_0200
 SERVER_UDP_FLAG_TCPOBFUSCATION = 0x0000_0400
 ED2K_PART_SIZE_BYTES = 9_728_000
 SECONDARY_FIXTURE_SIZE_BYTES = ED2K_PART_SIZE_BYTES + 1
-HASH_ONLY_FIXTURE_SIZE_BYTES = 512 * 1024
+HASH_ONLY_FIXTURE_SIZE_BYTES = (ED2K_PART_SIZE_BYTES * 2) + 1
 UNICODE_FIXTURE_SUFFIX = "Unicode-\u00e9-\u6f22"
 
 
@@ -140,6 +140,14 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info["name"]))
 
 
+def ed2k_link_with_source(link: str, source_ip: str, source_port: int) -> str:
+    """Appends a stock ED2K link source hint for deterministic local handoff."""
+
+    if not link.endswith("|/"):
+        raise RuntimeError(f"Cannot append source hint to malformed ED2K link: {link!r}")
+    return f"{link[:-2]}|sources,{source_ip}:{source_port}|/"
+
+
 def require_protocol_coverage(
     cases: list[protocol_matrix.ProtocolCase],
     *,
@@ -224,6 +232,7 @@ def require_rust_source_metadata(
         for source in sources
         if source.get("endpoint") == endpoint
         or (source.get("ip") == expected_ip and int(source.get("tcpPort") or 0) == expected_tcp_port)
+        or (source.get("address") == expected_ip and int(source.get("port") or 0) == expected_tcp_port)
     ]
     if not matching_sources:
         raise RuntimeError(f"Rust transfer sources did not include harness endpoint {endpoint}.")
@@ -614,6 +623,56 @@ def run_protocol_case(
             transfer_hash,
             args.server_publish_timeout_seconds,
         )
+        secondary_shared_link = dtt.wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=secondary_fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        secondary_link_info = dtt.parse_ed2k_file_link(str(secondary_shared_link["link"]))
+        secondary_decoded_name = decoded_ed2k_link_name(secondary_link_info)
+        if secondary_decoded_name != secondary_fixture_file.name:
+            raise RuntimeError(
+                "MFC parity peer exported secondary ED2K link name "
+                f"{secondary_decoded_name!r}, expected {secondary_fixture_file.name!r}."
+            )
+        secondary_expected_hash = str(secondary_link_info["hash"]).lower()
+        report["checks"]["harness_secondary_shared_file_link"] = {
+            **secondary_shared_link,
+            "parsed": secondary_link_info,
+            "decodedName": secondary_decoded_name,
+        }
+        report["checks"]["harness_secondary_server_file"] = goed2k.wait_for_server_file(
+            admin_base_url,
+            args.api_key,
+            secondary_expected_hash,
+            args.server_publish_timeout_seconds,
+        )
+        hash_only_shared_link = dtt.wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=hash_only_fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        hash_only_link_info = dtt.parse_ed2k_file_link(str(hash_only_shared_link["link"]))
+        hash_only_decoded_name = decoded_ed2k_link_name(hash_only_link_info)
+        if hash_only_decoded_name != hash_only_fixture_file.name:
+            raise RuntimeError(
+                "MFC parity peer exported hash-only ED2K link name "
+                f"{hash_only_decoded_name!r}, expected {hash_only_fixture_file.name!r}."
+            )
+        hash_only_hash = str(hash_only_link_info["hash"]).lower()
+        report["checks"]["harness_hash_only_shared_file_link"] = {
+            **hash_only_shared_link,
+            "parsed": hash_only_link_info,
+            "decodedName": hash_only_decoded_name,
+        }
+        report["checks"]["harness_hash_only_server_file"] = goed2k.wait_for_server_file(
+            admin_base_url,
+            args.api_key,
+            hash_only_hash,
+            args.server_publish_timeout_seconds,
+        )
 
         current_phase = "launch_rust"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
@@ -716,13 +775,22 @@ def run_protocol_case(
         )
         secondary_transfer_hash = str(secondary_search["transfer_hash"])
         report["checks"]["rust_secondary_search"] = secondary_search
-        secondary_search_row = secondary_search["search"]
-        report["checks"]["rust_secondary_download"] = rust_emulebb.request_json(
+        if secondary_transfer_hash.lower() != secondary_expected_hash:
+            raise RuntimeError(
+                "Rust secondary search returned hash "
+                f"{secondary_transfer_hash}, expected {secondary_expected_hash}."
+            )
+        secondary_source_link = ed2k_link_with_source(
+            str(secondary_shared_link["link"]),
+            p2p_address,
+            ports["client2_tcp"],
+        )
+        report["checks"]["rust_secondary_create"] = rust_emulebb.request_json(
             rust_base_url,
             "POST",
-            f"/api/v1/searches/{secondary_search_row['id']}/results/{secondary_transfer_hash}/operations/download",
+            "/api/v1/transfers",
             args.api_key,
-            {"paused": False},
+            {"link": secondary_source_link, "paused": False},
         )
         report["checks"]["rust_secondary_resume"] = rust_emulebb.request_json(
             rust_base_url,
@@ -758,17 +826,17 @@ def run_protocol_case(
             expected_size=SECONDARY_FIXTURE_SIZE_BYTES,
         )
 
-        hash_only_search = wait_for_rust_search_result_by_name(
-            rust_base_url,
-            args.api_key,
-            query=hash_only_fixture_file.name,
-            expected_name=hash_only_fixture_file.name,
-            expected_size=HASH_ONLY_FIXTURE_SIZE_BYTES,
-            timeout_seconds=args.server_publish_timeout_seconds,
+        hash_only_link = ed2k_link_with_source(
+            f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/",
+            p2p_address,
+            ports["client2_tcp"],
         )
-        hash_only_hash = str(hash_only_search["transfer_hash"]).lower()
-        hash_only_link = f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/"
-        report["checks"]["rust_hash_only_search"] = hash_only_search
+        report["checks"]["rust_hash_only_input"] = {
+            "hashOnlyLink": hash_only_link,
+            "hash": hash_only_hash,
+            "sourceLinkName": hash_only_decoded_name,
+            "sourceLinkSize": hash_only_link_info["size"],
+        }
         report["checks"]["rust_hash_only_create"] = rust_emulebb.request_json(
             rust_base_url,
             "POST",
