@@ -396,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         for profile in (client1, client2):
@@ -415,30 +418,27 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         current_phase = "launch_harness_seed"
-        harness_export_dir = paths.source_artifacts_dir / "client2-export"
-        harness_export_dir.mkdir(parents=True, exist_ok=True)
-        harness_ready_path = harness_export_dir / "ready.txt"
-        harness_export_link_path = harness_export_dir / "fixture.ed2k.txt"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
             minimized_to_tray=True,
-            extra_args=dtt.build_client2_harness_args(
-                ready_path=harness_ready_path,
-                fixture_file=fixture_file,
-                export_link_path=harness_export_link_path,
-                source_ip=p2p_address,
-            ),
         )
-        exported_link = dtt.wait_for_exported_link(harness_export_link_path, args.link_export_timeout_seconds)
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+        report["checks"]["harness_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+        )
+        report["checks"]["harness_shared_file_add"] = dtt.add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
+        report["checks"]["harness_shared_files_reload"] = dtt.reload_emule_shared_files(client2_base_url, args.api_key)
+        shared_link = dtt.wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        exported_link = str(shared_link["link"])
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
-        report["checks"]["harness_exported_link"] = {
-            "path": str(harness_export_link_path),
-            "link": exported_link,
-            "parsed": link_info,
-        }
-        report["checks"]["harness_ready"] = dtt.wait_for_file(harness_ready_path, 30.0, "tracing harness ready file")
+        report["checks"]["harness_shared_file_link"] = {**shared_link, "parsed": link_info}
         report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
