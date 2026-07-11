@@ -241,7 +241,9 @@ def build_server_config(
     JSON-line trace file useful for parity comparisons against LegacyED2KServer.
     """
 
-    ed2k_bind_address = ed2k_address or "0.0.0.0"
+    ed2k_bind_address = str(ed2k_address or "").strip()
+    if not ed2k_bind_address:
+        raise ValueError("ed2k_address must be an explicit LAN bind address; wildcard fallback is not supported.")
     config = {
         "listen_address": f"{ed2k_bind_address}:{ed2k_port}",
         "admin_listen_address": f"{admin_address}:{admin_port}",

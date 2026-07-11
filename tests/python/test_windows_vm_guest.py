@@ -15,6 +15,8 @@ def test_package_smoke_script_contains_guest_checks() -> None:
     assert "first-run-rest-status" in script
     assert "param($root, $zipPath, $lanBindAddr)" in script
     assert "BindAddr=$webBindAddr" in script
+    assert "loopback fallback is not supported" in script
+    assert "'127.0.0.1'" not in script
     assert "http://$($webBindAddr):4711/api/v1/status" in script
     assert "Restore-VMSnapshot" in script
     assert "[System.Diagnostics.Process]::Start" in script

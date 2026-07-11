@@ -115,7 +115,10 @@ try {
   $guestResult = Invoke-Command -Session $session -ScriptBlock {
     param($root, $zipPath, $lanBindAddr)
     $ErrorActionPreference = 'Stop'
-    $webBindAddr = if ([string]::IsNullOrWhiteSpace($lanBindAddr)) { '127.0.0.1' } else { $lanBindAddr }
+    if ([string]::IsNullOrWhiteSpace($lanBindAddr)) {
+      throw 'lanBindAddr is required for package smoke; loopback fallback is not supported.'
+    }
+    $webBindAddr = $lanBindAddr
     function New-Check($name, $status, $details) {
       [pscustomobject]@{ name = $name; status = $status; details = $details }
     }
@@ -167,7 +170,7 @@ try {
         '--generate-webserver-cert',
         '--cert', (Join-Path $certDir 'webserver.crt'),
         '--key', (Join-Path $certDir 'webserver.key'),
-        '--host', '127.0.0.1'
+        '--host', $webBindAddr
       ) 0 60
       $profile = Join-Path $root 'profile'
       $configDir = Join-Path $profile 'config'

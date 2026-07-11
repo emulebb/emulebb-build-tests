@@ -304,11 +304,12 @@ def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> No
         catalog_path=catalog_path,
         token="secret",
         admin_address="192.0.2.10",
+        ed2k_address="192.0.2.10",
     )
 
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert payload == config
-    assert payload["listen_address"] == "0.0.0.0:4661"
+    assert payload["listen_address"] == "192.0.2.10:4661"
     assert payload["admin_listen_address"] == "192.0.2.10:8080"
     assert payload["catalog_path"] == str(catalog_path)
     assert payload["protocol_obfuscation"] is True
@@ -329,6 +330,7 @@ def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
         catalog_path=catalog_path,
         token="secret",
         admin_address="192.0.2.10",
+        ed2k_address="192.0.2.10",
         protocol_obfuscation=False,
         server_udp=False,
     )
@@ -350,10 +352,26 @@ def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
         catalog_path=catalog_path,
         token="secret",
         admin_address="192.0.2.10",
+        ed2k_address="192.0.2.10",
     )
 
     assert config["admin_listen_address"] == "192.0.2.10:8080"
     assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.0.2.10:8080"
+
+
+def test_build_server_config_rejects_missing_ed2k_bind(tmp_path: Path) -> None:
+    config_path = tmp_path / "server" / "config.json"
+    catalog_path = tmp_path / "server" / "catalog.json"
+
+    with pytest.raises(ValueError, match="explicit LAN bind address"):
+        goed2k.build_server_config(
+            config_path,
+            ed2k_port=4661,
+            admin_port=8080,
+            catalog_path=catalog_path,
+            token="secret",
+            admin_address="192.0.2.10",
+        )
 
 
 def test_build_server_config_allows_ed2k_bind_override(tmp_path: Path) -> None:

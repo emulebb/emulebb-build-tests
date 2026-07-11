@@ -105,14 +105,10 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
     app_started = False
     app_root = expanded / "eMuleBB"
     exe_path = app_root / "emulebb.exe"
-    local_swarm_profile = args.profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
-    web_interface_bind_addr = "127.0.0.1"
+    web_interface_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
     base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
 
     try:
-        if args.lan_bind_addr or local_swarm_profile:
-            web_interface_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
-        base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
         reset_directory(artifacts)
         for directory in (config_dir, incoming_dir, temp_dir, shared_dir):
             directory.mkdir(parents=True, exist_ok=True)
@@ -214,7 +210,7 @@ def offline_preferences_text(
     temp_dir: Path,
     shared_dir: Path,
     enable_diagnostics: bool,
-    web_interface_bind_addr: str = "127.0.0.1",
+    web_interface_bind_addr: str,
 ) -> str:
     return "\n".join(
         [
@@ -798,9 +794,7 @@ def firewall_repair_check(app_root: Path, artifacts: Path) -> dict[str, Any]:
 def resolve_vhd_profile_bind_addr(args: argparse.Namespace) -> str:
     """Returns the WebServer bind address used by the VHD profile smoke."""
 
-    if args.lan_bind_addr:
-        return require_campaign_lan_bind_addr(args.lan_bind_addr)
-    return "127.0.0.1"
+    return require_campaign_lan_bind_addr(args.lan_bind_addr)
 
 
 def vhd_profile_launch_check(app_root: Path, args: argparse.Namespace) -> dict[str, Any]:

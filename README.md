@@ -108,7 +108,7 @@ Script inventory:
 | `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
-| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs the deterministic eMuleBB versus tracing-harness transfer and records optional eMuleAI/aMule client readiness |
+| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB MFC/Rust cross-client transfers and records optional eMuleAI readiness |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
@@ -118,7 +118,7 @@ Script inventory:
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
-| `scripts\amutorrent-local-ed2k-ui-live.py` | operator-facing local aMuTorrent coexistence E2E | maintained | throwaway local ED2K server, eMuleBB profile, aMule profile, aMuTorrent profile, browser profile, and capability matrix for both ED2K clients |
+| `scripts\amutorrent-local-ed2k-ui-live.py` | operator-facing local aMuTorrent coexistence E2E | maintained | throwaway local ED2K server, eMuleBB MFC/Rust profile, aMuTorrent profile, browser profile, and capability matrix for maintained ED2K clients |
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
 | `scripts\config-stability-ui-e2e.py` | operator-facing Python E2E | maintained | long `-c` config path, settings save, relaunch, and stability regression |
 | `scripts\shared-files-ui-e2e.py` | operator-facing Python E2E | maintained | real Win32 Shared Files regression |
@@ -295,8 +295,8 @@ Aggregate live E2E lane:
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
   local dump/crash smoke, and aMuTorrent browser smoke
 - `--profile multi-client-p2p` includes the local aMuTorrent coexistence lane:
-  one throwaway run launches eMuleBB and aMule behind aMuTorrent, adds the same
-  local ED2K fixture through both configured clients, exercises snapshot,
+  one throwaway run launches maintained eMuleBB MFC/Rust clients behind
+  aMuTorrent, adds the same local ED2K fixture through configured clients, exercises snapshot,
   config, history, metrics, logs, server, shared-directory, pause/resume/stop,
   category, delete/move preflight, qBittorrent-compatible app/torrent/category
   facade, and refresh surfaces, then verifies both completed files against the

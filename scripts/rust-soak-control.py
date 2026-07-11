@@ -1474,16 +1474,20 @@ def normalized_root_prefix(value: object) -> str:
 
 
 def default_base_url() -> str:
-    """Builds the default Rust REST base URL from X_LOCAL_IP when available."""
+    """Builds the default Rust REST base URL from the required X_LOCAL_IP."""
 
-    host = os.environ.get("X_LOCAL_IP", "127.0.0.1").strip() or "127.0.0.1"
+    host = os.environ.get("X_LOCAL_IP", "").strip()
+    if not host:
+        raise RuntimeError("X_LOCAL_IP must be set for Rust REST control traffic; loopback is not supported.")
     return f"http://{host}:4731/api/v1"
 
 
 def default_mfc_base_url() -> str:
-    """Builds the default MFC REST base URL from X_LOCAL_IP when available."""
+    """Builds the default MFC REST base URL from the required X_LOCAL_IP."""
 
-    host = os.environ.get("X_LOCAL_IP", "127.0.0.1").strip() or "127.0.0.1"
+    host = os.environ.get("X_LOCAL_IP", "").strip()
+    if not host:
+        raise RuntimeError("X_LOCAL_IP must be set for MFC REST control traffic; loopback is not supported.")
     return f"http://{host}:4732/api/v1"
 
 
