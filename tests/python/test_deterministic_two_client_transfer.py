@@ -215,32 +215,6 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert availability_checks[0] == (6104, "172.24.112.1", True)
 
 
-def test_choose_amule_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
-    module = load_script_module("deterministic-amule-transfer.py", "amule_transfer_for_port_bind_test")
-    listen_hosts: list[str] = []
-    availability_checks: list[tuple[int, str | None, bool]] = []
-    next_port = iter(range(6200, 6210))
-
-    def fake_choose_listen_port(host: str | None = None) -> int:
-        listen_hosts.append(host or "")
-        return next(next_port)
-
-    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
-        availability_checks.append((port, host, udp))
-        return True
-
-    monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
-    monkeypatch.setattr(module.dtt, "is_port_available", fake_is_port_available)
-
-    ports = module.choose_amule_ports({"ed2k_tcp": 4662}, "172.24.112.2")
-
-    assert ports["amule_tcp"] == 6200
-    assert ports["amule_udp"] == 6201
-    assert ports["amule_ec"] == 6202
-    assert listen_hosts == ["172.24.112.2"] * 3
-    assert all(host == "172.24.112.2" for _port, host, _udp in availability_checks)
-
-
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
     observed: dict[str, str | None] = {}
@@ -475,15 +449,6 @@ def test_deterministic_transfer_reuses_shared_goed2k_launcher() -> None:
     assert "goed2k.launch_ed2k_server(" in script_text
     assert "goed2k.start_ed2k_server(" not in script_text
     assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
-
-
-def test_deterministic_amule_transfer_reuses_shared_goed2k_launcher() -> None:
-    module = load_script_module("deterministic-amule-transfer.py", "amule_transfer_goed2k_launcher_test")
-    script_text = Path(module.__file__).read_text(encoding="utf-8")
-
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_ed2k_server_binary(" not in script_text
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:

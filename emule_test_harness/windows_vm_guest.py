@@ -692,9 +692,6 @@ $guestSonarrExe = Join-Path $guestSuiteInstallRoot 'apps\sonarr\Sonarr\Sonarr.ex
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
 $guestClient2Root = Join-Path $guestToolsRoot 'tracing-harness'
 $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
-$guestAmuleBinRoot = Join-Path $guestToolsRoot 'amule\bin'
-$guestAmuleDaemon = Join-Path $guestAmuleBinRoot 'amuled.exe'
-$guestAmuleControl = Join-Path $guestAmuleBinRoot 'amulecmd.exe'
 $guestContractRoot = Join-Path $guestHarnessRoot 'contracts'
 $guestToolingRestRoot = Join-Path $guestContractRoot 'rest'
 $guestAppSourceRoot = Join-Path $guestContractRoot 'app-source\srchybrid'
@@ -836,18 +833,6 @@ try {
     } -ArgumentList $guestClient2Root
     Copy-Item -ToSession $session -Path $payload.localSwarmClient2AppExe -Destination $guestClient2App -Force
   }
-  if ($payload.localSwarmAmuleDaemonExe -or $payload.localSwarmAmuleControlExe) {
-    Invoke-Command -Session $session -ScriptBlock {
-      param($root)
-      New-Item -ItemType Directory -Force -Path $root | Out-Null
-    } -ArgumentList $guestAmuleBinRoot
-  }
-  if ($payload.localSwarmAmuleDaemonExe) {
-    Copy-Item -ToSession $session -Path $payload.localSwarmAmuleDaemonExe -Destination $guestAmuleDaemon -Force
-  }
-  if ($payload.localSwarmAmuleControlExe) {
-    Copy-Item -ToSession $session -Path $payload.localSwarmAmuleControlExe -Destination $guestAmuleControl -Force
-  }
   $runnerArgs = @(
     '--profile', $payload.profileName,
     '--root', $guestRoot,
@@ -865,12 +850,6 @@ try {
   }
   if ($payload.localSwarmClient2AppExe) {
     $runnerArgs += @('--client2-app-exe', $guestClient2App)
-  }
-  if ($payload.localSwarmAmuleDaemonExe) {
-    $runnerArgs += @('--amule-daemon-exe', $guestAmuleDaemon)
-  }
-  if ($payload.localSwarmAmuleControlExe) {
-    $runnerArgs += @('--amule-control-exe', $guestAmuleControl)
   }
   if ($payload.localSwarmReleaseAssetPaths) {
     $runnerArgs += @('--prowlarr-exe', $guestProwlarrExe, '--radarr-exe', $guestRadarrExe, '--sonarr-exe', $guestSonarrExe)

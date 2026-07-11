@@ -65,7 +65,6 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "rest-api-smoke.py",
         "harness-cli-common.py",
         "deterministic-two-client-transfer.py",
-        "deterministic-amule-transfer.py",
         "local-ed2k-protocol-combinations.py",
     } <= script_names
 

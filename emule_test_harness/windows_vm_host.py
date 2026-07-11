@@ -80,7 +80,6 @@ LOCAL_SWARM_SUPPORT_SCRIPT_FILES = (
 )
 GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES = (
     "deterministic-two-client-transfer.py",
-    "deterministic-amule-transfer.py",
     "local-ed2k-protocol-combinations.py",
 )
 LOCAL_SWARM_PAYLOAD_SCRIPT_FILES = tuple(
