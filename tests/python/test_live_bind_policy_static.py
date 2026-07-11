@@ -126,6 +126,24 @@ def test_public_vpn_standalone_scripts_enable_vpn_guard_surface() -> None:
     assert offenders == []
 
 
+def test_lan_scoped_suite_scripts_do_not_default_p2p_to_hide_me() -> None:
+    offenders: list[str] = []
+    lan_script_names = {
+        spec.script_name
+        for spec in live_e2e_suite.SUITE_SPECS
+        if spec.network_scope == "lan"
+    }
+
+    for script_name in sorted(lan_script_names):
+        text = read_text(SCRIPT_ROOT / script_name)
+        if "--p2p-bind-interface-name" not in text:
+            continue
+        if 'default="hide.me"' in text or "DEFAULT_P2P_BIND_INTERFACE_NAME" in text:
+            offenders.append(f"{script_name}: LAN P2P must bind by X_LOCAL_IP/address, not hide.me interface")
+
+    assert offenders == []
+
+
 # Bespoke hide.me service/process control that must only live in the shared
 # emule_test_harness.hideme_split_tunnel helper, never reimplemented in a live
 # script. The split-tunnel allow-list and VPN restart are centralized so every

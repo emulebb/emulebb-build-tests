@@ -4765,7 +4765,11 @@ def main() -> int:
             }
         if args.deterministic_local_ed2k:
             record_phase("local_ed2k_prepare")
-            p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+            p2p_address = dtt.resolve_lan_p2p_bind_address(
+                lan_bind_addr=bind_addr,
+                p2p_bind_interface_name=args.p2p_bind_interface_name,
+                p2p_bind_interface_address=args.p2p_bind_interface_address,
+            )
             local_ports = choose_local_ed2k_ports({port}, bind_addr)
             local_server_dir = artifacts_dir / "local-ed2k-server"
             local_catalog_path = local_server_dir / "catalog.json"

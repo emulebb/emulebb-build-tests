@@ -91,6 +91,11 @@ def parse_args(*argv: str):
     return live_e2e_suite.build_parser().parse_args(args)
 
 
+@pytest.fixture(autouse=True)
+def _default_lan_bind_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+
+
 def test_live_e2e_summary_records_campaign_scenario_metadata(tmp_path: Path) -> None:
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
@@ -726,7 +731,7 @@ def test_arr_emulebb_suites_forward_http_and_https_rest_scheme(tmp_path: Path) -
 
 def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.11")
     monkeypatch.setenv("EMULEBB_TEST_LAN_INTERFACE", "Wi-Fi")
     monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.0.2.11")
     monkeypatch.setattr(
@@ -752,11 +757,27 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
     assert summary["network_context"]["lan"] == {"interface_name": "Wi-Fi", "ip_address": "192.0.2.11"}
     assert summary["network_context"]["lan_bind_address"] == "192.0.2.11"
     assert [suite["network_scope"] for suite in summary["suites"]] == ["lan", "lan"]
-    assert option_values(commands[0], "--p2p-bind-interface-name") == ["Wi-Fi"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.11"]
     assert option_values(commands[0], "--lan-bind-addr") == ["192.0.2.11"]
     assert option_values(commands[1], "--lan-bind-addr") == ["192.0.2.11"]
     assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.0.2.11"]
+
+
+def test_lan_network_context_does_not_fallback_to_resolved_interface_ip(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+    monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.0.2.11")
+
+    with pytest.raises(ValueError, match="--lan-bind-addr or X_LOCAL_IP"):
+        live_e2e_suite.run_live_e2e_suite(
+            parse_args(
+                "--suite",
+                "deterministic-two-client-transfer",
+                "--test-network",
+                "lan",
+            ),
+            FakeHarnessCliCommon(tmp_path),
+        )
 
 
 def test_lan_amutorrent_browser_clears_live_p2p_bind_without_vpn_guard(tmp_path: Path, monkeypatch) -> None:
@@ -1383,7 +1404,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert option_values(commands[0], "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_GODZILLA_VHD_SIZE_MB)]
     assert option_values(commands[0], "--stage") == ["launch-scale"]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
-    assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.10"]
     assert option_values(commands[0], "--total-client-count") == ["12"]
     assert option_values(commands[0], "--peer-transfer-count") == ["444"]
@@ -1449,7 +1470,7 @@ def test_rest_api_vpn_lan_bind_address_does_not_override_webserver_loopback(tmp_
 def test_rest_api_vpn_address_is_resolved_from_network_context() -> None:
     spec = suite_spec("rest-api")
 
-    assert live_e2e_suite.suite_p2p_bind_interface_address(spec, "", "10.54.221.82") == "10.54.221.82"
+    assert live_e2e_suite.suite_p2p_bind_interface_address(spec, "", "10.54.221.82") is None
 
 
 def test_rest_api_can_run_explicit_vpn_guard_off_scenario(tmp_path: Path) -> None:
@@ -1589,6 +1610,7 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
 
 def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
     monkeypatch.setattr(
         live_e2e_suite,
         "run_suite_command",
@@ -1622,7 +1644,8 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
 
     browser_command = commands[1]
-    assert option_values(browser_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(browser_command, "--p2p-bind-interface-name") == [""]
+    assert option_values(browser_command, "--p2p-bind-interface-address") == []
 
 
 def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path: Path, monkeypatch) -> None:
@@ -1697,6 +1720,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
 
 def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
     install_profiled_command_capture(monkeypatch, commands)
 
     summary = live_e2e_suite.run_live_e2e_suite(
@@ -2071,6 +2095,7 @@ def test_release_expanded_quick_profile_keeps_required_search_ui_live() -> None:
 
 def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
     install_profiled_command_capture(monkeypatch, commands)
     live_wire_inputs_file = tmp_path / "live-wire-inputs.local.json"
     live_wire_inputs_file.write_text("{}", encoding="utf-8")
@@ -2087,13 +2112,16 @@ def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: 
 
     assert summary["status"] == "passed"
     by_script = {script_name(command): command for command in commands}
-    for script in ("search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py", "amutorrent-browser-smoke.py"):
+    for script in ("search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py"):
         command = by_script[script]
         assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
         if script in {"rest-api-smoke.py", "rest-cold-start-dump-stress.py"}:
             assert "--enable-upnp" in command
         if script in {"search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py"}:
             assert option_values(command, "--live-wire-inputs-file") == [str(live_wire_inputs_file.resolve())]
+
+    amutorrent_browser_command = by_script["amutorrent-browser-smoke.py"]
+    assert option_values(amutorrent_browser_command, "--p2p-bind-interface-name") == [""]
 
     deterministic_command = by_script["deterministic-two-client-transfer.py"]
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []

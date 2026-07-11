@@ -474,14 +474,7 @@ def resolve_local_p2p_address(args: argparse.Namespace) -> str:
     if args.p2p_bind_interface_name.strip():
         return validate_lan_ipv4(dtt.discover_interface_ipv4(args.p2p_bind_interface_name), source="--p2p-bind-interface-name")
     if bool(args.lan_mode):
-        env_name = str(args.lan_address_env or X_LOCAL_IP_ENV)
-        env_value = os.environ.get(env_name, "").strip()
-        if not env_value:
-            raise RuntimeError(
-                f"Godzilla LAN mode requires {env_name} or --p2p-bind-interface-address. "
-                "Use --no-lan-mode only for local loopback debugging."
-            )
-        return validate_lan_ipv4(env_value, source=env_name)
+        return validate_lan_ipv4(str(args.lan_bind_addr), source="--lan-bind-addr")
     return discover_local_lan_ipv4()
 
 

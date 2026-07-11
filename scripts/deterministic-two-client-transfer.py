@@ -498,6 +498,28 @@ def discover_interface_ipv4(interface_name: str) -> str:
     return str(usable[0])
 
 
+def resolve_lan_p2p_bind_address(
+    *,
+    lan_bind_addr: str,
+    p2p_bind_interface_name: str = "",
+    p2p_bind_interface_address: str | None = None,
+) -> str:
+    """Returns the P2P bind address for LAN/local tests.
+
+    LAN campaigns default P2P address binding to the same explicit LAN address
+    used for REST/control. Interface discovery is only used when the caller
+    deliberately supplies an interface name.
+    """
+
+    explicit_address = str(p2p_bind_interface_address or "").strip()
+    if explicit_address:
+        return rest_smoke.require_lan_bind_addr(explicit_address, option_name="--p2p-bind-interface-address")
+    interface_name = str(p2p_bind_interface_name or "").strip()
+    if interface_name:
+        return discover_interface_ipv4(interface_name)
+    return rest_smoke.require_lan_bind_addr(lan_bind_addr)
+
+
 def configure_client_profile(
     *,
     config_dir: Path,
@@ -767,7 +789,11 @@ def main(argv: list[str] | None = None) -> int:
     current_phase = "initializing"
 
     try:
-        p2p_address = args.p2p_bind_interface_address or discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = resolve_lan_p2p_bind_address(
+            lan_bind_addr=args.lan_bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         ports = choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,

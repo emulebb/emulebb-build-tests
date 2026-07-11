@@ -190,7 +190,11 @@ def main(argv: list[str] | None = None) -> int:
         current_phase = "allocate_ports"
         emule_ports = local_kad.choose_local_kad_ports(2, args.lan_bind_addr)
         specs = build_participant_specs(emule_ports)
-        p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = dtt.resolve_lan_p2p_bind_address(
+            lan_bind_addr=args.lan_bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         all_specs = [specs["emulebb"], specs["harness"]]
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,

@@ -1936,8 +1936,8 @@ def extract_child_resource_diagnostics(child_result: dict[str, object] | None) -
 def suite_p2p_bind_interface_name(spec: SuiteSpec, default_interface_name: str, lan_interface_name: str) -> str:
     """Returns the interface alias to pass to one child suite."""
 
-    if spec.network_scope == "lan" and lan_interface_name:
-        return lan_interface_name
+    if spec.network_scope == "lan":
+        return ""
     return default_interface_name
 
 
@@ -1946,8 +1946,6 @@ def suite_p2p_bind_interface_address(spec: SuiteSpec, lan_interface_address: str
 
     if spec.network_scope == "lan" and lan_interface_address:
         return lan_interface_address
-    if spec.is_rest_api and spec.network_scope == "vpn" and vpn_interface_address:
-        return vpn_interface_address
     return None
 
 
@@ -2378,10 +2376,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     lan_bind_interface_name = os.environ.get(LAN_INTERFACE_ENV, "").strip()
     lan_bind_interface_address = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
-    lan_bind_addr = str(args.lan_bind_addr or "").strip() or os.environ.get(X_LOCAL_IP_ENV, "").strip() or lan_bind_interface_address
+    lan_bind_addr = str(args.lan_bind_addr or "").strip() or os.environ.get(X_LOCAL_IP_ENV, "").strip()
     vpn_bind_interface_name = os.environ.get(VPN_INTERFACE_ENV, "").strip()
     vpn_bind_interface_address = os.environ.get(VPN_IP_RESOLVED_ENV, "").strip()
     network_context_json = os.environ.get(NETWORK_CONTEXT_JSON_ENV, "").strip()
+    if any(spec.name in LAN_BIND_ADDR_SUITE_NAMES for spec in selected_specs) and not lan_bind_addr:
+        raise ValueError("Selected live suites require --lan-bind-addr or X_LOCAL_IP for LAN REST/control binding.")
     resolved_shared_files_ui_scenarios = list(
         shared_files_ui_scenarios
         or next(
@@ -2662,11 +2662,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             args.p2p_bind_interface_name,
             lan_bind_interface_name,
         )
-        p2p_lan_address = (
-            lan_bind_addr
-            if normalize_test_network(args.test_network) == "lan" or args.campaign_scenario_uses_local_swarm
-            else ""
-        )
+        p2p_lan_address = lan_bind_addr if spec.network_scope == "lan" or args.campaign_scenario_uses_local_swarm else ""
         child_p2p_bind_interface_address = suite_p2p_bind_interface_address(
             spec,
             p2p_lan_address,

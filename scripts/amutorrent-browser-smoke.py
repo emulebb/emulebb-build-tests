@@ -928,7 +928,7 @@ def main() -> int:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-browser-smoke-key")
     parser.add_argument("--lan-bind-addr", required=True)
-    parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--vpn-guard-enabled", action="store_true")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)

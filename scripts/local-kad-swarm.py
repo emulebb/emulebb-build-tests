@@ -472,7 +472,11 @@ def main(argv: list[str] | None = None) -> int:
     current_phase = "initializing"
 
     try:
-        p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = dtt.resolve_lan_p2p_bind_address(
+            lan_bind_addr=args.lan_bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         specs = build_client_specs(args.client_count, choose_local_kad_ports(args.client_count, args.lan_bind_addr))
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,

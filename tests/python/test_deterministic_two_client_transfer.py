@@ -276,6 +276,34 @@ def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(m
         module.discover_interface_ipv4("Ethernet")
 
 
+def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
+
+    assert module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.10") == "192.0.2.10"
+
+
+def test_resolve_lan_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module, "discover_interface_ipv4", lambda name: f"192.0.2.{len(name)}")
+
+    assert module.resolve_lan_p2p_bind_address(
+        lan_bind_addr="192.0.2.10",
+        p2p_bind_interface_name="Ethernet",
+    ) == "192.0.2.8"
+
+
+def test_resolve_lan_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
+
+    assert module.resolve_lan_p2p_bind_address(
+        lan_bind_addr="192.0.2.10",
+        p2p_bind_interface_name="Ethernet",
+        p2p_bind_interface_address="192.0.2.44",
+    ) == "192.0.2.44"
+
+
 def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
@@ -884,15 +912,14 @@ def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
     assert len(report["primary"]["samples"]) == 5
 
 
-def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
+def test_godzilla_rejects_loopback_lan_bind(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
-    monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")
     args = godzilla.parse_args(
         [
             "--total-client-count",
             "3",
             "--lan-bind-addr",
-            "192.0.2.10",
+            "127.0.0.1",
             "--emulebb-files",
             "1",
             "--harness-files",

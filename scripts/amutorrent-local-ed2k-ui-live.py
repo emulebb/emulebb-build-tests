@@ -1149,7 +1149,11 @@ def main(argv: list[str] | None = None) -> int:
         amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
         report["checks"]["amutorrent_frontend_bundle"] = amutorrent_ui.build_and_verify_frontend_bundle(amutorrent_root, node_path)
 
-        p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = dtt.resolve_lan_p2p_bind_address(
+            lan_bind_addr=args.lan_bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         ports = choose_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,

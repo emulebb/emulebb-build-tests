@@ -317,7 +317,11 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
         storage = path_layout(paths, fixture)
         report["storage_layout"] = ensure_storage_dirs(storage)
 
-        p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = dtt.resolve_lan_p2p_bind_address(
+            lan_bind_addr=args.lan_bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         ports = dtt.choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
