@@ -170,14 +170,14 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     assert prepared.build["exe_override"] == str(server_exe)
 
 
-def test_resolve_client2_app_exe_uses_tracing_harness_executable(tmp_path: Path) -> None:
+def test_resolve_client2_app_exe_uses_emulebb_main_executable(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    harness_exe = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release" / "emule.exe"
-    harness_exe.parent.mkdir(parents=True)
-    harness_exe.write_bytes(b"")
+    client2_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    client2_exe.parent.mkdir(parents=True)
+    client2_exe.write_bytes(b"")
 
-    assert module.resolve_client2_app_exe(workspace, "Release", None) == harness_exe.resolve()
+    assert module.resolve_client2_app_exe(workspace, "Release", None) == client2_exe.resolve()
 
 
 def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
@@ -210,7 +210,7 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
 
     assert ports["ed2k_tcp"] == 6100
     assert ports["ed2k_udp"] == 6104
-    assert listen_hosts == ["172.24.112.1"] * 8
+    assert listen_hosts == ["172.24.112.1"] * 9
     assert all(host == "172.24.112.1" for _port, host, _udp in availability_checks)
     assert availability_checks[0] == (6104, "172.24.112.1", True)
 

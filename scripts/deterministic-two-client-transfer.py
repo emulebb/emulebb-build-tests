@@ -101,11 +101,11 @@ def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
 
 
 def resolve_client2_app_exe(workspace_root: Path, configuration: str, override: str | None) -> Path:
-    """Resolves the eMule testing-harness client executable."""
+    """Resolves the MFC parity peer client executable."""
 
     availability = resolve_harness_client(workspace_root, configuration, override)
     if not availability.available or availability.executable is None:
-        raise RuntimeError(f"Client2 tracing-harness executable was not found: {availability.reason}.")
+        raise RuntimeError(f"Client2 MFC parity peer executable was not found: {availability.reason}.")
     return availability.executable
 
 
@@ -150,7 +150,15 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
     ed2k_tcp = choose_tcp_port_with_udp_offset(lan_bind_addr)
     add("ed2k_tcp", ed2k_tcp)
     add("ed2k_udp", ed2k_tcp + 4)
-    for name in ("ed2k_admin", "client1_rest", "client1_tcp", "client1_udp", "client2_tcp", "client2_udp"):
+    for name in (
+        "ed2k_admin",
+        "client1_rest",
+        "client2_rest",
+        "client1_tcp",
+        "client1_udp",
+        "client2_tcp",
+        "client2_udp",
+    ):
         for _ in range(100):
             candidate = rest_smoke.choose_listen_port(lan_bind_addr)
             if candidate not in used and is_port_available(candidate, host=lan_bind_addr, udp=name.endswith("_udp")):
@@ -844,6 +852,9 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            rest_api_key=args.api_key,
+            rest_port=ports["client2_rest"],
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         for profile in (client1, client2):
@@ -876,25 +887,27 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
 
-        export_link_path = paths.source_artifacts_dir / "client2-export" / "fixture.ed2k.txt"
-        ready_path = paths.source_artifacts_dir / "client2-export" / "ready.txt"
-        export_link_path.parent.mkdir(parents=True, exist_ok=True)
         current_phase = "launch_client2"
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
             minimized_to_tray=True,
-            extra_args=build_client2_harness_args(
-                ready_path=ready_path,
-                fixture_file=fixture_file,
-                export_link_path=export_link_path,
-                source_ip=p2p_address,
-            ),
         )
-        report["checks"]["client2_ready"] = wait_for_file(ready_path, 90.0, "client2 parity harness ready file")
-        exported_link = wait_for_exported_link(export_link_path, args.link_export_timeout_seconds)
+        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+        report["checks"]["client2_rest_ready"] = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+        )
+        report["checks"]["client2_shared_file_add"] = add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
+        report["checks"]["client2_shared_files_reload"] = reload_emule_shared_files(client2_base_url, args.api_key)
+        shared_link = wait_for_emule_shared_file_link(
+            client2_base_url,
+            args.api_key,
+            file_name=fixture_file.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        exported_link = str(shared_link["link"])
         link_info = parse_ed2k_file_link(exported_link)
-        report["checks"]["client2_exported_link"] = {"path": str(export_link_path), "link": exported_link, "parsed": link_info}
+        report["checks"]["client2_shared_file_link"] = {**shared_link, "parsed": link_info}
         transfer_hash = str(link_info["hash"])
         report["checks"]["client2_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
