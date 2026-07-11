@@ -1,4 +1,4 @@
-"""Runs deterministic local ED2K aMuTorrent UI downloads against eMuleBB and aMule."""
+"""Runs deterministic local ED2K aMuTorrent UI downloads against eMuleBB-compatible clients."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import amule as amule_harness  # noqa: E402
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import rust_client, rust_local_ed2k  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
@@ -38,7 +37,6 @@ def load_local_module(module_name: str, filename: str):
 
 
 dtt = load_local_module("deterministic_two_client_transfer_amutorrent_ui", "deterministic-two-client-transfer.py")
-amule_transfer = load_local_module("deterministic_amule_transfer_amutorrent_ui", "deterministic-amule-transfer.py")
 amutorrent_smoke = load_local_module("amutorrent_browser_smoke_local_ed2k", "amutorrent-browser-smoke.py")
 amutorrent_ui = load_local_module("amutorrent_emulebb_ui_live_local_ed2k", "amutorrent-emulebb-ui-live.py")
 
@@ -50,10 +48,8 @@ SUITE_NAME = "amutorrent-local-ed2k-ui-live"
 API_KEY = "amutorrent-local-ed2k-ui-live-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
-CLIENT04 = CLIENT_IDENTITIES["amule"]
 CLIENT05 = CLIENT_IDENTITIES["emulebb_rust"]
 AMUTORRENT_EMULEBB_ID = CLIENT01.profile_id
-AMUTORRENT_AMULE_ID = CLIENT04.profile_id
 AMUTORRENT_RUST_ID = CLIENT05.profile_id
 RUST_ED2K_NICK = "eMule"
 RUST_SHARED_TREE_FIXTURE_NAME = "amutorrent-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
@@ -65,13 +61,6 @@ BASE_ED2K_INSTANCE_MATRIX = [
         "display_name": CLIENT01.profile_id,
         "search_type": "server",
         "search_requires_fixture_match": True,
-    },
-    {
-        "instance_id": AMUTORRENT_AMULE_ID,
-        "client_type": "amule",
-        "display_name": CLIENT04.profile_id,
-        "search_type": "global",
-        "search_requires_fixture_match": False,
     },
 ]
 RUST_ED2K_INSTANCE = {
@@ -171,8 +160,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-shared-tree-fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
-    parser.add_argument("--amule-daemon-exe")
-    parser.add_argument("--amule-control-exe")
     parser.add_argument("--include-rust-client", action="store_true")
     parser.add_argument("--rust-repo")
     parser.add_argument("--rust-exe")
@@ -186,9 +173,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def choose_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
-    """Allocates local ED2K, eMuleBB, aMule, and aMuTorrent ports."""
+    """Allocates local ED2K, eMuleBB-compatible, and aMuTorrent ports."""
 
-    ports = amule_transfer.choose_amule_ports(dtt.choose_distinct_ports(lan_bind_addr), lan_bind_addr)
+    ports = dtt.choose_distinct_ports(lan_bind_addr)
     used = set(ports.values())
     for name in ("amutorrent", "rust_rest", "rust_ed2k", "rust_kad"):
         for _ in range(100):
@@ -220,8 +207,6 @@ def build_local_amutorrent_environment(
     data_dir: Path,
     emulebb_rest_port: int,
     emulebb_api_key: str,
-    amule_ec_port: int | None = None,
-    amule_password: str | None = None,
 ) -> dict[str, str]:
     """Builds a workspace-local aMuTorrent environment with the MFC ED2K client enabled."""
 
@@ -242,7 +227,6 @@ def build_local_amutorrent_environment(
             "EMULEBB_USE_SSL": "false",
             "EMULEBB_ID": AMUTORRENT_EMULEBB_ID,
             "EMULEBB_NAME": CLIENT01.profile_id,
-            "AMULE_ENABLED": "false",
         }
     )
     if node_path.is_absolute():
@@ -257,8 +241,6 @@ def write_local_amutorrent_config(
     lan_bind_addr: str,
     emulebb_rest_port: int,
     emulebb_api_key: str,
-    amule_ec_port: int,
-    amule_password: str,
     rust_rest_port: int | None = None,
     rust_api_key: str | None = None,
 ) -> Path:
@@ -275,15 +257,6 @@ def write_local_amutorrent_config(
             "port": emulebb_rest_port,
             "apiKey": emulebb_api_key,
             "useSsl": False,
-            "enabled": True,
-        },
-        {
-            "id": AMUTORRENT_AMULE_ID,
-            "type": "amule",
-            "name": CLIENT04.profile_id,
-            "host": lan_bind_addr,
-            "port": amule_ec_port,
-            "password": amule_password,
             "enabled": True,
         },
     ]
@@ -315,7 +288,7 @@ def write_local_amutorrent_config(
             "logs": str((data_dir / "logs").resolve()),
             "geoip": str((data_dir / "geoip").resolve()),
         },
-        "integrations": {"amuleInstanceId": AMUTORRENT_AMULE_ID},
+        "integrations": {},
     }
     config_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return config_path
@@ -341,7 +314,7 @@ def build_configured_amutorrent_environment(
             "SKIP_SETUP_WIZARD": "true",
         }
     )
-    for prefix in ("EMULEBB", "AMULE"):
+    for prefix in ("EMULEBB",):
         for key in list(env):
             if key.startswith(f"{prefix}_"):
                 env.pop(key, None)
@@ -698,7 +671,7 @@ def run_global_capability_checks(page: Any) -> dict[str, Any]:
 
 
 def run_qbittorrent_compat_checks(page: Any, *, transfer_hash: str) -> dict[str, Any]:
-    """Exercises the qBittorrent-compatible API facade backed by the configured aMule instance."""
+    """Exercises the qBittorrent-compatible API facade backed by the configured ED2K instance."""
 
     normalized_hash = transfer_hash.lower()
     category_name = f"e2e-{normalized_hash[:8]}"
@@ -1159,12 +1132,9 @@ def main(argv: list[str] | None = None) -> int:
     server_process: subprocess.Popen | None = None
     client1_app = None
     client2_app = None
-    amule_process: subprocess.Popen | None = None
     rust_process: subprocess.Popen[str] | None = None
     amutorrent_process: subprocess.Popen[str] | None = None
     amutorrent_output = None
-    amule_profile: amule_harness.AmuleRuntimeProfile | None = None
-    amule_control_exe: Path | None = None
     rust_profile: dict[str, Any] | None = None
     rust_shared_tree_fixture: dict[str, object] | None = None
     rust_shared_tree_link_info: dict[str, object] | None = None
@@ -1172,11 +1142,6 @@ def main(argv: list[str] | None = None) -> int:
     current_phase = "initializing"
 
     try:
-        amule_client = amule_transfer.resolve_required_amule(paths, args)
-        amule_daemon_exe = amule_client.executable
-        amule_control_exe = amule_client.control_executable
-        report["amule_inventory"] = amule_client.as_report()
-
         amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
         node_info = amutorrent_smoke.resolve_amutorrent_node()
         node_path = Path(str(node_info["path"]))
@@ -1235,16 +1200,6 @@ def main(argv: list[str] | None = None) -> int:
             [],
             CLIENT02.profile_id,
         )
-        amule_profile = amule_harness.prepare_amule_profile(
-            root_dir=paths.source_artifacts_dir / "clients" / CLIENT04.profile_id,
-            profile_id=CLIENT04.profile_id,
-            nick=CLIENT04.nick,
-            tcp_port=ports["amule_tcp"],
-            udp_port=ports["amule_udp"],
-            ec_port=ports["amule_ec"],
-            advertised_address=p2p_address,
-            ec_address=args.lan_bind_addr,
-        )
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
         dtt.configure_client_profile(
             config_dir=Path(client1["config_dir"]),
@@ -1272,7 +1227,7 @@ def main(argv: list[str] | None = None) -> int:
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
-        for config_dir in (Path(client1["config_dir"]), Path(client2["config_dir"]), amule_profile.config_dir):
+        for config_dir in (Path(client1["config_dir"]), Path(client2["config_dir"])):
             dtt.write_server_met(
                 config_dir / "server.met",
                 address=p2p_address,
@@ -1299,7 +1254,6 @@ def main(argv: list[str] | None = None) -> int:
                 "app_exe": str(client2_app_exe),
                 "preferences": dtt.read_preferences_snapshot(Path(client2["config_dir"])),
             },
-            CLIENT04.profile_id: amule_profile.as_report(),
         }
         if args.include_rust_client:
             report["profiles"][CLIENT05.profile_id] = {
@@ -1360,30 +1314,6 @@ def main(argv: list[str] | None = None) -> int:
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
-            args.server_connect_timeout_seconds,
-        )
-
-        amule_process = amule_harness.start_amuled(amule_daemon_exe, amule_profile)
-        report["checks"]["amule_ec_ready"] = amule_harness.wait_for_ec_ready(
-            amule_control_exe,
-            amule_profile,
-            args.rest_ready_timeout_seconds,
-        )
-        report["checks"]["amule_add_server"] = amule_transfer.amule_command_summary(
-            amule_harness.run_amulecmd(
-                amule_control_exe,
-                amule_profile,
-                f"Add {amule_harness.build_server_link(p2p_address, ports['ed2k_tcp'])}",
-                timeout_seconds=30.0,
-            )
-        )
-        report["checks"]["amule_connect_server"] = amule_transfer.amule_command_summary(
-            amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0)
-        )
-        report["checks"]["amule_server_client"] = goed2k.wait_for_server_client(
-            admin_base_url,
-            args.api_key,
-            CLIENT04.nick,
             args.server_connect_timeout_seconds,
         )
 
@@ -1454,8 +1384,6 @@ def main(argv: list[str] | None = None) -> int:
                     lan_bind_addr=args.lan_bind_addr,
                     emulebb_rest_port=ports["client1_rest"],
                     emulebb_api_key=args.api_key,
-                    amule_ec_port=ports["amule_ec"],
-                    amule_password=amule_profile.ec_password,
                     rust_rest_port=ports["rust_rest"],
                     rust_api_key=args.api_key,
                 )
@@ -1476,8 +1404,6 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=amutorrent_data_dir,
                 emulebb_rest_port=ports["client1_rest"],
                 emulebb_api_key=args.api_key,
-                amule_ec_port=ports["amule_ec"],
-                amule_password=amule_profile.ec_password,
             )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent_process = subprocess.Popen(
@@ -1527,7 +1453,6 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "verify_completed_files"
         emulebb_completed_path = Path(client1["incoming_dir"]) / str(link_info["name"])
-        amule_completed_path = amule_profile.incoming_dir / str(link_info["name"])
         report["checks"]["emulebb_completed_file"] = dtt.wait_for_completed_file(
             emulebb_completed_path,
             expected_size=int(link_info["size"]),
@@ -1541,12 +1466,6 @@ def main(argv: list[str] | None = None) -> int:
                 temp_dir=Path(client1["temp_dir"]),
                 hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
             ),
-        )
-        report["checks"]["amule_completed_file"] = dtt.wait_for_completed_file(
-            amule_completed_path,
-            expected_size=int(link_info["size"]),
-            expected_sha256=fixture_sha256,
-            timeout_seconds=args.transfer_completion_timeout_seconds,
         )
         if args.include_rust_client:
             assert rust_profile is not None
@@ -1611,12 +1530,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[CLIENT02.profile_id] = {"ok": True}
             except Exception as exc:
                 cleanup[CLIENT02.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        try:
-            cleanup[CLIENT04.profile_id] = amule_transfer.shutdown_amule(amule_control_exe, amule_profile)
-        except Exception as exc:
-            cleanup[CLIENT04.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         rust_client.stop_process_tree(rust_process)
-        goed2k.stop_process(amule_process)
         goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")

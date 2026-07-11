@@ -94,12 +94,6 @@ def test_amutorrent_environment_enables_mfc_ed2k_client(tmp_path: Path, monkeypa
     assert env["EMULEBB_API_KEY"] == "api-key"
     assert env["EMULEBB_ID"] == module.CLIENT01.profile_id
     assert env["EMULEBB_NAME"] == module.CLIENT01.profile_id
-    assert env["AMULE_ENABLED"] == "false"
-    assert "AMULE_HOST" not in env
-    assert "AMULE_PORT" not in env
-    assert "AMULE_PASSWORD" not in env
-    assert "AMULE_ID" not in env
-    assert "AMULE_NAME" not in env
     assert env["UNRELATED"] == "kept"
 
 
@@ -114,8 +108,6 @@ def test_configured_amutorrent_environment_uses_config_file_clients(tmp_path: Pa
         lan_bind_addr="192.0.2.10",
         emulebb_rest_port=19002,
         emulebb_api_key="api-key",
-        amule_ec_port=19003,
-        amule_password="amule-password",
         rust_rest_port=19004,
         rust_api_key="rust-key",
     )
@@ -123,7 +115,6 @@ def test_configured_amutorrent_environment_uses_config_file_clients(tmp_path: Pa
         base_env={
             "PATH": "base-path",
             "EMULEBB_HOST": "old-host",
-            "AMULE_PASSWORD": "old-password",
             "UNRELATED": "kept",
         },
         amutorrent_port=19001,
@@ -135,16 +126,14 @@ def test_configured_amutorrent_environment_uses_config_file_clients(tmp_path: Pa
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert [client["id"] for client in payload["clients"]] == [
         module.AMUTORRENT_EMULEBB_ID,
-        module.AMUTORRENT_AMULE_ID,
         module.AMUTORRENT_RUST_ID,
     ]
-    assert payload["clients"][2]["port"] == 19004
-    assert payload["clients"][2]["apiKey"] == "rust-key"
+    assert payload["clients"][1]["port"] == 19004
+    assert payload["clients"][1]["apiKey"] == "rust-key"
     assert env["PORT"] == "19001"
     assert env["lan_bind_address"] == "192.0.2.10"
     assert env["AMUTORRENT_DATA_DIR"].endswith("amutorrent-data")
     assert "EMULEBB_HOST" not in env
-    assert "AMULE_PASSWORD" not in env
     assert env["UNRELATED"] == "kept"
 
 
@@ -160,7 +149,7 @@ def test_snapshot_wait_is_instance_scoped(monkeypatch) -> None:
                 "data": {
                     "items": [
                         {"hash": "abc123", "instanceId": module.CLIENT01.profile_id, "status": "downloading"},
-                        {"hash": "abc123", "instanceId": module.CLIENT04.profile_id, "status": "complete"},
+                        {"hash": "abc123", "instanceId": module.CLIENT05.profile_id, "status": "complete"},
                     ]
                 }
             },
@@ -171,16 +160,16 @@ def test_snapshot_wait_is_instance_scoped(monkeypatch) -> None:
     item = module.wait_for_snapshot_item(
         object(),
         transfer_hash="abc123",
-        instance_id=module.CLIENT04.profile_id,
+        instance_id=module.CLIENT05.profile_id,
         timeout_seconds=1.0,
     )
 
-    assert item["instanceId"] == module.CLIENT04.profile_id
+    assert item["instanceId"] == module.CLIENT05.profile_id
     assert item["status"] == "complete"
     assert calls == ["/api/v1/data/snapshot"]
 
 
-def test_coexistence_snapshot_requires_both_clients(monkeypatch) -> None:
+def test_coexistence_snapshot_requires_configured_clients(monkeypatch) -> None:
     module = load_suite_module()
 
     def fake_fetch(_page, _path, _method="GET", _body=None):
@@ -190,7 +179,7 @@ def test_coexistence_snapshot_requires_both_clients(monkeypatch) -> None:
                 "data": {
                     "items": [
                         {"hash": "abc123", "instanceId": module.CLIENT01.profile_id, "client": "emulebb"},
-                        {"hash": "abc123", "instanceId": module.CLIENT04.profile_id, "client": "amule"},
+                        {"hash": "abc123", "instanceId": module.CLIENT05.profile_id, "client": "emulebb"},
                     ]
                 }
             },
@@ -201,12 +190,12 @@ def test_coexistence_snapshot_requires_both_clients(monkeypatch) -> None:
     snapshot = module.require_snapshot_has_instances(
         object(),
         transfer_hash="ABC123",
-        expected=module.ED2K_INSTANCE_MATRIX,
+        expected=module.ed2k_instance_matrix(include_rust_client=True),
     )
 
     assert snapshot["hash"] == "abc123"
     assert snapshot["instances"][module.CLIENT01.profile_id]["client"] == "emulebb"
-    assert snapshot["instances"][module.CLIENT04.profile_id]["client"] == "amule"
+    assert snapshot["instances"][module.CLIENT05.profile_id]["client"] == "emulebb"
 
 
 def test_transfer_operation_item_is_instance_scoped() -> None:
@@ -214,15 +203,15 @@ def test_transfer_operation_item_is_instance_scoped() -> None:
 
     item = module.build_transfer_operation_item(
         transfer_hash="ABCDEF",
-        instance_id=module.CLIENT04.profile_id,
-        client_type="amule",
+        instance_id=module.CLIENT05.profile_id,
+        client_type="emulebb",
         file_name="fixture.bin",
     )
 
     assert item["fileHash"] == "abcdef"
     assert item["hash"] == "abcdef"
-    assert item["instanceId"] == module.CLIENT04.profile_id
-    assert item["clientType"] == "amule"
+    assert item["instanceId"] == module.CLIENT05.profile_id
+    assert item["clientType"] == "emulebb"
     assert item["fileName"] == "fixture.bin"
 
 
@@ -248,21 +237,18 @@ def test_browser_text_helper_accepts_qbittorrent_compat_text_endpoints() -> None
     assert module.require_browser_http_text("qb-login", result, expected_text="Ok.") == "Ok."
 
 
-def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
+def test_capability_matrix_covers_mfc_ed2k_client_and_core_surfaces() -> None:
     module = load_suite_module()
 
-    assert {row["client_type"] for row in module.ED2K_INSTANCE_MATRIX} == {"emulebb", "amule"}
+    assert {row["client_type"] for row in module.ED2K_INSTANCE_MATRIX} == {"emulebb"}
     assert {row["client_type"]: row["search_type"] for row in module.ED2K_INSTANCE_MATRIX} == {
         "emulebb": "server",
-        "amule": "global",
     }
     assert {row["client_type"]: row["search_requires_fixture_match"] for row in module.ED2K_INSTANCE_MATRIX} == {
         "emulebb": True,
-        "amule": False,
     }
     assert {row["instance_id"] for row in module.ED2K_INSTANCE_MATRIX} == {
         module.CLIENT01.profile_id,
-        module.CLIENT04.profile_id,
     }
     manifest = module.AMUTORRENT_CAPABILITY_MATRIX
     assert {"health", "version", "data_snapshot", "categories", "history", "metrics_dashboard"} <= set(
@@ -305,12 +291,11 @@ def test_optional_rust_matrix_adds_emulebb_compatible_instance() -> None:
 
     assert [row["instance_id"] for row in matrix] == [
         module.AMUTORRENT_EMULEBB_ID,
-        module.AMUTORRENT_AMULE_ID,
         module.AMUTORRENT_RUST_ID,
     ]
-    assert matrix[2]["client_type"] == "emulebb"
-    assert matrix[2]["search_type"] == "server"
-    assert matrix[2]["search_requires_fixture_match"] is True
+    assert matrix[1]["client_type"] == "emulebb"
+    assert matrix[1]["search_type"] == "server"
+    assert matrix[1]["search_requires_fixture_match"] is True
 
 
 def test_qbittorrent_compat_checks_cover_text_and_json_facade(monkeypatch) -> None:
@@ -372,20 +357,20 @@ def test_ed2k_instance_button_click_uses_stable_instance_hook() -> None:
 
     page = FakePage()
 
-    module.click_ed2k_instance_button(page, module.CLIENT04.profile_id)
+    module.click_ed2k_instance_button(page, module.CLIENT05.profile_id)
 
     assert page.selectors == [
         (
             '[data-testid="emulebb-add-download-modal"] '
-            f'[data-testid="ed2k-instance-{module.CLIENT04.profile_id}"]'
+            f'[data-testid="ed2k-instance-{module.CLIENT05.profile_id}"]'
         ),
         (
             '[data-testid="emulebb-add-download-modal"] '
-            f'[data-testid="ed2k-instance-{module.CLIENT04.profile_id}"][data-selected="true"]:visible'
+            f'[data-testid="ed2k-instance-{module.CLIENT05.profile_id}"][data-selected="true"]:visible'
         ),
         (
             '[data-testid="emulebb-add-download-modal"]'
-            f'[data-selected-ed2k-instance="{module.CLIENT04.profile_id}"]'
+            f'[data-selected-ed2k-instance="{module.CLIENT05.profile_id}"]'
         ),
     ]
     assert page.timeout == 15000
