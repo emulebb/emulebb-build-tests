@@ -207,6 +207,17 @@ def test_rust_live_wire_uses_orchestrated_staged_runtime() -> None:
     assert '"builds" / "rust" / "target" / "release" / "emulebb-rust.exe"' not in text
 
 
+def test_rust_soak_uses_single_staged_runtime_resolver() -> None:
+    """Soak/profiling launch paths must not run Rust out of Cargo target dirs."""
+
+    launcher = read_text(SCRIPT_ROOT / "launch-soak.py")
+    resolver = read_text(HARNESS_ROOT / "converged_live_wire.py")
+    assert "resolve_rust_regular_exe(output_root)" in launcher
+    assert '("tools", "emulebb-rust", "bin", RUST_REGULAR_EXE_NAME)' in resolver
+    assert '"builds" / "rust" / "target"' not in launcher
+    assert '"builds" / "rust" / "target"' not in resolver
+
+
 def test_rust_live_wire_can_require_packet_diagnostics() -> None:
     """Diagnostic live-wire runs must fail when the staged Rust binary lacks packet dumps."""
 
