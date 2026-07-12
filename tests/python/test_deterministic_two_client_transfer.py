@@ -191,28 +191,35 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
 
 def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_suite_module()
-    listen_hosts: list[str] = []
     availability_checks: list[tuple[int, str | None, bool]] = []
-    next_port = iter(range(6100, 6110))
-
-    def fake_choose_listen_port(host: str | None = None) -> int:
-        listen_hosts.append(host or "")
-        return next(next_port)
 
     def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
         availability_checks.append((port, host, udp))
         return True
 
-    monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
     monkeypatch.setattr(module, "is_port_available", fake_is_port_available)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6209)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
 
     ports = module.choose_distinct_ports("172.24.112.1")
 
-    assert ports["ed2k_tcp"] == 6100
-    assert ports["ed2k_udp"] == 6104
-    assert listen_hosts == ["172.24.112.1"] * 9
+    assert ports["ed2k_tcp"] == 6200
+    assert ports["ed2k_udp"] == 6204
+    assert ports["ed2k_admin"] == 6201
+    assert ports["client1_rest"] == 6202
+    assert ports["client2_rest"] == 6203
+    assert ports["client1_tcp"] == 6205
+    assert ports["client1_udp"] == 6206
+    assert ports["client2_tcp"] == 6207
+    assert ports["client2_udp"] == 6208
     assert all(host == "172.24.112.1" for _port, host, _udp in availability_checks)
-    assert availability_checks[0] == (6104, "172.24.112.1", True)
+    assert availability_checks[:2] == [
+        (6200, "172.24.112.1", False),
+        (6204, "172.24.112.1", True),
+    ]
+    assert (6206, "172.24.112.1", True) in availability_checks
+    assert (6208, "172.24.112.1", True) in availability_checks
 
 
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:

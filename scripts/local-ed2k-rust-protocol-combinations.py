@@ -140,12 +140,15 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info["name"]))
 
 
-def ed2k_link_with_source(link: str, source_ip: str, source_port: int) -> str:
+def ed2k_link_with_source(link: str, source_ip: str, source_port: int, user_hash: str | None = None) -> str:
     """Appends a stock ED2K link source hint for deterministic local handoff."""
 
     if not link.endswith("|/"):
         raise RuntimeError(f"Cannot append source hint to malformed ED2K link: {link!r}")
-    return f"{link[:-2]}|sources,{source_ip}:{source_port}|/"
+    source = f"{source_ip}:{source_port}"
+    if user_hash:
+        source = f"{source}:{user_hash}"
+    return f"{link[:-2]}|sources,{source}|/"
 
 
 def require_protocol_coverage(
@@ -758,6 +761,11 @@ def run_protocol_case(
             expected_ip=p2p_address,
             expected_tcp_port=ports["client2_tcp"],
         )
+        source_user_hash = (
+            str(report["checks"]["rust_source_metadata"]["userHash"])
+            if case.client_crypt_supported
+            else None
+        )
         report["checks"]["rust_hashset_metadata"] = require_rust_hashset_metadata(
             rust_runtime / "metadata.sqlite",
             expected_hash=transfer_hash,
@@ -784,6 +792,7 @@ def run_protocol_case(
             str(secondary_shared_link["link"]),
             p2p_address,
             ports["client2_tcp"],
+            source_user_hash,
         )
         report["checks"]["rust_secondary_create"] = rust_emulebb.request_json(
             rust_base_url,
@@ -830,6 +839,7 @@ def run_protocol_case(
             f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/",
             p2p_address,
             ports["client2_tcp"],
+            source_user_hash,
         )
         report["checks"]["rust_hash_only_input"] = {
             "hashOnlyLink": hash_only_link,

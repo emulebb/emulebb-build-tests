@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import ipaddress
 import json
 import os
+import random
 import re
 import socket
 import struct
@@ -36,6 +38,8 @@ DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
+ED2K_LOCAL_PORT_MIN = 20000
+ED2K_LOCAL_PORT_MAX = 49151
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
@@ -127,11 +131,35 @@ def choose_tcp_port_with_udp_offset(lan_bind_addr: str | None = None, offset: in
     """Chooses a TCP port whose conventional ED2K UDP status port is free."""
 
     lan_bind_addr = rest_smoke.require_lan_bind_addr(lan_bind_addr, allow_env_fallback=True)
-    for _ in range(100):
-        port = rest_smoke.choose_listen_port(lan_bind_addr)
-        if port + offset <= 65535 and is_port_available(port + offset, host=lan_bind_addr, udp=True):
+    max_tcp_port = min(ED2K_LOCAL_PORT_MAX, 65535 - offset)
+    if ED2K_LOCAL_PORT_MIN > max_tcp_port:
+        raise RuntimeError("ED2K local port scan range cannot fit the UDP offset.")
+    start = random.randrange(ED2K_LOCAL_PORT_MIN, max_tcp_port + 1)
+    candidates = itertools.chain(range(start, max_tcp_port + 1), range(ED2K_LOCAL_PORT_MIN, start))
+    for port in candidates:
+        if is_port_available(port, host=lan_bind_addr) and is_port_available(
+            port + offset,
+            host=lan_bind_addr,
+            udp=True,
+        ):
             return port
     raise RuntimeError("Could not allocate a TCP port with a free ED2K UDP offset.")
+
+
+def choose_available_local_port(
+    lan_bind_addr: str,
+    used: set[int],
+    *,
+    udp: bool = False,
+) -> int:
+    """Chooses an unused local TCP/UDP port outside the Windows ephemeral range."""
+
+    start = random.randrange(ED2K_LOCAL_PORT_MIN, ED2K_LOCAL_PORT_MAX + 1)
+    candidates = itertools.chain(range(start, ED2K_LOCAL_PORT_MAX + 1), range(ED2K_LOCAL_PORT_MIN, start))
+    for candidate in candidates:
+        if candidate not in used and is_port_available(candidate, host=lan_bind_addr, udp=udp):
+            return candidate
+    raise RuntimeError("Could not allocate a local port in the ED2K harness range.")
 
 
 def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
@@ -159,13 +187,10 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
         "client2_tcp",
         "client2_udp",
     ):
-        for _ in range(100):
-            candidate = rest_smoke.choose_listen_port(lan_bind_addr)
-            if candidate not in used and is_port_available(candidate, host=lan_bind_addr, udp=name.endswith("_udp")):
-                add(name, candidate)
-                break
-        else:
-            raise RuntimeError(f"Could not allocate port for {name}.")
+        try:
+            add(name, choose_available_local_port(lan_bind_addr, used, udp=name.endswith("_udp")))
+        except RuntimeError as exc:
+            raise RuntimeError(f"Could not allocate port for {name}.") from exc
     return ports
 
 
