@@ -222,13 +222,13 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     rust_cross_client_command = (
         "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} "
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe "
+        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
         "--require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
     )
     rust_protocol_combinations_command = (
         "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} "
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe"
+        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe"
     )
     rust_live_wire_command = (
         "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json "

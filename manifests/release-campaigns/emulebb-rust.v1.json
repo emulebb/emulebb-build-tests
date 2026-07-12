@@ -89,12 +89,12 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe",
+          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe",
           "evidence": [
             {
               "kind": "manual",
               "required": true,
-              "description": "The Rust protocol-combination matrix reuses the stock eMuleBB local cases for plain server traffic, obfuscated-preferred server traffic, obfuscated-required server traffic, and obfuscated-required transfer with server UDP disabled while downloading Unicode-named fixtures from the tracing harness through the shared goed2k launcher. The suite records a protocol_matrix_coverage check requiring all four cases plus plain, obfuscated, UDP-disabled, compressible-fixture, low-compressibility fixture, Unicode fixture-name, and hash-only fixture-name surfaces, and each case requires ED2K link name round-trip, three Rust transfers in one protocol session, hash-only ED2K link metadata recovery in every protocol case, completed large-file bytes, source userHash metadata, and MD4/AICH hashset metadata for both named transfers."
+              "description": "The Rust protocol-combination matrix reuses the stock eMuleBB local cases for plain server traffic, obfuscated-preferred server traffic, obfuscated-required server traffic, and obfuscated-required transfer with server UDP disabled while downloading Unicode-named fixtures from the eMuleBB MFC main parity peer through the shared goed2k launcher. The suite records a protocol_matrix_coverage check requiring all four cases plus plain, obfuscated, UDP-disabled, compressible-fixture, low-compressibility fixture, Unicode fixture-name, and hash-only fixture-name surfaces, and each case requires ED2K link name round-trip, three Rust transfers in one protocol session, hash-only ED2K link metadata recovery in every protocol case, completed large-file bytes, source userHash metadata, and MD4/AICH hashset metadata for both named transfers."
             }
           ]
         },
@@ -105,7 +105,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
           "evidence": [
             {
               "kind": "manual",

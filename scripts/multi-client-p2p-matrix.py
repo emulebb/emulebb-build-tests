@@ -206,7 +206,7 @@ def build_child_script_command(script_name: str, scenario_artifacts: Path, args:
 
 
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the mandatory eMuleBB download from tracing-harness seed scenario."""
+    """Runs the mandatory eMuleBB download from the MFC main parity peer."""
 
     scenario_id = HARNESS_TRANSFER_SCENARIO_ID
     scenario_artifacts = paths.source_artifacts_dir / "h2"

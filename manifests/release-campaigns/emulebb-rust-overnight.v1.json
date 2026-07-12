@@ -49,7 +49,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe",
+          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe",
           "evidence": [
             {
               "kind": "json-status",
@@ -179,7 +179,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
           "evidence": [
             {
               "kind": "json-status",
@@ -208,7 +208,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
           "evidence": [
             {
               "kind": "json-status",
