@@ -469,13 +469,22 @@ def parse_sample_count(line: str, percent_start: int | None) -> int | None:
     return int(matches[-1].group(1).replace(",", ""))
 
 
-def parse_xperf_profile_detail_file(path: Path, *, limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT) -> dict[str, object]:
+def parse_xperf_profile_detail_file(
+    path: Path,
+    *,
+    process_image: str = "emulebb.exe",
+    limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT,
+) -> dict[str, object]:
     """Reads an exported xperf profile report and returns a compact summary."""
 
     if not path.is_file():
         return {"available": False, "reason": "xperf profile detail output was not written"}
     try:
-        return parse_xperf_profile_detail(path.read_text(encoding="utf-8", errors="replace"), limit=limit)
+        return parse_xperf_profile_detail(
+            path.read_text(encoding="utf-8", errors="replace"),
+            process_image=process_image,
+            limit=limit,
+        )
     except OSError as exc:
         return {
             "available": False,

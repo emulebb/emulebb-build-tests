@@ -252,7 +252,7 @@ def finalize_cpu_profile(
             include_stack=include_stack,
             stack_min_hits=stack_min_hits,
         )
-        detail_summary = cpu_profile.parse_xperf_profile_detail_file(paths.detail_path)
+        detail_summary = cpu_profile.parse_xperf_profile_detail_file(paths.detail_path, process_image=rust_exe.name)
         stack_summary = (
             cpu_profile.parse_xperf_stack_report_file(paths.stack_path)
             if include_stack
