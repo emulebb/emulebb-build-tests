@@ -23,6 +23,7 @@ spaced, and confirm before starting a live campaign.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -34,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
+from emule_test_harness import cpu_profile, live_process_monitor, vpn_guard_live
 from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
@@ -56,6 +58,9 @@ from emule_test_harness.soak_launch import (
     log,
 )
 from emule_test_harness.vm_guest_profiles import retry_http_json
+
+DEFAULT_PROFILE_SECONDS = 300.0
+DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
 
 
 def resolve_direct_mfc_profile(inputs: LiveWireInputs, *, no_mfc: bool) -> Path | None:
@@ -104,11 +109,218 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both).")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--bootstrap-limit", type=int, default=40)
+    parser.add_argument(
+        "--vpn-guard-live-config",
+        help="Ignored local VPN Guard config; required when --vpn-guard-scenario is not off.",
+    )
+    parser.add_argument(
+        "--vpn-guard-allowed-public-ip-cidrs",
+        default="",
+        help="Approved public VPN CIDR allowlist; defaults to the VPN Guard live config value.",
+    )
+    parser.add_argument(
+        "--vpn-guard-scenario",
+        choices=("off", "success"),
+        default="off",
+        help="Set to success for public live-wire runs; off is only for explicit guard-off scenarios.",
+    )
+    parser.add_argument("--cpu-profile", action="store_true", help="Run the soak under bounded ETW sampled CPU profiling.")
+    parser.add_argument("--cpu-profile-seconds", type=float, default=DEFAULT_PROFILE_SECONDS)
+    parser.add_argument("--cpu-profile-max-file-mb", type=int, default=cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB)
+    parser.add_argument("--cpu-profile-stack", action="store_true", help="Export a symbolized xperf stack butterfly report.")
+    parser.add_argument("--cpu-profile-stack-min-hits", type=int, default=10)
+    parser.add_argument(
+        "--cpu-profile-symbols-optional",
+        action="store_true",
+        help="Continue when the staged app-local PDB is absent.",
+    )
+    parser.add_argument(
+        "--process-metrics",
+        action="store_true",
+        help="Sample Rust process CPU and memory metrics even when ETW CPU profiling is disabled.",
+    )
+    parser.add_argument("--process-sample-interval", type=float, default=DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
     return parser
+
+
+def resolve_vpn_guard_profile(args: argparse.Namespace) -> dict[str, str | None]:
+    """Resolves the VPN Guard mode and approved CIDRs for one launcher run."""
+
+    if args.vpn_guard_scenario == "off":
+        return {"mode": "off", "allowed_public_ip_cidrs": "", "config_path": None}
+
+    config_path = Path(args.vpn_guard_live_config).resolve() if args.vpn_guard_live_config else None
+    if config_path is None or not config_path.is_file():
+        raise RuntimeError("--vpn-guard-live-config is required for --vpn-guard-scenario success.")
+
+    config = vpn_guard_live.load_config(config_path)
+    interface_name = str(config.get("p2pBindInterfaceName") or "").strip()
+    if interface_name.casefold() != vpn_guard_live.HIDEME_INTERFACE_NAME:
+        raise RuntimeError(f"VPN Guard live config must bind P2P to hide.me, got {interface_name!r}.")
+
+    cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip() or str(config.get("allowedPublicIpCidrs") or "").strip()
+    vpn_guard_live.require_hideme_public_cidrs(cidrs)
+    return {"mode": "block", "allowed_public_ip_cidrs": cidrs, "config_path": str(config_path)}
+
+
+def initialize_cpu_profile(
+    *,
+    args: argparse.Namespace,
+    run_paths: soak_run_layout.SoakRunPaths,
+    rust_exe: Path,
+) -> tuple[cpu_profile.CpuProfileTools | None, cpu_profile.CpuProfilePaths | None, dict[str, object] | None]:
+    """Starts ETW CPU profiling when requested and returns the mutable report."""
+
+    if not args.cpu_profile:
+        return None, None, None
+    if args.cpu_profile_seconds <= 0:
+        raise RuntimeError("--cpu-profile-seconds must be greater than zero.")
+    if args.cpu_profile_max_file_mb <= 0:
+        raise RuntimeError("--cpu-profile-max-file-mb must be greater than zero.")
+    if args.cpu_profile_stack_min_hits <= 0:
+        raise RuntimeError("--cpu-profile-stack-min-hits must be greater than zero.")
+
+    profile_paths = cpu_profile.build_cpu_profile_paths(run_paths.report_dir)
+    profile_report: dict[str, object] = {
+        "enabled": True,
+        "tool": "xperf",
+        "app_exe": str(rust_exe),
+        "profile_paths": {
+            "etl": str(profile_paths.etl_path),
+            "detail": str(profile_paths.detail_path),
+            "summary": str(profile_paths.summary_path),
+            "stack": str(profile_paths.stack_path),
+        },
+        "max_file_mb": args.cpu_profile_max_file_mb,
+        "seconds": args.cpu_profile_seconds,
+        "stack": bool(args.cpu_profile_stack),
+        "stack_min_hits": args.cpu_profile_stack_min_hits,
+    }
+    tools = cpu_profile.discover_cpu_profile_tools()
+    if not tools.xperf:
+        profile_report["status"] = "failed"
+        profile_report["error"] = "xperf was not found."
+        return tools, profile_paths, profile_report
+
+    pdb_path = cpu_profile.resolve_app_pdb_path(rust_exe)
+    profile_report["symbols"] = {"app_pdb": str(pdb_path), "app_pdb_exists": pdb_path.is_file()}
+    if not args.cpu_profile_symbols_optional and not pdb_path.is_file():
+        profile_report["status"] = "failed"
+        profile_report["error"] = f"Required app symbols were not found: {pdb_path}"
+        return tools, profile_paths, profile_report
+
+    start = cpu_profile.start_cpu_profile(
+        tools=tools,
+        paths=profile_paths,
+        max_file_mb=args.cpu_profile_max_file_mb,
+        timeout_seconds=30.0,
+    )
+    profile_report["start"] = start
+    return tools, profile_paths, profile_report
+
+
+def finalize_cpu_profile(
+    *,
+    tools: cpu_profile.CpuProfileTools | None,
+    paths: cpu_profile.CpuProfilePaths | None,
+    report: dict[str, object] | None,
+    rust_exe: Path,
+    include_stack: bool,
+    stack_min_hits: int,
+) -> dict[str, object] | None:
+    """Stops and exports ETW CPU profiling when it was started."""
+
+    if tools is None or paths is None or report is None:
+        return report
+    if not tools.xperf:
+        return report
+    if report.get("status") == "failed" and "start" not in report:
+        return report
+
+    stop = cpu_profile.stop_cpu_profile(tools=tools, paths=paths, timeout_seconds=60.0)
+    report["stop"] = stop
+    if report.get("start", {}).get("return_code") == 0 and stop.get("return_code") == 0 and paths.etl_path.is_file():
+        export = cpu_profile.export_cpu_profile(
+            tools=tools,
+            paths=paths,
+            app_exe=rust_exe,
+            timeout_seconds=90.0,
+            include_stack=include_stack,
+            stack_min_hits=stack_min_hits,
+        )
+        detail_summary = cpu_profile.parse_xperf_profile_detail_file(paths.detail_path)
+        stack_summary = (
+            cpu_profile.parse_xperf_stack_report_file(paths.stack_path)
+            if include_stack
+            else {"available": False, "reason": "stack export disabled"}
+        )
+        combined_summary = {"detail": detail_summary, "stack": stack_summary}
+        paths.summary_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.summary_path.write_text(json.dumps(combined_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report["export"] = export
+        report["summary"] = combined_summary
+        report["status"] = "passed" if detail_summary.get("available") or stack_summary.get("available") else "failed"
+    else:
+        report["status"] = "failed"
+    return report
+
+
+class RustProcessMetrics:
+    """Samples Rust process CPU and memory into the soak report directory."""
+
+    def __init__(self, *, process, report_dir: Path, interval_seconds: float) -> None:
+        self.process = process
+        self.report_dir = report_dir
+        self.interval_seconds = interval_seconds
+        self.started = time.monotonic()
+        self.last_sample_monotonic: float | None = None
+        self.last_cpu_seconds: float | None = None
+        self.next_sample = 0.0
+        self.rows: list[dict[str, object]] = []
+        self.handle: int | None = None
+        self.csv_path = report_dir / "analysis" / "rust-process-metrics.csv"
+        self.summary_path = report_dir / "analysis" / "rust-process-metrics-summary.json"
+        self.handle = live_process_monitor.open_process(process.pid)
+
+    def maybe_sample(self) -> dict[str, object] | None:
+        now = time.monotonic()
+        if self.handle is None or now < self.next_sample:
+            return None
+        row = live_process_monitor.sample_process_metrics(
+            handle=self.handle,
+            started_monotonic=self.started,
+            last_sample_monotonic=self.last_sample_monotonic,
+            last_cpu_seconds=self.last_cpu_seconds,
+        )
+        row["pid"] = self.process.pid
+        self.rows.append(row)
+        self.last_sample_monotonic = time.monotonic()
+        self.last_cpu_seconds = float(row["cpu_seconds"])
+        self.next_sample = now + self.interval_seconds
+        live_process_monitor.write_metric_csv(self.csv_path, self.rows)
+        self.write_summary()
+        return row
+
+    def write_summary(self) -> dict[str, object]:
+        summary = live_process_monitor.summarize_metric_rows(self.rows)
+        payload = {
+            "enabled": True,
+            "pid": self.process.pid,
+            "csv_path": str(self.csv_path),
+            "summary": summary,
+        }
+        self.summary_path.parent.mkdir(parents=True, exist_ok=True)
+        self.summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return payload
+
+    def close(self) -> None:
+        if self.handle is not None:
+            live_process_monitor.close_handle(self.handle)
+            self.handle = None
 
 
 def graceful_teardown(
@@ -133,7 +345,7 @@ def graceful_teardown(
         try:
             retry_http_json(
                 "rust shutdown", 1, rust_base, "/api/v1/app/shutdown",
-                api_key=RUST_API_KEY, method="POST", body={}, timeout_seconds=5.0,
+                api_key=RUST_API_KEY, method="POST", body={"confirmShutdown": True}, timeout_seconds=5.0,
             )
         except Exception:  # noqa: BLE001 - rust may already be tearing down
             pass
@@ -180,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
     soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
+    vpn_guard_profile = resolve_vpn_guard_profile(args)
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
@@ -230,6 +443,11 @@ def main(argv: list[str] | None = None) -> int:
     if direct_mfc_profile is not None:
         log(f"MFC direct profile from live-wire inputs: {direct_mfc_profile}")
     log(f"persistent rust profile under {soak_root} - sharing {len(shared_roots)} library root(s)")
+    if vpn_guard_profile["mode"] == "block":
+        log(
+            "VPN Guard enabled for hide.me with CIDRs: "
+            + str(vpn_guard_profile["allowed_public_ip_cidrs"])
+        )
     log(
         "P2P endpoint ports: "
         f"rust TCP {endpoint_ports['rust']['ed2kTcpPort']}/UDP {endpoint_ports['rust']['kadUdpPort']}; "
@@ -257,7 +475,17 @@ def main(argv: list[str] | None = None) -> int:
     rust_handles: dict | None = None
     mfc_handles: dict | None = None
     rust_base = ""
+    profile_tools: cpu_profile.CpuProfileTools | None = None
+    profile_paths: cpu_profile.CpuProfilePaths | None = None
+    profile_report: dict[str, object] | None = None
+    process_metrics: RustProcessMetrics | None = None
+    status = "stopped"
     try:
+        profile_tools, profile_paths, profile_report = initialize_cpu_profile(
+            args=args,
+            run_paths=run_paths,
+            rust_exe=rust_exe,
+        )
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
             rest_port=args.rust_rest_port, runtime_dir=rust_runtime,
@@ -267,9 +495,17 @@ def main(argv: list[str] | None = None) -> int:
             server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             enable_packet_dump=not args.rust_regular,
+            vpn_guard_mode=str(vpn_guard_profile["mode"]),
+            vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
         )
         rust_proc = rust_handles["process"]
         rust_base = rust_handles["baseUrl"]
+        if args.cpu_profile or args.process_metrics:
+            process_metrics = RustProcessMetrics(
+                process=rust_proc,
+                report_dir=run_paths.report_dir,
+                interval_seconds=args.process_sample_interval,
+            )
 
         mfc_base = ""
         if not args.no_mfc:
@@ -282,6 +518,8 @@ def main(argv: list[str] | None = None) -> int:
                 server_endpoint=args.mfc_server, obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
+                vpn_guard_mode=str(vpn_guard_profile["mode"]),
+                vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
             )
             mfc_base = mfc_handles["baseUrl"]
 
@@ -292,17 +530,49 @@ def main(argv: list[str] | None = None) -> int:
             log(f"  MFC diagnostics   : {mfc_base}   (X-API-Key: {MFC_API_KEY}) + its GUI window")
         log(f"  operator server   : {OPERATOR_SERVER}")
         log("Dumps accumulate under the persistent profiles; analyze later from this repo.")
+        if args.cpu_profile:
+            log(f"Profiling for {args.cpu_profile_seconds:.0f}s; artifacts: {run_paths.report_dir / 'analysis'}")
         log("Press Ctrl-C to stop everything (profiles + dumps are kept).")
         log("=" * 70)
 
+        deadline = time.monotonic() + args.cpu_profile_seconds if args.cpu_profile else None
+        last_metrics_log = 0.0
         while True:
             if rust_proc.poll() is not None:
                 log("rust daemon exited - stopping.")
+                status = "rust-exited"
+                break
+            row = process_metrics.maybe_sample() if process_metrics is not None else None
+            if row is not None and time.monotonic() - last_metrics_log >= 30.0:
+                log(
+                    "rust metrics: "
+                    f"cpu_one_core={row['process_pct_one_core']}% "
+                    f"private={row['private_mb']}MiB ws={row['working_set_mb']}MiB "
+                    f"handles={row['handles']}"
+                )
+                last_metrics_log = time.monotonic()
+            if deadline is not None and time.monotonic() >= deadline:
+                log("CPU profile window complete - stopping.")
+                status = "profile-complete"
                 break
             time.sleep(2.0)
     except KeyboardInterrupt:
         log("Ctrl-C - stopping all launched apps gracefully...")
     finally:
+        profile_report = finalize_cpu_profile(
+            tools=profile_tools,
+            paths=profile_paths,
+            report=profile_report,
+            rust_exe=rust_exe,
+            include_stack=args.cpu_profile_stack,
+            stack_min_hits=args.cpu_profile_stack_min_hits,
+        )
+        process_metrics_summary = None
+        if process_metrics is not None:
+            try:
+                process_metrics_summary = process_metrics.write_summary()
+            finally:
+                process_metrics.close()
         graceful_teardown(
             rust_handles=rust_handles,
             mfc_handles=mfc_handles,
@@ -311,8 +581,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     soak_run_layout.mark_run_finished(
         run_paths,
-        status="stopped",
-        extra={"rustRuntimeDir": str(rust_runtime), "mfcArtifactsDir": str(mfc_artifacts)},
+        status=status,
+        extra={
+            "rustRuntimeDir": str(rust_runtime),
+            "mfcArtifactsDir": str(mfc_artifacts),
+            "rustExe": str(rust_exe),
+            "vpnGuard": vpn_guard_profile,
+            "cpuProfile": profile_report,
+            "processMetrics": process_metrics_summary,
+        },
     )
     log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))
     return 0

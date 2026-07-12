@@ -17,7 +17,16 @@ DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
 CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
 CPU_PROFILE_STACKWALK_FLAGS = "Profile"
 XPERF_ERROR_ALREADY_EXISTS = 2147942583
-EMULE_SYMBOL_PREFIXES = ("emulebb!", "emulebb.exe!", "emule!", "emule.exe!")
+EMULE_SYMBOL_PREFIXES = (
+    "emulebb!",
+    "emulebb.exe!",
+    "emulebb-rust!",
+    "emulebb-rust.exe!",
+    "emulebb_rust!",
+    "emulebb_rust.exe!",
+    "emule!",
+    "emule.exe!",
+)
 EMULE_SYMBOL_PREFIX = EMULE_SYMBOL_PREFIXES[0]
 
 _PERCENT_RE = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)\s*%")
@@ -25,7 +34,13 @@ _XPERF_CSV_ROW_RE = re.compile(
     r"^\s*(?P<process>[^,]+),\s*(?P<count>[0-9][0-9,]*),\s*(?P<weight>[0-9]+(?:\.[0-9]+)?),\s*(?P<function>.+?)\s*$"
 )
 _SAMPLE_COUNT_RE = re.compile(r"(?<![A-Za-z0-9_.])([0-9][0-9,]*)(?![A-Za-z0-9_.])")
-_SYMBOL_RE = re.compile(r"\bemulebb(?:\.exe)?![^\s,;|]+|\bemule(?:\.exe)?![^\s,;|]+", re.IGNORECASE)
+_SYMBOL_RE = re.compile(
+    r"\bemulebb(?:\.exe)?![^\s,;|]+|"
+    r"\bemulebb-rust(?:\.exe)?![^\s,;|]+|"
+    r"\bemulebb_rust(?:\.exe)?![^\s,;|]+|"
+    r"\bemule(?:\.exe)?![^\s,;|]+",
+    re.IGNORECASE,
+)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _STACK_ROW_RE = re.compile(
     r"<tr><td>(?P<function>.*?)</td><td>(?P<hits>[0-9][0-9,]*)</td><td>(?P<percent>[0-9]+(?:\.[0-9]+)?)%</td><td>(?P<exclusive>[0-9][0-9,]*)</td>",
@@ -342,7 +357,12 @@ def export_cpu_profile(
     result["symbol_path"] = symbol_env["_NT_SYMBOL_PATH"]
     result["symcache_path"] = symbol_env["_NT_SYMCACHE_PATH"]
     if include_stack:
-        stack_command = build_xperf_stack_export_command(tools, paths, min_hits=stack_min_hits)
+        stack_command = build_xperf_stack_export_command(
+            tools,
+            paths,
+            process_image=app_exe.name,
+            min_hits=stack_min_hits,
+        )
         stack_result = run_tool_to_file(stack_command, paths.stack_path.with_suffix(".export.txt"), timeout_seconds, env=symbol_env)
         stack_result["stack_path"] = str(paths.stack_path)
         stack_result["stack_exists"] = paths.stack_path.is_file()
@@ -404,7 +424,12 @@ def parse_xperf_profile_detail(
         reverse=True,
     )
     top_rows = rows[:limit]
-    app_rows = [row for row in rows if isinstance(row.get("function"), str) and str(row["function"]).casefold().startswith(EMULE_SYMBOL_PREFIX)]
+    app_rows = [
+        row
+        for row in rows
+        if isinstance(row.get("function"), str)
+        and str(row["function"]).casefold().startswith(EMULE_SYMBOL_PREFIXES)
+    ]
     return {
         "available": bool(top_rows),
         "app_row_count": len(app_rows),
@@ -421,6 +446,12 @@ def normalize_emule_symbol(symbol: str) -> str:
 
     if symbol.casefold().startswith("emulebb.exe!"):
         return f"emulebb!{symbol[len('emulebb.exe!'):]}"
+    if symbol.casefold().startswith("emulebb-rust.exe!"):
+        return f"emulebb-rust!{symbol[len('emulebb-rust.exe!'):]}"
+    if symbol.casefold().startswith("emulebb_rust.exe!"):
+        return f"emulebb-rust!{symbol[len('emulebb_rust.exe!'):]}"
+    if symbol.casefold().startswith("emulebb_rust!"):
+        return f"emulebb-rust!{symbol[len('emulebb_rust!'):]}"
     if symbol.casefold().startswith("emule.exe!"):
         return f"emulebb!{symbol[len('emule.exe!'):]}"
     if symbol.casefold().startswith("emule!"):

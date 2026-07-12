@@ -14,6 +14,12 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
     cancel = cpu_profile.build_xperf_cancel_command(tools)
     export = cpu_profile.build_xperf_profile_export_command(tools, paths)
     stack_export = cpu_profile.build_xperf_stack_export_command(tools, paths, min_hits=25)
+    rust_stack_export = cpu_profile.build_xperf_stack_export_command(
+        tools,
+        paths,
+        process_image="emulebb-rust.exe",
+        min_hits=25,
+    )
 
     assert start[:3] == ["xperf.exe", "-on", "PROC_THREAD+LOADER+PROFILE"]
     assert start[start.index("-stackwalk") + 1] == "Profile"
@@ -25,6 +31,15 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
     assert export[-2:] == ["profile", "-detail"]
     assert stack_export[:5] == ["xperf.exe", "-i", str(paths.etl_path), "-symbols", "-target"]
     assert stack_export[-7:] == ["stack", "-process", "emulebb.exe", "-event", "Profile", "-butterfly", "25"]
+    assert rust_stack_export[-7:] == [
+        "stack",
+        "-process",
+        "emulebb-rust.exe",
+        "-event",
+        "Profile",
+        "-butterfly",
+        "25",
+    ]
 
 
 def test_symbol_environment_prefers_app_pdb_and_sets_symcache(tmp_path: Path) -> None:
@@ -125,6 +140,22 @@ def test_parse_xperf_profile_detail_preserves_csv_template_symbols() -> None:
     function = summary["top_app_functions"][0]["function"]
     assert function.startswith("emulebb!nlohmann::json_abi_v3_11_3::basic_json<std::map,std::vector")
     assert function.endswith(">::destroy")
+
+
+def test_parse_xperf_profile_detail_extracts_rust_symbols() -> None:
+    text = """
+emulebb-rust.exe (5740),     260000,       4.20,            emulebb_rust.exe!emulebb_core::kad::routing::RoutingTable::prune
+emulebb-rust.exe (5740),     120000,       1.90,            emulebb-rust.exe!tokio::runtime::scheduler::multi_thread::worker::Context::run
+"""
+
+    summary = cpu_profile.parse_xperf_profile_detail(text, process_image="emulebb-rust.exe")
+
+    assert summary["available"] is True
+    assert summary["app_row_count"] == 2
+    assert [row["function"] for row in summary["top_app_functions"]] == [
+        "emulebb-rust!emulebb_core::kad::routing::RoutingTable::prune",
+        "emulebb-rust!tokio::runtime::scheduler::multi_thread::worker::Context::run",
+    ]
 
 
 def test_parse_xperf_stack_report_extracts_top_app_inclusive_functions() -> None:

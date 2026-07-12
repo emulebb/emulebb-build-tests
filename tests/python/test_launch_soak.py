@@ -5,6 +5,7 @@ import inspect
 import sys
 from pathlib import Path
 
+from emule_test_harness import cpu_profile, vpn_guard_live
 from emule_test_harness.live_wire_inputs import LiveWireInputs
 
 
@@ -80,6 +81,88 @@ def test_launch_soak_parser_accepts_lan_bind_addr() -> None:
     assert args.lan_bind_addr == "192.0.2.10"
 
 
+def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
+    module = load_launch_soak_module()
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--rust-regular",
+            "--no-mfc",
+            "--cpu-profile",
+            "--cpu-profile-seconds",
+            "60",
+            "--cpu-profile-stack",
+            "--vpn-guard-live-config",
+            "vpn-guard-live.local.json",
+            "--vpn-guard-scenario",
+            "success",
+        ]
+    )
+
+    assert args.rust_regular is True
+    assert args.no_mfc is True
+    assert args.cpu_profile is True
+    assert args.cpu_profile_seconds == 60
+    assert args.cpu_profile_stack is True
+    assert args.vpn_guard_scenario == "success"
+
+
+def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    config_path = tmp_path / "vpn-guard-live.local.json"
+    vpn_guard_live.write_config(
+        config_path,
+        {
+            "schema": vpn_guard_live.SCHEMA,
+            "p2pBindInterfaceName": "hide.me",
+            "allowedPublicIpCidrs": ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS),
+            "commands": {},
+        },
+    )
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--vpn-guard-live-config",
+            str(config_path),
+            "--vpn-guard-scenario",
+            "success",
+        ]
+    )
+
+    resolved = module.resolve_vpn_guard_profile(args)
+
+    assert resolved["mode"] == "block"
+    assert resolved["allowed_public_ip_cidrs"] == ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS)
+    assert resolved["config_path"] == str(config_path.resolve())
+
+
+def test_launch_soak_initializes_cpu_profile_with_staged_symbols(tmp_path: Path, monkeypatch) -> None:
+    module = load_launch_soak_module()
+    args = module.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10", "--cpu-profile"])
+    run_paths = module.soak_run_layout.build_run_paths(tmp_path / "soak", "20260712T010203Z")
+    rust_exe = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    rust_exe.parent.mkdir(parents=True)
+    rust_exe.write_text("", encoding="utf-8")
+    rust_exe.with_suffix(".pdb").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(module.cpu_profile, "discover_cpu_profile_tools", lambda: cpu_profile.CpuProfileTools(xperf="xperf.exe"))
+    monkeypatch.setattr(
+        module.cpu_profile,
+        "start_cpu_profile",
+        lambda **_kwargs: {"return_code": 0},
+    )
+
+    _tools, paths, report = module.initialize_cpu_profile(args=args, run_paths=run_paths, rust_exe=rust_exe)
+
+    assert paths is not None
+    assert report is not None
+    assert report["app_exe"] == str(rust_exe)
+    assert report["profile_paths"]["summary"].endswith("cpu-profile-summary.json")
+    assert report["symbols"]["app_pdb_exists"] is True
+
+
 def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     module = load_launch_soak_module()
     source = inspect.getsource(module.main)
@@ -88,3 +171,4 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)" in source
     assert "rust_runtime = resolve_direct_rust_profile(inputs)" in source
     assert "direct_profile_dir=direct_mfc_profile" in source
+    assert "vpn_guard_mode=str(vpn_guard_profile[\"mode\"])" in source
