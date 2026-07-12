@@ -577,5 +577,5 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
     )
 
     assert exit_code == 0
-    assert calls == ["h2", "rust-emulebb", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
+    assert calls == ["rust-emulebb", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
     assert reports[-1]["status"] == "passed"

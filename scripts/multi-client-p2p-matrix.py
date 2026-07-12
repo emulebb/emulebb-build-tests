@@ -396,10 +396,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         report["ed2k_server_binary"] = prepare_shared_ed2k_server_binary(paths, args)
-        scenarios = [run_deterministic_transfer_scenario(paths, args)]
-        completed_optional_ids: set[str] = set()
         selected_optional_ids = set(args.require_scenario or ())
         run_all_optional = not selected_optional_ids
+        scenarios = []
+        if run_all_optional or HARNESS_TRANSFER_SCENARIO_ID in selected_optional_ids:
+            scenarios.append(run_deterministic_transfer_scenario(paths, args))
+        completed_optional_ids: set[str] = set()
         rust = inventory["emulebb_rust"]
         rust_peer = inventory["emulebb_rust_peer"]
         if (
