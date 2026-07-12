@@ -261,18 +261,54 @@ def test_write_rust_config_enables_fast_harness_kad_hello_intro(tmp_path: Path) 
     assert "helloIntroFanout = 4" in text
 
 
-def test_rust_cargo_env_uses_workspace_output_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rust_cargo_env_requires_existing_workspace_target_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace_root = tmp_path / "workspace-root"
     output_root = tmp_path / "output-root"
+    target_dir = output_root / "builds" / "rust" / "target"
+    target_dir.mkdir(parents=True)
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
-    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
 
     env = rust_client.rust_cargo_env()
 
-    assert Path(env["CARGO_TARGET_DIR"]) == output_root / "builds" / "rust" / "target"
-    assert Path(env["CARGO_TARGET_DIR"]).is_dir()
-    assert os.environ.get("CARGO_TARGET_DIR") is None
+    assert Path(env["CARGO_TARGET_DIR"]) == target_dir
+
+
+def test_rust_cargo_env_rejects_missing_target_dir_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_root = tmp_path / "output-root"
+    (output_root / "builds" / "rust" / "target").mkdir(parents=True)
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path / "workspace-root"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+
+    with pytest.raises(RuntimeError, match="CARGO_TARGET_DIR must be set"):
+        rust_client.rust_cargo_env()
+
+
+def test_rust_cargo_env_rejects_wrong_target_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_root = tmp_path / "output-root"
+    expected = output_root / "builds" / "rust" / "target"
+    wrong = tmp_path / "wrong-target"
+    expected.mkdir(parents=True)
+    wrong.mkdir()
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path / "workspace-root"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(wrong))
+
+    with pytest.raises(RuntimeError, match="CARGO_TARGET_DIR must be"):
+        rust_client.rust_cargo_env()
+
+
+def test_rust_cargo_env_rejects_nonexistent_target_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_root = tmp_path / "output-root"
+    target_dir = output_root / "builds" / "rust" / "target"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path / "workspace-root"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
+
+    with pytest.raises(RuntimeError, match="existing directory"):
+        rust_client.rust_cargo_env()
 
 
 def test_start_rust_client_uses_shared_cargo_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -55,9 +55,12 @@ def log(message: str) -> None:
 def resolve_lan_rest_bind_addr(lan_bind_addr: str = "") -> str:
     """Returns the explicit LAN address used by soak REST/control surfaces."""
 
-    candidate = str(lan_bind_addr or "").strip() or os.environ.get("X_LOCAL_IP", "").strip()
+    x_local_ip = os.environ.get("X_LOCAL_IP", "").strip()
+    candidate = str(lan_bind_addr or "").strip() or x_local_ip
     if not candidate:
         raise RuntimeError("Soak REST/control binding requires --lan-bind-addr or X_LOCAL_IP.")
+    if x_local_ip and candidate != x_local_ip:
+        raise ValueError(f"Soak REST/control bind address must match X_LOCAL_IP ({x_local_ip}), got {candidate!r}.")
     try:
         parsed = ipaddress.ip_address(candidate)
     except ValueError as exc:
@@ -65,6 +68,15 @@ def resolve_lan_rest_bind_addr(lan_bind_addr: str = "") -> str:
     if parsed.is_unspecified or parsed.is_loopback:
         raise ValueError(f"LAN REST/control bind address must not be loopback or wildcard, got {candidate!r}.")
     return candidate
+
+
+def require_operator_server_endpoint(endpoint: str, *, label: str = "server") -> str:
+    """Returns the fixed live-wire operator eD2K server endpoint or raises."""
+
+    endpoint = endpoint.strip()
+    if endpoint != OPERATOR_SERVER:
+        raise ValueError(f"{label} must be the fixed live-wire ED2K server {OPERATOR_SERVER}, got {endpoint!r}.")
+    return endpoint
 
 
 def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) -> str:
@@ -121,6 +133,45 @@ def require_distinct_endpoint_ports(
     if duplicates:
         raise ValueError("Soak client P2P ports must be distinct: " + "; ".join(duplicates))
     return ports
+
+
+def parse_windows_excluded_port_ranges(text: str) -> tuple[range, ...]:
+    """Parses ``netsh interface * show excludedportrange`` output into ranges."""
+
+    ranges: list[range] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        start = int(parts[0])
+        end = int(parts[1])
+        if 0 < start <= end <= 65535:
+            ranges.append(range(start, end + 1))
+    return tuple(ranges)
+
+
+def require_ports_not_excluded(
+    ports: dict[str, dict[str, int]],
+    *,
+    tcp_excluded: tuple[range, ...] = (),
+    udp_excluded: tuple[range, ...] = (),
+) -> None:
+    """Raises when configured soak ports overlap reserved Windows port ranges."""
+
+    checks = (
+        ("rust.ed2kTcpPort", ports["rust"]["ed2kTcpPort"], tcp_excluded),
+        ("rust.kadUdpPort", ports["rust"]["kadUdpPort"], udp_excluded),
+        ("mfc.ed2kTcpPort", ports["mfc"]["ed2kTcpPort"], tcp_excluded),
+        ("mfc.kadUdpPort", ports["mfc"]["kadUdpPort"], udp_excluded),
+        ("mfc.serverUdpPort", ports["mfc"]["serverUdpPort"], udp_excluded),
+    )
+    offenders = [
+        f"{name}={port}"
+        for name, port, excluded in checks
+        if any(port in reserved for reserved in excluded)
+    ]
+    if offenders:
+        raise ValueError("Soak client P2P ports overlap excluded Windows port ranges: " + "; ".join(offenders))
 
 
 def normalize_shared_root(path: str) -> str:
@@ -570,7 +621,7 @@ def bring_up_rust(
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=RUST_API_KEY,
-        p2p_bind_ip=bind_ip,
+        p2p_bind_ip=None,
         p2p_bind_interface="hide.me",
         ed2k_port=ed2k_port,
         kad_port=kad_port,

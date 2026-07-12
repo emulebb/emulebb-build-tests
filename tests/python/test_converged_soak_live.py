@@ -33,10 +33,14 @@ def test_soak_launch_requires_same_vpn_bind_ip() -> None:
         soak_launch.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.0.0.5"})
 
 
-def test_resolve_lan_rest_bind_addr_honors_explicit_cli_value(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_lan_rest_bind_addr_requires_explicit_cli_value_to_match_x_local_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
-    assert soak_launch.resolve_lan_rest_bind_addr("192.0.2.44") == "192.0.2.44"
+    assert soak_launch.resolve_lan_rest_bind_addr("192.0.2.10") == "192.0.2.10"
+    with pytest.raises(ValueError, match="X_LOCAL_IP"):
+        soak_launch.resolve_lan_rest_bind_addr("192.0.2.44")
 
 
 def test_resolve_lan_rest_bind_addr_uses_x_local_ip(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,6 +98,28 @@ def test_soak_endpoint_ports_reject_duplicates() -> None:
             mfc_kad_port=43672,
             mfc_server_udp_port=43673,
         )
+
+
+def test_soak_endpoint_ports_reject_excluded_windows_ranges() -> None:
+    ports = soak_launch.require_distinct_endpoint_ports(
+        rust_ed2k_port=42662,
+        rust_kad_port=42672,
+        mfc_ed2k_port=43662,
+        mfc_kad_port=43672,
+        mfc_server_udp_port=43673,
+    )
+    tcp_ranges = soak_launch.parse_windows_excluded_port_ranges("  42660    42665     *\n")
+    udp_ranges = soak_launch.parse_windows_excluded_port_ranges("  50000    50059     *\n")
+
+    with pytest.raises(ValueError, match="excluded Windows port ranges"):
+        soak_launch.require_ports_not_excluded(ports, tcp_excluded=tcp_ranges, udp_excluded=udp_ranges)
+
+
+def test_live_wire_operator_server_endpoint_is_fixed() -> None:
+    assert soak_launch.require_operator_server_endpoint(soak_launch.OPERATOR_SERVER) == soak_launch.OPERATOR_SERVER
+
+    with pytest.raises(ValueError, match="fixed live-wire ED2K server"):
+        soak_launch.require_operator_server_endpoint("192.0.2.1:4661", label="--rust-server")
 
 
 def test_build_upload_evidence_classifies_passive_serving(tmp_path: Path) -> None:
@@ -407,15 +433,28 @@ def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> No
 
 def test_converged_soak_defaults_to_persistent_rust_runtime(tmp_path: Path) -> None:
     runner = _load_soak_runner()
+    persisted_runtime = tmp_path / "profiles" / "rust"
 
-    selection = runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=False)
+    selection = runner.resolve_rust_runtime_paths(
+        tmp_path / "soak",
+        "20260627T120000Z",
+        fresh=False,
+        persisted_runtime_dir=persisted_runtime,
+    )
 
     assert selection == {
-        "runtimeDir": tmp_path / "soak" / "rust-runtime",
-        "packetDumpDir": tmp_path / "soak" / "rust-runtime" / "packet-dump",
-        "mode": "persistent",
+        "runtimeDir": persisted_runtime.resolve(),
+        "packetDumpDir": persisted_runtime.resolve() / "packet-dump",
+        "mode": "persistent-input",
         "fresh": False,
     }
+
+
+def test_converged_soak_requires_persisted_rust_profile_for_persistent_runs(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+
+    with pytest.raises(RuntimeError, match="rust_profile.profile_dir"):
+        runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=False)
 
 
 def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) -> None:

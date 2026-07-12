@@ -1619,14 +1619,27 @@ def trim_log_tree(
     return results
 
 
-def resolve_rust_runtime_paths(soak_root: Path, campaign_id: str, *, fresh: bool) -> dict[str, Path | str | bool]:
+def resolve_rust_runtime_paths(
+    soak_root: Path,
+    campaign_id: str,
+    *,
+    fresh: bool,
+    persisted_runtime_dir: Path | None = None,
+) -> dict[str, Path | str | bool]:
     """Returns the Rust runtime/cache path selection for a converged soak run."""
 
-    runtime_dir = soak_root / (f"rust-runtime-{campaign_id}" if fresh else "rust-runtime")
+    if fresh:
+        runtime_dir = soak_root / f"rust-runtime-{campaign_id}"
+        mode = "fresh-campaign"
+    else:
+        if persisted_runtime_dir is None:
+            raise RuntimeError("live-wire inputs must define rust_profile.profile_dir for persistent Rust soak runs.")
+        runtime_dir = persisted_runtime_dir.resolve()
+        mode = "persistent-input"
     return {
         "runtimeDir": runtime_dir,
         "packetDumpDir": runtime_dir / "packet-dump",
-        "mode": "fresh-campaign" if fresh else "persistent",
+        "mode": mode,
         "fresh": fresh,
     }
 
@@ -1929,6 +1942,8 @@ def main(argv: list[str] | None = None) -> int:
         mfc_kad_port=args.mfc_kad_port,
         mfc_server_udp_port=args.mfc_server_udp_port,
     )
+    soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
+    soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
@@ -1945,6 +1960,7 @@ def main(argv: list[str] | None = None) -> int:
     shared_dirs_mod = mods["shared_dirs"]
 
     inputs_path = Path(args.inputs).resolve()
+    inputs = load_live_wire_inputs(inputs_path)
     # VPN Guard live config: the hide.me public-exit CIDR allowlist that both
     # clients enforce (fail-closed) and that the HTTP+STUN check validates against.
     vpn_guard_config_path = (
@@ -1967,7 +1983,7 @@ def main(argv: list[str] | None = None) -> int:
     if mfc_profile_dir is None:
         # Fall back to the operator-configured persisted MFC profile from live-wire
         # inputs (mfc_profile.profile_dir) when no explicit --mfc-profile-dir is given.
-        inputs_profile = load_live_wire_inputs(inputs_path).mfc_profile_dir
+        inputs_profile = inputs.mfc_profile_dir
         if inputs_profile is not None:
             mfc_profile_dir = inputs_profile.resolve()
     rust_incoming_dir = Path(args.rust_incoming_dir).resolve() if args.rust_incoming_dir else None
@@ -2027,6 +2043,7 @@ def main(argv: list[str] | None = None) -> int:
         soak_root,
         campaign_id,
         fresh=bool(args.fresh_rust_runtime),
+        persisted_runtime_dir=inputs.rust_profile_dir,
     )
     rust_runtime = Path(rust_runtime_selection["runtimeDir"])
     rust_packet_dump = Path(rust_runtime_selection["packetDumpDir"])

@@ -174,7 +174,7 @@ def test_live_scripts_do_not_reimplement_hide_me_restart() -> None:
 # emulebb-tooling `emulebb-env-override` policy audit at unit speed.
 AUTHORITATIVE_ENV_WRITE_PATTERNS = tuple(
     re.compile(form.format(var=re.escape(var)))
-    for var in ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    for var in ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT", "CARGO_TARGET_DIR")
     for form in (
         r"os\.environ\[\s*[\"']{var}[\"']\s*\]\s*=",
         r"os\.environ\.setdefault\(\s*[\"']{var}[\"']",
@@ -185,7 +185,7 @@ AUTHORITATIVE_ENV_WRITE_PATTERNS = tuple(
 
 
 def test_harness_never_overrides_authoritative_workspace_env() -> None:
-    """Harness and live scripts must read, never assign, the workspace path vars."""
+    """Harness and live scripts must read, never assign, authoritative env vars."""
 
     offenders: list[str] = []
     for path in python_sources(SCRIPT_ROOT, HARNESS_ROOT):

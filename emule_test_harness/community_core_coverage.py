@@ -218,8 +218,21 @@ def run_live_rest_e2e_for_community_summary(
         str(config.live_rest_search_observation_timeout_seconds),
     ]
     env = os.environ.copy()
-    env["EMULEBB_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
-    env["EMULEBB_WORKSPACE_OUTPUT_ROOT"] = str(get_workspace_output_root())
+    raw_workspace_root = env.get("EMULEBB_WORKSPACE_ROOT", "").strip()
+    if not raw_workspace_root:
+        raise RuntimeError("EMULEBB_WORKSPACE_ROOT must be set before running live REST coverage.")
+    expected_workspace_root = config.workspace_root.parent.parent.resolve()
+    env_workspace_root = Path(raw_workspace_root).expanduser().resolve()
+    env_output_root = get_workspace_output_root()
+    if not env_workspace_root.is_dir():
+        raise RuntimeError(f"EMULEBB_WORKSPACE_ROOT must point to an existing directory: {env_workspace_root}")
+    if not env_output_root.is_dir():
+        raise RuntimeError(f"EMULEBB_WORKSPACE_OUTPUT_ROOT must point to an existing directory: {env_output_root}")
+    if os.path.normcase(str(env_workspace_root)) != os.path.normcase(str(expected_workspace_root)):
+        raise RuntimeError(
+            "EMULEBB_WORKSPACE_ROOT must match the community coverage workspace: "
+            f"{expected_workspace_root}, got {env_workspace_root}."
+        )
     lan_bind_addr = resolve_lan_bind_address(env)
     if lan_bind_addr:
         command.extend(["--lan-bind-addr", lan_bind_addr])

@@ -9,14 +9,29 @@ from pathlib import Path
 
 from .paths import get_workspace_output_root
 
+CARGO_TARGET_DIR_ENV = "CARGO_TARGET_DIR"
+
+
+def get_required_cargo_target_dir() -> Path:
+    """Returns the caller-provided canonical Cargo target directory."""
+
+    raw_target_dir = os.environ.get(CARGO_TARGET_DIR_ENV, "").strip()
+    if not raw_target_dir:
+        raise RuntimeError(f"{CARGO_TARGET_DIR_ENV} must be set before running Rust harness commands.")
+    target_dir = Path(raw_target_dir).resolve()
+    if not target_dir.exists():
+        raise RuntimeError(f"{CARGO_TARGET_DIR_ENV} must point to an existing directory: {target_dir}")
+    expected = (get_workspace_output_root() / "builds" / "rust" / "target").resolve()
+    if os.path.normcase(str(target_dir)) != os.path.normcase(str(expected)):
+        raise RuntimeError(f"{CARGO_TARGET_DIR_ENV} must be {expected}, got {target_dir}.")
+    return target_dir
+
 
 def rust_cargo_env() -> dict[str, str]:
-    """Returns a Cargo environment that keeps Rust build output under the workspace output root."""
+    """Returns the process environment after validating the canonical Cargo target dir."""
 
     env = os.environ.copy()
-    target_dir = Path(env.get("CARGO_TARGET_DIR") or get_workspace_output_root() / "builds" / "rust" / "target")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    env["CARGO_TARGET_DIR"] = str(target_dir)
+    get_required_cargo_target_dir()
     return env
 
 

@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.artifact_names import utc_run_id  # noqa: E402
 from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root  # noqa: E402
+from emule_test_harness.rust_client import get_required_cargo_target_dir, rust_cargo_env  # noqa: E402
 
 SUITE_NAME = "rust-ed2k-private-parity-modules"
 
@@ -651,12 +652,12 @@ def run_cargo_case(case: RustModuleCase, rust_repo: Path, cargo_target_dir: Path
     """Runs one cargo test module filter and returns summary evidence."""
 
     command = ["cargo", "test", "-p", case.package, case.module_filter, "--", "--nocapture"]
-    env = os.environ.copy()
-    env["CARGO_TARGET_DIR"] = str(cargo_target_dir)
+    if cargo_target_dir.resolve() != get_required_cargo_target_dir():
+        raise RuntimeError("Rust parity module cargo target dir must match the process CARGO_TARGET_DIR.")
     result = subprocess.run(
         command,
         cwd=rust_repo,
-        env=env,
+        env=rust_cargo_env(),
         text=True,
         capture_output=True,
         check=False,
@@ -1002,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
     rust_repo = resolve_rust_repo(args.rust_repo, workspace_root)
-    cargo_target_dir = output_root / "builds" / "rust" / "target"
+    cargo_target_dir = get_required_cargo_target_dir()
     run_id = utc_run_id()
     run_dir = args.artifacts_dir.resolve() if args.artifacts_dir else output_root / "reports" / SUITE_NAME / run_id
     latest_dir = output_root / "reports" / SUITE_NAME / "latest"

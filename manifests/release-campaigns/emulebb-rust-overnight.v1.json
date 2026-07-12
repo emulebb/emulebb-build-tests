@@ -3,7 +3,7 @@
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-rust-overnight",
-  "releaseVersion": "0.0.3",
+  "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust full overnight parity campaign",
   "description": "Long-form Rust headless core proof for total local eD2K parity. It promotes the full protocol-combination matrix, private Rust ED2K queue/resume/callback/serving modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
@@ -292,18 +292,18 @@
       "title": "Live-wire release",
       "scenarios": [
         {
-          "id": "emulebb.flow.rust.overnight.live-wire.deferred.v1",
-          "title": "Rust live-wire proof deferred until VPN binding exists",
+          "id": "emulebb.flow.rust.overnight.live-wire.release-gate.v1",
+          "title": "Rust live-wire proof covered by release gate",
           "phase": "live-wire-release",
           "flowCategory": "live-wire",
           "required": false,
           "blocking": false,
-          "command": "manual",
+          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
           "evidence": [
             {
               "kind": "manual",
               "required": false,
-              "description": "Public live-wire Rust proof remains deferred until the Rust runtime has the same hide.me-bound VPN contract as eMuleBB live campaigns; local ED2K parity is owned by the overnight protocol matrix."
+              "description": "Public live-wire proof is owned by the 0.1.0-beta.1 release gate: persisted MFC and Rust profiles from live-wire inputs, REST/control bound to X_LOCAL_IP, P2P bound through hide.me, VPN Guard CIDR validation, and fixed eD2K server 45.82.80.155:5687. The overnight campaign remains the long local protocol matrix."
             }
           ]
         }
@@ -344,9 +344,9 @@
       ]
     },
     {
-      "id": "emulebb-rust-overnight-live-wire-deferred",
+      "id": "emulebb-rust-overnight-live-wire-release-gate",
       "coveredBy": [
-        "emulebb.flow.rust.overnight.live-wire.deferred.v1"
+        "emulebb.flow.rust.overnight.live-wire.release-gate.v1"
       ]
     }
   ]

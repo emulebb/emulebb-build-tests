@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "emulebb.vpnGuardLiveConfig.v1"
+HIDEME_INTERFACE_NAME = "hide.me"
+REQUIRED_HIDEME_PUBLIC_CIDRS = (
+    "176.10.104.0/22",
+    "149.88.27.0/24",
+    "98.98.148.0/23",
+    "149.50.217.0/24",
+    "149.50.216.0/24",
+)
 HOOK_NAMES = frozenset({
     "connect",
     "disconnect",
@@ -41,6 +49,35 @@ def build_config(*, p2p_bind_interface_name: str, public_ip: str, commands: dict
     }
 
 
+def normalize_public_cidrs(raw_cidrs: str) -> tuple[str, ...]:
+    """Returns a canonical tuple of public IPv4 CIDR strings from a comma list."""
+
+    parts = [part.strip() for part in raw_cidrs.split(",") if part.strip()]
+    networks: list[str] = []
+    for part in parts:
+        network = ipaddress.ip_network(part, strict=True)
+        if network.version != 4 or not network.network_address.is_global:
+            raise ValueError(f"VPN Guard CIDR must be a globally routable IPv4 network: {part!r}")
+        networks.append(str(network))
+    return tuple(networks)
+
+
+def require_hideme_public_cidrs(raw_cidrs: str) -> None:
+    """Raises unless the config uses the exact allowed hide.me public CIDR set."""
+
+    configured = set(normalize_public_cidrs(raw_cidrs))
+    required = set(REQUIRED_HIDEME_PUBLIC_CIDRS)
+    if configured != required:
+        missing = sorted(required - configured)
+        extra = sorted(configured - required)
+        detail = []
+        if missing:
+            detail.append("missing " + ",".join(missing))
+        if extra:
+            detail.append("extra " + ",".join(extra))
+        raise ValueError("VPN Guard live config must use the approved hide.me public CIDRs: " + "; ".join(detail))
+
+
 def write_config(path: Path, payload: dict[str, Any]) -> None:
     """Writes a local VPN Guard live-test config file."""
 
@@ -56,8 +93,11 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("VPN Guard live config must be a JSON object.")
     if payload.get("schema") != SCHEMA:
         raise ValueError(f"VPN Guard live config schema must be {SCHEMA!r}.")
-    if not str(payload.get("p2pBindInterfaceName") or "").strip():
+    interface_name = str(payload.get("p2pBindInterfaceName") or "").strip()
+    if not interface_name:
         raise ValueError("VPN Guard live config requires p2pBindInterfaceName.")
+    if interface_name.casefold() == HIDEME_INTERFACE_NAME:
+        require_hideme_public_cidrs(str(payload.get("allowedPublicIpCidrs") or ""))
     commands = payload.get("commands", {})
     if not isinstance(commands, dict):
         raise ValueError("VPN Guard live config commands must be an object.")

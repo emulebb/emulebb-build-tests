@@ -15,6 +15,7 @@ from emule_test_harness.community_core_coverage import (
 def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    output_root.mkdir(parents=True)
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     older = output_root / "reports" / "native-coverage" / "older" / "coverage-summary.json"
@@ -59,6 +60,7 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
     output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    output_root.mkdir(parents=True)
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     main_app_root = workspace_root / "app" / "emulebb-main"
@@ -117,6 +119,7 @@ def test_optional_live_rest_e2e_uses_lan_bind_when_available(tmp_path: Path, mon
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
     output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    output_root.mkdir(parents=True)
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     main_app_root = workspace_root / "app" / "emulebb-main"

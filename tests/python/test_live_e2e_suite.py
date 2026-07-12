@@ -14,6 +14,8 @@ from emule_test_harness import live_e2e_suite, local_swarm_media
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
 from emule_test_harness import vpn_guard_live
 
+APPROVED_HIDEME_CIDRS = ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS)
+
 
 class FakeHarnessCliCommon:
     def __init__(self, root: Path) -> None:
@@ -80,14 +82,16 @@ def parse_args(*argv: str):
         config_path = Path(tempfile.gettempdir()) / "emulebb-test-vpn-guard-live.json"
         vpn_guard_live.write_config(
             config_path,
-            vpn_guard_live.build_config(
-                p2p_bind_interface_name="hide.me",
-                public_ip="8.8.8.8",
-            ),
+            {
+                "schema": vpn_guard_live.SCHEMA,
+                "p2pBindInterfaceName": "hide.me",
+                "allowedPublicIpCidrs": APPROVED_HIDEME_CIDRS,
+                "commands": {},
+            },
         )
         args.extend(["--vpn-guard-live-config", str(config_path.resolve())])
     if "--vpn-guard-allowed-public-ip-cidrs" not in args and "--vpn-guard-scenario" not in args:
-        args.extend(["--vpn-guard-allowed-public-ip-cidrs", "8.8.8.8/32"])
+        args.extend(["--vpn-guard-allowed-public-ip-cidrs", APPROVED_HIDEME_CIDRS])
     return live_e2e_suite.build_parser().parse_args(args)
 
 
@@ -973,7 +977,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     auto_browse_command = commands[7]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(auto_browse_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
+    assert option_values(auto_browse_command, "--vpn-guard-allowed-public-ip-cidrs") == [APPROVED_HIDEME_CIDRS]
     assert "--update-live-wire-inputs" not in auto_browse_command
 
 
@@ -2456,7 +2460,7 @@ def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: P
     assert [suite["name"] for suite in summary["suites"]] == ["search-ui-live"]
     assert script_name(commands[0]) == "search-ui-live.py"
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(commands[0], "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
+    assert option_values(commands[0], "--vpn-guard-allowed-public-ip-cidrs") == [APPROVED_HIDEME_CIDRS]
     assert option_values(commands[0], "--live-wire-inputs-file")
     assert option_values(commands[0], "--ui-search-rounds") == ["1"]
     assert option_values(commands[0], "--ui-download-lifecycle-count") == ["1"]

@@ -29,6 +29,7 @@ class LiveWireInputs:
     bootstrap_transfer_hashes: tuple[str, ...]
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
     mfc_profile_dir: Path | None = None
+    rust_profile_dir: Path | None = None
 
 
 def get_default_inputs_path(repo_root: Path) -> Path:
@@ -85,6 +86,7 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
     auto_browse = require_object(payload, "auto_browse")
     media_corpus = read_optional_object(payload, "media_corpus")
     mfc_profile = read_optional_object(payload, "mfc_profile")
+    rust_profile = read_optional_object(payload, "rust_profile")
     return LiveWireInputs(
         path=(path or Path(DEFAULT_INPUTS_FILE_NAME)).resolve(),
         generic_open_terms=read_terms(search_terms, "generic_open"),
@@ -95,6 +97,7 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
         direct_bootstrap_transfers=read_direct_transfers(auto_browse, "direct_bootstrap_transfers"),
         mfc_profile_dir=read_optional_single_path(mfc_profile, "profile_dir"),
+        rust_profile_dir=read_optional_single_path(rust_profile, "profile_dir"),
     )
 
 

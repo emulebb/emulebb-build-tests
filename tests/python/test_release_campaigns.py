@@ -200,10 +200,10 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
     assert campaign["campaignId"] == "emulebb-rust"
-    assert campaign["releaseVersion"] == "0.0.3"
+    assert campaign["releaseVersion"] == "0.1.0-beta.1"
     assert campaign["proofTier"] == "future"
     assert "MVP" not in json.dumps(campaign)
-    assert "emulebb-rust-v0.0.3" in json.dumps(campaign)
+    assert "emulebb-rust-v0.1.0-beta.1" in json.dumps(campaign)
     scenario_ids = {
         scenario["id"]
         for phase in campaign["phases"]
@@ -230,14 +230,20 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe"
     )
+    rust_live_wire_command = (
+        "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json "
+        "--lan-bind-addr ${X_LOCAL_IP} --duration 4h"
+    )
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
+    assert "emulebb.flow.rust.live-wire.hideme.v1" in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in covered_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
+    assert "emulebb.flow.rust.live-wire.hideme.v1" in covered_ids
     assert sum(
         1
         for phase in campaign["phases"]
@@ -260,6 +266,15 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         scenario["command"] == rust_protocol_combinations_command
         and scenario["required"] is True
         and scenario["blocking"] is True
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    )
+    assert any(
+        scenario["command"] == rust_live_wire_command
+        and scenario["required"] is True
+        and scenario["blocking"] is True
+        and any("mfc_profile.profile_dir plus rust_profile.profile_dir" in item for item in scenario["localInputs"])
+        and any("45.82.80.155:5687" in item for item in scenario["localInputs"])
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
     )
@@ -294,6 +309,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
     assert campaign["campaignId"] == "emulebb-rust-overnight"
+    assert campaign["releaseVersion"] == "0.1.0-beta.1"
     assert campaign["proofTier"] == "overnight-full"
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
 
@@ -314,6 +330,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     total_audit_id = "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
     preflight_id = "emulebb.flow.rust.overnight.local-client.pytest.v1"
     rest_contract_id = "emulebb.flow.rust.overnight.rest.contract.v1"
+    live_wire_id = "emulebb.flow.rust.overnight.live-wire.release-gate.v1"
 
     assert covered_ids <= set(scenarios)
     assert preflight_id in covered_ids
@@ -323,6 +340,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert emulebb_cross_id in covered_ids
     assert rust_cross_id in covered_ids
     assert total_audit_id in covered_ids
+    assert live_wire_id in covered_ids
     preflight_evidence = scenarios[preflight_id]["evidence"][0]
     assert preflight_evidence["kind"] == "json-status"
     assert preflight_evidence["base"] == "workspace-output"

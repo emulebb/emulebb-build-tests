@@ -66,6 +66,14 @@ def resolve_direct_mfc_profile(inputs: LiveWireInputs, *, no_mfc: bool) -> Path 
     return inputs.mfc_profile_dir.resolve()
 
 
+def resolve_direct_rust_profile(inputs: LiveWireInputs) -> Path:
+    """Returns the operator-owned Rust profile used for the soak launcher."""
+
+    if inputs.rust_profile_dir is None:
+        raise RuntimeError("live-wire inputs must define rust_profile.profile_dir for live soak runs.")
+    return inputs.rust_profile_dir.resolve()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -170,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         mfc_kad_port=args.mfc_kad_port,
         mfc_server_udp_port=args.mfc_server_udp_port,
     )
+    soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
+    soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
     output_root = get_workspace_output_root()
@@ -193,13 +203,13 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
+    rust_runtime = resolve_direct_rust_profile(inputs)
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
 
     soak_root = output_root / "soak"
     campaign_id = soak_run_layout.utc_campaign_id()
-    rust_runtime = soak_root / "rust-runtime"
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = None if args.no_mfc else soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,

@@ -3,9 +3,9 @@
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-rust",
-  "releaseVersion": "0.0.3",
+  "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust product-family campaign",
-  "description": "Campaign for the eMuleBB Rust 0.0.3 headless core client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy for REST, ED2K, Kad, transfer, upload, queue, and local indexing proof, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
+  "description": "Campaign for the eMuleBB Rust 0.1.0-beta.1 headless core client. It reuses the shared eMuleBB campaign runner, local deterministic swarm policy, persisted live-wire profiles, and hide.me-bound public live-wire proof for REST, ED2K, Kad, transfer, upload, queue, and local indexing evidence.",
   "proofTier": "future",
   "phases": [
     {
@@ -147,19 +147,22 @@
           "title": "Rust hide.me-bound live-wire proof",
           "phase": "live-wire-release",
           "flowCategory": "live-wire",
-          "required": false,
-          "blocking": false,
-          "command": "python scripts/rust-live-wire-hideme.py --inputs live-wire-inputs.local.json",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
           "localInputs": [
-            "operator-owned live-wire inputs stay in ignored local files (live-wire-inputs.local.json)",
-            "X_LOCAL_IP (REST bind) and EMULEBB_WORKSPACE_OUTPUT_ROOT (release exe + runtime) come from the environment",
-            "public live Rust P2P binds through the hide.me split tunnel; the daemon exe is whitelisted in %APPDATA%/Hide.me/vpn.settings"
+            "CARGO_TARGET_DIR, EMULEBB_WORKSPACE_OUTPUT_ROOT, and EMULEBB_WORKSPACE_ROOT are pre-set environment variables and point to valid paths",
+            "operator-owned live-wire inputs stay in ignored local files (live-wire-inputs.local.json) and define mfc_profile.profile_dir plus rust_profile.profile_dir",
+            "X_LOCAL_IP is the REST/control bind address and must match --lan-bind-addr",
+            "public live Rust and MFC P2P bind through the hide.me split tunnel; REST binds stay on X_LOCAL_IP",
+            "vpn-guard-live.local.json uses p2pBindInterfaceName hide.me and the approved public CIDRs",
+            "live eD2K connects to 45.82.80.155:5687"
           ],
           "evidence": [
             {
               "kind": "manual",
-              "required": false,
-              "description": "Host-level live-wire run binds Rust P2P through hide.me, connects to the operator eD2K server, bootstraps Kad from the public nodes.dat, and proves connection, server keyword search, Kad participation, source exchange, and a completed download across obfuscation-on and obfuscation-off passes. Report JSON is written under EMULEBB_WORKSPACE_OUTPUT_ROOT/live-wire/ (outside the repo)."
+              "required": true,
+              "description": "Host-level converged live-wire run binds REST/control to X_LOCAL_IP, binds P2P through hide.me, uses the persisted MFC and Rust profiles from live-wire inputs, connects both clients to 45.82.80.155:5687, bootstraps Kad from the selected nodes.dat source, and records synchronized REST, server, Kad, upload, transfer, and diagnostic parity checkpoints under EMULEBB_WORKSPACE_OUTPUT_ROOT."
             }
           ]
         }
@@ -225,7 +228,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Define Rust package artifacts and SBOM rows under the same naming structure as eMuleBB: campaign id emulebb-rust, future annotated release tag emulebb-rust-v0.0.3 after release proof and operator tagging approval, release root emulebb-rust-v0.0.3, and standard ZIP assets named emulebb-rust-0.0.3-ARCH.zip."
+              "description": "Define Rust package artifacts and SBOM rows under the same naming structure as eMuleBB: campaign id emulebb-rust, future annotated release tag emulebb-rust-v0.1.0-beta.1 after release proof and operator tagging approval, release root emulebb-rust-v0.1.0-beta.1, and standard ZIP assets named emulebb-rust-0.1.0-beta.1-ARCH.zip."
             }
           ]
         }
@@ -269,6 +272,12 @@
       "id": "emulebb-rust-rest-contract",
       "coveredBy": [
         "emulebb.flow.rust.rest.emulebb-contract.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-live-wire-release",
+      "coveredBy": [
+        "emulebb.flow.rust.live-wire.hideme.v1"
       ]
     }
   ]

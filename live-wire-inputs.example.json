@@ -3,6 +3,9 @@
   "mfc_profile": {
     "profile_dir": "%EMULEBB_MFC_SOAK_PROFILE_DIR%"
   },
+  "rust_profile": {
+    "profile_dir": "%EMULEBB_RUST_SOAK_PROFILE_DIR%"
+  },
   "search_terms": {
     "generic_open": [
       "linux",

@@ -105,6 +105,10 @@ def test_run_cargo_case_uses_output_root_cargo_target(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     case = module.selected_cases(["downloader-resume"])[0]
     cargo_target = tmp_path / "output" / "builds" / "rust" / "target"
+    cargo_target.mkdir(parents=True)
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(cargo_target))
 
     report = module.run_cargo_case(case, tmp_path / "rust", cargo_target)
 
