@@ -67,6 +67,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ui-poll-interval-ms", type=int, default=1000)
     parser.add_argument("--rust-upload-limit-kibps", type=int)
     parser.add_argument("--emulebb-upload-limit-kibps", type=int)
+    parser.add_argument(
+        "--rust-kad-enabled",
+        action="store_true",
+        help="Enable Rust Kad during this cross-client run. The default keeps local cross-client evidence ED2K-only.",
+    )
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
@@ -625,6 +630,7 @@ def main(argv: list[str] | None = None) -> int:
             "rust_upload_limit_kibps": args.rust_upload_limit_kibps,
             "emulebb_upload_limit_kibps": args.emulebb_upload_limit_kibps,
         }
+        report["rust_kad_enabled"] = bool(args.rust_kad_enabled)
 
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
         if not (rust_repo / "Cargo.toml").is_file():
@@ -669,6 +675,11 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_port=rust_ed2k_port,
             kad_port=rust_kad_port,
             server_endpoint=server_endpoint,
+        )
+        rust_metadata.replace_settings_section(
+            rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
+            "core",
+            {"networkKademlia": bool(args.rust_kad_enabled)},
         )
         current_phase = "launch_rust"
         rust_features: str | None = None

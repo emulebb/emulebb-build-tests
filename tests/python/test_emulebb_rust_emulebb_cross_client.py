@@ -81,6 +81,14 @@ def test_cross_client_script_uses_shared_goed2k_launcher_boundary() -> None:
     assert "goed2k.start_ed2k_server(" not in script_text
 
 
+def test_cross_client_disables_rust_kad_by_default() -> None:
+    module = load_suite_module()
+
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+
+    assert args.rust_kad_enabled is False
+
+
 def test_cross_client_fixture_names_are_unicode() -> None:
     module = load_suite_module()
 
