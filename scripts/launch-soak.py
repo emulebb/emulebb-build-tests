@@ -141,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sample Rust process CPU and memory metrics even when ETW CPU profiling is disabled.",
     )
     parser.add_argument("--process-sample-interval", type=float, default=DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS)
+    parser.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=0.0,
+        help="Stop the soak after this many seconds with the same graceful teardown path as Ctrl-C.",
+    )
     parser.add_argument("--rust-ui", action="store_true", help="Launch the staged native Rust UI during the soak.")
     parser.add_argument("--rust-ui-poll-interval-ms", type=int, default=5_000)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
@@ -468,6 +474,8 @@ def launch_rust_ui(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.duration_seconds < 0:
+        raise RuntimeError("--duration-seconds must not be negative.")
     obfuscation = not args.no_obfuscation
     endpoint_ports = soak_launch.require_distinct_endpoint_ports(
         rust_ed2k_port=args.rust_ed2k_port,
@@ -640,7 +648,8 @@ def main(argv: list[str] | None = None) -> int:
         log("Press Ctrl-C to stop everything (profiles + dumps are kept).")
         log("=" * 70)
 
-        deadline = time.monotonic() + args.cpu_profile_seconds if args.cpu_profile else None
+        duration_deadline = time.monotonic() + args.duration_seconds if args.duration_seconds > 0 else None
+        profile_deadline = time.monotonic() + args.cpu_profile_seconds if args.cpu_profile and duration_deadline is None else None
         last_metrics_log = 0.0
         while True:
             if rust_proc.poll() is not None:
@@ -664,9 +673,13 @@ def main(argv: list[str] | None = None) -> int:
                         f"handles={ui_row['handles']}"
                     )
                 last_metrics_log = time.monotonic()
-            if deadline is not None and time.monotonic() >= deadline:
+            if profile_deadline is not None and time.monotonic() >= profile_deadline:
                 log("CPU profile window complete - stopping.")
                 status = "profile-complete"
+                break
+            if duration_deadline is not None and time.monotonic() >= duration_deadline:
+                log("duration window complete - stopping.")
+                status = "duration-complete"
                 break
             time.sleep(2.0)
     except KeyboardInterrupt:
@@ -713,6 +726,7 @@ def main(argv: list[str] | None = None) -> int:
                 "pid": rust_ui_handles["process"].pid if rust_ui_handles is not None else None,
                 "outputPath": rust_ui_handles.get("outputPath") if rust_ui_handles is not None else None,
             },
+            "durationSeconds": args.duration_seconds,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,
             "processMetrics": process_metrics_summary,

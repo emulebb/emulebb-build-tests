@@ -93,6 +93,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "--cpu-profile-seconds",
             "60",
             "--cpu-profile-stack",
+            "--duration-seconds",
+            "3600",
             "--rust-ui",
             "--rust-ui-poll-interval-ms",
             "2000",
@@ -108,6 +110,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.cpu_profile is True
     assert args.cpu_profile_seconds == 60
     assert args.cpu_profile_stack is True
+    assert args.duration_seconds == 3600
     assert args.rust_ui is True
     assert args.rust_ui_poll_interval_ms == 2000
     assert args.vpn_guard_scenario == "success"
@@ -179,3 +182,5 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "rust_ui_handles = launch_rust_ui(" in source
     assert "direct_profile_dir=direct_mfc_profile" in source
     assert "vpn_guard_mode=str(vpn_guard_profile[\"mode\"])" in source
+    assert "duration_deadline = time.monotonic() + args.duration_seconds" in source
+    assert "\"durationSeconds\": args.duration_seconds" in source
