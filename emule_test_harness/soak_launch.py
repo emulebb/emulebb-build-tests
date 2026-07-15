@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .rust_client import start_rust_client_executable_with_output, write_rust_profile
+from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
 
@@ -647,27 +647,32 @@ def bring_up_rust(
     handle = (profile_dir / "daemon.out").open("a", encoding="utf-8")
     process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
 
-    wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
-    patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
-    if server_met_url:
-        rust_mod.import_server_met(base_url, server_met_url)
-    retry_http_json(
-        "rust kad start", 3, base_url, "/api/v1/kad/operations/start",
-        api_key=RUST_API_KEY, method="POST", body={},
-    )
-    connect_operator_server(
-        base_url,
-        RUST_API_KEY,
-        description="rust server connect",
-        endpoint=server_endpoint,
-    )
-    rust_mod.share_directories(base_url, shared_roots)
+    try:
+        wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
+        patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
+        if server_met_url:
+            rust_mod.import_server_met(base_url, server_met_url)
+        retry_http_json(
+            "rust kad start", 3, base_url, "/api/v1/kad/operations/start",
+            api_key=RUST_API_KEY, method="POST", body={},
+        )
+        connect_operator_server(
+            base_url,
+            RUST_API_KEY,
+            description="rust server connect",
+            endpoint=server_endpoint,
+        )
+        rust_mod.share_directories(base_url, shared_roots)
 
-    def connected() -> dict[str, Any] | None:
-        stats = rust_mod.get_stats(base_url)
-        return stats if rust_stats_connected(stats, require_kad=False) else None
+        def connected() -> dict[str, Any] | None:
+            stats = rust_mod.get_stats(base_url)
+            return stats if rust_stats_connected(stats, require_kad=False) else None
 
-    stats = wait_until("rust ED2K connected", timeouts["connect"], connected)
+        stats = wait_until("rust ED2K connected", timeouts["connect"], connected)
+    except Exception:
+        stop_process_tree(process)
+        handle.close()
+        raise
     log(f"rust connected (highId={bool(stats.get('ed2kHighId'))}) - REST {base_url}")
     return {
         "process": process,
