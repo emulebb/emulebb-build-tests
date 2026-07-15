@@ -46,6 +46,22 @@ def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, t
     assert args.duration_seconds == rust_upload_soak.DEFAULT_DURATION_SECONDS
 
 
+def test_resolve_goed2k_repo_override_uses_workspace_repo(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    repo = workspace_root / "repos" / "goed2k-server"
+    repo.mkdir(parents=True)
+    (repo / "go.mod").write_text("module example.invalid/goed2k\n", encoding="utf-8")
+
+    assert rust_upload_soak.resolve_goed2k_repo_override(workspace_root, None) == str(repo)
+
+
+def test_resolve_goed2k_repo_override_prefers_explicit_path(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    override = tmp_path / "custom-goed2k"
+
+    assert rust_upload_soak.resolve_goed2k_repo_override(workspace_root, override) == str(override)
+
+
 def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
     stage_dummy_rust_tools(output_root)

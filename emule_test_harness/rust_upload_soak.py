@@ -43,6 +43,15 @@ def staged_rust_bin(name: str) -> Path:
     return get_workspace_output_root() / "tools" / "emulebb-rust" / "bin" / name
 
 
+def resolve_goed2k_repo_override(workspace_root: Path, override: Path | None) -> str | None:
+    """Returns the goed2k repo override for the canonical workspace layout."""
+
+    if override is not None:
+        return str(override)
+    repo = workspace_root / "repos" / "goed2k-server"
+    return str(repo) if (repo / "go.mod").is_file() else None
+
+
 def free_lan_port(host: str, used: set[int] | None = None) -> int:
     """Allocates one free TCP port bound to the selected LAN/control address."""
 
@@ -322,7 +331,7 @@ def run(argv: list[str] | None = None) -> int:
             token=args.api_key,
             admin_address=lan,
             ed2k_address=lan,
-            repo_override=str(args.ed2k_server_repo) if args.ed2k_server_repo else None,
+            repo_override=resolve_goed2k_repo_override(workspace_root, args.ed2k_server_repo),
             exe_override=str(args.ed2k_server_exe) if args.ed2k_server_exe else None,
             packet_trace=True,
         )
