@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import socket
 import subprocess
 import time
@@ -129,18 +130,12 @@ def write_payload(path: Path, size_bytes: int) -> dict[str, object]:
 
     remaining = size_bytes
     digest = hashlib.sha256()
-    state = 0x9E3779B97F4A7C15
+    rng = random.Random(0xE2D2_036)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
         while remaining > 0:
-            chunk = bytearray()
-            chunk_len = min(1024 * 1024, remaining)
-            while len(chunk) < chunk_len:
-                state ^= (state << 13) & 0xFFFFFFFFFFFFFFFF
-                state ^= state >> 7
-                state ^= (state << 17) & 0xFFFFFFFFFFFFFFFF
-                chunk.extend(state.to_bytes(8, "little"))
-            chunk = chunk[:chunk_len]
+            chunk_len = min(8 * 1024 * 1024, remaining)
+            chunk = rng.randbytes(chunk_len)
             handle.write(chunk)
             digest.update(chunk)
             remaining -= len(chunk)
@@ -148,7 +143,7 @@ def write_payload(path: Path, size_bytes: int) -> dict[str, object]:
         "path": str(path),
         "sizeBytes": size_bytes,
         "sha256": digest.hexdigest(),
-        "contentKind": "deterministic-xorshift64",
+        "contentKind": "deterministic-randbytes",
     }
 
 

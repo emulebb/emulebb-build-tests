@@ -90,7 +90,7 @@ def test_write_payload_records_size_and_hash(tmp_path: Path) -> None:
         "path": str(path),
         "sizeBytes": size,
         "sha256": hashlib.sha256(data).hexdigest(),
-        "contentKind": "deterministic-xorshift64",
+        "contentKind": "deterministic-randbytes",
     }
     assert duplicate["sha256"] == result["sha256"]
 
