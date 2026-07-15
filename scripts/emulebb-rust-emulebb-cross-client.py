@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness import rust_upload_soak  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 
@@ -59,9 +60,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--attach-rust-ui", action="store_true")
+    parser.add_argument("--rust-ui-exe", type=Path)
+    parser.add_argument("--ui-poll-interval-ms", type=int, default=1000)
+    parser.add_argument("--rust-upload-limit-kibps", type=int)
+    parser.add_argument("--emulebb-upload-limit-kibps", type=int)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
+
+
+def resolve_rust_ui_exe(override: Path | None) -> Path:
+    """Resolves the native Rust UI executable used by cross-client evidence runs."""
+
+    path = override if override is not None else rust_upload_soak.staged_rust_bin("emulebb-rust-ui.exe")
+    return path.resolve()
+
+
+def validate_optional_soak_args(args: argparse.Namespace) -> None:
+    """Rejects invalid optional cross-client soak and UI arguments."""
+
+    if args.attach_rust_ui:
+        rust_ui_exe = resolve_rust_ui_exe(args.rust_ui_exe)
+        if not rust_ui_exe.is_file():
+            raise ValueError(f"Rust UI executable was not found: {rust_ui_exe}")
+        if args.ui_poll_interval_ms < 1000:
+            raise ValueError("--ui-poll-interval-ms must be at least 1000.")
+    for name in ("rust_upload_limit_kibps", "emulebb_upload_limit_kibps"):
+        value = getattr(args, name)
+        if value is not None and value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be greater than zero.")
 
 
 def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = False) -> int:
@@ -126,6 +154,7 @@ def wait_for_rust_transfer_completed(
     expected_size: int,
     expected_sha256: str,
     timeout_seconds: float,
+    snapshot_callback=None,
 ) -> dict[str, object]:
     """Waits until Rust completes one transfer and verifies the persisted bytes."""
 
@@ -137,6 +166,8 @@ def wait_for_rust_transfer_completed(
         row = dict(data) if isinstance(data, dict) else {"payload": data}
         row["observed_at"] = round(time.time(), 3)
         row["pieces_file"] = dtt.snapshot_file(pieces_path, hash_limit_bytes=expected_size)
+        if snapshot_callback is not None:
+            row["snapshot"] = snapshot_callback()
         observations.append(row)
         if (
             isinstance(data, dict)
@@ -442,6 +473,17 @@ def publish_rust_shared_tree(
     }
 
 
+def require_process_alive(process: subprocess.Popen, output_path: Path, label: str) -> dict[str, object]:
+    """Returns process liveness evidence or raises with the captured output tail."""
+
+    if process.poll() is None:
+        return {"pid": process.pid, "alive": True, "output": str(output_path)}
+    tail = ""
+    if output_path.is_file():
+        tail = output_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+    raise RuntimeError(f"{label} exited early with code {process.returncode}: {tail}")
+
+
 def require_cross_client_requirements(report: dict[str, object]) -> dict[str, object]:
     """Checks the high-level Rust/eMuleBB ED2K parity surfaces proven by the report."""
 
@@ -499,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the bidirectional Rust/eMuleBB cross-client transfer scenario."""
 
     args = parse_args(argv)
+    validate_optional_soak_args(args)
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
@@ -519,8 +562,24 @@ def main(argv: list[str] | None = None) -> int:
     }
     server_process: subprocess.Popen | None = None
     rust_process: subprocess.Popen[str] | None = None
+    rust_ui_process: subprocess.Popen[str] | None = None
+    rust_ui_log = None
+    rust_ui_metrics: dict[str, object] | None = None
+    rust_ui_output_path = paths.source_artifacts_dir / "rust-ui.out"
     emulebb_app = None
     current_phase = "initializing"
+
+    def sample_rust_ui(label: str) -> dict[str, object] | None:
+        if rust_ui_process is None:
+            return None
+        row: dict[str, object] = {
+            "label": label,
+            "process": require_process_alive(rust_ui_process, rust_ui_output_path, "emulebb-rust-ui"),
+        }
+        if rust_ui_metrics is not None:
+            row["metrics"] = rust_upload_soak.sample_process_metrics(rust_ui_metrics, 1.0)
+        return row
+
     try:
         p2p_address = dtt.resolve_lan_p2p_bind_address(
             lan_bind_addr=args.lan_bind_addr,
@@ -539,6 +598,10 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_address": p2p_address,
             "server_endpoint": server_endpoint,
             "ports": {**ports, "rust_rest": rust_rest_port, "rust_ed2k": rust_ed2k_port, "rust_kad": rust_kad_port},
+        }
+        report["limits"] = {
+            "rust_upload_limit_kibps": args.rust_upload_limit_kibps,
+            "emulebb_upload_limit_kibps": args.emulebb_upload_limit_kibps,
         }
 
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
@@ -609,6 +672,40 @@ def main(argv: list[str] | None = None) -> int:
             args.api_key,
             args.rest_ready_timeout_seconds,
         )
+        if args.rust_upload_limit_kibps is not None:
+            report["checks"]["rust_upload_limit"] = rust_upload_soak.patch_upload_limit(
+                rust_base_url,
+                args.api_key,
+                args.rust_upload_limit_kibps,
+            )
+        if args.attach_rust_ui:
+            current_phase = "launch_rust_ui"
+            rust_ui_exe = resolve_rust_ui_exe(args.rust_ui_exe)
+            rust_ui_process, rust_ui_log = rust_upload_soak.launch_rust_ui(
+                ui_exe=rust_ui_exe,
+                base_url=rust_base_url,
+                api_key=args.api_key,
+                poll_interval_ms=args.ui_poll_interval_ms,
+                output_path=rust_ui_output_path,
+            )
+            report["rust_ui"] = {
+                "exe": str(rust_ui_exe),
+                "output": str(rust_ui_output_path),
+                "poll_interval_ms": args.ui_poll_interval_ms,
+                "pid": rust_ui_process.pid,
+            }
+            report["checks"]["rust_ui_attached"] = require_process_alive(
+                rust_ui_process,
+                rust_ui_output_path,
+                "emulebb-rust-ui",
+            )
+            rust_ui_metrics = rust_upload_soak.open_process_metrics(
+                rust_ui_process,
+                "rust-ui",
+                paths.source_artifacts_dir / "analysis",
+                1.0,
+            )
+            report["checks"]["rust_ui_sample_after_launch"] = sample_rust_ui("after_launch")
         report["checks"]["rust_connect"] = request_json(rust_base_url, "POST", "/api/v1/servers/operations/connect", args.api_key)
         report["checks"]["rust_ed2k_connected"] = wait_for_rust_ed2k_connected(rust_base_url, args.api_key, args.server_connect_timeout_seconds)
         report["checks"]["rust_shared_tree_publish"] = publish_rust_shared_tree(
@@ -640,6 +737,11 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
         )
+        if args.emulebb_upload_limit_kibps is not None:
+            live_common.apply_emule_preferences(
+                Path(emulebb["config_dir"]),
+                (("MaxUpload", str(args.emulebb_upload_limit_kibps)),),
+            )
         dtt.write_server_met(Path(emulebb["config_dir"]) / "server.met", address=p2p_address, port=ports["ed2k_tcp"], name="emulebb-local-e2e")
         current_phase = "launch_emulebb"
         emulebb_app = live_common.launch_app(paths.app_exe, Path(emulebb["profile_base"]), minimized_to_tray=True)
@@ -668,8 +770,10 @@ def main(argv: list[str] | None = None) -> int:
                 incoming_path=completed_path,
                 temp_dir=Path(emulebb["temp_dir"]),
                 hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
-            ),
+            )
+            | {"rustUi": sample_rust_ui("rust_to_emulebb_transfer_wait")},
         )
+        report["checks"]["rust_ui_sample_after_rust_upload"] = sample_rust_ui("after_rust_upload")
         emulebb_fixture_path = paths.source_artifacts_dir / "emulebb-shared" / emulebb_to_rust_fixture_name()
         emulebb_fixture_sha256 = dtt.write_fixture_file(emulebb_fixture_path, args.fixture_size_bytes, seed=0xE1BB2026)
         report["emulebb_fixture"] = {
@@ -731,7 +835,9 @@ def main(argv: list[str] | None = None) -> int:
             expected_size=int(emulebb_link_info["size"]),
             expected_sha256=emulebb_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
+            snapshot_callback=lambda: {"rustUi": sample_rust_ui("emulebb_to_rust_transfer_wait")},
         )
+        report["checks"]["rust_ui_sample_after_emulebb_upload"] = sample_rust_ui("after_emulebb_upload")
         report["checks"]["rust_emulebb_manifest_metadata"] = require_rust_download_manifest_metadata(
             rust_profile,
             transfer_hash=emulebb_transfer_hash,
@@ -752,13 +858,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         cleanup: dict[str, object] = {}
+        report["rust_ui_process_metrics"] = rust_upload_soak.close_process_metrics(rust_ui_metrics)
         if emulebb_app is not None:
             try:
                 live_common.close_app_cleanly(emulebb_app)
                 cleanup[CLIENT_EMULEBB.profile_id] = {"ok": True}
             except Exception as exc:
                 cleanup[CLIENT_EMULEBB.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+        rust_client.stop_process_tree(rust_ui_process)
         rust_client.stop_process_tree(rust_process)
+        if rust_ui_log is not None:
+            rust_ui_log.close()
         goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
