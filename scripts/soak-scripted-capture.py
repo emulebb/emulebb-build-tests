@@ -378,12 +378,12 @@ def main(argv: list[str] | None = None) -> int:
     run_start = time.time()
     try:
         if client == "rust":
-            rust_runtime = report_dir / "rust-runtime" if args.fresh_profile else soak_root / "rust-runtime"
+            rust_profile_dir = report_dir / "rust-profile" if args.fresh_profile else soak_root / "rust-profile"
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
                 rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-                rest_port=rest_port, profile_dir=rust_runtime, packet_dump_dir=dump_dir,
-                incoming_dir=rust_runtime / "incoming",
+                rest_port=rest_port, profile_dir=rust_profile_dir, packet_dump_dir=dump_dir,
+                incoming_dir=rust_profile_dir / "incoming",
                 bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
                 server_met_url=args.server_met_url, server_endpoint=OPERATOR_SERVER,
                 obfuscation=obfuscation, timeouts=timeouts,

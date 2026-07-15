@@ -246,14 +246,14 @@ def run_rust_side(
     server_met_url: str,
     timeouts: dict[str, float],
     scenario: cs.ConvergedScenario,
-    persist_runtime_dir: Path | None = None,
+    persist_profile_dir: Path | None = None,
     shared_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Drives the rust client end-to-end for one scenario; returns its evidence."""
 
     # Persisted profile (when set): the daemon reuses its cached MD4/AICH catalog
     # across runs (incremental reload), so the shared library is not re-hashed.
-    profile_dir = persist_runtime_dir if persist_runtime_dir is not None else side_dir / "profile"
+    profile_dir = persist_profile_dir if persist_profile_dir is not None else side_dir / "profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
     daemon_log = side_dir / "daemon.out"
     packet_dump_dir = side_dir / "packet-dump"
@@ -779,7 +779,7 @@ def run_one_scenario(
     environment_parity: dict[str, Any],
     scenario_dir: Path,
     timeouts: dict[str, float],
-    persist_rust_runtime: Path | None = None,
+    persist_rust_profile_dir: Path | None = None,
     persist_mfc_artifacts: Path | None = None,
     shared_roots: list[str] | None = None,
 ) -> tuple[dict[str, Any], cs.ScenarioResult]:
@@ -796,7 +796,7 @@ def run_one_scenario(
         rest_port=args.rust_rest_port, bootstrap_nodes=bootstrap_nodes, terms=terms,
         seed_dir=seed_dir, side_dir=scenario_dir / "rust", server_met_url=args.server_met_url,
         timeouts=timeouts, scenario=scenario,
-        persist_runtime_dir=persist_rust_runtime, shared_roots=shared_roots,
+        persist_profile_dir=persist_rust_profile_dir, shared_roots=shared_roots,
     )
 
     log("--- MFC diagnostics side ---")
@@ -933,7 +933,7 @@ def main(argv: list[str] | None = None) -> int:
     # shared library is hashed once per client; and the live-wire library roots for
     # --full-shares (same set shared on both clients).
     persisted_root = output_root / "live-wire" / "persisted-profile"
-    persist_rust_runtime = (persisted_root / "rust-runtime") if args.persisted else None
+    persist_rust_profile_dir = (persisted_root / "rust-profile") if args.persisted else None
     persist_mfc_artifacts = (persisted_root / "mfc-runtime") if args.persisted else None
     shared_roots = rust_mod.load_shared_roots(inputs_path) if args.full_shares else None
     if args.full_shares:
@@ -960,7 +960,7 @@ def main(argv: list[str] | None = None) -> int:
             args=args, bind_ip=bind_ip, bootstrap_nodes=bootstrap_nodes, terms=terms,
             environment_parity=environment_parity,
             scenario_dir=scenario_dir, timeouts=timeouts,
-            persist_rust_runtime=persist_rust_runtime,
+            persist_rust_profile_dir=persist_rust_profile_dir,
             persist_mfc_artifacts=persist_mfc_artifacts, shared_roots=shared_roots,
         )
         scenario_report_path = report_dir / f"{scenario.name}.json"

@@ -685,7 +685,7 @@ def test_mfc_known_met_import_skips_without_direct_mfc_profile(tmp_path: Path) -
 
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=None,
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[],
         enabled=True,
     )
@@ -707,7 +707,7 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded(tmp_path: Path) 
     known_met = mfc_profile / "config" / "known.met"
     known_met.parent.mkdir(parents=True)
     known_met.write_bytes(b"placeholder")
-    db = tmp_path / "rust-runtime" / "emulebb-rust-metadata.db"
+    db = tmp_path / "rust-profile" / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE shared_file_sources (source_path TEXT PRIMARY KEY)")
@@ -717,7 +717,7 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded(tmp_path: Path) 
     assert runner.rust_share_in_place_row_count(db) == 1
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[str(tmp_path / "share")],
         enabled=True,
     )
@@ -737,7 +737,7 @@ def test_mfc_known_met_import_uses_marker_freshness_when_already_seeded(
     known_met = mfc_profile / "config" / "known.met"
     known_met.parent.mkdir(parents=True)
     known_met.write_bytes(b"placeholder")
-    runtime = tmp_path / "rust-runtime"
+    runtime = tmp_path / "rust-profile"
     db = runtime / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
@@ -750,7 +750,7 @@ def test_mfc_known_met_import_uses_marker_freshness_when_already_seeded(
 
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=runtime,
+        rust_profile_dir=runtime,
         shared_roots=[str(tmp_path / "share")],
         enabled=True,
     )
@@ -769,7 +769,7 @@ def test_mfc_known_met_import_runs_for_empty_rust_profile(
     known_met = mfc_profile / "config" / "known.met"
     known_met.parent.mkdir(parents=True)
     known_met.write_bytes(b"placeholder")
-    runtime = tmp_path / "rust-runtime"
+    runtime = tmp_path / "rust-profile"
     calls: list[dict[str, object]] = []
 
     def fake_import(**kwargs: object) -> dict[str, object]:
@@ -795,7 +795,7 @@ def test_mfc_known_met_import_runs_for_empty_rust_profile(
 
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=runtime,
+        rust_profile_dir=runtime,
         shared_roots=[str(tmp_path / "share")],
         enabled=True,
     )
@@ -813,7 +813,7 @@ def test_mfc_known_met_import_skips_when_disabled(tmp_path: Path) -> None:
 
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=tmp_path / "mfc",
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[],
         enabled=False,
     )
@@ -857,7 +857,7 @@ def test_mfc_known_met_import_records_redacted_counts(
 
     result = runner.import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[str(tmp_path / "share")],
         enabled=True,
     )
@@ -865,7 +865,7 @@ def test_mfc_known_met_import_records_redacted_counts(
     assert calls == [
         {
             "rust_repo": rust_repo,
-            "metadata_db": tmp_path / "rust-runtime" / "emulebb-rust-metadata.db",
+            "metadata_db": tmp_path / "rust-profile" / "emulebb-rust-metadata.db",
             "known_met": known_met,
             "shared_roots": [tmp_path / "share"],
         }
@@ -894,7 +894,7 @@ def test_mfc_shared_files_inventory_import_skips_without_inventory(tmp_path: Pat
 
     result = runner.import_mfc_shared_files_inventory_for_rust_profile(
         mfc_profile_dir=tmp_path / "mfc",
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[],
         inventory_path=None,
     )
@@ -946,7 +946,7 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
 
     result = runner.import_mfc_shared_files_inventory_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=tmp_path / "rust-runtime",
+        rust_profile_dir=tmp_path / "rust-profile",
         shared_roots=[str(tmp_path / "share")],
         inventory_path=inventory,
     )
@@ -955,7 +955,7 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
         {"load": inventory},
         {
             "rust_repo": rust_repo,
-            "metadata_db": tmp_path / "rust-runtime" / "emulebb-rust-metadata.db",
+            "metadata_db": tmp_path / "rust-profile" / "emulebb-rust-metadata.db",
             "known_met": known_met,
             "shared_file_rows": [
                 {"hash": "a" * 32, "path": str(tmp_path / "share" / "file.bin"), "sizeBytes": 4}
@@ -993,7 +993,7 @@ def test_mfc_shared_files_inventory_import_skips_when_rust_db_already_seeded(
     mfc_profile = tmp_path / "mfc"
     inventory = tmp_path / "inventory.json"
     inventory.write_text('{"data":{"items":[]}}', encoding="utf-8")
-    runtime = tmp_path / "rust-runtime"
+    runtime = tmp_path / "rust-profile"
     db = runtime / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
@@ -1009,7 +1009,7 @@ def test_mfc_shared_files_inventory_import_skips_when_rust_db_already_seeded(
 
     result = runner.import_mfc_shared_files_inventory_for_rust_profile(
         mfc_profile_dir=mfc_profile,
-        rust_runtime_dir=runtime,
+        rust_profile_dir=runtime,
         shared_roots=[str(tmp_path / "share")],
         inventory_path=inventory,
     )
@@ -1046,7 +1046,7 @@ def test_preseed_rust_shared_roots_writes_before_startup(
     monkeypatch.setattr(runner.rust_metadata, "seed_shared_directory_roots", fake_seed)
 
     result = runner.preseed_rust_shared_roots_for_startup(
-        rust_runtime_dir=runtime,
+        rust_profile_dir=runtime,
         shared_roots=[
             {"path": str(tmp_path / "share"), "recursive": True},
             str(tmp_path / "share"),
@@ -2123,7 +2123,7 @@ def test_load_diag_mtime_filter_applies_to_mfc_bad_peer_adapter(tmp_path: Path) 
     ]
 
 
-def test_share_warmup_parity_risk_reports_cold_fresh_rust_runtime(tmp_path: Path) -> None:
+def test_share_warmup_parity_risk_reports_cold_fresh_rust_profile(tmp_path: Path) -> None:
     runner = _load_soak_runner()
     checkpoints = tmp_path / "checkpoints"
     checkpoints.mkdir()

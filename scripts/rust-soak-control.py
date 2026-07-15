@@ -108,7 +108,7 @@ def default_live_wire_inputs() -> Path:
 def default_profile_dir() -> Path:
     """Returns the persistent Rust soak profile directory."""
 
-    return output_root() / "soak" / "rust-runtime"
+    return output_root() / "soak" / "rust-profile"
 
 
 def default_mfc_shareddir_file() -> Path:

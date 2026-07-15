@@ -738,7 +738,7 @@ def run_pass(
     require_packet_diagnostics: bool = False,
     soak_seconds: float = 0.0,
     shared_roots: list[object] | None = None,
-    persist_runtime_dir: Path | None = None,
+    persist_profile_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Runs one obfuscation pass end-to-end and returns its evidence."""
 
@@ -748,7 +748,7 @@ def run_pass(
     # hashed shared-file catalog (emulebb-rust-metadata.db) valid across launches, so the
     # operator's large shared dirs are hashed once and reused. Falls back to a
     # per-pass ephemeral dir only when persistence is disabled.
-    profile_dir = persist_runtime_dir if persist_runtime_dir is not None else pass_dir / "profile"
+    profile_dir = persist_profile_dir if persist_profile_dir is not None else pass_dir / "profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
     # pass_dir holds the per-run log/dumps; create it explicitly (it is no
     # longer created as a side effect of the profile dir when persistence is on).
@@ -969,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ephemeral-profile",
         action="store_true",
-        help="Use a fresh per-run runtime dir (re-hashes shares each launch). Default: a "
+        help="Use a fresh per-run profile dir (re-hashes shares each launch). Default: a "
         "PERSISTED profile dir so preferences + the hashed shared-file catalog survive launches.",
     )
     args = parser.parse_args(argv)
@@ -991,12 +991,12 @@ def main(argv: list[str] | None = None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     # Persisted profile (default): stable profile dir reused across launches so
     # settings + the hashed shared-file catalog stay valid.
-    persist_runtime_dir = (
+    persist_profile_dir = (
         None if args.ephemeral_profile
-        else output_root / "live-wire" / "persisted-profile" / "rust-runtime"
+        else output_root / "live-wire" / "persisted-profile" / "rust-profile"
     )
-    if persist_runtime_dir is not None:
-        log(f"persisted profile: {persist_runtime_dir}")
+    if persist_profile_dir is not None:
+        log(f"persisted profile: {persist_profile_dir}")
 
     log(f"ensuring hide.me split tunnel for {exe_path.name}...")
     vpn = ensure_vpn_ready(exe_path, name="eMuleBB Rust")
@@ -1034,7 +1034,7 @@ def main(argv: list[str] | None = None) -> int:
                 require_packet_diagnostics=args.require_packet_diagnostics,
                 soak_seconds=args.soak_seconds,
                 shared_roots=shared_roots,
-                persist_runtime_dir=persist_runtime_dir,
+                persist_profile_dir=persist_profile_dir,
             )
         )
         time.sleep(3.0)

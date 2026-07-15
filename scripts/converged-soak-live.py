@@ -1305,11 +1305,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shared-dir-file", help="Optional MFC shareddir.dat to use as the parity share source.")
     parser.add_argument("--rust-incoming-dir", help="Optional Rust incomingDir; also added to the parity share set.")
     parser.add_argument(
-        "--fresh-rust-runtime",
+        "--fresh-rust-profile",
         action="store_true",
         help=(
             "Use a campaign-scoped Rust runtime instead of the persistent "
-            "soak/rust-runtime profile. This intentionally discards the Rust "
+            "soak/rust-profile profile. This intentionally discards the Rust "
             "shared-file hash cache for the run."
         ),
     )
@@ -1693,8 +1693,8 @@ def known_met_import_signature(known_met: Path, shared_roots: list[object]) -> d
     }
 
 
-def load_known_met_import_marker(rust_runtime_dir: Path) -> dict[str, Any] | None:
-    marker = rust_runtime_dir / KNOWN_MET_IMPORT_MARKER
+def load_known_met_import_marker(rust_profile_dir: Path) -> dict[str, Any] | None:
+    marker = rust_profile_dir / KNOWN_MET_IMPORT_MARKER
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1703,13 +1703,13 @@ def load_known_met_import_marker(rust_runtime_dir: Path) -> dict[str, Any] | Non
 
 
 def write_known_met_import_marker(
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     signature: dict[str, Any],
     *,
     imported_records: int,
     imported_source_paths: int,
 ) -> None:
-    marker = rust_runtime_dir / KNOWN_MET_IMPORT_MARKER
+    marker = rust_profile_dir / KNOWN_MET_IMPORT_MARKER
     marker.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         **signature,
@@ -1732,7 +1732,7 @@ def known_met_import_marker_matches(
 def import_mfc_known_met_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     shared_roots: list[object],
     enabled: bool,
 ) -> dict[str, Any]:
@@ -1747,12 +1747,12 @@ def import_mfc_known_met_for_rust_profile(
     if not known_met.is_file():
         return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
 
-    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
+    metadata_db = rust_profile_dir / RUST_PROFILE_METADATA_FILE
     signature = known_met_import_signature(known_met, shared_roots)
     already_seeded = rust_share_in_place_row_count(metadata_db)
     if already_seeded > 0:
         marker_freshness = "matched" if known_met_import_marker_matches(
-            load_known_met_import_marker(rust_runtime_dir),
+            load_known_met_import_marker(rust_profile_dir),
             signature,
         ) else "not-required"
         return {
@@ -1771,7 +1771,7 @@ def import_mfc_known_met_for_rust_profile(
     )
     imported_source_paths = raw.get("importedSourcePaths", raw["importedRecords"])
     write_known_met_import_marker(
-        rust_runtime_dir,
+        rust_profile_dir,
         signature,
         imported_records=raw["importedRecords"],
         imported_source_paths=imported_source_paths,
@@ -1793,7 +1793,7 @@ def import_mfc_known_met_for_rust_profile(
 def import_mfc_shared_files_inventory_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     shared_roots: list[object],
     inventory_path: Path | None,
 ) -> dict[str, Any]:
@@ -1806,7 +1806,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     if not inventory_path.is_file():
         return {"enabled": True, "status": "skipped", "reason": "inventory-missing"}
 
-    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
+    metadata_db = rust_profile_dir / RUST_PROFILE_METADATA_FILE
     already_seeded = rust_share_in_place_row_count(metadata_db)
     if already_seeded > 0:
         return {
@@ -1842,7 +1842,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
 
 def preseed_rust_shared_roots_for_startup(
     *,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     shared_roots: list[object],
 ) -> dict[str, Any]:
     """Persist Rust shared roots before daemon startup reload can prune seeds."""
@@ -1862,7 +1862,7 @@ def preseed_rust_shared_roots_for_startup(
                 "accessible": Path(path).is_dir(),
             }
         )
-    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
+    metadata_db = rust_profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_db.exists():
         rust_metadata.create_metadata_db(resolve_rust_repo(), metadata_db)
     rust_metadata.seed_shared_directory_roots(metadata_db, roots)
@@ -2042,10 +2042,10 @@ def main(argv: list[str] | None = None) -> int:
     rust_profile_selection = resolve_rust_profile_paths(
         soak_root,
         campaign_id,
-        fresh=bool(args.fresh_rust_runtime),
+        fresh=bool(args.fresh_rust_profile),
         persisted_profile_dir=inputs.rust_profile_dir,
     )
-    rust_runtime = Path(rust_profile_selection["profileDir"])
+    rust_profile_dir = Path(rust_profile_selection["profileDir"])
     rust_packet_dump = Path(rust_profile_selection["packetDumpDir"])
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = soak_run_layout.mfc_soak_log_dir(
@@ -2058,7 +2058,7 @@ def main(argv: list[str] | None = None) -> int:
     reject_windows_temp_path(report_dir, "soak report directory")
     preflight_manifest = soak_run_layout.prepare_clean_run(
         paths=run_paths,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_log_dir,
     )
@@ -2077,7 +2077,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
-    log(f"rust profile mode: {rust_profile_selection['mode']} ({rust_runtime.name})")
+    log(f"rust profile mode: {rust_profile_selection['mode']} ({rust_profile_dir.name})")
     log(
         "P2P endpoint ports: "
         f"rust TCP {args.rust_ed2k_port}/UDP {args.rust_kad_port}; "
@@ -2135,9 +2135,9 @@ def main(argv: list[str] | None = None) -> int:
         "skippedInaccessibleSharedRootCount": skipped_inaccessible_shared_roots,
         "rustIncomingDirConfigured": rust_incoming_dir is not None,
         "directMfcProfile": mfc_profile_dir is not None,
-        "freshRustProfile": bool(args.fresh_rust_runtime),
+        "freshRustProfile": bool(args.fresh_rust_profile),
         "rustProfileMode": rust_profile_selection["mode"],
-        "rustProfileDirName": rust_runtime.name,
+        "rustProfileDirName": rust_profile_dir.name,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
         "preserveDiagnosticEvidence": not bool(args.trim_diagnostic_evidence),
@@ -2160,7 +2160,7 @@ def main(argv: list[str] | None = None) -> int:
     summary["preflightCleanup"] = preflight_manifest["preflightCleanup"]
     known_met_import = import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile_dir,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         shared_roots=shared_roots,
         enabled=not bool(args.skip_mfc_known_met_import),
     )
@@ -2177,7 +2177,7 @@ def main(argv: list[str] | None = None) -> int:
         log(f"MFC known.met import skipped: {known_met_import['reason']}")
     shared_files_inventory_import = import_mfc_shared_files_inventory_for_rust_profile(
         mfc_profile_dir=mfc_profile_dir,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         shared_roots=shared_roots,
         inventory_path=mfc_shared_files_inventory,
     )
@@ -2191,7 +2191,7 @@ def main(argv: list[str] | None = None) -> int:
     elif shared_files_inventory_import.get("enabled"):
         log(f"MFC shared-files inventory import skipped: {shared_files_inventory_import['reason']}")
     rust_shared_roots_preseed = preseed_rust_shared_roots_for_startup(
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         shared_roots=shared_roots,
     )
     summary["rustSharedRootsPreseed"] = rust_shared_roots_preseed
@@ -2210,7 +2210,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-            rest_port=args.rust_rest_port, profile_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
+            rest_port=args.rust_rest_port, profile_dir=rust_profile_dir, packet_dump_dir=rust_packet_dump,
             incoming_dir=rust_incoming_dir, bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
             server_met_url=args.server_met_url, server_endpoint=args.rust_server, obfuscation=obfuscation,
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
@@ -2679,10 +2679,10 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                     },
                     "errorLogHits": live_process_monitor.scan_log_markers(
-                        [rust_runtime / "daemon.out"], log_offsets, error_patterns
+                        [rust_profile_dir / "daemon.out"], log_offsets, error_patterns
                     ),
                     "logTrim": trim_log_tree(
-                        [rust_runtime / "daemon.out", rust_dump_dir, mfc_dump_dir],
+                        [rust_profile_dir / "daemon.out", rust_dump_dir, mfc_dump_dir],
                         max_bytes=args.log_trim_bytes,
                         preserve_diagnostic_evidence=not bool(args.trim_diagnostic_evidence),
                     ),

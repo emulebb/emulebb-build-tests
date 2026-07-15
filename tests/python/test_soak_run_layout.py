@@ -51,26 +51,26 @@ def test_mfc_soak_log_dir_resolves_generated_and_direct_profiles(tmp_path: Path)
 def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path) -> None:
     soak_root = tmp_path / "soak"
     paths = soak_run_layout.build_run_paths(soak_root, "20260706T073313Z")
-    rust_runtime = soak_root / "rust-runtime"
-    rust_packet_dump = rust_runtime / "packet-dump"
+    rust_profile_dir = soak_root / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
     rust_packet_dump.mkdir(parents=True)
-    (rust_runtime / "daemon.out").write_text("old daemon", encoding="utf-8")
-    (rust_runtime / "emulebb-rust-metadata.db").write_text("durable", encoding="utf-8")
+    (rust_profile_dir / "daemon.out").write_text("old daemon", encoding="utf-8")
+    (rust_profile_dir / "emulebb-rust-metadata.db").write_text("durable", encoding="utf-8")
     (rust_packet_dump / "emulebb-rust-diag-1.jsonl").write_text("{}", encoding="utf-8")
 
     manifest = soak_run_layout.prepare_clean_run(
         paths=paths,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         stop_process_cleanup=False,
     )
 
     assert manifest["preflightCleanup"]["rust"]["archivedCount"] == 2
-    assert not (rust_runtime / "daemon.out").exists()
+    assert not (rust_profile_dir / "daemon.out").exists()
     assert not (rust_packet_dump / "emulebb-rust-diag-1.jsonl").exists()
-    assert (rust_runtime / "emulebb-rust-metadata.db").read_text(encoding="utf-8") == "durable"
-    assert (paths.preflight_archive_dir / "rust-runtime" / "daemon.out").is_file()
+    assert (rust_profile_dir / "emulebb-rust-metadata.db").read_text(encoding="utf-8") == "durable"
+    assert (paths.preflight_archive_dir / "rust-profile" / "daemon.out").is_file()
     assert (paths.preflight_archive_dir / "rust-packet-dump" / "emulebb-rust-diag-1.jsonl").is_file()
     assert paths.actions_dir.is_dir()
     assert paths.checkpoints_dir.is_dir()
@@ -78,8 +78,8 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path)
 
 def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
     paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
-    rust_runtime = tmp_path / "soak" / "rust-runtime"
-    rust_packet_dump = rust_runtime / "packet-dump"
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
     mfc_logs = tmp_path / "mfc-logs"
     rust_packet_dump.mkdir(parents=True)
     mfc_logs.mkdir()
@@ -90,7 +90,7 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
 
     manifest = soak_run_layout.prepare_clean_run(
         paths=paths,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
         stop_process_cleanup=False,
@@ -109,12 +109,12 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
 
 def test_prepare_clean_run_publishes_last_run_and_latest_pointers(tmp_path: Path) -> None:
     paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
-    rust_runtime = tmp_path / "soak" / "rust-runtime"
-    rust_packet_dump = rust_runtime / "packet-dump"
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
 
     soak_run_layout.prepare_clean_run(
         paths=paths,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         stop_process_cleanup=False,
@@ -130,11 +130,11 @@ def test_prepare_clean_run_publishes_last_run_and_latest_pointers(tmp_path: Path
 
 def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
     paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
-    rust_runtime = tmp_path / "soak" / "rust-runtime"
-    rust_packet_dump = rust_runtime / "packet-dump"
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
     soak_run_layout.prepare_clean_run(
         paths=paths,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         stop_process_cleanup=False,
@@ -149,7 +149,7 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
 
 
 def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) -> None:
-    rust_runtime = tmp_path / "soak" / "rust-runtime"
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
     mfc_profile = tmp_path / "mfc-profile"
     rows = [
         WindowsProcessInfo(
@@ -168,7 +168,7 @@ def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) 
             pid=20,
             parent_pid=1,
             name="emulebb-rust-diagnostics.exe",
-            command_line=f"emulebb-rust-diagnostics.exe --profile {rust_runtime}",
+            command_line=f"emulebb-rust-diagnostics.exe --profile {rust_profile_dir}",
         ),
         WindowsProcessInfo(
             pid=30,
@@ -186,7 +186,7 @@ def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) 
 
     selected = soak_run_layout.select_stale_soak_process_roots(
         rows,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         mfc_profile_base=mfc_profile,
         exclude_pids=set(),
     )
@@ -195,7 +195,7 @@ def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) 
 
 
 def test_select_stale_soak_process_roots_excludes_current_family(tmp_path: Path) -> None:
-    rust_runtime = tmp_path / "soak" / "rust-runtime"
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
     rows = [
         WindowsProcessInfo(
             pid=10,
@@ -213,7 +213,7 @@ def test_select_stale_soak_process_roots_excludes_current_family(tmp_path: Path)
 
     selected = soak_run_layout.select_stale_soak_process_roots(
         rows,
-        rust_runtime_dir=rust_runtime,
+        rust_profile_dir=rust_profile_dir,
         mfc_profile_base=None,
         exclude_pids={10, 11},
     )

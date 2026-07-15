@@ -19,7 +19,7 @@ CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 RUST_PACKET_DUMP_GLOBS = (
     "*.jsonl",
 )
-RUST_RUNTIME_FILES = (
+RUST_PROFILE_VOLATILE_FILES = (
     "daemon.out",
 )
 MFC_LOG_GLOBS = (
@@ -144,7 +144,7 @@ def current_process_and_ancestor_pids(processes: list[windows_processes.WindowsP
 def select_stale_soak_process_roots(
     processes: list[windows_processes.WindowsProcessInfo],
     *,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     mfc_profile_base: Path | None,
     exclude_pids: set[int] | None = None,
 ) -> list[windows_processes.WindowsProcessInfo]:
@@ -164,7 +164,7 @@ def select_stale_soak_process_roots(
             or "launch-soak.py" in command_lower
             or "scripts\\launch-soak.py" in command_lower
         )
-        is_rust = name == "emulebb-rust-diagnostics.exe" and _command_contains_path(command_line, rust_runtime_dir)
+        is_rust = name == "emulebb-rust-diagnostics.exe" and _command_contains_path(command_line, rust_profile_dir)
         is_mfc = name == "emulebb-diagnostics.exe" and _command_contains_path(command_line, mfc_profile_base)
         if is_runner or is_rust or is_mfc:
             selected.append(process)
@@ -175,7 +175,7 @@ def select_stale_soak_process_roots(
 
 def stop_stale_soak_processes(
     *,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     mfc_log_dir: Path | None,
     timeout_seconds: float = 15.0,
 ) -> dict[str, Any]:
@@ -188,7 +188,7 @@ def stop_stale_soak_processes(
     mfc_profile_base = mfc_profile_base_from_log_dir(mfc_log_dir)
     targets = select_stale_soak_process_roots(
         processes,
-        rust_runtime_dir=rust_runtime_dir,
+        rust_profile_dir=rust_profile_dir,
         mfc_profile_base=mfc_profile_base,
         exclude_pids=excluded,
     )
@@ -246,18 +246,18 @@ def _glob_files(root: Path, patterns: Iterable[str]) -> list[Path]:
 
 def archive_rust_volatile_outputs(
     *,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     rust_packet_dump_dir: Path,
     archive_dir: Path,
 ) -> dict[str, Any]:
     """Archives Rust soak logs/dumps while preserving durable profile state."""
 
-    runtime_files = [rust_runtime_dir / name for name in RUST_RUNTIME_FILES]
+    profile_files = [rust_profile_dir / name for name in RUST_PROFILE_VOLATILE_FILES]
     packet_files = _glob_files(rust_packet_dump_dir, RUST_PACKET_DUMP_GLOBS)
     archived_runtime = _archive_files(
-        runtime_files,
-        source_root=rust_runtime_dir,
-        archive_root=archive_dir / "rust-runtime",
+        profile_files,
+        source_root=rust_profile_dir,
+        archive_root=archive_dir / "rust-profile",
     )
     archived_packets = _archive_files(
         packet_files,
@@ -291,7 +291,7 @@ def archive_mfc_log_outputs(*, mfc_log_dir: Path | None, archive_dir: Path) -> d
 def prepare_clean_run(
     *,
     paths: SoakRunPaths,
-    rust_runtime_dir: Path,
+    rust_profile_dir: Path,
     rust_packet_dump_dir: Path,
     mfc_log_dir: Path | None,
     stop_process_cleanup: bool = True,
@@ -303,12 +303,12 @@ def prepare_clean_run(
     paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
     preflight = paths.preflight_archive_dir
     processes = (
-        stop_stale_soak_processes(rust_runtime_dir=rust_runtime_dir, mfc_log_dir=mfc_log_dir)
+        stop_stale_soak_processes(rust_profile_dir=rust_profile_dir, mfc_log_dir=mfc_log_dir)
         if stop_process_cleanup
         else {"enabled": False, "reason": "disabled", "targets": [], "results": []}
     )
     rust = archive_rust_volatile_outputs(
-        rust_runtime_dir=rust_runtime_dir,
+        rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump_dir,
         archive_dir=preflight,
     )
@@ -320,7 +320,7 @@ def prepare_clean_run(
         "soakRoot": str(paths.soak_root),
         "reportDir": str(paths.report_dir),
         "archiveDir": str(paths.archive_dir),
-        "rustProfileDir": str(rust_runtime_dir),
+        "rustProfileDir": str(rust_profile_dir),
         "rustPacketDumpDir": str(rust_packet_dump_dir),
         "mfcLogDir": str(mfc_log_dir) if mfc_log_dir is not None else None,
         "preflightCleanup": {"processes": processes, "rust": rust, "mfc": mfc},

@@ -503,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
-    rust_runtime = resolve_direct_rust_profile(inputs)
+    rust_profile_dir = resolve_direct_rust_profile(inputs)
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -518,8 +518,8 @@ def main(argv: list[str] | None = None) -> int:
     run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
     preflight_manifest = soak_run_layout.prepare_clean_run(
         paths=run_paths,
-        rust_runtime_dir=rust_runtime,
-        rust_packet_dump_dir=rust_runtime / "packet-dump",
+        rust_profile_dir=rust_profile_dir,
+        rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
     )
     log(
@@ -577,8 +577,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-            rest_port=args.rust_rest_port, profile_dir=rust_runtime,
-            packet_dump_dir=rust_runtime / "packet-dump", incoming_dir=rust_runtime / "incoming",
+            rest_port=args.rust_rest_port, profile_dir=rust_profile_dir,
+            packet_dump_dir=rust_profile_dir / "packet-dump", incoming_dir=rust_profile_dir / "incoming",
             bootstrap_nodes=bootstrap_nodes,
             shared_roots=shared_roots, server_met_url=args.server_met_url,
             server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
@@ -704,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
         run_paths,
         status=status,
         extra={
-            "rustProfileDir": str(rust_runtime),
+            "rustProfileDir": str(rust_profile_dir),
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustUi": {

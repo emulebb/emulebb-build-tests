@@ -38,7 +38,7 @@ RUST_BASE = "http://192.168.1.210:4731"
 RUST_KEY = "converged-soak"
 MFC_BASE = "http://192.168.1.210:4732"
 MFC_KEY = "converged-soak-mfc"
-RUNTIME_DUMP = Path(r"C:\var\build\emulebb_out\soak\rust-runtime\packet-dump")
+RUST_PROFILE_DUMP = Path(r"C:\var\build\emulebb_out\soak\rust-profile\packet-dump")
 MFC_LOGS = Path(r"F:\M\H06T01\dldz\EMULE_BIN\logs")
 # Sentinel "since" that keeps every record — used to load a full (unwindowed) trace
 # for the cumulative Kad opcode-coverage signal.
@@ -308,7 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-key", default=RUST_KEY)
     parser.add_argument("--mfc-base", default=MFC_BASE)
     parser.add_argument("--mfc-key", default=MFC_KEY)
-    parser.add_argument("--rust-dump", type=Path, default=RUNTIME_DUMP, help="Rust packet-dump directory.")
+    parser.add_argument("--rust-dump", type=Path, default=RUST_PROFILE_DUMP, help="Rust packet-dump directory.")
     parser.add_argument("--diff", action="store_true", help="Also run the cross-client divergence report.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
