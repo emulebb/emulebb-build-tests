@@ -95,6 +95,10 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "--cpu-profile-stack",
             "--duration-seconds",
             "3600",
+            "--rest-timeout-seconds",
+            "30",
+            "--connect-timeout-seconds",
+            "90",
             "--rust-ui",
             "--rust-ui-poll-interval-ms",
             "2000",
@@ -111,6 +115,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.cpu_profile_seconds == 60
     assert args.cpu_profile_stack is True
     assert args.duration_seconds == 3600
+    assert args.rest_timeout_seconds == 30
+    assert args.connect_timeout_seconds == 90
     assert args.rust_ui is True
     assert args.rust_ui_poll_interval_ms == 2000
     assert args.vpn_guard_scenario == "success"

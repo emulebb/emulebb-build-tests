@@ -110,6 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both).")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--bootstrap-limit", type=int, default=40)
+    parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
     parser.add_argument(
         "--vpn-guard-live-config",
         help="Ignored local VPN Guard config; required when --vpn-guard-scenario is not off.",
@@ -476,6 +478,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.duration_seconds < 0:
         raise RuntimeError("--duration-seconds must not be negative.")
+    if args.rest_timeout_seconds <= 0:
+        raise RuntimeError("--rest-timeout-seconds must be greater than zero.")
+    if args.connect_timeout_seconds <= 0:
+        raise RuntimeError("--connect-timeout-seconds must be greater than zero.")
     obfuscation = not args.no_obfuscation
     endpoint_ports = soak_launch.require_distinct_endpoint_ports(
         rust_ed2k_port=args.rust_ed2k_port,
@@ -565,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
     log(f"Kad bootstrap from {args.nodes_url}: {len(bootstrap_nodes)} contacts")
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
-    timeouts = {"rest": 60.0, "connect": 240.0}
+    timeouts = {"rest": args.rest_timeout_seconds, "connect": args.connect_timeout_seconds}
 
     rust_handles: dict | None = None
     rust_ui_handles: dict | None = None
