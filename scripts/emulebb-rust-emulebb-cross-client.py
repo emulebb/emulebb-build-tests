@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -32,6 +33,7 @@ CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
 CLIENT_RUST = CLIENT_IDENTITIES["emulebb_rust"]
 ED2K_PART_SIZE_BYTES = 9_728_000
 UNICODE_FIXTURE_SUFFIX = "Unicode-\u00e9-\u6f22"
+MFC_PROFILE_SEED_FILES = ("preferences.ini", "preferences.dat", "nodes.dat")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -371,6 +373,26 @@ def write_rust_shared_tree_fixture(root: Path, size_bytes: int) -> dict[str, obj
         "unicode_name": True,
         "recursive": True,
     }
+
+
+def materialize_local_profile_seed(
+    seed_config_dir: Path,
+    output_dir: Path,
+    *,
+    server_address: str,
+    server_port: int,
+    server_name: str,
+) -> Path:
+    """Writes a complete local MFC seed profile with the run's goed2k server."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name in MFC_PROFILE_SEED_FILES:
+        source = seed_config_dir / name
+        if not source.is_file():
+            raise RuntimeError(f"Profile seed is missing required file: {source}")
+        shutil.copy2(source, output_dir / name)
+    dtt.write_server_met(output_dir / "server.met", address=server_address, port=server_port, name=server_name)
+    return output_dir
 
 
 def require_shared_file_item(shared_files: dict[str, object], file_name: str) -> dict[str, object]:
@@ -722,7 +744,15 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["rust_shared_file"] = rust_file
         report["checks"]["rust_server_file"] = goed2k.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
 
-        emulebb = live_common.prepare_scenario_profile(profile_seed_dir, paths.source_artifacts_dir, [], CLIENT_EMULEBB.profile_id)
+        emulebb_seed_dir = materialize_local_profile_seed(
+            profile_seed_dir,
+            paths.source_artifacts_dir / "emulebb-profile-seed",
+            server_address=p2p_address,
+            server_port=ports["ed2k_tcp"],
+            server_name="emulebb-local-e2e",
+        )
+        report["emulebb_profile_seed_dir"] = str(emulebb_seed_dir)
+        emulebb = live_common.prepare_scenario_profile(emulebb_seed_dir, paths.source_artifacts_dir, [], CLIENT_EMULEBB.profile_id)
         dtt.configure_client_profile(
             config_dir=Path(emulebb["config_dir"]),
             app_exe=paths.app_exe,

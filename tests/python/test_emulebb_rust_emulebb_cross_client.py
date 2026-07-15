@@ -254,6 +254,28 @@ def test_write_rust_shared_tree_fixture_uses_nested_recursive_fixture(tmp_path: 
     assert len(str(fixture["sha256"])) == 64
 
 
+def test_materialize_local_profile_seed_adds_run_server_met(tmp_path: Path) -> None:
+    module = load_suite_module()
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    for name in module.MFC_PROFILE_SEED_FILES:
+        (seed / name).write_bytes(name.encode("ascii"))
+
+    output = module.materialize_local_profile_seed(
+        seed,
+        tmp_path / "generated-seed",
+        server_address="192.0.2.44",
+        server_port=4711,
+        server_name="local-cross-client",
+    )
+
+    for name in module.MFC_PROFILE_SEED_FILES:
+        assert (output / name).read_bytes() == name.encode("ascii")
+    server_met = output / "server.met"
+    assert server_met.is_file()
+    assert b"local-cross-client" in server_met.read_bytes()
+
+
 def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     calls: list[tuple[str, str, object]] = []
