@@ -106,3 +106,58 @@ def test_bring_up_rust_cleans_process_on_connection_timeout(tmp_path: Path, monk
 
     assert stopped == [fake_process]
     assert launched["handle"].closed is True
+
+
+def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeypatch) -> None:
+    class FakeRustMod:
+        share_calls = 0
+
+        @staticmethod
+        def get_stats(_base_url: str) -> dict[str, object]:
+            return {"ed2kConnected": True, "ed2kHighId": True}
+
+        @classmethod
+        def import_server_met(cls, _base_url: str, _server_met_url: str) -> None:
+            return None
+
+        @classmethod
+        def share_directories(cls, _base_url: str, _shared_roots: list[object]) -> None:
+            cls.share_calls += 1
+
+    class FakeProcess:
+        pid = 4343
+
+    fake_process = FakeProcess()
+
+    monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        soak_launch,
+        "start_rust_client_executable_with_output",
+        lambda _exe_path, _profile_dir, _handle: fake_process,
+    )
+    monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: None)
+
+    result = soak_launch.bring_up_rust(
+        rust_mod=FakeRustMod(),
+        exe_path=tmp_path / "emulebb-rust-diagnostics.exe",
+        bind_ip="10.0.0.2",
+        rest_addr="192.0.2.10",
+        rest_port=4731,
+        profile_dir=tmp_path / "profile",
+        packet_dump_dir=tmp_path / "profile" / "packet-dump",
+        incoming_dir=tmp_path / "profile" / "incoming",
+        bootstrap_nodes=[],
+        shared_roots=[object()],
+        server_met_url="",
+        server_endpoint=soak_launch.OPERATOR_SERVER,
+        obfuscation=True,
+        timeouts={"rest": 1.0, "connect": 1.0},
+        apply_shared_directories=False,
+    )
+
+    assert FakeRustMod.share_calls == 0
+    assert result["sharedDirectoriesApplied"] is False
+    result["logHandle"].close()

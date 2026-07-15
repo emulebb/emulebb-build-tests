@@ -114,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
     parser.add_argument(
+        "--reuse-rust-shared-profile",
+        action="store_true",
+        help="Do not PATCH Rust shared directories; reuse the existing persistent Rust profile state.",
+    )
+    parser.add_argument(
         "--vpn-guard-live-config",
         help="Ignored local VPN Guard config; required when --vpn-guard-scenario is not off.",
     )
@@ -600,6 +605,7 @@ def main(argv: list[str] | None = None) -> int:
             server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             enable_packet_dump=not args.rust_regular,
+            apply_shared_directories=not args.reuse_rust_shared_profile,
             vpn_guard_mode=str(vpn_guard_profile["mode"]),
             vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
         )
@@ -743,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
                 "outputPath": rust_ui_handles.get("outputPath") if rust_ui_handles is not None else None,
             },
             "durationSeconds": args.duration_seconds,
+            "reuseRustSharedProfile": bool(args.reuse_rust_shared_profile),
             "error": failure,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,

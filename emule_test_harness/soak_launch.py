@@ -599,6 +599,7 @@ def bring_up_rust(
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
     enable_packet_dump: bool = True,
+    apply_shared_directories: bool = True,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent profile and returns live handles.
 
@@ -662,7 +663,10 @@ def bring_up_rust(
             description="rust server connect",
             endpoint=server_endpoint,
         )
-        rust_mod.share_directories(base_url, shared_roots)
+        if apply_shared_directories:
+            rust_mod.share_directories(base_url, shared_roots)
+        else:
+            log("rust shared-directory PATCH skipped; reusing existing Rust profile shared roots.")
 
         def connected() -> dict[str, Any] | None:
             stats = rust_mod.get_stats(base_url)
@@ -679,6 +683,7 @@ def bring_up_rust(
         "logHandle": handle,
         "baseUrl": base_url,
         "packetDumpDir": packet_dump_dir,
+        "sharedDirectoriesApplied": apply_shared_directories,
     }
 
 
