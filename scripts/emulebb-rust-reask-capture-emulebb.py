@@ -88,15 +88,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def start_rust_uploader(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpoint,
                         used_ports, shared_dir):
-    """Writes a config + launches the Rust uploader (activeSlots=0, reask on, plaintext)."""
+    """Writes a profile + launches the Rust uploader (activeSlots=0, reask on, plaintext)."""
     rest_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     ed2k_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     kad_port = cc.choose_extra_port(lan_bind_addr, used_ports)
-    runtime = paths.source_artifacts_dir / "rust-uploader-runtime"
-    config = paths.source_artifacts_dir / "rust-uploader.toml"
-    rust_client.write_rust_config(
-        config,
-        runtime_dir=runtime,
+    profile = paths.source_artifacts_dir / "rust-uploader-profile"
+    rust_client.write_rust_profile(
+        profile,
+        rust_repo=repo,
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=api_key,
@@ -112,7 +111,7 @@ def start_rust_uploader(*, repo, paths, lan_bind_addr, api_key, p2p_address, ser
     )
     out_path = paths.source_artifacts_dir / "rust-uploader.out"
     os.environ["RUST_LOG"] = RUST_LOG
-    process = rust_client.start_rust_client(repo, config, out_path)
+    process = rust_client.start_rust_client(repo, profile, out_path)
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
     # Share the fixture directory before connecting so the offer-files advertisement

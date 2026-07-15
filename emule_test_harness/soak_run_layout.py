@@ -320,7 +320,7 @@ def prepare_clean_run(
         "soakRoot": str(paths.soak_root),
         "reportDir": str(paths.report_dir),
         "archiveDir": str(paths.archive_dir),
-        "rustRuntimeDir": str(rust_runtime_dir),
+        "rustProfileDir": str(rust_runtime_dir),
         "rustPacketDumpDir": str(rust_packet_dump_dir),
         "mfcLogDir": str(mfc_log_dir) if mfc_log_dir is not None else None,
         "preflightCleanup": {"processes": processes, "rust": rust, "mfc": mfc},

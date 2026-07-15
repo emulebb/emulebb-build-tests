@@ -74,19 +74,17 @@ def test_amutorrent_adapter_drives_rust_controller(tmp_path: Path) -> None:
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
 
-    runtime_dir = tmp_path / "runtime"
-    config_path = tmp_path / "emulebb-rust.toml"
+    profile_dir = tmp_path / "profile"
     output_path = tmp_path / "emulebb-rust.out"
     port = free_lan_port(lan_host)
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=repo,
         rest_addr=lan_host,
         rest_port=port,
         api_key=API_KEY,
     )
-    metadata_path = runtime_dir / "metadata.sqlite"
-    rust_metadata.create_metadata_db(repo, metadata_path)
+    metadata_path = profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
     rust_metadata.seed_indexed_file(
         metadata_path,
         ed2k_hash=SEED_HASH,
@@ -96,7 +94,7 @@ def test_amutorrent_adapter_drives_rust_controller(tmp_path: Path) -> None:
         availability_score=3,
     )
 
-    process = rust_client.start_rust_client(repo, config_path, output_path)
+    process = rust_client.start_rust_client(repo, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)

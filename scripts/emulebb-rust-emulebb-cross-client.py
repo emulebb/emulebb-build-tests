@@ -216,7 +216,7 @@ def wait_for_rust_search_result(
 
 
 def require_rust_download_manifest_metadata(
-    runtime_dir: Path,
+    profile_dir: Path,
     *,
     transfer_hash: str,
     expected_name: str,
@@ -225,7 +225,8 @@ def require_rust_download_manifest_metadata(
 ) -> dict[str, object]:
     """Requires Rust to persist stock metadata learned from a cross-client source."""
 
-    manifest = rust_metadata.read_transfer_manifest(runtime_dir / "metadata.sqlite", transfer_hash)
+    metadata_path = profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
+    manifest = rust_metadata.read_transfer_manifest(metadata_path, transfer_hash)
     if manifest is None:
         raise RuntimeError(f"Rust cross-client manifest is missing for {transfer_hash}.")
     expected_part_count = max(1, (expected_size + ED2K_PART_SIZE_BYTES - 1) // ED2K_PART_SIZE_BYTES)
@@ -277,7 +278,7 @@ def require_rust_download_manifest_metadata(
     if not source_user_hashes:
         raise RuntimeError("Rust cross-client manifest did not persist the peer user hash.")
     return {
-        "metadataPath": str(runtime_dir / "metadata.sqlite"),
+        "metadataPath": str(metadata_path),
         "fileHash": str(manifest.get("file_hash") or "").lower(),
         "canonicalName": manifest.get("canonical_name"),
         "fileSize": int(manifest.get("file_size") or 0),
@@ -572,11 +573,10 @@ def main(argv: list[str] | None = None) -> int:
         report["fixture"] = dict(rust_shared_tree)
         report["rust_shared_tree"] = dict(rust_shared_tree)
 
-        rust_runtime = paths.source_artifacts_dir / "rust-runtime"
-        rust_config = paths.source_artifacts_dir / "rust.toml"
-        rust_client.write_rust_config(
-            rust_config,
-            runtime_dir=rust_runtime,
+        rust_profile = paths.source_artifacts_dir / "rust-profile"
+        rust_client.write_rust_profile(
+            rust_profile,
+            rust_repo=rust_repo,
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
             api_key=args.api_key,
@@ -599,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
             rust_features = "packet-diagnostics"
             report["rust_packet_dump_dir"] = str(rust_packet_dir)
         rust_process = rust_client.start_rust_client(
-            rust_repo, rust_config, paths.source_artifacts_dir / "rust.out", features=rust_features
+            rust_repo, rust_profile, paths.source_artifacts_dir / "rust.out", features=rust_features
         )
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = wait_for_rust_rest(
@@ -727,13 +727,13 @@ def main(argv: list[str] | None = None) -> int:
             rust_base_url,
             args.api_key,
             emulebb_transfer_hash,
-            rust_runtime,
+            rust_profile,
             expected_size=int(emulebb_link_info["size"]),
             expected_sha256=emulebb_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
         )
         report["checks"]["rust_emulebb_manifest_metadata"] = require_rust_download_manifest_metadata(
-            rust_runtime,
+            rust_profile,
             transfer_hash=emulebb_transfer_hash,
             expected_name=decoded_ed2k_link_name(emulebb_link_info),
             expected_size=int(emulebb_link_info["size"]),

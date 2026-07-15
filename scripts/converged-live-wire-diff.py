@@ -55,7 +55,7 @@ from emule_test_harness.paths import get_workspace_output_root, reject_windows_t
 from emule_test_harness.rust_client import (
     start_rust_client_executable_with_output,
     stop_process_tree,
-    write_rust_config,
+    write_rust_profile,
 )
 from emule_test_harness.vm_guest_profiles import (
     retry_http_json,
@@ -251,19 +251,18 @@ def run_rust_side(
 ) -> dict[str, Any]:
     """Drives the rust client end-to-end for one scenario; returns its evidence."""
 
-    # Persisted runtime (when set): the daemon reuses its cached MD4/AICH catalog
+    # Persisted profile (when set): the daemon reuses its cached MD4/AICH catalog
     # across runs (incremental reload), so the shared library is not re-hashed.
-    runtime_dir = persist_runtime_dir if persist_runtime_dir is not None else side_dir / "runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    config_path = side_dir / "emulebb-rust.toml"
+    profile_dir = persist_runtime_dir if persist_runtime_dir is not None else side_dir / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
     daemon_log = side_dir / "daemon.out"
     packet_dump_dir = side_dir / "packet-dump"
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_addr}:{rest_port}"
 
-    write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    write_rust_profile(
+        profile_dir,
+        rust_repo=REPO_ROOT.parent / "emulebb-rust",
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=RUST_API_KEY,
@@ -275,17 +274,15 @@ def run_rust_side(
         obfuscation_enabled=scenario.obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
+        nat_enabled=not scenario.low_id,
     )
     # HighID needs UPnP to map the high ports on the hide.me IGD; the
     # firewalled/LowID scenario deliberately leaves NAT/UPnP off so no port
     # forward is published and the server assigns a LowID.
-    nat_enabled = "false" if scenario.low_id else "true"
-    with config_path.open("a", encoding="utf-8") as cfg:
-        cfg.write(f"\n[nat]\nenabled = {nat_enabled}\n")
 
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     handle = daemon_log.open("w", encoding="utf-8")
-    process = start_rust_client_executable_with_output(exe_path, config_path, handle)
+    process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
     evidence: dict[str, Any] = {"client": "rust", "baseUrl": base_url, "scenario": scenario.name}
     try:
         wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)

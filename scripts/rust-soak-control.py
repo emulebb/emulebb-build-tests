@@ -4,7 +4,7 @@ This is intentionally operational glue, not a scenario runner. It keeps the
 common long-soak chores reusable:
 
 * sample sanitized Rust REST counters;
-* gracefully restart the diagnostics daemon against an existing runtime dir;
+* gracefully restart the diagnostics daemon against an existing profile dir;
 * restart the upload parity monitor with the current PID-specific Rust diag log;
 * run reusable long-soak cadence checks without shell loops.
 
@@ -44,7 +44,11 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.rust_client import spawn_rust_daemon
+from emule_test_harness.rust_client import (
+    RUST_PROFILE_METADATA_FILE,
+    RUST_PROFILE_SETTINGS_FILE,
+    spawn_rust_daemon,
+)
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
     MFC_ED2K_PORT,
@@ -101,8 +105,8 @@ def default_live_wire_inputs() -> Path:
     return REPO_ROOT / "live-wire-inputs.local.json"
 
 
-def default_runtime_dir() -> Path:
-    """Returns the persistent Rust soak runtime directory."""
+def default_profile_dir() -> Path:
+    """Returns the persistent Rust soak profile directory."""
 
     return output_root() / "soak" / "rust-runtime"
 
@@ -1452,7 +1456,7 @@ def default_rust_repo() -> Path:
 def default_metadata_db() -> Path:
     """Returns the persistent Rust metadata database path."""
 
-    return default_runtime_dir() / "metadata.sqlite"
+    return default_profile_dir() / RUST_PROFILE_METADATA_FILE
 
 
 def normalized_windows_path_key(value: object) -> str:
@@ -2800,8 +2804,9 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
         ).fetchone()[0]
         rows = connection.execute(
             """
-            SELECT source_path, file_size, source_mtime_ms
-            FROM share_in_place_sources
+            SELECT local_paths.display_path, shared_file_sources.file_size, shared_file_sources.source_mtime_ms
+            FROM shared_file_sources
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
             """
         ).fetchall()
     finally:
@@ -2935,28 +2940,28 @@ def latest_diag_log(log_dir: Path, rust_pid: int | None = None) -> Path | None:
 
 
 def start_rust(args: argparse.Namespace) -> dict[str, object]:
-    """Starts the diagnostics daemon against the persisted runtime."""
+    """Starts the diagnostics daemon against the persisted profile."""
 
-    runtime_dir = args.runtime_dir
-    log_dir = args.log_dir or runtime_dir / "packet-dump"
-    config_path = args.config or runtime_dir / "emulebb-rust.toml"
+    profile_dir = args.profile_dir
+    log_dir = args.log_dir or profile_dir / "packet-dump"
+    settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
     exe = args.exe
     if not exe.is_file():
         raise RuntimeError(f"Rust diagnostics executable was not found: {exe}")
-    if not config_path.is_file():
-        raise RuntimeError(f"Rust config was not found: {config_path}")
-    runtime_dir.mkdir(parents=True, exist_ok=True)
+    if not settings_path.is_file():
+        raise RuntimeError(f"Rust profile settings were not found: {settings_path}")
+    profile_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
-    stdout = (runtime_dir / "daemon.out").open("ab", buffering=0)
+    stdout = (profile_dir / "daemon.out").open("ab", buffering=0)
     # WHY: detached so the daemon outlives this control process (the persisted soak
     # is driven/observed separately); binary append handle matches the existing log.
     process = spawn_rust_daemon(
         exe,
-        config_path,
+        profile_dir,
         output_handle=stdout,
-        cwd=runtime_dir,
+        cwd=profile_dir,
         env=env,
         detached=True,
         text=False,
@@ -2974,7 +2979,7 @@ def start_rust(args: argparse.Namespace) -> dict[str, object]:
         time.sleep(1.0)
     return {
         "rustPid": process.pid,
-        "runtimeDir": str(runtime_dir),
+        "profileDir": str(profile_dir),
         "logDir": str(log_dir),
         "diagLog": str(diag) if diag is not None else None,
         "connected": connected,
@@ -4929,10 +4934,9 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_parser.add_argument("--check-adapter", action="store_true")
     vpn_parser.set_defaults(func=vpn_allowlist_status)
 
-    start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
-    start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())
+    start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted profile.")
+    start_parser.add_argument("--profile-dir", type=Path, default=default_profile_dir())
     start_parser.add_argument("--log-dir", type=Path)
-    start_parser.add_argument("--config", type=Path)
     start_parser.add_argument("--exe", type=Path, default=default_executable())
     start_parser.add_argument("--rest-timeout-seconds", type=float, default=90.0)
     start_parser.add_argument("--connect-timeout-seconds", type=float, default=180.0)
@@ -4959,7 +4963,7 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser = sub.add_parser("restart-monitor", help="Restart the upload parity monitor.")
     monitor_parser.add_argument("--mfc-upload-log", type=Path)
     monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
-    monitor_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    monitor_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
     monitor_parser.add_argument("--rust-pid", type=int)
     monitor_parser.add_argument("--rust-diag-log", type=Path)
     monitor_parser.add_argument("--interval-seconds", type=float, default=300.0)
@@ -4969,7 +4973,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser = sub.add_parser("watch-once", help="Run one long-soak cadence check and optional monitor repair.")
     watch_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     watch_parser.add_argument("--stale-seconds", type=float, default=900.0)
-    watch_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    watch_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
     watch_parser.add_argument("--rust-pid", type=int)
     watch_parser.add_argument("--rust-diag-log", type=Path)
     watch_parser.add_argument("--mfc-upload-log", type=Path)
@@ -5024,7 +5028,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_loop_parser = sub.add_parser("watch-loop", help="Run repeated long-soak cadence checks.")
     watch_loop_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     watch_loop_parser.add_argument("--stale-seconds", type=float, default=900.0)
-    watch_loop_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    watch_loop_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
     watch_loop_parser.add_argument("--rust-pid", type=int)
     watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
@@ -5067,7 +5071,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_watch_loop_parser = sub.add_parser("start-watch-loop", help="Start detached repeated soak checks.")
     start_watch_loop_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     start_watch_loop_parser.add_argument("--stale-seconds", type=float, default=900.0)
-    start_watch_loop_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    start_watch_loop_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
     start_watch_loop_parser.add_argument("--rust-pid", type=int)
     start_watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     start_watch_loop_parser.add_argument("--mfc-upload-log", type=Path)

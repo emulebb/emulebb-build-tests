@@ -431,20 +431,20 @@ def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> No
     assert skipped == 1
 
 
-def test_converged_soak_defaults_to_persistent_rust_runtime(tmp_path: Path) -> None:
+def test_converged_soak_defaults_to_persistent_rust_profile(tmp_path: Path) -> None:
     runner = _load_soak_runner()
-    persisted_runtime = tmp_path / "profiles" / "rust"
+    persisted_profile = tmp_path / "profiles" / "rust"
 
-    selection = runner.resolve_rust_runtime_paths(
+    selection = runner.resolve_rust_profile_paths(
         tmp_path / "soak",
         "20260627T120000Z",
         fresh=False,
-        persisted_runtime_dir=persisted_runtime,
+        persisted_profile_dir=persisted_profile,
     )
 
     assert selection == {
-        "runtimeDir": persisted_runtime.resolve(),
-        "packetDumpDir": persisted_runtime.resolve() / "packet-dump",
+        "profileDir": persisted_profile.resolve(),
+        "packetDumpDir": persisted_profile.resolve() / "packet-dump",
         "mode": "persistent-input",
         "fresh": False,
     }
@@ -454,17 +454,17 @@ def test_converged_soak_requires_persisted_rust_profile_for_persistent_runs(tmp_
     runner = _load_soak_runner()
 
     with pytest.raises(RuntimeError, match="rust_profile.profile_dir"):
-        runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=False)
+        runner.resolve_rust_profile_paths(tmp_path / "soak", "20260627T120000Z", fresh=False)
 
 
-def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) -> None:
+def test_converged_soak_fresh_rust_profile_is_campaign_scoped(tmp_path: Path) -> None:
     runner = _load_soak_runner()
 
-    selection = runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=True)
+    selection = runner.resolve_rust_profile_paths(tmp_path / "soak", "20260627T120000Z", fresh=True)
 
     assert selection == {
-        "runtimeDir": tmp_path / "soak" / "rust-runtime-20260627T120000Z",
-        "packetDumpDir": tmp_path / "soak" / "rust-runtime-20260627T120000Z" / "packet-dump",
+        "profileDir": tmp_path / "soak" / "rust-profile-20260627T120000Z",
+        "packetDumpDir": tmp_path / "soak" / "rust-profile-20260627T120000Z" / "packet-dump",
         "mode": "fresh-campaign",
         "fresh": True,
     }
@@ -707,11 +707,11 @@ def test_mfc_known_met_import_skips_when_rust_db_already_seeded(tmp_path: Path) 
     known_met = mfc_profile / "config" / "known.met"
     known_met.parent.mkdir(parents=True)
     known_met.write_bytes(b"placeholder")
-    db = tmp_path / "rust-runtime" / "metadata.sqlite"
+    db = tmp_path / "rust-runtime" / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE share_in_place_sources (source_path TEXT PRIMARY KEY)")
-    conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
+    conn.execute("CREATE TABLE shared_file_sources (source_path TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO shared_file_sources VALUES ('C:/x/a.iso')")
     conn.commit()
     conn.close()
     assert runner.rust_share_in_place_row_count(db) == 1
@@ -738,11 +738,11 @@ def test_mfc_known_met_import_uses_marker_freshness_when_already_seeded(
     known_met.parent.mkdir(parents=True)
     known_met.write_bytes(b"placeholder")
     runtime = tmp_path / "rust-runtime"
-    db = runtime / "metadata.sqlite"
+    db = runtime / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE share_in_place_sources (source_path TEXT PRIMARY KEY)")
-    conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
+    conn.execute("CREATE TABLE shared_file_sources (source_path TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO shared_file_sources VALUES ('C:/x/a.iso')")
     conn.commit()
     conn.close()
     signature = runner.known_met_import_signature(known_met, [str(tmp_path / "share")])
@@ -844,7 +844,7 @@ def test_mfc_known_met_import_records_redacted_counts(
             "importedRecords": 2,
             "importedSourcePaths": 3,
             "dryRun": False,
-            "metadataDb": str(tmp_path / "private" / "metadata.sqlite"),
+            "metadataDb": str(tmp_path / "private" / "emulebb-rust-metadata.db"),
             "skipped": {
                 "missing_identity": 0,
                 "md4_count_mismatch": 0,
@@ -865,7 +865,7 @@ def test_mfc_known_met_import_records_redacted_counts(
     assert calls == [
         {
             "rust_repo": rust_repo,
-            "metadata_db": tmp_path / "rust-runtime" / "metadata.sqlite",
+            "metadata_db": tmp_path / "rust-runtime" / "emulebb-rust-metadata.db",
             "known_met": known_met,
             "shared_roots": [tmp_path / "share"],
         }
@@ -929,7 +929,7 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
             "matchedRows": 3,
             "importedRows": 3,
             "dryRun": False,
-            "metadataDb": str(tmp_path / "private" / "metadata.sqlite"),
+            "metadataDb": str(tmp_path / "private" / "emulebb-rust-metadata.db"),
             "skipped": {
                 "invalid_row": 0,
                 "path_outside_shared_roots": 0,
@@ -955,7 +955,7 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
         {"load": inventory},
         {
             "rust_repo": rust_repo,
-            "metadata_db": tmp_path / "rust-runtime" / "metadata.sqlite",
+            "metadata_db": tmp_path / "rust-runtime" / "emulebb-rust-metadata.db",
             "known_met": known_met,
             "shared_file_rows": [
                 {"hash": "a" * 32, "path": str(tmp_path / "share" / "file.bin"), "sizeBytes": 4}
@@ -994,11 +994,11 @@ def test_mfc_shared_files_inventory_import_skips_when_rust_db_already_seeded(
     inventory = tmp_path / "inventory.json"
     inventory.write_text('{"data":{"items":[]}}', encoding="utf-8")
     runtime = tmp_path / "rust-runtime"
-    db = runtime / "metadata.sqlite"
+    db = runtime / "emulebb-rust-metadata.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE share_in_place_sources (source_path TEXT PRIMARY KEY)")
-    conn.execute("INSERT INTO share_in_place_sources VALUES ('C:/x/a.iso')")
+    conn.execute("CREATE TABLE shared_file_sources (source_path TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO shared_file_sources VALUES ('C:/x/a.iso')")
     conn.commit()
     conn.close()
     monkeypatch.setattr(
@@ -1029,7 +1029,7 @@ def test_preseed_rust_shared_roots_writes_before_startup(
     runner = _load_soak_runner()
     rust_repo = tmp_path / "emulebb-rust"
     runtime = tmp_path / "runtime"
-    db_path = runtime / "metadata.sqlite"
+    db_path = runtime / "emulebb-rust-metadata.db"
     shared_root = soak_launch.normalize_shared_root(str(tmp_path / "share"))
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(runner, "resolve_rust_repo", lambda: rust_repo)
@@ -2139,7 +2139,7 @@ def test_share_warmup_parity_risk_reports_cold_fresh_rust_runtime(tmp_path: Path
         encoding="utf-8",
     )
     summary = {
-        "environmentParity": {"freshRustRuntime": True},
+        "environmentParity": {"freshRustProfile": True},
         "mfcKnownMetImport": {"knownMetRecords": 100000, "importedRecords": 3000},
         "mfcSharedFilesInventoryImport": {"status": "skipped", "reason": "no-inventory"},
     }
@@ -2172,10 +2172,10 @@ def test_share_warmup_parity_risk_ignores_persistent_or_warm_runs(tmp_path: Path
     )
 
     assert runner.build_share_warmup_parity_risk(
-        {"environmentParity": {"freshRustRuntime": False}},
+        {"environmentParity": {"freshRustProfile": False}},
         checkpoints,
     ) == []
     assert runner.build_share_warmup_parity_risk(
-        {"environmentParity": {"freshRustRuntime": True}},
+        {"environmentParity": {"freshRustProfile": True}},
         checkpoints,
     ) == []

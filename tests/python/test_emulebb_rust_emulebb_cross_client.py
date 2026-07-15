@@ -264,9 +264,10 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
 def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tmp_path: Path) -> None:
     module = load_suite_module()
     transfer_hash = "00112233445566778899aabbccddeeff"
-    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    metadata_db = tmp_path / "emulebb-rust-metadata.db"
+    rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
     rust_metadata.seed_transfer_manifest(
-        tmp_path / "metadata.sqlite",
+        metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
         size_bytes=module.ED2K_PART_SIZE_BYTES + 1,
@@ -304,9 +305,10 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
 def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: Path) -> None:
     module = load_suite_module()
     transfer_hash = "00112233445566778899aabbccddeeff"
-    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    metadata_db = tmp_path / "emulebb-rust-metadata.db"
+    rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
     rust_metadata.seed_transfer_manifest(
-        tmp_path / "metadata.sqlite",
+        metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
         size_bytes=module.ED2K_PART_SIZE_BYTES,
@@ -331,9 +333,10 @@ def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: 
 def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_path: Path) -> None:
     module = load_suite_module()
     transfer_hash = "00112233445566778899aabbccddeeff"
-    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    metadata_db = tmp_path / "emulebb-rust-metadata.db"
+    rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
     rust_metadata.seed_transfer_manifest(
-        tmp_path / "metadata.sqlite",
+        metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
         size_bytes=module.ED2K_PART_SIZE_BYTES,
@@ -419,7 +422,7 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
     def fail_after_goed2k_started(*_args, **_kwargs):
         raise RuntimeError("stop after shared goed2k launch")
 
-    monkeypatch.setattr(module.rust_client, "write_rust_config", fail_after_goed2k_started)
+    monkeypatch.setattr(module.rust_client, "write_rust_profile", fail_after_goed2k_started)
 
     exit_code = module.main(
         [

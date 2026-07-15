@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .rust_client import start_rust_client_executable_with_output, write_rust_config
+from .rust_client import start_rust_client_executable_with_output, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
 
@@ -316,16 +316,16 @@ def existing_shared_roots(roots: list[object]) -> tuple[list[object], int]:
 
 
 def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, Any]:
-    """Applies the shared REST upload cap preference to one live client."""
+    """Applies the shared REST upload cap setting to one live client."""
 
     return retry_http_json(
         "soak upload limit",
         2,
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         api_key=api_key,
         method="PATCH",
-        body={"uploadLimitKiBps": upload_limit_kibps},
+        body={"core": {"uploadLimitKiBps": upload_limit_kibps}},
         timeout_seconds=15.0,
     )
 
@@ -582,7 +582,7 @@ def bring_up_rust(
     bind_ip: str,
     rest_addr: str,
     rest_port: int,
-    runtime_dir: Path,
+    profile_dir: Path,
     packet_dump_dir: Path,
     incoming_dir: Path | None,
     bootstrap_nodes: list[str],
@@ -600,7 +600,7 @@ def bring_up_rust(
     vpn_guard_allowed_public_ip_cidrs: str = "",
     enable_packet_dump: bool = True,
 ) -> dict[str, Any]:
-    """Starts the rust daemon on the persistent runtime and returns live handles.
+    """Starts the rust daemon on the persistent profile and returns live handles.
 
     ``enable_udp_reask`` defaults to True to match the rust product default
     (``config.rs`` ``enable_udp_reask: true``); the FEAT-001 client-UDP source
@@ -609,14 +609,13 @@ def bring_up_rust(
     shipping client instead of an artificially disabled one.
     """
 
-    runtime_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True, exist_ok=True)
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
-    config_path = runtime_dir / "emulebb-rust.toml"
     base_url = f"http://{rest_addr}:{rest_port}"
 
-    write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    write_rust_profile(
+        profile_dir,
+        rust_repo=REPO_ROOT.parent / "emulebb-rust",
         incoming_dir=incoming_dir,
         rest_addr=rest_addr,
         rest_port=rest_port,
@@ -631,11 +630,10 @@ def bring_up_rust(
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_udp_reask,
         publish_emule_rust_identity=publish_emule_rust_identity,
+        nat_enabled=True,
         vpn_guard_mode=vpn_guard_mode,
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
-    with config_path.open("a", encoding="utf-8") as cfg:
-        cfg.write("\n[nat]\nenabled = true\n")
 
     # EMULEBB_RUST_LOG_DIR runtime-gates the rust diag writers: the ed2k/kad
     # PACKET families are additionally behind the cargo `packet-diagnostics`
@@ -646,8 +644,8 @@ def bring_up_rust(
         os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     else:
         os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
-    handle = (runtime_dir / "daemon.out").open("a", encoding="utf-8")
-    process = start_rust_client_executable_with_output(exe_path, config_path, handle)
+    handle = (profile_dir / "daemon.out").open("a", encoding="utf-8")
+    process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
 
     wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
     patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)

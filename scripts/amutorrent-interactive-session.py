@@ -278,12 +278,12 @@ def start_rust_backend(
 ) -> tuple[subprocess.Popen[str], dict[str, str]]:
     """Starts the Rust client for an interactive aMuTorrent session."""
 
-    runtime_dir = paths.source_artifacts_dir / "rust-runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    config_path = paths.source_artifacts_dir / "emulebb-rust.toml"
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    profile_dir = paths.source_artifacts_dir / "rust-profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    rust_repo = resolve_rust_repo(paths, args)
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo,
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=args.api_key,
@@ -291,19 +291,17 @@ def start_rust_backend(
     log_path = paths.source_artifacts_dir / "emulebb-rust.log"
     executable = resolve_rust_executable(paths, args)
     if executable.is_file():
-        process = rust_client.start_rust_client_executable(executable, config_path, log_path)
+        process = rust_client.start_rust_client_executable(executable, profile_dir, log_path)
         launch_mode = "executable"
         launched_from = executable
     else:
-        rust_repo = resolve_rust_repo(paths, args)
-        process = rust_client.start_rust_client(rust_repo, config_path, log_path)
+        process = rust_client.start_rust_client(rust_repo, profile_dir, log_path)
         launch_mode = "cargo"
         launched_from = rust_repo
     return process, {
         "rust_launch_mode": launch_mode,
         "rust_launch_path": str(launched_from),
-        "rust_config": str(config_path),
-        "rust_runtime_dir": str(runtime_dir),
+        "rust_profile_dir": str(profile_dir),
         "rust_log": str(log_path),
     }
 

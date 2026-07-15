@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
                 rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-                rest_port=rest_port, runtime_dir=rust_runtime, packet_dump_dir=dump_dir,
+                rest_port=rest_port, profile_dir=rust_runtime, packet_dump_dir=dump_dir,
                 incoming_dir=rust_runtime / "incoming",
                 bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
                 server_met_url=args.server_met_url, server_endpoint=OPERATOR_SERVER,

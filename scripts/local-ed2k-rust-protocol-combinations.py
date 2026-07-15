@@ -679,12 +679,11 @@ def run_protocol_case(
 
         current_phase = "launch_rust"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_runtime = case_dir / "rust-runtime"
-        rust_config = case_dir / "rust.toml"
+        rust_profile = case_dir / "rust-profile"
         entry = rust_server_entry(case, p2p_address, ports["ed2k_tcp"])
-        rust_client.write_rust_config(
-            rust_config,
-            runtime_dir=rust_runtime,
+        rust_client.write_rust_profile(
+            rust_profile,
+            rust_repo=rust_repo,
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
             api_key=args.api_key,
@@ -696,7 +695,7 @@ def run_protocol_case(
             obfuscation_enabled=case.client_crypt_supported,
         )
         report["checks"]["rust_server_entry"] = entry
-        rust_process = rust_client.start_rust_client(rust_repo, rust_config, case_dir / "rust.out")
+        rust_process = rust_client.start_rust_client(rust_repo, rust_profile, case_dir / "rust.out")
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = rust_emulebb.wait_for_rust_rest(
             rust_base_url,
@@ -744,7 +743,7 @@ def run_protocol_case(
             rust_base_url,
             args.api_key,
             transfer_hash,
-            rust_runtime,
+            rust_profile,
             expected_size=int(link_info["size"]),
             expected_sha256=fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
@@ -767,7 +766,7 @@ def run_protocol_case(
             else None
         )
         report["checks"]["rust_hashset_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "metadata.sqlite",
+            rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             expected_hash=transfer_hash,
             expected_name=decoded_link_name,
             expected_size=int(link_info["size"]),
@@ -811,7 +810,7 @@ def run_protocol_case(
             rust_base_url,
             args.api_key,
             secondary_transfer_hash,
-            rust_runtime,
+            rust_profile,
             expected_size=SECONDARY_FIXTURE_SIZE_BYTES,
             expected_sha256=secondary_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
@@ -829,7 +828,7 @@ def run_protocol_case(
             expected_tcp_port=ports["client2_tcp"],
         )
         report["checks"]["rust_secondary_hashset_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "metadata.sqlite",
+            rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             expected_hash=secondary_transfer_hash,
             expected_name=secondary_fixture_file.name,
             expected_size=SECONDARY_FIXTURE_SIZE_BYTES,
@@ -864,7 +863,7 @@ def run_protocol_case(
             rust_base_url,
             args.api_key,
             hash_only_hash,
-            rust_runtime,
+            rust_profile,
             expected_size=HASH_ONLY_FIXTURE_SIZE_BYTES,
             expected_sha256=hash_only_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
@@ -899,7 +898,7 @@ def run_protocol_case(
             expected_tcp_port=ports["client2_tcp"],
         )
         report["checks"]["rust_hash_only_manifest_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "metadata.sqlite",
+            rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             expected_hash=hash_only_hash,
             expected_name=hash_only_fixture_file.name,
             expected_size=HASH_ONLY_FIXTURE_SIZE_BYTES,
@@ -918,8 +917,7 @@ def run_protocol_case(
                 "preferences": dtt.read_preferences_snapshot(Path(harness["config_dir"])),
             },
             CLIENT_RUST.profile_id: {
-                "runtime_dir": str(rust_runtime),
-                "config_path": str(rust_config),
+                "profile_dir": str(rust_profile),
             },
         }
         report["status"] = "passed"

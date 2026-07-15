@@ -1,4 +1,4 @@
-"""Import MFC known.met hashes into an eMuleBB Rust metadata.sqlite profile."""
+"""Import MFC known.met hashes into an eMuleBB Rust profile metadata DB."""
 
 from __future__ import annotations
 

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -74,9 +75,12 @@ def _lan_port_available(host: str, port: int) -> bool:
     return True
 
 
-def write_config(
-    path: Path,
-    runtime_dir: Path,
+def rust_metadata_path(profile_dir: Path) -> Path:
+    return profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
+
+
+def write_profile(
+    profile_dir: Path,
     lan_host: str,
     port: int,
     *,
@@ -86,9 +90,9 @@ def write_config(
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
 ) -> None:
-    rust_client.write_rust_config(
-        path,
-        runtime_dir=runtime_dir,
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=workspace_root() / "repos" / "emulebb-rust",
         rest_addr=lan_host,
         rest_port=port,
         api_key=API_KEY,
@@ -102,7 +106,7 @@ def write_config(
 
 
 def write_remembered_source_manifest(
-    runtime_dir: Path,
+    profile_dir: Path,
     file_hash: str,
     name: str,
     size_bytes: int,
@@ -110,7 +114,7 @@ def write_remembered_source_manifest(
     source_port: int,
 ) -> None:
     repo = workspace_root() / "repos" / "emulebb-rust"
-    metadata_path = runtime_dir / "metadata.sqlite"
+    metadata_path = rust_metadata_path(profile_dir)
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(repo, metadata_path)
     rust_metadata.seed_remembered_source_transfer(
@@ -281,8 +285,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
 
-    runtime_dir = tmp_path / "runtime"
-    config_path = tmp_path / "emulebb-rust.toml"
+    profile_dir = tmp_path / "profile"
     output_path = tmp_path / "emulebb-rust.out"
     shared_root = tmp_path / "shared-root"
     nested_shared_root = shared_root / "nested"
@@ -292,10 +295,10 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     shared_top_file.write_bytes(b"emulebb-rust shared root fixture")
     shared_nested_file.write_bytes(b"emulebb-rust nested shared root fixture")
     port = free_lan_port(lan_host)
-    write_config(config_path, runtime_dir, lan_host, port)
-    seed_index(repo, runtime_dir / "metadata.sqlite")
+    write_profile(profile_dir, lan_host, port)
+    seed_index(repo, rust_metadata_path(profile_dir))
 
-    process = rust_client.start_rust_client(repo, config_path, output_path)
+    process = rust_client.start_rust_client(repo, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -321,33 +324,32 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB Rust"
         assert "rest.emulebb.v1" in app["data"]["capabilities"]
-        preferences = request_json(base_url, "GET", "/api/v1/app/preferences")["data"]
-        assert preferences["uploadLimitKiBps"] > 0
-        assert preferences["downloadAutoBroadbandIo"] is True
-        updated_preferences = request_json(
+        settings = request_json(base_url, "GET", "/api/v1/app/settings")["data"]
+        assert settings["core"]["uploadLimitKiBps"] > 0
+        updated_settings = request_json(
             base_url,
             "PATCH",
-            "/api/v1/app/preferences",
+            "/api/v1/app/settings",
             {
-                "uploadLimitKiBps": 2048,
-                "uploadClientDataRate": 64,
-                "queueSize": 3000,
-                "networkEd2k": False,
-                "downloadAutoBroadbandIo": False,
+                "core": {
+                    "uploadLimitKiBps": 2048,
+                    "uploadClientDataRate": 64,
+                    "queueSize": 3000,
+                    "networkEd2k": False,
+                },
             },
         )["data"]
-        assert updated_preferences["uploadLimitKiBps"] == 2048
-        assert updated_preferences["uploadClientDataRate"] == 64
-        assert updated_preferences["queueSize"] == 3000
-        assert updated_preferences["networkEd2k"] is False
-        assert updated_preferences["downloadAutoBroadbandIo"] is False
-        empty_preferences_status, _ = request_json_status(
+        assert updated_settings["core"]["uploadLimitKiBps"] == 2048
+        assert updated_settings["core"]["uploadClientDataRate"] == 64
+        assert updated_settings["core"]["queueSize"] == 3000
+        assert updated_settings["core"]["networkEd2k"] is False
+        empty_settings_status, _ = request_json_status(
             base_url,
             "PATCH",
-            "/api/v1/app/preferences",
+            "/api/v1/app/settings",
             {},
         )
-        assert empty_preferences_status == 400
+        assert empty_settings_status == 400
         categories = request_json(base_url, "GET", "/api/v1/categories")["data"]["items"]
         assert categories[0]["id"] == 0
         created_category = request_json(
@@ -754,9 +756,9 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
 
         # Persistence proof: restart the daemon and confirm the paused control
-        # state and renamed canonical name reload from metadata.sqlite.
+        # state and renamed canonical name reload from emulebb-rust-metadata.db.
         terminate_process(process)
-        process = rust_client.start_rust_client_append(repo, config_path, output_path)
+        process = rust_client.start_rust_client_append(repo, profile_dir, output_path)
         wait_for_rest(base_url, process, output_path)
         reloaded_transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert reloaded_transfer["state"] == "paused"
@@ -777,7 +779,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )["data"]
         assert delete_result["items"][0]["ok"] is True
         assert delete_result["items"][0]["hash"] == SEED_HASH
-        assert not (runtime_dir / "transfers" / SEED_HASH).exists()
+        assert not (profile_dir / "transfers" / SEED_HASH).exists()
         denied_search_clear_status, denied_search_clear_error = request_json_status(
             base_url,
             "DELETE",
@@ -804,15 +806,13 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
 
-    runtime_dir = tmp_path / "runtime"
-    config_path = tmp_path / "emulebb-rust.toml"
+    profile_dir = tmp_path / "profile"
     output_path = tmp_path / "emulebb-rust.out"
     port = free_lan_port(lan_host)
     ed2k_port = free_lan_port(lan_host)
     kad_port = free_lan_port(lan_host)
-    write_config(
-        config_path,
-        runtime_dir,
+    write_profile(
+        profile_dir,
         lan_host,
         port,
         ed2k_server_endpoint="192.0.2.20:4661",
@@ -820,7 +820,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         kad_listen_port=kad_port,
     )
 
-    process = rust_client.start_rust_client(repo, config_path, output_path)
+    process = rust_client.start_rust_client(repo, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -941,13 +941,11 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     )
     server_process = ed2k_server.process
 
-    rust_runtime_dir = tmp_path / "runtime"
-    rust_config_path = tmp_path / "emulebb-rust.toml"
+    rust_profile_dir = tmp_path / "profile"
     rust_output_path = tmp_path / "emulebb-rust.out"
     rust_port = free_lan_port(lan_host)
-    write_config(
-        rust_config_path,
-        rust_runtime_dir,
+    write_profile(
+        rust_profile_dir,
         lan_host,
         rust_port,
         ed2k_server_endpoint=f"{lan_host}:{server_port}",
@@ -955,7 +953,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         kad_listen_port=rust_kad_port,
     )
 
-    rust_process = rust_client.start_rust_client(rust_repo, rust_config_path, rust_output_path)
+    rust_process = rust_client.start_rust_client(rust_repo, rust_profile_dir, rust_output_path)
 
     try:
         admin_base_url = ed2k_server.admin_base_url
@@ -1034,23 +1032,20 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     )
     server_process = ed2k_server.process
 
-    seeder_runtime_dir = tmp_path / "seeder-runtime"
-    seeder_config_path = tmp_path / "seeder.toml"
+    seeder_profile_dir = tmp_path / "seeder-profile"
     seeder_output_path = tmp_path / "seeder.out"
     seeder_rest_port = free_lan_port_not(lan_host, forbidden_ports)
     seeder_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
     seeder_kad_port = free_lan_port_not(lan_host, forbidden_ports)
 
-    leecher_runtime_dir = tmp_path / "leecher-runtime"
-    leecher_config_path = tmp_path / "leecher.toml"
+    leecher_profile_dir = tmp_path / "leecher-profile"
     leecher_output_path = tmp_path / "leecher.out"
     leecher_rest_port = free_lan_port_not(lan_host, forbidden_ports)
     leecher_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
     leecher_kad_port = free_lan_port_not(lan_host, forbidden_ports)
     kad_bootstrap_min_contacts = 1
-    write_config(
-        seeder_config_path,
-        seeder_runtime_dir,
+    write_profile(
+        seeder_profile_dir,
         lan_host,
         seeder_rest_port,
         ed2k_server_endpoint=f"{lan_host}:{server_port}",
@@ -1059,9 +1054,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         kad_bootstrap_nodes=[f"{lan_host}:{leecher_kad_port}"],
         kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
-    write_config(
-        leecher_config_path,
-        leecher_runtime_dir,
+    write_profile(
+        leecher_profile_dir,
         lan_host,
         leecher_rest_port,
         ed2k_server_endpoint=f"{lan_host}:{server_port}",
@@ -1071,16 +1065,14 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
 
-    remembered_runtime_dir = tmp_path / "remembered-leecher-runtime"
-    remembered_config_path = tmp_path / "remembered-leecher.toml"
+    remembered_profile_dir = tmp_path / "remembered-leecher-profile"
     remembered_output_path = tmp_path / "remembered-leecher.out"
     remembered_rest_port = free_lan_port_not(lan_host, forbidden_ports)
     remembered_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
     remembered_kad_port = free_lan_port_not(lan_host, forbidden_ports)
     dead_server_port = free_lan_port_not(lan_host, forbidden_ports)
-    write_config(
-        remembered_config_path,
-        remembered_runtime_dir,
+    write_profile(
+        remembered_profile_dir,
         lan_host,
         remembered_rest_port,
         ed2k_server_endpoint=f"{lan_host}:{dead_server_port}",
@@ -1089,15 +1081,27 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         kad_bootstrap_nodes=[f"{lan_host}:{seeder_kad_port}"],
         kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
-    seeder_config = seeder_config_path.read_text(encoding="utf-8")
-    leecher_config = leecher_config_path.read_text(encoding="utf-8")
-    assert f'bootstrapNodes = ["{lan_host}:{leecher_kad_port}"]' in seeder_config
-    assert f'bootstrapNodes = ["{lan_host}:{seeder_kad_port}"]' in leecher_config
-    assert "bootstrapMinRoutingContacts = 1" in seeder_config
-    assert "bootstrapMinRoutingContacts = 1" in leecher_config
+    with sqlite3.connect(rust_metadata_path(seeder_profile_dir)) as conn:
+        seeder_bootstrap = conn.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchone()[0]
+        seeder_min_contacts = json.loads(
+            conn.execute(
+                "SELECT value_json FROM settings WHERE section = 'kad' AND key = 'bootstrapMinRoutingContacts'"
+            ).fetchone()[0]
+        )
+    with sqlite3.connect(rust_metadata_path(leecher_profile_dir)) as conn:
+        leecher_bootstrap = conn.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchone()[0]
+        leecher_min_contacts = json.loads(
+            conn.execute(
+                "SELECT value_json FROM settings WHERE section = 'kad' AND key = 'bootstrapMinRoutingContacts'"
+            ).fetchone()[0]
+        )
+    assert seeder_bootstrap == f"{lan_host}:{leecher_kad_port}"
+    assert leecher_bootstrap == f"{lan_host}:{seeder_kad_port}"
+    assert seeder_min_contacts == 1
+    assert leecher_min_contacts == 1
 
-    seeder_process = rust_client.start_rust_client(rust_repo, seeder_config_path, seeder_output_path)
-    leecher_process = rust_client.start_rust_client(rust_repo, leecher_config_path, leecher_output_path)
+    seeder_process = rust_client.start_rust_client(rust_repo, seeder_profile_dir, seeder_output_path)
+    leecher_process = rust_client.start_rust_client(rust_repo, leecher_profile_dir, leecher_output_path)
 
     remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
@@ -1192,7 +1196,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert hash_only_published["name"] == hash_only_payload_path.name
 
         write_remembered_source_manifest(
-            remembered_runtime_dir,
+            remembered_profile_dir,
             str(share_file["hash"]).lower(),
             payload_path.name,
             len(payload),
@@ -1201,7 +1205,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         )
         remembered_leecher_process = rust_client.start_rust_client(
             rust_repo,
-            remembered_config_path,
+            remembered_profile_dir,
             remembered_output_path,
         )
         remembered_base_url = f"http://{lan_host}:{remembered_rest_port}"
@@ -1226,7 +1230,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             )
         assert remembered_transfer["state"] == "completed"
         assert int(remembered_transfer["completedBytes"]) == len(payload)
-        remembered_payload = remembered_runtime_dir / "transfers" / str(share_file["hash"]).lower() / "pieces.bin"
+        remembered_payload = remembered_profile_dir / "transfers" / str(share_file["hash"]).lower() / "pieces.bin"
         assert remembered_payload.read_bytes() == payload
 
         leecher_base_url = f"http://{lan_host}:{leecher_rest_port}"
@@ -1374,13 +1378,13 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             and int(source["port"]) == seeder_ed2k_port
             for source in sources
         )
-        downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
+        downloaded_payload = leecher_profile_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
         downloaded_unicode_payload = (
-            leecher_runtime_dir / "transfers" / str(unicode_result["hash"]) / "pieces.bin"
+            leecher_profile_dir / "transfers" / str(unicode_result["hash"]) / "pieces.bin"
         )
         assert downloaded_unicode_payload.read_bytes() == unicode_payload
-        downloaded_hash_only_payload = leecher_runtime_dir / "transfers" / hash_only_hash / "pieces.bin"
+        downloaded_hash_only_payload = leecher_profile_dir / "transfers" / hash_only_hash / "pieces.bin"
         assert downloaded_hash_only_payload.read_bytes() == hash_only_payload
 
         reverse_share = request_json(
@@ -1459,13 +1463,13 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             and int(source["port"]) == leecher_ed2k_port
             for source in reverse_sources
         )
-        reverse_downloaded_payload = seeder_runtime_dir / "transfers" / str(reverse_result["hash"]) / "pieces.bin"
+        reverse_downloaded_payload = seeder_profile_dir / "transfers" / str(reverse_result["hash"]) / "pieces.bin"
         assert reverse_downloaded_payload.read_bytes() == reverse_payload
 
         terminate_process(leecher_process)
         leecher_process = rust_client.start_rust_client_append(
             rust_repo,
-            leecher_config_path,
+            leecher_profile_dir,
             leecher_output_path,
         )
         wait_for_rest(leecher_base_url, leecher_process, leecher_output_path)

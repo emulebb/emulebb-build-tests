@@ -123,7 +123,7 @@ def wait_for_transfer_completed(
     base_url: str,
     api_key: str,
     transfer_hash: str,
-    runtime_dir: Path,
+    profile_dir: Path,
     *,
     expected_size: int,
     expected_sha256: str,
@@ -132,7 +132,7 @@ def wait_for_transfer_completed(
     """Waits until Rust completes a transfer and verifies the stored bytes."""
 
     observations: list[dict[str, object]] = []
-    pieces_path = runtime_dir / "transfers" / transfer_hash.lower() / "pieces.bin"
+    pieces_path = profile_dir / "transfers" / transfer_hash.lower() / "pieces.bin"
 
     def probe() -> dict[str, object] | None:
         data = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
@@ -215,11 +215,11 @@ def start_client(
     *,
     repo: Path,
     executable: Path | None,
-    config_path: Path,
+    profile_dir: Path,
     log_path: Path,
 ) -> tuple[subprocess.Popen[str], str, Path]:
     """Starts Rust from a staged executable when present, otherwise through Cargo."""
 
     if executable is not None and executable.is_file():
-        return rust_client.start_rust_client_executable(executable, config_path, log_path), "executable", executable
-    return rust_client.start_rust_client(repo, config_path, log_path), "cargo", repo
+        return rust_client.start_rust_client_executable(executable, profile_dir, log_path), "executable", executable
+    return rust_client.start_rust_client(repo, profile_dir, log_path), "cargo", repo

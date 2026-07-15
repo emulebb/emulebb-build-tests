@@ -55,7 +55,7 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path)
     rust_packet_dump = rust_runtime / "packet-dump"
     rust_packet_dump.mkdir(parents=True)
     (rust_runtime / "daemon.out").write_text("old daemon", encoding="utf-8")
-    (rust_runtime / "metadata.sqlite").write_text("durable", encoding="utf-8")
+    (rust_runtime / "emulebb-rust-metadata.db").write_text("durable", encoding="utf-8")
     (rust_packet_dump / "emulebb-rust-diag-1.jsonl").write_text("{}", encoding="utf-8")
 
     manifest = soak_run_layout.prepare_clean_run(
@@ -69,7 +69,7 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(tmp_path: Path)
     assert manifest["preflightCleanup"]["rust"]["archivedCount"] == 2
     assert not (rust_runtime / "daemon.out").exists()
     assert not (rust_packet_dump / "emulebb-rust-diag-1.jsonl").exists()
-    assert (rust_runtime / "metadata.sqlite").read_text(encoding="utf-8") == "durable"
+    assert (rust_runtime / "emulebb-rust-metadata.db").read_text(encoding="utf-8") == "durable"
     assert (paths.preflight_archive_dir / "rust-runtime" / "daemon.out").is_file()
     assert (paths.preflight_archive_dir / "rust-packet-dump" / "emulebb-rust-diag-1.jsonl").is_file()
     assert paths.actions_dir.is_dir()
@@ -168,7 +168,7 @@ def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) 
             pid=20,
             parent_pid=1,
             name="emulebb-rust-diagnostics.exe",
-            command_line=f"emulebb-rust-diagnostics.exe --config {rust_runtime}\\emulebb-rust.toml",
+            command_line=f"emulebb-rust-diagnostics.exe --profile {rust_runtime}",
         ),
         WindowsProcessInfo(
             pid=30,

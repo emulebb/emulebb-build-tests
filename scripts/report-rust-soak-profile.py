@@ -69,7 +69,7 @@ def build_report(*, rest_base_url: str, api_key: str) -> dict[str, object]:
             "status": last_run.get("status"),
             "reportDir": last_run.get("reportDir"),
             "rustExe": last_run.get("rustExe"),
-            "rustRuntimeDir": last_run.get("rustRuntimeDir"),
+            "rustProfileDir": last_run.get("rustProfileDir"),
         },
         "processMetrics": metrics.get("summary") if isinstance(metrics.get("summary"), dict) else {},
         "status": status.get("data", status),

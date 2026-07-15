@@ -37,7 +37,7 @@ from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.rust_client import (
     start_rust_client_executable_with_output,
     stop_process_tree,
-    write_rust_config,
+    write_rust_profile,
 )
 from emule_test_harness.soak_launch import load_live_wire_shared_root_entries
 from emule_test_harness.vm_guest_profiles import (
@@ -744,22 +744,21 @@ def run_pass(
 
     label = "on" if obfuscation else "off"
     log(f"=== pass: obfuscation {label} ===")
-    # Persisted profile (default): a stable runtime dir keeps preferences + the
-    # hashed shared-file catalog (metadata.sqlite) valid across launches, so the
+    # Persisted profile (default): a stable profile dir keeps settings + the
+    # hashed shared-file catalog (emulebb-rust-metadata.db) valid across launches, so the
     # operator's large shared dirs are hashed once and reused. Falls back to a
     # per-pass ephemeral dir only when persistence is disabled.
-    runtime_dir = persist_runtime_dir if persist_runtime_dir is not None else pass_dir / "runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    # pass_dir holds the per-run config/log/dumps; create it explicitly (it is no
-    # longer created as a side effect of the runtime dir when persistence is on).
+    profile_dir = persist_runtime_dir if persist_runtime_dir is not None else pass_dir / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    # pass_dir holds the per-run log/dumps; create it explicitly (it is no
+    # longer created as a side effect of the profile dir when persistence is on).
     pass_dir.mkdir(parents=True, exist_ok=True)
-    config_path = pass_dir / "emulebb-rust.toml"
     daemon_log = pass_dir / "daemon.out"
     base_url = f"http://{rest_addr}:{rest_port}"
 
-    write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    write_rust_profile(
+        profile_dir,
+        rust_repo=REPO_ROOT.parent / "emulebb-rust",
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=API_KEY,
@@ -773,11 +772,10 @@ def run_pass(
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_reask,
+        nat_enabled=True,
     )
     # Enable UPnP so the P2P stack maps ports on the hide.me IGD (needed for
-    # HighID + inbound sources over the tunnel). write_rust_config omits [nat].
-    with config_path.open("a", encoding="utf-8") as cfg:
-        cfg.write("\n[nat]\nenabled = true\n")
+    # HighID + inbound sources over the tunnel).
 
     # Raise the reask module to trace when validating FEAT-001 so detach /
     # reciprocity / reask-send activity is visible in the daemon log.
@@ -792,7 +790,7 @@ def run_pass(
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     handle = daemon_log.open("w", encoding="utf-8")
-    process = start_rust_client_executable_with_output(exe_path, config_path, handle)
+    process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
     evidence: dict[str, Any] = {"obfuscation": obfuscation}
     try:
         wait_until("REST ready", timeouts["rest"], lambda: get_stats(base_url) or None)
@@ -991,8 +989,8 @@ def main(argv: list[str] | None = None) -> int:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = output_root / "live-wire" / f"rust-hideme-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    # Persisted profile (default): stable runtime dir reused across launches so
-    # preferences + the hashed shared-file catalog (metadata.sqlite) stay valid.
+    # Persisted profile (default): stable profile dir reused across launches so
+    # settings + the hashed shared-file catalog stay valid.
     persist_runtime_dir = (
         None if args.ephemeral_profile
         else output_root / "live-wire" / "persisted-profile" / "rust-runtime"

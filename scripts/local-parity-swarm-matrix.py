@@ -213,15 +213,14 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
 
 
 def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, upload_active_slots: int | None = None, crypt: bool = True) -> None:
-    runtime_dir = artifacts / f"{client.name}-runtime"
+    profile_dir = artifacts / f"{client.name}-profile"
     log_dir = artifacts / f"{client.name}-packet-dump"
     log_dir.mkdir(parents=True, exist_ok=True)
     client.log_dir = log_dir
-    client.runtime_dir = runtime_dir
-    config = artifacts / f"{client.name}.toml"
-    rust_client.write_rust_config(
-        config,
-        runtime_dir=runtime_dir,
+    client.runtime_dir = profile_dir
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo,
         rest_addr=client.ip,
         rest_port=client.rest_port,
         api_key=client.api_key,
@@ -233,7 +232,7 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         upload_active_slots=upload_active_slots,
     )
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
-    client.process = rust_client.start_rust_client_executable(rust_exe, config, artifacts / f"{client.name}.out")
+    client.process = rust_client.start_rust_client_executable(rust_exe, profile_dir, artifacts / f"{client.name}.out")
     dtt.rest_smoke.wait_for_rest_ready(client.base_url, client.api_key, timeout)
     request_json(client.base_url, "POST", "/api/v1/servers/operations/connect", client.api_key)
     deadline = time.monotonic() + timeout

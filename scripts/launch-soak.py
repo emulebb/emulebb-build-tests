@@ -577,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-            rest_port=args.rust_rest_port, runtime_dir=rust_runtime,
+            rest_port=args.rust_rest_port, profile_dir=rust_runtime,
             packet_dump_dir=rust_runtime / "packet-dump", incoming_dir=rust_runtime / "incoming",
             bootstrap_nodes=bootstrap_nodes,
             shared_roots=shared_roots, server_met_url=args.server_met_url,
@@ -704,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
         run_paths,
         status=status,
         extra={
-            "rustRuntimeDir": str(rust_runtime),
+            "rustProfileDir": str(rust_runtime),
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustUi": {

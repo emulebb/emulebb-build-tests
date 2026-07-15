@@ -63,7 +63,7 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
-from emule_test_harness.rust_client import stop_process_tree
+from emule_test_harness.rust_client import RUST_PROFILE_METADATA_FILE, stop_process_tree
 from emule_test_harness.soak_launch import (
     DEFAULT_LOG_TRIM_BYTES,
     DEFAULT_MFC_SEED_CONFIG_DIR,
@@ -1480,16 +1480,16 @@ def build_share_warmup_parity_risk(
     summary: dict[str, Any],
     checkpoints_dir: Path,
 ) -> list[dict[str, Any]]:
-    """Return warnings when a fresh Rust runtime is still building its share cache.
+    """Return warnings when a fresh Rust profile is still building its share cache.
 
     Server/search packet parity can be green while upload-side parity is not yet
     comparable: MFC may start with a persisted known.met cache, whereas a fresh
-    Rust runtime must hash shared roots unless exact MFC shared-file rows were
+    Rust profile must hash shared roots unless exact MFC shared-file rows were
     imported. Surface that distinction in the retained report.
     """
 
     environment = summary.get("environmentParity")
-    if not isinstance(environment, dict) or not environment.get("freshRustRuntime"):
+    if not isinstance(environment, dict) or not environment.get("freshRustProfile"):
         return []
 
     checkpoints = sorted(checkpoints_dir.glob("*.json"))
@@ -1534,7 +1534,7 @@ def build_share_warmup_parity_risk(
             "rustSharedHashingCount": rust_hashing,
             "mfcSharedFileCount": mfc_shared,
             "mfcSharedHashingCount": mfc_hashing,
-            "freshRustRuntime": True,
+            "freshRustProfile": True,
             "mfcKnownMetImportedRecords": imported_records,
             "mfcKnownMetRecords": known_records,
             "mfcKnownMetImportRatio": import_ratio,
@@ -1619,26 +1619,26 @@ def trim_log_tree(
     return results
 
 
-def resolve_rust_runtime_paths(
+def resolve_rust_profile_paths(
     soak_root: Path,
     campaign_id: str,
     *,
     fresh: bool,
-    persisted_runtime_dir: Path | None = None,
+    persisted_profile_dir: Path | None = None,
 ) -> dict[str, Path | str | bool]:
-    """Returns the Rust runtime/cache path selection for a converged soak run."""
+    """Returns the Rust profile/cache path selection for a converged soak run."""
 
     if fresh:
-        runtime_dir = soak_root / f"rust-runtime-{campaign_id}"
+        profile_dir = soak_root / f"rust-profile-{campaign_id}"
         mode = "fresh-campaign"
     else:
-        if persisted_runtime_dir is None:
+        if persisted_profile_dir is None:
             raise RuntimeError("live-wire inputs must define rust_profile.profile_dir for persistent Rust soak runs.")
-        runtime_dir = persisted_runtime_dir.resolve()
+        profile_dir = persisted_profile_dir.resolve()
         mode = "persistent-input"
     return {
-        "runtimeDir": runtime_dir,
-        "packetDumpDir": runtime_dir / "packet-dump",
+        "profileDir": profile_dir,
+        "packetDumpDir": profile_dir / "packet-dump",
         "mode": mode,
         "fresh": fresh,
     }
@@ -1660,7 +1660,7 @@ def rust_share_in_place_row_count(metadata_db: Path) -> int:
     try:
         conn = sqlite3.connect(f"file:{metadata_db}?mode=ro", uri=True)
         try:
-            row = conn.execute("SELECT count(*) FROM share_in_place_sources").fetchone()
+            row = conn.execute("SELECT count(*) FROM shared_file_sources").fetchone()
             return int(row[0]) if row else 0
         finally:
             conn.close()
@@ -1747,7 +1747,7 @@ def import_mfc_known_met_for_rust_profile(
     if not known_met.is_file():
         return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
 
-    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
     signature = known_met_import_signature(known_met, shared_roots)
     already_seeded = rust_share_in_place_row_count(metadata_db)
     if already_seeded > 0:
@@ -1806,7 +1806,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     if not inventory_path.is_file():
         return {"enabled": True, "status": "skipped", "reason": "inventory-missing"}
 
-    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
     already_seeded = rust_share_in_place_row_count(metadata_db)
     if already_seeded > 0:
         return {
@@ -1862,7 +1862,7 @@ def preseed_rust_shared_roots_for_startup(
                 "accessible": Path(path).is_dir(),
             }
         )
-    metadata_db = rust_runtime_dir / "metadata.sqlite"
+    metadata_db = rust_runtime_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_db.exists():
         rust_metadata.create_metadata_db(resolve_rust_repo(), metadata_db)
     rust_metadata.seed_shared_directory_roots(metadata_db, roots)
@@ -2039,14 +2039,14 @@ def main(argv: list[str] | None = None) -> int:
 
     campaign_id = soak_run_layout.utc_campaign_id()
     soak_root = soak_run_layout.require_output_soak_root(output_root / "soak", output_root)
-    rust_runtime_selection = resolve_rust_runtime_paths(
+    rust_profile_selection = resolve_rust_profile_paths(
         soak_root,
         campaign_id,
         fresh=bool(args.fresh_rust_runtime),
-        persisted_runtime_dir=inputs.rust_profile_dir,
+        persisted_profile_dir=inputs.rust_profile_dir,
     )
-    rust_runtime = Path(rust_runtime_selection["runtimeDir"])
-    rust_packet_dump = Path(rust_runtime_selection["packetDumpDir"])
+    rust_runtime = Path(rust_profile_selection["profileDir"])
+    rust_packet_dump = Path(rust_profile_selection["packetDumpDir"])
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,
@@ -2077,7 +2077,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
-    log(f"rust runtime mode: {rust_runtime_selection['mode']} ({rust_runtime.name})")
+    log(f"rust profile mode: {rust_profile_selection['mode']} ({rust_runtime.name})")
     log(
         "P2P endpoint ports: "
         f"rust TCP {args.rust_ed2k_port}/UDP {args.rust_kad_port}; "
@@ -2135,9 +2135,9 @@ def main(argv: list[str] | None = None) -> int:
         "skippedInaccessibleSharedRootCount": skipped_inaccessible_shared_roots,
         "rustIncomingDirConfigured": rust_incoming_dir is not None,
         "directMfcProfile": mfc_profile_dir is not None,
-        "freshRustRuntime": bool(args.fresh_rust_runtime),
-        "rustRuntimeMode": rust_runtime_selection["mode"],
-        "rustRuntimeDirName": rust_runtime.name,
+        "freshRustProfile": bool(args.fresh_rust_runtime),
+        "rustProfileMode": rust_profile_selection["mode"],
+        "rustProfileDirName": rust_runtime.name,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
         "preserveDiagnosticEvidence": not bool(args.trim_diagnostic_evidence),
@@ -2210,7 +2210,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-            rest_port=args.rust_rest_port, runtime_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
+            rest_port=args.rust_rest_port, profile_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
             incoming_dir=rust_incoming_dir, bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
             server_met_url=args.server_met_url, server_endpoint=args.rust_server, obfuscation=obfuscation,
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,

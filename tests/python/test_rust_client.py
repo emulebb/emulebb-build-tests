@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -19,38 +21,56 @@ def load_rust_live_wire_module():
     return module
 
 
-def test_write_rust_config_supports_rest_only_profile(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def rust_repo() -> Path:
+    return Path(__file__).parents[3] / "emulebb-rust"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+
+def metadata_path(profile_dir: Path) -> Path:
+    return profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
+
+
+def setting_value(profile_dir: Path, section: str, key: str) -> object:
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        row = conn.execute(
+            "SELECT value_json FROM settings WHERE section = ? AND key = ?",
+            (section, key),
+        ).fetchone()
+    assert row is not None
+    return json.loads(row[0])
+
+
+def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert 'runtimeDir = "' in text
+    text = (profile_dir / rust_client.RUST_PROFILE_SETTINGS_FILE).read_text(encoding="utf-8")
     assert 'bindAddr = "192.0.2.10:4711"' in text
     assert 'apiKey = "key"' in text
     assert "[ed2k]" not in text
+    assert "runtimeDir" not in text
+    assert metadata_path(profile_dir).is_file()
 
 
-def test_write_rust_config_supports_incoming_dir(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_supports_incoming_dir(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         incoming_dir=tmp_path / "incoming",
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert f'incomingDir = "{(tmp_path / "incoming").as_posix()}"' in text
+    assert setting_value(profile_dir, "daemon", "incomingDir") == (tmp_path / "incoming").as_posix()
 
 
 def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,11 +105,11 @@ def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pyt
     assert result["totalCompletedBytes"] == 1000
 
 
-def test_write_rust_config_requires_complete_ed2k_settings(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="ED2K Rust configs"):
-        rust_client.write_rust_config(
-            tmp_path / "emulebb-rust.toml",
-            runtime_dir=tmp_path / "runtime",
+def test_write_rust_profile_requires_complete_ed2k_settings(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="ED2K Rust profiles"):
+        rust_client.write_rust_profile(
+            tmp_path / "profile",
+            rust_repo=rust_repo(),
             rest_addr="192.0.2.10",
             rest_port=4711,
             api_key="key",
@@ -97,12 +117,12 @@ def test_write_rust_config_requires_complete_ed2k_settings(tmp_path: Path) -> No
         )
 
 
-def test_write_rust_config_uses_configurable_ed2k_connect_timeout(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_uses_configurable_ed2k_connect_timeout(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -113,19 +133,18 @@ def test_write_rust_config_uses_configurable_ed2k_connect_timeout(tmp_path: Path
         connect_timeout_secs=15,
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert 'p2pBindIp = "192.0.2.10"' in text
-    assert "connectTimeoutSecs = 15" in text
-    assert "reconnectIntervalSecs = 60" in text
-    assert "obfuscationEnabled = true" in text
+    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
+    assert setting_value(profile_dir, "ed2k", "connectTimeoutSecs") == 15
+    assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 60
+    assert setting_value(profile_dir, "ed2k", "obfuscationEnabled") is True
 
 
-def test_write_rust_config_uses_configurable_reconnect_interval(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -136,16 +155,15 @@ def test_write_rust_config_uses_configurable_reconnect_interval(tmp_path: Path) 
         reconnect_interval_secs=300,
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert "reconnectIntervalSecs = 300" in text
+    assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 300
 
 
-def test_write_rust_config_supports_interface_and_ip_binding(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_supports_interface_and_ip_binding(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -156,17 +174,16 @@ def test_write_rust_config_supports_interface_and_ip_binding(tmp_path: Path) -> 
         server_endpoint="192.0.2.20:4661",
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert 'p2pBindIp = "192.0.2.10"' in text
-    assert 'p2pBindInterface = "hide.me"' in text
+    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
+    assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
 
 
-def test_write_rust_config_supports_interface_only_binding(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_supports_interface_only_binding(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -176,17 +193,20 @@ def test_write_rust_config_supports_interface_only_binding(tmp_path: Path) -> No
         server_endpoint="192.0.2.20:4661",
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert "p2pBindIp" not in text
-    assert 'p2pBindInterface = "hide.me"' in text
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        p2p_bind_ip = conn.execute(
+            "SELECT value_json FROM settings WHERE section = 'daemon' AND key = 'p2pBindIp'"
+        ).fetchone()
+    assert p2p_bind_ip is None
+    assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
 
 
-def test_write_rust_config_can_disable_obfuscation_and_write_server_entry(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_can_disable_obfuscation_and_write_server_entry(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -207,24 +227,24 @@ def test_write_rust_config_can_disable_obfuscation_and_write_server_entry(tmp_pa
         obfuscation_enabled=False,
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert 'p2pBindIp = "192.0.2.10"' in text
-    assert "obfuscationEnabled = false" in text
-    assert "serverEndpoints" not in text
-    assert "[[ed2k.serverEntries]]" in text
-    assert 'host = "192.0.2.20"' in text
-    assert "port = 4661" in text
-    assert "udpFlags = 120" in text
-    assert "udpKey = 287454020" in text
-    assert "obfuscationPortUdp = 4665" in text
+    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
+    assert setting_value(profile_dir, "ed2k", "obfuscationEnabled") is False
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        row = conn.execute(
+            """
+            SELECT address, port, name, enabled, udp_flags, obfuscation_tcp_port
+            FROM servers
+            """
+        ).fetchone()
+    assert row == ("192.0.2.20", 4661, "emulebb-local-e2e", 1, 120, 4661)
 
 
-def test_write_rust_config_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
+def test_write_rust_profile_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
 
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
         rest_addr="192.0.2.10",
         rest_port=4711,
         api_key="key",
@@ -236,29 +256,15 @@ def test_write_rust_config_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -
         kad_bootstrap_min_routing_contacts=1,
     )
 
-    text = config_path.read_text(encoding="utf-8")
-    assert 'bootstrapNodes = ["192.0.2.11:4672"]' in text
-    assert "bootstrapMinRoutingContacts = 1" in text
-
-
-def test_write_rust_config_enables_fast_harness_kad_hello_intro(tmp_path: Path) -> None:
-    config_path = tmp_path / "emulebb-rust.toml"
-
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=tmp_path / "runtime",
-        rest_addr="192.0.2.10",
-        rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.10:4661",
-    )
-
-    text = config_path.read_text(encoding="utf-8")
-    assert "helloIntroIntervalSecs = 1" in text
-    assert "helloIntroFanout = 4" in text
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        endpoints = [
+            row[0]
+            for row in conn.execute(
+                "SELECT endpoint FROM kad_bootstrap_endpoints ORDER BY position"
+            )
+        ]
+    assert endpoints == ["192.0.2.11:4672"]
+    assert setting_value(profile_dir, "kad", "bootstrapMinRoutingContacts") == 1
 
 
 def test_rust_cargo_env_requires_existing_workspace_target_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -324,7 +330,7 @@ def test_start_rust_client_uses_shared_cargo_command(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(rust_client, "rust_cargo_env", lambda: {"CARGO_TARGET_DIR": "target-dir"})
     monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
 
-    process = rust_client.start_rust_client(tmp_path / "repo", tmp_path / "config.toml", tmp_path / "rust.out")
+    process = rust_client.start_rust_client(tmp_path / "repo", tmp_path / "profile", tmp_path / "rust.out")
 
     assert isinstance(process, FakeProcess)
     assert calls[0]["command"] == [
@@ -335,8 +341,8 @@ def test_start_rust_client_uses_shared_cargo_command(monkeypatch: pytest.MonkeyP
         "--bin",
         "emulebb-rust",
         "--",
-        "--config",
-        str(tmp_path / "config.toml"),
+        "--profile",
+        str(tmp_path / "profile"),
     ]
     assert calls[0]["cwd"] == tmp_path / "repo"
     assert calls[0]["env"] == {"CARGO_TARGET_DIR": "target-dir"}
@@ -359,7 +365,7 @@ def test_start_rust_client_append_keeps_restart_log(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(rust_client, "rust_cargo_env", lambda: {"CARGO_TARGET_DIR": "target-dir"})
     monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
 
-    rust_client.start_rust_client_append(tmp_path / "repo", tmp_path / "config.toml", output_path)
+    rust_client.start_rust_client_append(tmp_path / "repo", tmp_path / "profile", output_path)
 
     assert calls[0]["stdout"].mode == "a"
     calls[0]["stdout"].write("second run\n")
@@ -382,10 +388,10 @@ def test_start_rust_client_executable_uses_staged_binary(monkeypatch: pytest.Mon
     executable.write_bytes(b"exe")
     monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
 
-    process = rust_client.start_rust_client_executable(executable, tmp_path / "config.toml", tmp_path / "rust.out")
+    process = rust_client.start_rust_client_executable(executable, tmp_path / "profile", tmp_path / "rust.out")
 
     assert isinstance(process, FakeProcess)
-    assert calls[0]["command"] == [str(executable), "--config", str(tmp_path / "config.toml")]
+    assert calls[0]["command"] == [str(executable), "--profile", str(tmp_path / "profile")]
     assert calls[0]["cwd"] == executable.parent
     assert calls[0]["stdout"].mode == "w"
     calls[0]["stdout"].close()

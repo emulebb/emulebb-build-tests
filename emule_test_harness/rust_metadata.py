@@ -1,9 +1,9 @@
-"""Helpers to seed the eMuleBB Rust ``metadata.sqlite`` store for harness scenarios.
+"""Helpers to seed the eMuleBB Rust profile metadata store for harness scenarios.
 
 The Rust client persists its search index and ED2K transfer manifests in a single
-SQLite database (``<runtimeDir>/metadata.sqlite``). Harness scenarios that need to
-stage prior client state (a previously harvested index entry, or a remembered
-download source) seed that database directly before launching the client.
+SQLite database (``<profileDir>/emulebb-rust-metadata.db``). Harness scenarios
+that need to stage profile settings or prior client state seed that database
+directly before launching the client.
 
 To avoid duplicating the Rust schema in Python, these helpers read the canonical
 ``schema.sql`` and schema marker straight from the ``emulebb-metadata`` crate, so a
@@ -14,6 +14,7 @@ schema change in the client is picked up automatically. Only the small set of se
 from __future__ import annotations
 
 import re
+import json
 import sqlite3
 import sys
 import time
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ED2K_PART_SIZE = 9_728_000
+RUST_PROFILE_METADATA_FILE = "emulebb-rust-metadata.db"
 
 
 def _metadata_src_dir(rust_repo: Path) -> Path:
@@ -54,7 +56,7 @@ def _now_ms() -> int:
 
 
 def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
-    """Create ``metadata.sqlite`` with the canonical schema and a matching marker row.
+    """Create ``emulebb-rust-metadata.db`` with the canonical schema and marker row.
 
     The Rust ``MetadataStore`` keeps a pre-existing database only when the
     ``metadata_schema`` marker matches its compiled ``SCHEMA_ID``/``SCHEMA_VERSION``;
@@ -73,6 +75,120 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
         conn.commit()
 
 
+def put_setting_json(db_path: Path, section: str, key: str, value: object) -> None:
+    """Upsert one Rust profile settings row using the canonical JSON row shape."""
+
+    if not section.strip():
+        raise ValueError("settings section must not be empty")
+    if not key.strip():
+        raise ValueError("settings key must not be empty")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO settings(section, key, value_json, updated_at_ms)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(section, key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at_ms = excluded.updated_at_ms
+            """,
+            (section, key, json.dumps(value), _now_ms()),
+        )
+        conn.commit()
+
+
+def replace_settings_section(db_path: Path, section: str, values: dict[str, object]) -> None:
+    """Replace one Rust settings section with scalar JSON setting rows."""
+
+    if not section.strip():
+        raise ValueError("settings section must not be empty")
+    now = _now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM settings WHERE section = ?", (section,))
+        for key, value in sorted(values.items()):
+            if not key.strip():
+                raise ValueError("settings key must not be empty")
+            conn.execute(
+                """
+                INSERT INTO settings(section, key, value_json, updated_at_ms)
+                VALUES (?, ?, ?, ?)
+                """,
+                (section, key, json.dumps(value), now),
+            )
+        conn.commit()
+
+
+def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None:
+    """Replace the ordered Rust Kad bootstrap endpoint list."""
+
+    now = _now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM kad_bootstrap_endpoints")
+        for position, endpoint in enumerate(endpoints):
+            if not endpoint.strip():
+                raise ValueError("Kad bootstrap endpoint must not be empty")
+            conn.execute(
+                """
+                INSERT INTO kad_bootstrap_endpoints(position, endpoint, updated_at_ms)
+                VALUES (?, ?, ?)
+                """,
+                (position, endpoint, now),
+            )
+        conn.commit()
+
+
+def seed_server(db_path: Path, server: dict[str, object]) -> None:
+    """Seed one enabled ED2K server row into the Rust SQLite profile."""
+
+    address = str(server.get("host") or server.get("address") or "").strip()
+    port = int(server.get("port") or 0)
+    if not address or not (1 <= port <= 65535):
+        raise ValueError("Rust server seed requires host/address and port.")
+    now = _now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO servers(
+                address, port, name, description, server_priority, static_server,
+                enabled, failed_count, ping_ms, users, files, soft_files, hard_files,
+                version, obfuscation_tcp_port, udp_flags, first_seen_ms, last_seen_ms, deleted_at_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0, 0, 0, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(address, port) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                server_priority = excluded.server_priority,
+                static_server = excluded.static_server,
+                enabled = excluded.enabled,
+                version = excluded.version,
+                obfuscation_tcp_port = excluded.obfuscation_tcp_port,
+                udp_flags = excluded.udp_flags,
+                last_seen_ms = excluded.last_seen_ms,
+                deleted_at_ms = NULL
+            """,
+            (
+                address,
+                port,
+                str(server.get("name") or ""),
+                str(server.get("description") or ""),
+                str(server.get("serverPriority") or "normal"),
+                1 if bool(server.get("staticServer", True)) else 0,
+                1 if bool(server.get("enabled", True)) else 0,
+                str(server.get("version") or ""),
+                _optional_int(server.get("obfuscationPortTcp") or server.get("obfuscationTcpPort")),
+                _optional_int(server.get("udpFlags")),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
 def seed_indexed_file(
     db_path: Path,
     *,
@@ -89,24 +205,34 @@ def seed_indexed_file(
     now = _now_ms()
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        content_object_id = _upsert_content_object(conn, hash_blob, name, size_bytes, now)
         conn.execute(
             """
             INSERT INTO known_files(
-                content_object_id, ed2k_hash, size_bytes, canonical_name,
+                ed2k_hash, size_bytes, display_name,
                 content_type, availability_score, first_seen_ms, last_seen_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ed2k_hash) DO UPDATE SET
+                size_bytes = excluded.size_bytes,
+                display_name = excluded.display_name,
+                content_type = excluded.content_type,
+                availability_score = max(known_files.availability_score, excluded.availability_score),
+                last_seen_ms = excluded.last_seen_ms,
+                updated_at_ms = excluded.updated_at_ms
             """,
-            (content_object_id, hash_blob, size_bytes, name, content_type, availability_score, now, now, now),
+            (hash_blob, size_bytes, name, content_type, availability_score, now, now, now),
         )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
         ).fetchone()[0]
         conn.execute(
             """
-            INSERT INTO file_names(known_file_id, name, normalized_name, source_kind, seen_count, first_seen_ms, last_seen_ms)
-            VALUES (?, ?, ?, 'index', 1, ?, ?)
+            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_ms, last_seen_ms)
+            VALUES (?, ?, ?, 1, ?, ?)
+            ON CONFLICT(known_file_id, normalized_name) DO UPDATE SET
+                name = excluded.name,
+                seen_count = file_names.seen_count + 1,
+                last_seen_ms = excluded.last_seen_ms
             """,
             (known_file_id, name, normalized, now, now),
         )
@@ -156,21 +282,20 @@ def seed_transfer_manifest(
     now = _now_ms()
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        content_object_id = _upsert_content_object(conn, hash_blob, name, size_bytes, now)
+        source_path_id = _optional_local_path_id(conn, source_path, now)
         conn.execute(
             """
             INSERT INTO known_files(
-                content_object_id, ed2k_hash, size_bytes, canonical_name,
+                ed2k_hash, size_bytes, display_name,
                 part_size, part_count, completed, md4_hashset_acquired,
                 aich_hashset_acquired, aich_root, upload_priority,
                 auto_upload_priority, comment, rating, all_time_uploaded_bytes,
                 first_seen_ms, last_seen_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
-                content_object_id = excluded.content_object_id,
                 size_bytes = excluded.size_bytes,
-                canonical_name = excluded.canonical_name,
+                display_name = excluded.display_name,
                 part_size = excluded.part_size,
                 part_count = excluded.part_count,
                 completed = excluded.completed,
@@ -186,7 +311,6 @@ def seed_transfer_manifest(
                 updated_at_ms = excluded.updated_at_ms
             """,
             (
-                content_object_id,
                 hash_blob,
                 size_bytes,
                 name,
@@ -212,16 +336,17 @@ def seed_transfer_manifest(
         conn.execute(
             """
             INSERT INTO transfers(
-                known_file_id, visible_state, control_state, priority,
-                payload_directory, source_path, source_mtime_ms,
+                known_file_id, visible_state, control_state, download_priority,
+                payload_directory, source_path_id, source_mtime_ms,
                 created_at_ms, updated_at_ms, completed_at_ms
             )
             VALUES (?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
+                download_priority = excluded.download_priority,
                 payload_directory = excluded.payload_directory,
-                source_path = excluded.source_path,
+                source_path_id = excluded.source_path_id,
                 source_mtime_ms = excluded.source_mtime_ms,
                 updated_at_ms = excluded.updated_at_ms,
                 completed_at_ms = excluded.completed_at_ms,
@@ -232,7 +357,7 @@ def seed_transfer_manifest(
                 visible_state,
                 control_state,
                 ed2k_hash,
-                source_path,
+                source_path_id,
                 source_mtime_ms,
                 now,
                 now,
@@ -242,23 +367,23 @@ def seed_transfer_manifest(
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
-        if source_path is not None:
+        if source_path_id is not None:
             conn.execute(
                 """
-                INSERT INTO share_in_place_sources(
-                    known_file_id, source_path, file_size, source_mtime_ms,
+                INSERT INTO shared_file_sources(
+                    known_file_id, path_id, file_size, source_mtime_ms,
                     created_at_ms, updated_at_ms
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_path) DO UPDATE SET
+                ON CONFLICT(path_id) DO UPDATE SET
                     known_file_id = excluded.known_file_id,
                     file_size = excluded.file_size,
                     source_mtime_ms = excluded.source_mtime_ms,
                     updated_at_ms = excluded.updated_at_ms
                 """,
-                (known_file_id, source_path, size_bytes, source_mtime_ms, now, now),
+                (known_file_id, source_path_id, size_bytes, source_mtime_ms, now, now),
             )
-            conn.execute("DELETE FROM shared_source_failures WHERE source_path = ?", (source_path,))
+            conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
         conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
         conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
         conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
@@ -303,8 +428,8 @@ def seed_transfer_manifest(
         if completed:
             conn.execute(
                 """
-                INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, source_kind, created_at_ms)
-                VALUES (?, 0, ?, 'ed2k_transfer', ?)
+                INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
+                VALUES (?, 0, ?, ?)
                 """,
                 (known_file_id, size_bytes, now),
             )
@@ -445,21 +570,20 @@ def _seed_share_in_place_manifest_conn(
     hash_blob = bytes.fromhex(ed2k_hash)
     piece_size = ED2K_PART_SIZE
     piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
-    content_object_id = _upsert_content_object(conn, hash_blob, name, size_bytes, now)
+    source_path_id = _upsert_local_path(conn, source_path, now)
     conn.execute(
         """
         INSERT INTO known_files(
-            content_object_id, ed2k_hash, size_bytes, canonical_name,
+            ed2k_hash, size_bytes, display_name,
             part_size, part_count, completed, md4_hashset_acquired,
             aich_hashset_acquired, aich_root, upload_priority,
             auto_upload_priority, all_time_uploaded_bytes,
             first_seen_ms, last_seen_ms, updated_at_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ed2k_hash) DO UPDATE SET
-            content_object_id = excluded.content_object_id,
             size_bytes = excluded.size_bytes,
-            canonical_name = excluded.canonical_name,
+            display_name = excluded.display_name,
             part_size = excluded.part_size,
             part_count = excluded.part_count,
             completed = excluded.completed,
@@ -473,7 +597,6 @@ def _seed_share_in_place_manifest_conn(
             updated_at_ms = excluded.updated_at_ms
         """,
         (
-            content_object_id,
             hash_blob,
             size_bytes,
             name,
@@ -495,41 +618,41 @@ def _seed_share_in_place_manifest_conn(
     conn.execute(
         """
         INSERT INTO transfers(
-            known_file_id, visible_state, priority, payload_directory,
-            source_path, source_mtime_ms, created_at_ms, updated_at_ms, completed_at_ms
+            known_file_id, visible_state, download_priority, payload_directory,
+            source_path_id, source_mtime_ms, created_at_ms, updated_at_ms, completed_at_ms
         )
         VALUES (?, 'completed', 'normal', ?, ?, ?, ?, ?, ?)
         ON CONFLICT(known_file_id) DO UPDATE SET
             visible_state = excluded.visible_state,
-            priority = excluded.priority,
+            download_priority = excluded.download_priority,
             payload_directory = excluded.payload_directory,
-            source_path = excluded.source_path,
+            source_path_id = excluded.source_path_id,
             source_mtime_ms = excluded.source_mtime_ms,
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
             removed_at_ms = NULL
         """,
-        (known_file_id, ed2k_hash, source_path, source_mtime_ms, now, now, now),
+        (known_file_id, ed2k_hash, source_path_id, source_mtime_ms, now, now, now),
     )
     transfer_id = conn.execute(
         "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
     ).fetchone()[0]
     conn.execute(
         """
-        INSERT INTO share_in_place_sources(
-            known_file_id, source_path, file_size, source_mtime_ms,
+        INSERT INTO shared_file_sources(
+            known_file_id, path_id, file_size, source_mtime_ms,
             created_at_ms, updated_at_ms
         )
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_path) DO UPDATE SET
+        ON CONFLICT(path_id) DO UPDATE SET
             known_file_id = excluded.known_file_id,
             file_size = excluded.file_size,
             source_mtime_ms = excluded.source_mtime_ms,
             updated_at_ms = excluded.updated_at_ms
         """,
-        (known_file_id, source_path, size_bytes, source_mtime_ms, now, now),
+        (known_file_id, source_path_id, size_bytes, source_mtime_ms, now, now),
     )
-    conn.execute("DELETE FROM shared_source_failures WHERE source_path = ?", (source_path,))
+    conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
     conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
     conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
     conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
@@ -555,8 +678,8 @@ def _seed_share_in_place_manifest_conn(
         )
     conn.execute(
         """
-        INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, source_kind, created_at_ms)
-        VALUES (?, 0, ?, 'ed2k_transfer', ?)
+        INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
+        VALUES (?, 0, ?, ?)
         """,
         (known_file_id, size_bytes, now),
     )
@@ -591,7 +714,7 @@ def seed_remembered_source_transfer(
 
 
 def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
-    """Read a persisted ED2K transfer manifest from ``metadata.sqlite``.
+    """Read a persisted ED2K transfer manifest from the Rust profile metadata DB.
 
     Mirrors ``MetadataStore::transfer_manifest_by_hash`` and returns the same
     field shape the legacy ``resume-manifest.json`` exposed, so harness checks can
@@ -604,7 +727,7 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         row = conn.execute(
             """
             SELECT known_files.id, transfers.id, transfers.control_state,
-                   known_files.canonical_name, known_files.size_bytes,
+                   known_files.display_name, known_files.size_bytes,
                    coalesce(known_files.part_size, 0),
                    known_files.completed, known_files.md4_hashset_acquired,
                    known_files.aich_hashset_acquired,
@@ -612,9 +735,10 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                         ELSE lower(hex(known_files.aich_root)) END,
                    known_files.upload_priority, known_files.comment, known_files.rating,
                    known_files.auto_upload_priority, known_files.all_time_uploaded_bytes,
-                   transfers.source_path, transfers.source_mtime_ms
+                   source_paths.display_path, transfers.source_mtime_ms
             FROM known_files
             LEFT JOIN transfers ON transfers.known_file_id = known_files.id
+            LEFT JOIN local_paths source_paths ON source_paths.id = transfers.source_path_id
             WHERE known_files.ed2k_hash = ?
             """,
             (hash_blob,),
@@ -678,33 +802,10 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
     }
 
 
-def _upsert_content_object(
-    conn: sqlite3.Connection,
-    hash_blob: bytes,
-    name: str,
-    size_bytes: int,
-    now: int,
-) -> int:
-    conn.execute(
-        """
-        INSERT INTO content_objects(
-            kind, primary_hash_kind, primary_hash, display_name, size_bytes,
-            first_seen_ms, last_seen_ms, updated_at_ms
-        )
-        VALUES ('ed2k_file', 'ed2k', ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(kind, primary_hash_kind, primary_hash) DO UPDATE SET
-            display_name = excluded.display_name,
-            size_bytes = excluded.size_bytes,
-            last_seen_ms = excluded.last_seen_ms,
-            updated_at_ms = excluded.updated_at_ms,
-            deleted_at_ms = NULL
-        """,
-        (hash_blob, name, size_bytes, now, now, now),
-    )
-    return conn.execute(
-        "SELECT id FROM content_objects WHERE kind = 'ed2k_file' AND primary_hash_kind = 'ed2k' AND primary_hash = ?",
-        (hash_blob,),
-    ).fetchone()[0]
+def _optional_local_path_id(conn: sqlite3.Connection, display_path: str | None, now: int) -> int | None:
+    if display_path is None:
+        return None
+    return _upsert_local_path(conn, display_path, now)
 
 
 def _upsert_local_path(conn: sqlite3.Connection, display_path: str, now: int) -> int:

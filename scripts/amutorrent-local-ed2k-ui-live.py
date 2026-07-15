@@ -388,13 +388,12 @@ def start_rust_download_client(
     """Starts a Rust ED2K client connected to the local server for aMuTorrent UI coverage."""
 
     rust_repo = Path(args.rust_repo).resolve() if args.rust_repo else resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-    runtime_dir = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "runtime"
-    config_path = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "emulebb-rust.toml"
+    profile_dir = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "profile"
     log_path = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "emulebb-rust.log"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    rust_client.write_rust_config(
-        config_path,
-        runtime_dir=runtime_dir,
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo,
         rest_addr=args.lan_bind_addr,
         rest_port=ports["rust_rest"],
         api_key=args.api_key,
@@ -406,7 +405,7 @@ def start_rust_download_client(
     process, launch_mode, launch_path = rust_local_ed2k.start_client(
         repo=rust_repo,
         executable=rust_executable_from_args(args),
-        config_path=config_path,
+        profile_dir=profile_dir,
         log_path=log_path,
     )
     base_url = f"http://{args.lan_bind_addr}:{ports['rust_rest']}"
@@ -415,8 +414,7 @@ def start_rust_download_client(
         "nick": RUST_ED2K_NICK,
         "profile_id": CLIENT05.profile_id,
         "base_url": base_url,
-        "runtime_dir": str(runtime_dir),
-        "config": str(config_path),
+        "profile_dir": str(profile_dir),
         "log": str(log_path),
         "launch_mode": launch_mode,
         "launch_path": str(launch_path),

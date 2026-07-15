@@ -77,15 +77,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpoint,
                used_ports, label, enable_reask):
-    """Writes a config + launches one Rust client; returns (base_url, process, out, runtime)."""
+    """Writes a profile + launches one Rust client; returns (base_url, process, out, profile)."""
     rest_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     ed2k_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     kad_port = cc.choose_extra_port(lan_bind_addr, used_ports)
-    runtime = paths.source_artifacts_dir / f"rust-{label}-runtime"
-    config = paths.source_artifacts_dir / f"rust-{label}.toml"
-    rust_client.write_rust_config(
-        config,
-        runtime_dir=runtime,
+    profile = paths.source_artifacts_dir / f"rust-{label}-profile"
+    rust_client.write_rust_profile(
+        profile,
+        rust_repo=repo,
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=api_key,
@@ -104,12 +103,12 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
     os.environ["RUST_LOG"] = RUST_LOG
-    process = rust_client.start_rust_client(repo, config, out_path)
+    process = rust_client.start_rust_client(repo, profile, out_path)
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
     cc.request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)
     cc.wait_for_rust_ed2k_connected(base_url, api_key, 120.0)
-    return base_url, process, out_path, runtime
+    return base_url, process, out_path, profile
 
 
 def rust_download_emulebb_file(base_url, api_key, *, query, transfer_hash, timeout):

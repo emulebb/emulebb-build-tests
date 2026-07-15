@@ -123,22 +123,23 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         source_row = conn.execute(
             """
-            SELECT file_size, source_mtime_ms
-            FROM share_in_place_sources
-            WHERE source_path = ?
+            SELECT shared_file_sources.file_size, shared_file_sources.source_mtime_ms
+            FROM shared_file_sources
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            WHERE local_paths.display_path = ?
             """,
             (str(payload),),
         ).fetchone()
         piece_rows = conn.execute("SELECT count(*) FROM transfer_pieces").fetchone()[0]
         range_row = conn.execute(
             """
-            SELECT start_offset, end_offset, source_kind
+            SELECT start_offset, end_offset
             FROM verified_ranges
             """
         ).fetchone()
     assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
     assert piece_rows == 0
-    assert range_row == (0, payload.stat().st_size, "ed2k_transfer")
+    assert range_row == (0, payload.stat().st_size)
 
 
 def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> None:
@@ -217,7 +218,14 @@ def test_import_known_met_seeds_all_duplicate_paths(tmp_path: Path) -> None:
     assert summary["skipped"]["no_path_match"] == 0
     with sqlite3.connect(db_path) as conn:
         seeded = {
-            row[0] for row in conn.execute("SELECT source_path FROM share_in_place_sources")
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT local_paths.display_path
+                FROM shared_file_sources
+                JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+                """
+            )
         }
     assert seeded == {str(payloads[0]), str(payloads[1])}
 
@@ -336,22 +344,23 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
     with sqlite3.connect(db_path) as conn:
         source_row = conn.execute(
             """
-            SELECT file_size, source_mtime_ms
-            FROM share_in_place_sources
-            WHERE source_path = ?
+            SELECT shared_file_sources.file_size, shared_file_sources.source_mtime_ms
+            FROM shared_file_sources
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            WHERE local_paths.display_path = ?
             """,
             (str(payload),),
         ).fetchone()
         piece_rows = conn.execute("SELECT count(*) FROM transfer_pieces").fetchone()[0]
         range_row = conn.execute(
             """
-            SELECT start_offset, end_offset, source_kind
+            SELECT start_offset, end_offset
             FROM verified_ranges
             """
         ).fetchone()
     assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
     assert piece_rows == 0
-    assert range_row == (0, payload.stat().st_size, "ed2k_transfer")
+    assert range_row == (0, payload.stat().st_size)
 
 
 def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path) -> None:

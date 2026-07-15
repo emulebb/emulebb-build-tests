@@ -3645,7 +3645,7 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("GET", "/api/v1/status") in method_path_pairs
     assert ("GET", "/api/v1/shared-directories") in method_path_pairs
     assert operations_by_pair[("GET", "/api/v1/status")]["expected_statuses"] == (200,)
-    assert ("PATCH", "/api/v1/app/preferences") in method_path_pairs
+    assert ("PATCH", "/api/v1/app/settings") in method_path_pairs
     assert ("POST", "/api/v1/transfers") in method_path_pairs
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/operations/pause") in method_path_pairs
     transfer_files_delete_path = f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/files?confirm=false"

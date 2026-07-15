@@ -1,15 +1,17 @@
-"""Shared eMuleBB Rust launch and configuration helpers for harness scenarios."""
+"""Shared eMuleBB Rust launch and profile helpers for harness scenarios."""
 
 from __future__ import annotations
 
 import os
 import subprocess
-import json
 from pathlib import Path
 
 from .paths import get_workspace_output_root
+from . import rust_metadata
 
 CARGO_TARGET_DIR_ENV = "CARGO_TARGET_DIR"
+RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
+RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
 
 
 def get_required_cargo_target_dir() -> Path:
@@ -35,10 +37,10 @@ def rust_cargo_env() -> dict[str, str]:
     return env
 
 
-def write_rust_config(
-    path: Path,
+def write_rust_profile(
+    profile_dir: Path,
     *,
-    runtime_dir: Path,
+    rust_repo: Path,
     incoming_dir: Path | None = None,
     rest_addr: str,
     rest_port: int,
@@ -54,122 +56,117 @@ def write_rust_config(
     reconnect_interval_secs: int = 60,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
-    kad_hello_intro_interval_secs: int = 1,
-    kad_hello_intro_fanout: int = 4,
     enable_udp_reask: bool = False,
     publish_emule_rust_identity: bool = False,
     upload_active_slots: int | None = None,
+    nat_enabled: bool | None = None,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
-    """Writes a minimal eMuleBB Rust config for local harness runs.
+    """Writes a minimal eMuleBB Rust profile for local harness runs.
 
     ``vpn_guard_mode`` (``off`` / ``block``) + ``vpn_guard_allowed_public_ip_cidrs``
-    populate the ``[vpnGuard]`` section: ``block`` fails the P2P data plane closed
-    when the tunnel binding is lost, and the CIDR allowlist validates the public
-    exit (VpnGuardSettings, emulebb-daemon/src/lib.rs).
+    populate the ``vpn.guard`` settings section: ``block`` fails the P2P data
+    plane closed when the tunnel binding is lost, and the CIDR allowlist
+    validates the public exit (VpnGuardSettings, emulebb-daemon/src/lib.rs).
     """
 
-    lines = [
-        f'runtimeDir = "{runtime_dir.as_posix()}"',
-    ]
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
+    metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
+    if not metadata_path.exists():
+        rust_metadata.create_metadata_db(rust_repo, metadata_path)
+
+    lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
+    settings_path.write_text("\n".join(lines), encoding="utf-8")
+
+    daemon_settings: dict[str, object] = {}
     if incoming_dir is not None:
-        lines.append(f'incomingDir = "{incoming_dir.as_posix()}"')
+        daemon_settings["incomingDir"] = incoming_dir.as_posix()
+    if p2p_bind_ip is not None:
+        daemon_settings["p2pBindIp"] = p2p_bind_ip
+    if p2p_bind_interface is not None:
+        daemon_settings["p2pBindInterface"] = p2p_bind_interface
+    if daemon_settings:
+        rust_metadata.replace_settings_section(metadata_path, "daemon", daemon_settings)
+
+    if kad_bootstrap_nodes:
+        rust_metadata.replace_kad_bootstrap_endpoints(metadata_path, kad_bootstrap_nodes)
+
+    kad_settings: dict[str, object] = {}
+    if kad_port is not None:
+        kad_settings["listenPort"] = kad_port
+    if kad_bootstrap_min_routing_contacts != 10:
+        kad_settings["bootstrapMinRoutingContacts"] = kad_bootstrap_min_routing_contacts
+    if kad_settings:
+        rust_metadata.replace_settings_section(metadata_path, "kad", kad_settings)
+
+    ed2k_settings: dict[str, object] = {}
     if server_endpoint is not None:
         if (p2p_bind_ip is None and p2p_bind_interface is None) or ed2k_port is None or kad_port is None:
-            raise ValueError(
-                "ED2K Rust configs require p2p_bind_ip and/or p2p_bind_interface, ed2k_port, and kad_port."
-            )
-        if p2p_bind_ip is not None:
-            lines.append(f'p2pBindIp = "{p2p_bind_ip}"')
-        if p2p_bind_interface is not None:
-            lines.append(f'p2pBindInterface = "{p2p_bind_interface}"')
-        lines.append("")
+            raise ValueError("ED2K Rust profiles require p2p_bind_ip and/or p2p_bind_interface, ed2k_port, and kad_port.")
     if server_entry is not None:
         if server_endpoint is None:
             raise ValueError("ED2K Rust serverEntry requires server_endpoint.")
         if "host" not in server_entry or "port" not in server_entry:
             raise ValueError("ED2K Rust serverEntry requires host and port.")
-    lines.extend(
-        [
-            "[rest]",
-            f'bindAddr = "{rest_addr}:{rest_port}"',
-            f'apiKey = "{api_key}"',
-            "",
-        ]
-    )
+    if ed2k_port is not None:
+        ed2k_settings["listenPort"] = ed2k_port
     if server_endpoint is not None:
-        lines.extend(
-            [
-                "[kad]",
-                f"listenPort = {kad_port}",
-                f"bootstrapNodes = {json.dumps(kad_bootstrap_nodes or [])}",
-                f"bootstrapMinRoutingContacts = {kad_bootstrap_min_routing_contacts}",
-                f"helloIntroIntervalSecs = {kad_hello_intro_interval_secs}",
-                f"helloIntroFanout = {kad_hello_intro_fanout}",
-                "",
-                "[ed2k]",
-                f"listenPort = {ed2k_port}",
-                f"obfuscationEnabled = {str(obfuscation_enabled).lower()}",
-                f"connectTimeoutSecs = {connect_timeout_secs}",
-                f"reconnectIntervalSecs = {reconnect_interval_secs}",
-                f"enableUdpReask = {str(enable_udp_reask).lower()}",
+        ed2k_settings.update(
+            {
+                "obfuscationEnabled": obfuscation_enabled,
+                "connectTimeoutSecs": connect_timeout_secs,
+                "reconnectIntervalSecs": reconnect_interval_secs,
+                "enableUdpReask": enable_udp_reask,
                 # Client identity on the wire: false (default) impersonates a stock
                 # eMule Community 0.7-series client (6-tag hello, no CT_MOD_VERSION);
                 # true publishes the emulebb-rust mod identity. Kept explicit so the
                 # impersonation choice is visible + flippable per soak run.
-                f"publishEmuleRustIdentity = {str(publish_emule_rust_identity).lower()}",
-                "",
-            ]
+                "publishEmuleRustIdentity": publish_emule_rust_identity,
+            }
         )
-        if server_entry is None:
-            lines.append(f'serverEndpoints = ["{server_endpoint}"]')
-        else:
-            lines.append("[[ed2k.serverEntries]]")
-            lines.extend(toml_line(key, value) for key, value in server_entry.items())
-        lines.append("")
-        # Optional upload-queue policy override. activeSlots=0 forces every
-        # requester into the waiting queue (used to make a peer UDP-reask us).
-        if upload_active_slots is not None:
-            lines.extend(
-                [
-                    "[ed2k.uploadQueue]",
-                    f"activeSlots = {upload_active_slots}",
-                    "",
-                ]
-            )
+    # Optional upload-queue policy override. activeSlots=0 forces every
+    # requester into the waiting queue (used to make a peer UDP-reask us).
+    if upload_active_slots is not None:
+        ed2k_settings["uploadQueue"] = {"activeSlots": upload_active_slots}
+    if ed2k_settings:
+        rust_metadata.replace_settings_section(metadata_path, "ed2k", ed2k_settings)
+
+    if server_entry is not None:
+        rust_metadata.seed_server(metadata_path, server_entry)
+    elif server_endpoint is not None:
+        rust_metadata.seed_server(metadata_path, server_from_endpoint(server_endpoint))
+
+    if nat_enabled is not None:
+        rust_metadata.replace_settings_section(metadata_path, "nat", {"enabled": nat_enabled})
+
     # VPN Guard: activate the fail-closed data-plane guard + public-exit CIDR
     # allowlist for public live-test runs (workspace Live Test Network Policy).
     guard_mode = (vpn_guard_mode or "off").strip().lower()
     guard_enabled = guard_mode == "block"
-    lines.extend(
-        [
-            "[vpnGuard]",
-            f"enabled = {str(guard_enabled).lower()}",
-            f'mode = "{"block" if guard_enabled else "off"}"',
-            f"allowedPublicIpCidrs = {json.dumps(vpn_guard_allowed_public_ip_cidrs or '')}",
-            "",
-        ]
+    rust_metadata.replace_settings_section(
+        metadata_path,
+        "vpn.guard",
+        {
+            "enabled": guard_enabled,
+            "mode": "block" if guard_enabled else "off",
+            "allowedPublicIpCidrs": vpn_guard_allowed_public_ip_cidrs or "",
+        },
     )
-    path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def toml_line(key: str, value: object) -> str:
-    """Formats a simple TOML scalar line for generated harness configs."""
+def server_from_endpoint(endpoint: str) -> dict[str, object]:
+    """Returns a SQLite server seed row from a ``host:port`` endpoint."""
 
-    if isinstance(value, bool):
-        rendered = str(value).lower()
-    elif isinstance(value, int):
-        rendered = str(value)
-    elif isinstance(value, str):
-        rendered = json.dumps(value)
-    else:
-        raise TypeError(f"unsupported TOML scalar for {key}: {value!r}")
-    return f"{key} = {rendered}"
+    host, separator, raw_port = endpoint.rpartition(":")
+    if not separator or not host:
+        raise ValueError(f"ED2K Rust server endpoint must be host:port, got {endpoint!r}.")
+    return {"host": host, "port": int(raw_port), "name": endpoint}
 
 
 def start_rust_client(
-    repo: Path, config_path: Path, output_path: Path, features: str | None = None
+    repo: Path, profile_dir: Path, output_path: Path, features: str | None = None
 ) -> subprocess.Popen[str]:
     """Starts `emulebb-rust` through Cargo using the shared workspace target directory.
 
@@ -180,30 +177,30 @@ def start_rust_client(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
-    return start_rust_client_with_output(repo, config_path, output_handle, features=features)
+    return start_rust_client_with_output(repo, profile_dir, output_handle, features=features)
 
 
-def start_rust_client_append(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
+def start_rust_client_append(repo: Path, profile_dir: Path, output_path: Path) -> subprocess.Popen[str]:
     """Restarts `emulebb-rust` while appending to an existing harness log."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("a", encoding="utf-8")
-    return start_rust_client_with_output(repo, config_path, output_handle)
+    return start_rust_client_with_output(repo, profile_dir, output_handle)
 
 
-def start_rust_client_executable(executable: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
-    """Starts a staged `emulebb-rust` executable with a generated harness config."""
+def start_rust_client_executable(executable: Path, profile_dir: Path, output_path: Path) -> subprocess.Popen[str]:
+    """Starts a staged `emulebb-rust` executable with a generated harness profile."""
 
     if not executable.is_file():
         raise RuntimeError(f"eMuleBB Rust executable was not found at '{executable}'.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
-    return start_rust_client_executable_with_output(executable, config_path, output_handle)
+    return start_rust_client_executable_with_output(executable, profile_dir, output_handle)
 
 
 def spawn_rust_daemon(
     executable: Path,
-    config_path: Path,
+    profile_dir: Path,
     *,
     output_handle,
     cwd: Path | None = None,
@@ -222,7 +219,7 @@ def spawn_rust_daemon(
     if detached and os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     return subprocess.Popen(
-        [str(executable), "--config", str(config_path)],
+        [str(executable), "--profile", str(profile_dir)],
         cwd=cwd if cwd is not None else executable.parent,
         env=env if env is not None else os.environ.copy(),
         stdout=output_handle,
@@ -234,16 +231,16 @@ def spawn_rust_daemon(
 
 def start_rust_client_executable_with_output(
     executable: Path,
-    config_path: Path,
+    profile_dir: Path,
     output_handle,
 ) -> subprocess.Popen[str]:
     """Starts a staged `emulebb-rust` executable with an already-open output handle."""
 
-    return spawn_rust_daemon(executable, config_path, output_handle=output_handle)
+    return spawn_rust_daemon(executable, profile_dir, output_handle=output_handle)
 
 
 def start_rust_client_with_output(
-    repo: Path, config_path: Path, output_handle, features: str | None = None
+    repo: Path, profile_dir: Path, output_handle, features: str | None = None
 ) -> subprocess.Popen[str]:
     """Starts `emulebb-rust` with an already-open output handle.
 
@@ -262,8 +259,8 @@ def start_rust_client_with_output(
             "emulebb-rust",
             *feature_args,
             "--",
-            "--config",
-            str(config_path),
+            "--profile",
+            str(profile_dir),
         ],
         cwd=repo,
         env=rust_cargo_env(),

@@ -193,7 +193,7 @@ REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_SURFACE_QBIT_DOWNLOAD_HASH = "11223344556677889900aabbccddeeff"
-REST_PREFERENCE_KEYS = {
+REST_CORE_SETTING_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
     "maxConnections",
@@ -204,10 +204,10 @@ REST_PREFERENCE_KEYS = {
     "uploadSlotElasticPercent",
     "queueSize",
     "autoConnect",
-    "newAutoUp",
-    "newAutoDown",
+    "reconnect",
     "creditSystem",
     "safeServerConnect",
+    "addServersFromServer",
     "networkKademlia",
     "networkEd2k",
 }
@@ -1048,8 +1048,8 @@ REST_STRESS_READ_PATHS = (
 REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "PATCH",
-        "path": "/api/v1/app/preferences",
-        "json_body": {"safeServerConnect": True},
+        "path": "/api/v1/app/settings",
+        "json_body": {"core": {"safeServerConnect": True}},
         "family": "app",
         "scenario": "safe_mutation",
         "expected_statuses": (200,),
@@ -3619,6 +3619,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"confirmDump": True, "fullMemory": False}
     if route_name == "triggerDiagnosticCrashTest":
         return {"confirmCrash": True}
+    if route_name == "patchSettings":
+        return {"core": {"safeServerConnect": True}}
     if route_name in {"app_preferences_patch", "patchPreferences"}:
         return {"safeServerConnect": True}
     if route_name in {"categories_create", "createCategory"}:
@@ -4050,85 +4052,89 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "capabilities": capabilities,
     }
 
-    preferences = http_request(base_url, "/api/v1/app/preferences", api_key=api_key)
-    preference_payload = require_json_object(preferences, 200)
-    missing_preference_keys = sorted(REST_PREFERENCE_KEYS.difference(preference_payload.keys()))
-    assert not missing_preference_keys, missing_preference_keys
-    surface["app_preferences_get"] = {
-        "status": preferences["status"],
-        "keys": sorted(preference_payload.keys()),
+    settings = http_request(base_url, "/api/v1/app/settings", api_key=api_key)
+    settings_payload = require_json_object(settings, 200)
+    core_settings = settings_payload.get("core")
+    assert isinstance(core_settings, dict), compact_http_result(settings)
+    missing_core_keys = sorted(REST_CORE_SETTING_KEYS.difference(core_settings.keys()))
+    assert not missing_core_keys, missing_core_keys
+    surface["app_settings_get"] = {
+        "status": settings["status"],
+        "coreKeys": sorted(core_settings.keys()),
     }
 
-    invalid_preference = http_request(
+    invalid_setting = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body={"unsupportedPreference": True},
+        json_body={"core": {"unsupportedSetting": True}},
     )
-    invalid_preference_value = http_request(
+    invalid_setting_value = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body={"maxUploadSlots": 0},
+        json_body={"core": {"maxUploadSlots": 0}},
     )
-    invalid_preference_boolean = http_request(
+    invalid_setting_boolean = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body={"safeServerConnect": "true"},
+        json_body={"core": {"safeServerConnect": "true"}},
     )
-    invalid_preference_empty = http_request(
+    invalid_setting_empty = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
         json_body={},
     )
-    surface["app_preferences_invalid"] = {
-        "status": invalid_preference["status"],
+    surface["app_settings_invalid"] = {
+        "status": invalid_setting["status"],
         "error": require_error_response(
-            invalid_preference,
+            invalid_setting,
             400,
             "INVALID_ARGUMENT",
-            message_contains="unknown JSON field: unsupportedPreference",
+            message_contains="unknown field `unsupportedSetting`",
         ),
         "bad_value": require_error_response(
-            invalid_preference_value,
+            invalid_setting_value,
             400,
             "INVALID_ARGUMENT",
             message_contains="maxUploadSlots must be an unsigned number in the range 1..64",
         ),
         "bad_boolean": require_error_response(
-            invalid_preference_boolean,
+            invalid_setting_boolean,
             400,
             "INVALID_ARGUMENT",
-            message_contains="safeServerConnect must be a boolean",
+            message_contains="invalid type: string",
         ),
         "empty": require_error_response(
-            invalid_preference_empty,
+            invalid_setting_empty,
             400,
             "INVALID_ARGUMENT",
-            message_contains="preferences PATCH requires at least one preference",
+            message_contains="settings PATCH requires at least one settings section",
         ),
     }
 
-    safe_preference_update = {key: preference_payload[key] for key in REST_PREFERENCE_KEYS}
-    preference_set = http_request(
+    safe_core_update = {key: core_settings[key] for key in REST_CORE_SETTING_KEYS}
+    settings_set = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body=safe_preference_update,
+        json_body={"core": safe_core_update},
     )
-    preference_set_payload = require_json_object(preference_set, 200)
-    for key, expected_value in safe_preference_update.items():
-        assert preference_set_payload.get(key) == expected_value, compact_http_result(preference_set)
-    surface["app_preferences_set_noop"] = {
-        "status": preference_set["status"],
-        "updated": safe_preference_update,
+    settings_set_payload = require_json_object(settings_set, 200)
+    updated_core = settings_set_payload.get("core")
+    assert isinstance(updated_core, dict), compact_http_result(settings_set)
+    for key, expected_value in safe_core_update.items():
+        assert updated_core.get(key) == expected_value, compact_http_result(settings_set)
+    surface["app_settings_set_noop"] = {
+        "status": settings_set["status"],
+        "updated": safe_core_update,
     }
 
     transfers = http_request(base_url, "/api/v1/transfers", api_key=api_key)
@@ -4894,10 +4900,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     bad_json_content_type = http_request(
         base_url,
-        "/api/v1/app/preferences",
+        "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        raw_body=json.dumps({"safeServerConnect": True}),
+        raw_body=json.dumps({"core": {"safeServerConnect": True}}),
         content_type="text/plain",
     )
     search_bad_method = http_request(

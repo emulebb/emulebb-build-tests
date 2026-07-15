@@ -414,7 +414,7 @@ def test_repair_rust_metadata_accepts_extra_shared_roots(tmp_path: Path, monkeyp
             allow_known_met_fallback=False,
             mfc_base_url="http://192.0.2.20:4732/api/v1",
             mfc_api_key="mfc",
-            metadata_db=tmp_path / "metadata.sqlite",
+            metadata_db=tmp_path / "emulebb-rust-metadata.db",
             rust_repo=tmp_path / "emulebb-rust",
             shared_file_page_size=1000,
             shared_file_timeout_seconds=1.0,
@@ -2036,7 +2036,7 @@ def test_mfc_processes_only_reports_client_executables(tmp_path: Path, monkeypat
         parent_pid=111,
         name="emulebb-rust-diagnostics.exe",
         creation_date="20260101000002.000000+000",
-        command_line="emulebb-rust-diagnostics.exe --config runtime.toml",
+        command_line="emulebb-rust-diagnostics.exe --profile runtime",
     )
     monkeypatch.setattr(control, "collect_processes", lambda: [helper_process, rust_process, client_process])
 
