@@ -190,3 +190,6 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "vpn_guard_mode=str(vpn_guard_profile[\"mode\"])" in source
     assert "duration_deadline = time.monotonic() + args.duration_seconds" in source
     assert "\"durationSeconds\": args.duration_seconds" in source
+    assert "except Exception as exc:" in source
+    assert "\"error\": failure" in source
+    assert "return 1 if status == \"failed\" else 0" in source

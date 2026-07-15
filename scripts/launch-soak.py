@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -583,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     process_metrics: RustProcessMetrics | None = None
     ui_process_metrics: RustProcessMetrics | None = None
     status = "stopped"
+    failure: dict[str, object] | None = None
     try:
         profile_tools, profile_paths, profile_report = initialize_cpu_profile(
             args=args,
@@ -690,6 +692,14 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(2.0)
     except KeyboardInterrupt:
         log("Ctrl-C - stopping all launched apps gracefully...")
+    except Exception as exc:
+        status = "failed"
+        failure = {
+            "type": type(exc).__name__,
+            "message": str(exc) or repr(exc),
+            "traceback": traceback.format_exc(),
+        }
+        log(f"soak launch failed: {failure['type']}: {failure['message']}")
     finally:
         profile_report = finalize_cpu_profile(
             tools=profile_tools,
@@ -733,6 +743,7 @@ def main(argv: list[str] | None = None) -> int:
                 "outputPath": rust_ui_handles.get("outputPath") if rust_ui_handles is not None else None,
             },
             "durationSeconds": args.duration_seconds,
+            "error": failure,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,
             "processMetrics": process_metrics_summary,
@@ -740,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
         },
     )
     log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))
-    return 0
+    return 1 if status == "failed" else 0
 
 
 if __name__ == "__main__":
