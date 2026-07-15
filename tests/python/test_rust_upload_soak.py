@@ -75,17 +75,24 @@ def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, 
 
 def test_write_payload_records_size_and_hash(tmp_path: Path) -> None:
     path = tmp_path / "payload.bin"
-    size = len(b"emulebb-rust-local-upload-soak\n") + 7
+    duplicate_path = tmp_path / "payload-again.bin"
+    size = 4099
 
     result = rust_upload_soak.write_payload(path, size)
+    duplicate = rust_upload_soak.write_payload(duplicate_path, size)
 
     data = path.read_bytes()
+    duplicate_data = duplicate_path.read_bytes()
     assert len(data) == size
+    assert data == duplicate_data
+    assert len(set(data[:256])) > 64
     assert result == {
         "path": str(path),
         "sizeBytes": size,
         "sha256": hashlib.sha256(data).hexdigest(),
+        "contentKind": "deterministic-xorshift64",
     }
+    assert duplicate["sha256"] == result["sha256"]
 
 
 def test_safe_counter_helpers_tolerate_missing_values() -> None:

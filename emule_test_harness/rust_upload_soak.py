@@ -125,19 +125,31 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def write_payload(path: Path, size_bytes: int) -> dict[str, object]:
-    """Writes a deterministic synthetic payload and returns summary metadata."""
+    """Writes deterministic incompressible soak bytes and returns metadata."""
 
-    pattern = b"emulebb-rust-local-upload-soak\n"
     remaining = size_bytes
     digest = hashlib.sha256()
+    state = 0x9E3779B97F4A7C15
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
         while remaining > 0:
-            chunk = pattern[: min(len(pattern), remaining)]
+            chunk = bytearray()
+            chunk_len = min(1024 * 1024, remaining)
+            while len(chunk) < chunk_len:
+                state ^= (state << 13) & 0xFFFFFFFFFFFFFFFF
+                state ^= state >> 7
+                state ^= (state << 17) & 0xFFFFFFFFFFFFFFFF
+                chunk.extend(state.to_bytes(8, "little"))
+            chunk = chunk[:chunk_len]
             handle.write(chunk)
             digest.update(chunk)
             remaining -= len(chunk)
-    return {"path": str(path), "sizeBytes": size_bytes, "sha256": digest.hexdigest()}
+    return {
+        "path": str(path),
+        "sizeBytes": size_bytes,
+        "sha256": digest.hexdigest(),
+        "contentKind": "deterministic-xorshift64",
+    }
 
 
 def open_process_metrics(process: subprocess.Popen, label: str, report_dir: Path, interval_seconds: float) -> dict[str, object]:
@@ -321,7 +333,10 @@ def run(argv: list[str] | None = None) -> int:
     leecher_metrics = None
     ui_metrics = None
     try:
-        payload = write_payload(artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.bin", args.payload_mib * 1024 * 1024)
+        payload = write_payload(
+            artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
+            args.payload_mib * 1024 * 1024,
+        )
         report["payload"] = payload
         ed2k_server = goed2k.launch_ed2k_server(
             workspace_root=workspace_root,
