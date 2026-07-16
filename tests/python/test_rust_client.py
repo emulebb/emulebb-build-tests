@@ -158,6 +158,27 @@ def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path)
     assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 300
 
 
+def test_write_rust_profile_supports_best_effort_initial_nat_mapping(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_interface="hide.me",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.20:4661",
+        nat_enabled=True,
+        nat_require_initial_mapping=False,
+    )
+
+    assert setting_value(profile_dir, "nat", "enabled") is True
+    assert setting_value(profile_dir, "nat", "requireInitialMapping") is False
+
+
 def test_write_rust_profile_supports_interface_and_ip_binding(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 

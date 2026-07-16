@@ -5244,11 +5244,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_status_parser.add_argument("--stale-seconds", type=float, default=900.0)
     profile_status_parser.add_argument("--include-vpn-status", action="store_true")
     profile_status_parser.add_argument("--check-vpn-adapter", action="store_true")
-    profile_status_parser.add_argument(
-        "--vpn-settings-path",
-        type=Path,
-        default=REPO_ROOT / "vpn-guard-live.local.json",
-    )
+    profile_status_parser.add_argument("--vpn-settings-path", type=Path)
     profile_status_parser.set_defaults(func=rust_profile_status)
 
     mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")

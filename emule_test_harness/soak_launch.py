@@ -632,6 +632,7 @@ def bring_up_rust(
         enable_udp_reask=enable_udp_reask,
         publish_emule_rust_identity=publish_emule_rust_identity,
         nat_enabled=True,
+        nat_require_initial_mapping=False,
         vpn_guard_mode=vpn_guard_mode,
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )

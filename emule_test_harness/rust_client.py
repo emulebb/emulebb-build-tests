@@ -60,6 +60,7 @@ def write_rust_profile(
     publish_emule_rust_identity: bool = False,
     upload_active_slots: int | None = None,
     nat_enabled: bool | None = None,
+    nat_require_initial_mapping: bool | None = None,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
@@ -138,8 +139,13 @@ def write_rust_profile(
     elif server_endpoint is not None:
         rust_metadata.seed_server(metadata_path, server_from_endpoint(server_endpoint))
 
+    nat_settings: dict[str, object] = {}
     if nat_enabled is not None:
-        rust_metadata.replace_settings_section(metadata_path, "nat", {"enabled": nat_enabled})
+        nat_settings["enabled"] = nat_enabled
+    if nat_require_initial_mapping is not None:
+        nat_settings["requireInitialMapping"] = nat_require_initial_mapping
+    if nat_settings:
+        rust_metadata.replace_settings_section(metadata_path, "nat", nat_settings)
 
     # VPN Guard: activate the fail-closed data-plane guard + public-exit CIDR
     # allowlist for public live-test runs (workspace Live Test Network Policy).
