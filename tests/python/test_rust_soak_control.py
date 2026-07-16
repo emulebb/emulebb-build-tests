@@ -574,6 +574,41 @@ def test_start_upload_monitor_ignores_stale_reused_mfc_log(tmp_path: Path, monke
     assert str(stale_mfc_log) not in commands[0]
 
 
+def test_start_upload_monitor_allows_regular_rust_without_diag_log(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    mfc_log = tmp_path / "emulebb-diagnostics-upload-slot.log"
+    mfc_log.write_text("fresh\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            del kwargs
+            commands.append(list(command))
+            self.pid = 5432
+
+    monkeypatch.setattr(control, "latest_diag_log", lambda _log_dir, _rust_pid: None)
+    monkeypatch.setattr(control.subprocess, "Popen", FakePopen)
+
+    result = control.start_upload_monitor(
+        SimpleNamespace(
+            base_url="http://127.0.0.1:4731/api/v1",
+            api_key="test-key",
+            output_dir=tmp_path / "monitor",
+            log_dir=tmp_path,
+            rust_pid=123,
+            rust_diag_log=None,
+            mfc_upload_log=mfc_log,
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+        )
+    )
+
+    assert result["monitorPid"] == 5432
+    assert result["rustDiagLog"] is None
+    assert "--rust-diag-log" not in commands[0]
+    assert "--mfc-upload-log" in commands[0]
+
+
 def test_start_watch_loop_propagates_live_evidence_args(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     commands: list[list[str]] = []

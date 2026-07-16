@@ -3672,8 +3672,6 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
             default_mfc_upload_log_search_roots(),
             max_age_seconds=stale_seconds,
         )
-    if diag_log is None:
-        raise RuntimeError(f"No Rust diagnostics log found under {args.log_dir}.")
     if mfc_upload_log is None:
         raise RuntimeError(
             "No fresh MFC upload diagnostics log was provided, discovered, or reusable from the monitor command line. "
@@ -3691,8 +3689,6 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         args.base_url,
         "--rust-api-key",
         args.api_key,
-        "--rust-diag-log",
-        str(diag_log),
         "--mfc-upload-log",
         str(mfc_upload_log),
         "--output-dir",
@@ -3702,6 +3698,8 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         "--mfc-log-stale-seconds",
         str(stale_seconds),
     ]
+    if diag_log is not None:
+        command.extend(["--rust-diag-log", str(diag_log)])
     process = subprocess.Popen(
         command,
         cwd=str(REPO_ROOT),
@@ -3709,7 +3707,7 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         stderr=stderr,
         creationflags=creationflags,
     )
-    return {"monitorPid": process.pid, "rustDiagLog": str(diag_log), "outputDir": str(output_dir)}
+    return {"monitorPid": process.pid, "rustDiagLog": str(diag_log) if diag_log is not None else None, "outputDir": str(output_dir)}
 
 
 def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
