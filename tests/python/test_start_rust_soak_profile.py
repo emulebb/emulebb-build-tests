@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -43,3 +44,97 @@ def test_background_starter_rejects_short_operator_runs(monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError, match="at least 3600"):
         module.main(["--seconds", "300", "--lan-bind-addr", "192.0.2.10"])
+
+
+def write_minimal_live_inputs(repo_root: Path, rust_profile: Path) -> None:
+    payload = {
+        "schema": "emulebb-build-tests.live-wire-inputs.v1",
+        "rust_profile": {"profile_dir": str(rust_profile)},
+        "search_terms": {
+            "generic_open": ["linux iso"],
+            "documents": ["linux pdf"],
+            "radarr_movies": ["public domain"],
+        },
+        "auto_browse": {
+            "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],
+            "direct_bootstrap_transfers": [
+                {
+                    "hash": "0123456789abcdef0123456789abcdef",
+                    "name": "fixture.iso",
+                    "size": 123,
+                    "method": "direct_ed2k",
+                }
+            ],
+        },
+    }
+    (repo_root / "live-wire-inputs.local.json").write_text(json.dumps(payload), encoding="utf-8")
+    (repo_root / "vpn-guard-live.local.json").write_text(
+        json.dumps(
+            {
+                "schema": "emulebb.vpnGuardLiveConfig.v1",
+                "p2pBindInterfaceName": "hide.me",
+                "allowedPublicIpCidrs": "192.0.2.0/24",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def set_operator_env(monkeypatch: pytest.MonkeyPatch, workspace_root: Path, output_root: Path) -> Path:
+    cargo_target_dir = output_root / "builds" / "rust" / "target"
+    workspace_root.mkdir(parents=True)
+    cargo_target_dir.mkdir(parents=True)
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(cargo_target_dir))
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+    return cargo_target_dir
+
+
+def test_background_starter_describe_reports_effective_operator_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_start_soak_module()
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    rust_profile = output_root / "soak" / "rust-runtime"
+    repo_root.mkdir()
+    rust_profile.mkdir(parents=True)
+    write_minimal_live_inputs(repo_root, rust_profile)
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
+
+    assert module.main(["--seconds", "3600", "--describe"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["mode"] == "rust-regular-live-profile"
+    assert result["lanBindAddr"] == "192.0.2.10"
+    assert result["rustProfileDir"] == str(rust_profile)
+    assert result["rustExe"] == str(output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe")
+    assert result["p2pBindInterface"] == "hide.me"
+    assert result["bootstrapHashCount"] == 1
+    assert result["directBootstrapTransferCount"] == 1
+    assert "launch-soak.py" in result["launchCommand"][1]
+    assert "stop-profile-launch" in result["stopCommand"]
+
+
+def test_background_starter_requires_inherited_cargo_target_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_start_soak_module()
+    workspace_root = tmp_path / "workspace"
+    output_root = tmp_path / "out"
+    wrong_cargo_target = tmp_path / "wrong-target"
+    workspace_root.mkdir()
+    output_root.mkdir()
+    wrong_cargo_target.mkdir()
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(wrong_cargo_target))
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+
+    with pytest.raises(RuntimeError, match="CARGO_TARGET_DIR must already point"):
+        module.main(["--seconds", "3600", "--describe"])

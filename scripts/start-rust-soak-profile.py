@@ -13,13 +13,18 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
+
+REQUIRED_ENV_DIRS = ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT", "CARGO_TARGET_DIR")
+REQUIRED_ENV_VALUES = ("X_LOCAL_IP",)
 
 
 def require_env_dir(name: str) -> Path:
@@ -43,6 +48,82 @@ def require_env_value(name: str) -> str:
     return value
 
 
+def require_operator_environment() -> dict[str, Path | str]:
+    """Returns the inherited operator environment, or raises before launch."""
+
+    workspace_root = require_env_dir("EMULEBB_WORKSPACE_ROOT")
+    output_root = require_env_dir("EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    cargo_target_dir = require_env_dir("CARGO_TARGET_DIR")
+    expected_cargo_target_dir = output_root / "builds" / "rust" / "target"
+    if cargo_target_dir.resolve() != expected_cargo_target_dir.resolve():
+        raise RuntimeError(
+            "CARGO_TARGET_DIR must already point to "
+            f"{expected_cargo_target_dir}; got {cargo_target_dir}."
+        )
+    return {
+        "EMULEBB_WORKSPACE_ROOT": workspace_root,
+        "EMULEBB_WORKSPACE_OUTPUT_ROOT": output_root,
+        "CARGO_TARGET_DIR": cargo_target_dir,
+        "X_LOCAL_IP": require_env_value("X_LOCAL_IP"),
+    }
+
+
+def default_inputs_path() -> Path:
+    """Returns the checked-in operator live-wire input path."""
+
+    return (REPO_ROOT / "live-wire-inputs.local.json").resolve()
+
+
+def default_vpn_guard_path() -> Path:
+    """Returns the checked-in operator VPN Guard config path."""
+
+    return (REPO_ROOT / "vpn-guard-live.local.json").resolve()
+
+
+def regular_rust_exe(output_root: Path) -> Path:
+    """Returns the staged regular Rust executable path used by --rust-regular."""
+
+    return output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+
+
+def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]) -> dict[str, Any]:
+    """Builds the self-describing operator run profile without starting it."""
+
+    inputs_path = default_inputs_path()
+    inputs = load_live_wire_inputs(inputs_path)
+    output_root = Path(env["EMULEBB_WORKSPACE_OUTPUT_ROOT"])
+    lan_bind_addr = args.lan_bind_addr.strip() or str(env["X_LOCAL_IP"])
+    return {
+        "schema": "emulebb.rust-soak-profile.describe.v1",
+        "mode": "rust-regular-live-profile",
+        "seconds": args.seconds,
+        "lanBindAddr": lan_bind_addr,
+        "requiredEnvironment": {
+            name: str(env[name])
+            for name in (*REQUIRED_ENV_DIRS, *REQUIRED_ENV_VALUES)
+        },
+        "inputs": str(inputs_path),
+        "vpnGuardConfig": str(default_vpn_guard_path()),
+        "rustProfileDir": str(inputs.rust_profile_dir) if inputs.rust_profile_dir is not None else None,
+        "rustExe": str(regular_rust_exe(output_root)),
+        "rustRest": f"http://{lan_bind_addr}:4731/api/v1",
+        "rustApiKey": "converged-soak",
+        "p2pBindInterface": "hide.me",
+        "p2pPorts": {"ed2kTcp": 42662, "kadUdp": 42672},
+        "sharedRootCount": len(inputs.video_roots),
+        "bootstrapHashCount": len(inputs.bootstrap_transfer_hashes),
+        "directBootstrapTransferCount": len(inputs.direct_bootstrap_transfers),
+        "launchCommand": build_launch_command(argparse.Namespace(seconds=args.seconds, lan_bind_addr=lan_bind_addr)),
+        "stopCommand": [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "rust-soak-control.py"),
+            "stop-profile-launch",
+            "--manifest",
+            str(output_root / "logs" / "soak-launch" / "rust-regular-soak.latest.json"),
+        ],
+    }
+
+
 def build_launch_command(args: argparse.Namespace) -> list[str]:
     """Builds the background launch-soak command."""
 
@@ -50,13 +131,13 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         sys.executable,
         str(REPO_ROOT / "scripts" / "launch-soak.py"),
         "--inputs",
-        str((REPO_ROOT / "live-wire-inputs.local.json").resolve()),
+        str(default_inputs_path()),
         "--lan-bind-addr",
         args.lan_bind_addr,
         "--rust-regular",
         "--no-mfc",
         "--vpn-guard-live-config",
-        str((REPO_ROOT / "vpn-guard-live.local.json").resolve()),
+        str(default_vpn_guard_path()),
         "--vpn-guard-scenario",
         "success",
         "--cpu-profile",
@@ -69,9 +150,16 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seconds", type=int, default=3600)
-    parser.add_argument("--lan-bind-addr", default="")
+    epilog = (
+        "Required inherited environment: "
+        "EMULEBB_WORKSPACE_ROOT, EMULEBB_WORKSPACE_OUTPUT_ROOT, CARGO_TARGET_DIR, X_LOCAL_IP. "
+        "This launcher never sets or repairs those values. Use --describe to print the "
+        "effective profile, paths, binding, command, and stop command without starting anything."
+    )
+    parser = argparse.ArgumentParser(description=__doc__, epilog=epilog)
+    parser.add_argument("--seconds", type=int, default=3600, help="CPU profile/run window; minimum 3600.")
+    parser.add_argument("--lan-bind-addr", default="", help="REST LAN bind address; defaults to inherited X_LOCAL_IP.")
+    parser.add_argument("--describe", action="store_true", help="Print effective paths and commands without launching.")
     return parser
 
 
@@ -80,19 +168,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.seconds < 3600:
         raise RuntimeError("--seconds must be at least 3600 for the operator soak profile run.")
 
-    require_env_dir("EMULEBB_WORKSPACE_ROOT")
-    require_env_dir("EMULEBB_WORKSPACE_OUTPUT_ROOT")
-    require_env_dir("CARGO_TARGET_DIR")
-    lan_bind_addr = args.lan_bind_addr.strip() or require_env_value("X_LOCAL_IP")
+    env = require_operator_environment()
+    if args.describe:
+        print(json.dumps(build_effective_profile(args, env), indent=2, sort_keys=True))
+        return 0
+
+    lan_bind_addr = args.lan_bind_addr.strip() or str(env["X_LOCAL_IP"])
     args.lan_bind_addr = lan_bind_addr
 
     output_root = get_workspace_output_root()
     log_dir = output_root / "logs" / "soak-launch"
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    stdout_path = log_dir / f"rust-regular-1h-soak-{stamp}.out.log"
-    stderr_path = log_dir / f"rust-regular-1h-soak-{stamp}.err.log"
-    manifest_path = log_dir / "rust-regular-1h-soak.latest.json"
+    stdout_path = log_dir / f"rust-regular-soak-{stamp}.out.log"
+    stderr_path = log_dir / f"rust-regular-soak-{stamp}.err.log"
+    manifest_path = log_dir / "rust-regular-soak.latest.json"
     command = build_launch_command(args)
 
     stdout = stdout_path.open("w", encoding="utf-8", newline="\n")
@@ -120,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         "seconds": args.seconds,
         "lanBindAddr": lan_bind_addr,
         "startedUtc": stamp,
+        "describe": build_effective_profile(args, env),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(manifest, indent=2, sort_keys=True))
