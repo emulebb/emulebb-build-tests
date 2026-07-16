@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
     parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
+    parser.add_argument(
+        "--rust-fallback-server",
+        action="append",
+        default=[],
+        help="Explicit Rust-only fallback eD2K server endpoint, host:port. May be repeated.",
+    )
     parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
     parser.add_argument("--no-mfc", action="store_true", help="Do not launch the MFC diagnostics GUI.")
     parser.add_argument(
@@ -508,6 +514,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
     soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
+    for index, endpoint in enumerate(args.rust_fallback_server, start=1):
+        soak_launch.require_live_server_endpoint(endpoint, label=f"--rust-fallback-server #{index}")
+    if args.rust_fallback_server and not args.no_mfc:
+        raise RuntimeError("--rust-fallback-server is Rust-only; pass --no-mfc for fallback server probes.")
     vpn_guard_profile = resolve_vpn_guard_profile(args)
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
@@ -621,6 +631,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_packet_dump=not args.rust_regular,
             apply_shared_directories=not args.reuse_rust_shared_profile,
             replace_servers=args.single_rust_server,
+            fallback_server_endpoints=list(args.rust_fallback_server),
             vpn_guard_mode=str(vpn_guard_profile["mode"]),
             vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
         )
@@ -757,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
             "rustProfileDir": str(rust_profile_dir),
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
+            "rustServer": args.rust_server,
+            "rustFallbackServers": list(args.rust_fallback_server),
             "rustUi": {
                 "enabled": bool(args.rust_ui),
                 "exe": str(rust_ui_exe) if rust_ui_exe is not None else None,

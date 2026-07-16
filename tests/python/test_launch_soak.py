@@ -99,6 +99,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "30",
             "--connect-timeout-seconds",
             "90",
+            "--rust-fallback-server",
+            "176.123.5.89:4725",
             "--reuse-rust-shared-profile",
             "--rust-ui",
             "--rust-ui-poll-interval-ms",
@@ -118,6 +120,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.duration_seconds == 3600
     assert args.rest_timeout_seconds == 30
     assert args.connect_timeout_seconds == 90
+    assert args.rust_fallback_server == ["176.123.5.89:4725"]
     assert args.reuse_rust_shared_profile is True
     assert args.rust_ui is True
     assert args.rust_ui_poll_interval_ms == 2000
@@ -193,7 +196,9 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "duration_deadline = time.monotonic() + args.duration_seconds" in source
     assert "\"durationSeconds\": args.duration_seconds" in source
     assert "apply_shared_directories=not args.reuse_rust_shared_profile" in source
+    assert "fallback_server_endpoints=list(args.rust_fallback_server)" in source
     assert "\"reuseRustSharedProfile\": bool(args.reuse_rust_shared_profile)" in source
+    assert "\"rustFallbackServers\": list(args.rust_fallback_server)" in source
     assert "except Exception as exc:" in source
     assert "\"error\": failure" in source
     assert "return 1 if status == \"failed\" else 0" in source

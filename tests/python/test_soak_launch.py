@@ -42,6 +42,14 @@ def test_rust_stats_connected_kad_gate_only_when_required() -> None:
     ) is True
 
 
+def test_live_server_endpoint_validation_accepts_explicit_fallback() -> None:
+    assert soak_launch.require_live_server_endpoint("176.123.5.89:4725") == "176.123.5.89:4725"
+    with pytest.raises(ValueError, match="host:port"):
+        soak_launch.require_live_server_endpoint("176.123.5.89")
+    with pytest.raises(ValueError, match="range"):
+        soak_launch.require_live_server_endpoint("176.123.5.89:70000")
+
+
 def test_rust_bringup_does_not_force_second_server_connect() -> None:
     source = Path(soak_launch.__file__).read_text(encoding="utf-8")
 
@@ -160,4 +168,73 @@ def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeyp
 
     assert FakeRustMod.share_calls == 0
     assert result["sharedDirectoriesApplied"] is False
+    result["logHandle"].close()
+
+
+def test_bring_up_rust_tries_explicit_fallback_server_after_primary_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeRustMod:
+        connected = False
+
+        @classmethod
+        def get_stats(cls, _base_url: str) -> dict[str, object]:
+            return {"ed2kConnected": cls.connected, "ed2kHighId": cls.connected}
+
+        @staticmethod
+        def import_server_met(_base_url: str, _server_met_url: str) -> None:
+            return None
+
+        @staticmethod
+        def share_directories(_base_url: str, _shared_roots: list[object]) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 4444
+
+    connected_endpoints: list[str] = []
+
+    def fake_connect(_base_url: str, _api_key: str, *, description: str, endpoint: str, name: str = ""):
+        connected_endpoints.append(endpoint)
+        if "fallback" in description:
+            FakeRustMod.connected = True
+        return {"endpoint": endpoint, "name": name}
+
+    def fake_wait_until(description: str, _timeout: float, predicate):
+        result = predicate()
+        if result:
+            return result
+        raise RuntimeError(f"Timed out waiting for {description}")
+
+    monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        soak_launch,
+        "start_rust_client_executable_with_output",
+        lambda _exe_path, _profile_dir, _handle: FakeProcess(),
+    )
+    monkeypatch.setattr(soak_launch, "wait_until", fake_wait_until)
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "connect_operator_server", fake_connect)
+
+    result = soak_launch.bring_up_rust(
+        rust_mod=FakeRustMod(),
+        exe_path=tmp_path / "emulebb-rust-diagnostics.exe",
+        bind_ip="10.0.0.2",
+        rest_addr="192.0.2.10",
+        rest_port=4731,
+        profile_dir=tmp_path / "profile",
+        packet_dump_dir=tmp_path / "profile" / "packet-dump",
+        incoming_dir=tmp_path / "profile" / "incoming",
+        bootstrap_nodes=[],
+        shared_roots=[],
+        server_met_url="",
+        server_endpoint=soak_launch.OPERATOR_SERVER,
+        obfuscation=True,
+        timeouts={"rest": 1.0, "connect": 1.0},
+        fallback_server_endpoints=["176.123.5.89:4725"],
+    )
+
+    assert connected_endpoints == [soak_launch.OPERATOR_SERVER, "176.123.5.89:4725"]
     result["logHandle"].close()

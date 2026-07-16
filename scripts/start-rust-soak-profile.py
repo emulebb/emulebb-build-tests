@@ -86,6 +86,12 @@ def regular_rust_exe(output_root: Path) -> Path:
     return output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
 
 
+def diagnostics_rust_exe(output_root: Path) -> Path:
+    """Returns the staged diagnostics Rust executable path."""
+
+    return output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-diagnostics.exe"
+
+
 def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]) -> dict[str, Any]:
     """Builds the self-describing operator run profile without starting it."""
 
@@ -95,7 +101,7 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
     lan_bind_addr = args.lan_bind_addr.strip() or str(env["X_LOCAL_IP"])
     return {
         "schema": "emulebb.rust-soak-profile.describe.v1",
-        "mode": "rust-regular-live-profile",
+        "mode": "rust-diagnostics-live-profile" if args.diagnostics else "rust-regular-live-profile",
         "seconds": args.seconds,
         "lanBindAddr": lan_bind_addr,
         "requiredEnvironment": {
@@ -105,7 +111,7 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "inputs": str(inputs_path),
         "vpnGuardConfig": str(default_vpn_guard_path()),
         "rustProfileDir": str(inputs.rust_profile_dir) if inputs.rust_profile_dir is not None else None,
-        "rustExe": str(regular_rust_exe(output_root)),
+        "rustExe": str(diagnostics_rust_exe(output_root) if args.diagnostics else regular_rust_exe(output_root)),
         "rustRest": f"http://{lan_bind_addr}:4731/api/v1",
         "rustApiKey": "converged-soak",
         "p2pBindInterface": "hide.me",
@@ -114,11 +120,15 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "bootstrapHashCount": len(inputs.bootstrap_transfer_hashes),
         "directBootstrapTransferCount": len(inputs.direct_bootstrap_transfers),
         "singleServer": bool(args.single_server),
+        "diagnostics": bool(args.diagnostics),
+        "rustFallbackServers": list(args.rust_fallback_server),
         "launchCommand": build_launch_command(
             argparse.Namespace(
                 seconds=args.seconds,
                 lan_bind_addr=lan_bind_addr,
                 single_server=args.single_server,
+                diagnostics=args.diagnostics,
+                rust_fallback_server=list(args.rust_fallback_server),
             )
         ),
         "stopCommand": [
@@ -141,7 +151,6 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         str(default_inputs_path()),
         "--lan-bind-addr",
         args.lan_bind_addr,
-        "--rust-regular",
         "--no-mfc",
         "--vpn-guard-live-config",
         str(default_vpn_guard_path()),
@@ -153,8 +162,12 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         "--cpu-profile-stack",
         "--process-metrics",
     ]
+    if not args.diagnostics:
+        command.append("--rust-regular")
     if args.single_server:
         command.extend(["--reuse-kad-bootstrap", "--server-met-url", "", "--single-rust-server"])
+    for endpoint in args.rust_fallback_server:
+        command.extend(["--rust-fallback-server", endpoint])
     return command
 
 
@@ -172,6 +185,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--single-server",
         action="store_true",
         help="Use only the fixed Rust operator ED2K server and skip server.met import.",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Run emulebb-rust-diagnostics.exe instead of the regular Rust executable.",
+    )
+    parser.add_argument(
+        "--rust-fallback-server",
+        action="append",
+        default=[],
+        help="Explicit Rust-only fallback eD2K server endpoint, host:port. May be repeated.",
     )
     parser.add_argument("--describe", action="store_true", help="Print effective paths and commands without launching.")
     return parser

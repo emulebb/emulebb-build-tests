@@ -39,6 +39,27 @@ def test_background_starter_builds_python_launch_soak_command() -> None:
     assert "vpn-guard-live.local.json" in command[command.index("--vpn-guard-live-config") + 1]
 
 
+def test_background_starter_can_request_diagnostics_with_fallback_server() -> None:
+    module = load_start_soak_module()
+    args = module.build_parser().parse_args(
+        [
+            "--seconds",
+            "3600",
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--diagnostics",
+            "--rust-fallback-server",
+            "176.123.5.89:4725",
+        ]
+    )
+
+    command = module.build_launch_command(args)
+
+    assert "--rust-regular" not in command
+    assert command[command.index("--rust-fallback-server") + 1] == "176.123.5.89:4725"
+    assert "--no-mfc" in command
+
+
 def test_background_starter_rejects_short_operator_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_start_soak_module()
 
@@ -118,6 +139,40 @@ def test_background_starter_describe_reports_effective_operator_contract(
     assert result["directBootstrapTransferCount"] == 1
     assert "launch-soak.py" in result["launchCommand"][1]
     assert "stop-profile-launch" in result["stopCommand"]
+
+
+def test_background_starter_describe_reports_diagnostics_and_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_start_soak_module()
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    rust_profile = output_root / "soak" / "rust-runtime"
+    repo_root.mkdir()
+    rust_profile.mkdir(parents=True)
+    write_minimal_live_inputs(repo_root, rust_profile)
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
+
+    assert module.main(
+        [
+            "--seconds",
+            "3600",
+            "--describe",
+            "--diagnostics",
+            "--rust-fallback-server",
+            "176.123.5.89:4725",
+        ]
+    ) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["mode"] == "rust-diagnostics-live-profile"
+    assert result["diagnostics"] is True
+    assert result["rustFallbackServers"] == ["176.123.5.89:4725"]
+    assert result["rustExe"] == str(output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-diagnostics.exe")
+    assert "--rust-regular" not in result["launchCommand"]
 
 
 def test_background_starter_requires_inherited_cargo_target_dir(

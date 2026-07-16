@@ -79,6 +79,21 @@ def require_operator_server_endpoint(endpoint: str, *, label: str = "server") ->
     return endpoint
 
 
+def require_live_server_endpoint(endpoint: str, *, label: str = "server") -> str:
+    """Returns one explicit live eD2K server endpoint or raises."""
+
+    endpoint = endpoint.strip()
+    try:
+        address, port = server_endpoint_parts(endpoint)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an eD2K server endpoint in host:port form, got {endpoint!r}.") from exc
+    if not address:
+        raise ValueError(f"{label} must include a non-empty host, got {endpoint!r}.")
+    if port < 1 or port > 65535:
+        raise ValueError(f"{label} port must be in the range 1..65535, got {port}.")
+    return endpoint
+
+
 def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) -> str:
     """Returns the common hide.me bind IP or raises when client routing diverges."""
 
@@ -459,6 +474,73 @@ def connect_operator_server(
     return {"ensure": ensured, "connect": connected}
 
 
+def latest_packet_dump_record(packet_dump_dir: Path, pattern: str) -> dict[str, Any] | None:
+    """Returns the latest JSON row from the newest matching packet dump."""
+
+    if not packet_dump_dir.is_dir():
+        return None
+    files = sorted(packet_dump_dir.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                payload["sourceFile"] = path.name
+                return payload
+    return None
+
+
+def rust_startup_failure_context(
+    *,
+    base_url: str,
+    api_key: str,
+    packet_dump_dir: Path,
+    connect_attempts: list[dict[str, Any]],
+    latest_error: BaseException,
+) -> dict[str, Any]:
+    """Collects compact Rust startup state for connection failures."""
+
+    context: dict[str, Any] = {
+        "connectAttempts": connect_attempts,
+        "error": str(latest_error),
+        "latestEd2kServerPacket": latest_packet_dump_record(packet_dump_dir, "emulebb-rust-ed2k-server-dump-*.jsonl"),
+        "latestEd2kTcpPacket": latest_packet_dump_record(packet_dump_dir, "emulebb-rust-ed2k-tcp-dump-*.jsonl"),
+    }
+    try:
+        context["stats"] = retry_http_json(
+            "rust stats after connect failure",
+            1,
+            base_url,
+            "/api/v1/stats",
+            api_key=api_key,
+            timeout_seconds=15.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the original failure.
+        context["statsError"] = str(exc)
+    try:
+        context["servers"] = retry_http_json(
+            "rust servers after connect failure",
+            1,
+            base_url,
+            "/api/v1/servers",
+            api_key=api_key,
+            timeout_seconds=15.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the original failure.
+        context["serversError"] = str(exc)
+    return context
+
+
 def wait_for_mfc_core_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, Any]:
     """Waits for MFC REST surfaces that lag behind the listener on large profiles."""
 
@@ -601,6 +683,7 @@ def bring_up_rust(
     enable_packet_dump: bool = True,
     apply_shared_directories: bool = True,
     replace_servers: bool = False,
+    fallback_server_endpoints: list[str] | None = None,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent profile and returns live handles.
 
@@ -660,12 +743,13 @@ def bring_up_rust(
             "rust kad start", 3, base_url, "/api/v1/kad/operations/start",
             api_key=RUST_API_KEY, method="POST", body={},
         )
-        connect_operator_server(
+        connect_attempts: list[dict[str, Any]] = []
+        connect_attempts.append(connect_operator_server(
             base_url,
             RUST_API_KEY,
             description="rust server connect",
             endpoint=server_endpoint,
-        )
+        ))
         if apply_shared_directories:
             rust_mod.share_directories(base_url, shared_roots)
         else:
@@ -675,7 +759,41 @@ def bring_up_rust(
             stats = rust_mod.get_stats(base_url)
             return stats if rust_stats_connected(stats, require_kad=False) else None
 
-        stats = wait_until("rust ED2K connected", timeouts["connect"], connected)
+        try:
+            stats = wait_until("rust ED2K connected", timeouts["connect"], connected)
+        except Exception as primary_exc:
+            latest_exc: BaseException = primary_exc
+            stats = None
+            for index, fallback_endpoint in enumerate(fallback_server_endpoints or (), start=1):
+                log(f"rust primary server did not connect; trying fallback server {fallback_endpoint}")
+                try:
+                    connect_attempts.append(connect_operator_server(
+                        base_url,
+                        RUST_API_KEY,
+                        description=f"rust fallback server connect {index}",
+                        endpoint=fallback_endpoint,
+                        name=f"rust-fallback-{index}",
+                    ))
+                    stats = wait_until(
+                        f"rust ED2K connected via fallback server {fallback_endpoint}",
+                        timeouts["connect"],
+                        connected,
+                    )
+                    break
+                except Exception as fallback_exc:  # noqa: BLE001 - try every explicit fallback before failing.
+                    latest_exc = fallback_exc
+            if stats is None:
+                context = rust_startup_failure_context(
+                    base_url=base_url,
+                    api_key=RUST_API_KEY,
+                    packet_dump_dir=packet_dump_dir,
+                    connect_attempts=connect_attempts,
+                    latest_error=latest_exc,
+                )
+                raise RuntimeError(
+                    "Timed out waiting for rust ED2K connected; startup context: "
+                    + json.dumps(context, sort_keys=True, default=str)
+                ) from latest_exc
     except Exception:
         stop_process_tree(process)
         handle.close()
