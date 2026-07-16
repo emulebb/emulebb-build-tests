@@ -2216,9 +2216,13 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
         connection.execute("CREATE TABLE known_files (completed INTEGER, size INTEGER, uploaded_bytes INTEGER, upload_requests INTEGER, upload_accepts INTEGER)")
         connection.execute("INSERT INTO known_files VALUES (1, 100, 10, 2, 1)")
         connection.execute("INSERT INTO known_files VALUES (0, 200, 20, 3, 2)")
+        connection.execute("CREATE TABLE shared_directory_roots (enabled INTEGER, accessible INTEGER, deleted_at_ms INTEGER)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 0, NULL)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (0, 1, NULL)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, 123)")
         for table in (
             "transfers",
-            "shared_roots",
             "servers",
             "kad_bootstrap_endpoints",
             "peers",
@@ -2269,9 +2273,15 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
     assert result["rustProcesses"][0]["pid"] == 5432
     assert result["metadata"]["knownFilesTotal"] == 2
     assert result["metadata"]["knownFilesCompleted"] == 1
-    assert result["metadata"]["knownCompletedBytes"] == 300
+    assert result["metadata"]["knownCompletedBytes"] == 100
     assert result["metadata"]["knownUploadedBytes"] == 30
     assert result["metadata"]["knownUploadRequests"] == 5
+    assert result["metadata"]["sharedRootsTotal"] == 4
+    assert result["metadata"]["sharedRootsEnabled"] == 3
+    assert result["metadata"]["sharedRootsAccessibleEnabled"] == 2
+    assert result["metadata"]["sharedRootsActive"] == 3
+    assert result["metadata"]["sharedRootsActiveEnabled"] == 2
+    assert result["metadata"]["sharedRootsActiveAccessibleEnabled"] == 1
     assert result["metadata"]["ed2kPartHashRows"] == 1
     assert result["watch"]["findings"] == ["watch-not-running", "watch-stale"]
 

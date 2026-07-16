@@ -3150,6 +3150,15 @@ def sqlite_count_table(connection: sqlite3.Connection, tables: set[str], table: 
     return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
+def first_present_int(*values: int | None) -> int | None:
+    """Returns the first non-None integer, preserving zero counts."""
+
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def sqlite_count_truthy(
     connection: sqlite3.Connection,
     tables: set[str],
@@ -3165,6 +3174,43 @@ def sqlite_count_truthy(
         if column in columns:
             return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} != 0").fetchone()[0])
     return None
+
+
+def sqlite_count_all_truthy(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    table: str,
+    candidate_columns: tuple[str, ...],
+) -> int | None:
+    """Counts rows where all listed columns are present and truthy."""
+
+    if table not in tables:
+        return None
+    columns = sqlite_columns(connection, table)
+    selected = [column for column in candidate_columns if column in columns]
+    if not selected:
+        return None
+    predicate = " AND ".join(f"{column} != 0" for column in selected)
+    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {predicate}").fetchone()[0])
+
+
+def sqlite_count_truthy_with_null(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    table: str,
+    truthy_columns: tuple[str, ...],
+    null_columns: tuple[str, ...],
+) -> int | None:
+    """Counts rows where present truthy columns are true and present null columns are NULL."""
+
+    if table not in tables:
+        return None
+    columns = sqlite_columns(connection, table)
+    predicates = [f"{column} != 0" for column in truthy_columns if column in columns]
+    predicates.extend(f"{column} IS NULL" for column in null_columns if column in columns)
+    if not predicates:
+        return None
+    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {' AND '.join(predicates)}").fetchone()[0])
 
 
 def sqlite_sum_column(
@@ -3185,6 +3231,31 @@ def sqlite_sum_column(
     return None
 
 
+def sqlite_sum_column_where_truthy(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    table: str,
+    sum_columns: tuple[str, ...],
+    truthy_columns: tuple[str, ...],
+) -> int | None:
+    """Sums the first available sum column where the first truthy column is true."""
+
+    if table not in tables:
+        return None
+    columns = sqlite_columns(connection, table)
+    sum_column = next((column for column in sum_columns if column in columns), None)
+    if sum_column is None:
+        return None
+    truthy_column = next((column for column in truthy_columns if column in columns), None)
+    if truthy_column is None:
+        value = connection.execute(f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table}").fetchone()[0]
+    else:
+        value = connection.execute(
+            f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table} WHERE {truthy_column} != 0"
+        ).fetchone()[0]
+    return int(value or 0)
+
+
 def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
     """Returns compact persisted Rust metadata counters."""
 
@@ -3203,11 +3274,12 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
                 "known_files",
                 ("completed", "is_completed"),
             ),
-            "knownCompletedBytes": sqlite_sum_column(
+            "knownCompletedBytes": sqlite_sum_column_where_truthy(
                 connection,
                 tables,
                 "known_files",
                 ("completed_bytes", "size", "size_bytes", "file_size"),
+                ("completed", "is_completed"),
             ),
             "knownUploadedBytes": sqlite_sum_column(
                 connection,
@@ -3228,7 +3300,44 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
                 ("upload_accepts", "all_time_upload_accepts"),
             ),
             "transfersTotal": sqlite_count_table(connection, tables, "transfers"),
-            "sharedRootsTotal": sqlite_count_table(connection, tables, "shared_roots"),
+            "sharedRootsTotal": first_present_int(
+                sqlite_count_table(connection, tables, "shared_directory_roots"),
+                sqlite_count_table(connection, tables, "shared_roots"),
+                sqlite_count_table(connection, tables, "shared_directories"),
+            ),
+            "sharedRootsEnabled": sqlite_count_all_truthy(
+                connection,
+                tables,
+                "shared_directory_roots",
+                ("enabled",),
+            ),
+            "sharedRootsAccessibleEnabled": sqlite_count_all_truthy(
+                connection,
+                tables,
+                "shared_directory_roots",
+                ("enabled", "accessible"),
+            ),
+            "sharedRootsActive": sqlite_count_truthy_with_null(
+                connection,
+                tables,
+                "shared_directory_roots",
+                tuple(),
+                ("deleted_at_ms",),
+            ),
+            "sharedRootsActiveEnabled": sqlite_count_truthy_with_null(
+                connection,
+                tables,
+                "shared_directory_roots",
+                ("enabled",),
+                ("deleted_at_ms",),
+            ),
+            "sharedRootsActiveAccessibleEnabled": sqlite_count_truthy_with_null(
+                connection,
+                tables,
+                "shared_directory_roots",
+                ("enabled", "accessible"),
+                ("deleted_at_ms",),
+            ),
             "serversTotal": sqlite_count_table(connection, tables, "servers"),
             "kadBootstrapEndpoints": sqlite_count_table(connection, tables, "kad_bootstrap_endpoints"),
             "peersTotal": sqlite_count_table(connection, tables, "peers"),
@@ -3240,6 +3349,53 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
         }
     finally:
         connection.close()
+
+
+def compact_profile_watch_status(watch: dict[str, object]) -> dict[str, object]:
+    """Returns the watch fields useful in routine profile status output."""
+
+    latest = watch.get("latestRecord") if isinstance(watch.get("latestRecord"), dict) else {}
+    rust = latest.get("rust") if isinstance(latest.get("rust"), dict) else {}
+    monitor = latest.get("monitor") if isinstance(latest.get("monitor"), dict) else {}
+    monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
+    vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
+    diagnostics = latest.get("diagnostics") if isinstance(latest.get("diagnostics"), dict) else {}
+    return {
+        "watchPid": watch.get("watchPid"),
+        "watchAlive": watch.get("watchAlive"),
+        "watchStale": watch.get("watchStale"),
+        "latestAgeSeconds": watch.get("latestAgeSeconds"),
+        "findings": watch.get("findings"),
+        "watchPidFile": watch.get("watchPidFile"),
+        "watchJsonl": watch.get("watchJsonl"),
+        "watchStopFilePresent": watch.get("watchStopFilePresent"),
+        "latestTimestampUtc": latest.get("timestampUtc"),
+        "latestRust": {
+            "uploadSpeedKiBps": rust.get("uploadSpeedKiBps"),
+            "activeUploads": rust.get("activeUploads"),
+            "waitingUploads": rust.get("waitingUploads"),
+            "ed2kPublishedEntries": rust.get("ed2kPublishedEntries"),
+            "ed2kPendingEntries": rust.get("ed2kPendingEntries"),
+            "ed2kVisibilityPercent": rust.get("ed2kVisibilityPercent"),
+            "kadSourcePublishedTotal": rust.get("kadSourcePublishedTotal"),
+        },
+        "latestMonitor": {
+            "alive": monitor.get("monitorAlive"),
+            "stale": monitor.get("monitorStale"),
+            "rustKiBps": monitor_latest.get("rustKiBps"),
+            "rustUploads": monitor_latest.get("rustUploads"),
+            "parityGap": monitor_latest.get("parityGap"),
+        },
+        "latestVpn": {
+            "allWhitelisted": vpn.get("allWhitelisted"),
+            "adapterUp": vpn.get("adapterUp"),
+            "bindIpPresent": vpn.get("bindIpPresent"),
+        },
+        "latestDiagnostics": {
+            "fileCount": diagnostics.get("fileCount"),
+            "patterns": diagnostics.get("aggregatePatternCounts"),
+        },
+    }
 
 
 def rust_profile_status(args: argparse.Namespace) -> dict[str, object]:
@@ -3278,7 +3434,7 @@ def rust_profile_status(args: argparse.Namespace) -> dict[str, object]:
         },
         "launcherProcesses": profile_launcher_process_rows(manifest),
         "rustProcesses": rust_process_rows(),
-        "watch": watch,
+        "watch": compact_profile_watch_status(watch),
         "vpn": vpn_allowlist_status(
             argparse.Namespace(
                 exe=None,
