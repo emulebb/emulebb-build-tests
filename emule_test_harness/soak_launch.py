@@ -600,6 +600,7 @@ def bring_up_rust(
     vpn_guard_allowed_public_ip_cidrs: str = "",
     enable_packet_dump: bool = True,
     apply_shared_directories: bool = True,
+    replace_servers: bool = False,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent profile and returns live handles.
 
@@ -633,6 +634,7 @@ def bring_up_rust(
         publish_emule_rust_identity=publish_emule_rust_identity,
         nat_enabled=True,
         nat_require_initial_mapping=False,
+        replace_servers=replace_servers,
         vpn_guard_mode=vpn_guard_mode,
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )

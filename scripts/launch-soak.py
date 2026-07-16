@@ -109,7 +109,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both).")
+    parser.add_argument(
+        "--reuse-kad-bootstrap",
+        action="store_true",
+        help="Reuse existing Rust profile Kad bootstrap endpoints instead of downloading nodes.dat.",
+    )
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
+    parser.add_argument(
+        "--single-rust-server",
+        action="store_true",
+        help="Replace the Rust profile server list with only --rust-server before launch.",
+    )
     parser.add_argument("--bootstrap-limit", type=int, default=40)
     parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
@@ -573,8 +583,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     log(f"hide.me bind IP: {bind_ip}")
 
-    bootstrap_nodes = fetch_bootstrap_endpoints(args.nodes_url, limit=args.bootstrap_limit)
-    log(f"Kad bootstrap from {args.nodes_url}: {len(bootstrap_nodes)} contacts")
+    if args.reuse_kad_bootstrap:
+        bootstrap_nodes = []
+        log("Kad bootstrap: reusing existing Rust profile endpoints")
+    else:
+        bootstrap_nodes = fetch_bootstrap_endpoints(args.nodes_url, limit=args.bootstrap_limit)
+        log(f"Kad bootstrap from {args.nodes_url}: {len(bootstrap_nodes)} contacts")
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
     timeouts = {"rest": args.rest_timeout_seconds, "connect": args.connect_timeout_seconds}
@@ -606,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             enable_packet_dump=not args.rust_regular,
             apply_shared_directories=not args.reuse_rust_shared_profile,
+            replace_servers=args.single_rust_server,
             vpn_guard_mode=str(vpn_guard_profile["mode"]),
             vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
         )

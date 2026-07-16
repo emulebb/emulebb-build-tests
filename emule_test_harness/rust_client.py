@@ -61,6 +61,7 @@ def write_rust_profile(
     upload_active_slots: int | None = None,
     nat_enabled: bool | None = None,
     nat_require_initial_mapping: bool | None = None,
+    replace_servers: bool = False,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
@@ -133,6 +134,9 @@ def write_rust_profile(
         ed2k_settings["uploadQueue"] = {"activeSlots": upload_active_slots}
     if ed2k_settings:
         rust_metadata.replace_settings_section(metadata_path, "ed2k", ed2k_settings)
+
+    if replace_servers:
+        rust_metadata.clear_servers(metadata_path)
 
     if server_entry is not None:
         rust_metadata.seed_server(metadata_path, server_entry)

@@ -260,6 +260,38 @@ def test_write_rust_profile_can_disable_obfuscation_and_write_server_entry(tmp_p
     assert row == ("192.0.2.20", 4661, "emulebb-local-e2e", 1, 120, 4661)
 
 
+def test_write_rust_profile_can_replace_server_list(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.20:4661",
+    )
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.30:4661",
+        replace_servers=True,
+    )
+
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        rows = conn.execute("SELECT address, port FROM servers ORDER BY address, port").fetchall()
+    assert rows == [("192.0.2.30", 4661)]
+
+
 def test_write_rust_profile_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 

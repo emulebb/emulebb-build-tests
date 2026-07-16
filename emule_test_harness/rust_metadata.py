@@ -183,6 +183,14 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
         conn.commit()
 
 
+def clear_servers(db_path: Path) -> None:
+    """Remove persisted ED2K server rows from a Rust SQLite profile."""
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM servers")
+        conn.commit()
+
+
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None

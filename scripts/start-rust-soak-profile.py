@@ -113,7 +113,14 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "sharedRootCount": len(inputs.video_roots),
         "bootstrapHashCount": len(inputs.bootstrap_transfer_hashes),
         "directBootstrapTransferCount": len(inputs.direct_bootstrap_transfers),
-        "launchCommand": build_launch_command(argparse.Namespace(seconds=args.seconds, lan_bind_addr=lan_bind_addr)),
+        "singleServer": bool(args.single_server),
+        "launchCommand": build_launch_command(
+            argparse.Namespace(
+                seconds=args.seconds,
+                lan_bind_addr=lan_bind_addr,
+                single_server=args.single_server,
+            )
+        ),
         "stopCommand": [
             sys.executable,
             str(REPO_ROOT / "scripts" / "rust-soak-control.py"),
@@ -146,6 +153,8 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         "--cpu-profile-stack",
         "--process-metrics",
     ]
+    if args.single_server:
+        command.extend(["--reuse-kad-bootstrap", "--server-met-url", "", "--single-rust-server"])
     return command
 
 
@@ -159,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, epilog=epilog)
     parser.add_argument("--seconds", type=int, default=3600, help="CPU profile/run window; minimum 3600.")
     parser.add_argument("--lan-bind-addr", default="", help="REST LAN bind address; defaults to inherited X_LOCAL_IP.")
+    parser.add_argument(
+        "--single-server",
+        action="store_true",
+        help="Use only the fixed Rust operator ED2K server and skip server.met import.",
+    )
     parser.add_argument("--describe", action="store_true", help="Print effective paths and commands without launching.")
     return parser
 
