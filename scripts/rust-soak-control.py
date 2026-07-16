@@ -1251,10 +1251,32 @@ def default_vpn_executables() -> list[Path]:
     return executables
 
 
+def default_regular_executable() -> Path:
+    """Returns the staged regular Rust executable used by the operator live profile."""
+
+    return output_root() / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+
+
+def vpn_executables_from_args(args: argparse.Namespace) -> list[Path]:
+    """Returns the executable list requested by one VPN status invocation."""
+
+    if args.exe:
+        return list(args.exe)
+    if getattr(args, "rust_regular", False):
+        executables = [default_regular_executable()]
+        if getattr(args, "include_mfc", False):
+            try:
+                executables.append(clw.resolve_mfc_diagnostics_exe(output_root()))
+            except FileNotFoundError:
+                pass
+        return executables
+    return default_vpn_executables()
+
+
 def vpn_allowlist_status(args: argparse.Namespace) -> dict[str, object]:
     """Reports hide.me split-tunnel status without mutating VPN settings."""
 
-    executables = args.exe or default_vpn_executables()
+    executables = vpn_executables_from_args(args)
     rows = []
     for exe in executables:
         try:
@@ -1457,6 +1479,47 @@ def default_metadata_db() -> Path:
     """Returns the persistent Rust metadata database path."""
 
     return default_profile_dir() / RUST_PROFILE_METADATA_FILE
+
+
+def default_profile_launch_manifest() -> Path:
+    """Returns the operator Rust profile launcher manifest path."""
+
+    return output_root() / "logs" / "soak-launch" / "rust-regular-soak.latest.json"
+
+
+def default_profile_launch_watch_paths() -> dict[str, Path]:
+    """Returns retained live-watch paths for the operator Rust profile."""
+
+    watch_dir = output_root() / "soak" / "rust-runtime" / "live-watch"
+    return {
+        "watchPidFile": watch_dir / "rust-soak-watch.pid",
+        "watchJsonl": watch_dir / "rust-live-watch.jsonl",
+        "watchHeartbeat": watch_dir / "rust-live-watch.heartbeat.txt",
+        "watchStopFile": watch_dir / "rust-soak-watch.stop",
+    }
+
+
+def load_profile_launch_manifest(path: Path) -> dict[str, object]:
+    """Loads one operator profile launcher manifest."""
+
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"profile launch manifest is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"profile launch manifest must contain one JSON object: {path}")
+    return payload
+
+
+def live_wire_rust_profile_dir(inputs_path: Path) -> Path:
+    """Returns the Rust runtime profile configured in the live-wire inputs."""
+
+    inputs = load_live_wire_inputs(inputs_path)
+    if inputs.rust_profile_dir is None:
+        raise RuntimeError(f"{inputs_path} must define rust_profile.profile_dir")
+    return inputs.rust_profile_dir.resolve()
 
 
 def normalized_windows_path_key(value: object) -> str:
@@ -2992,12 +3055,12 @@ def stop_rust(args: argparse.Namespace) -> dict[str, object]:
     request_rust_shutdown(args.base_url, args.api_key)
     exited = wait_pid_exit(args.pid, args.shutdown_timeout_seconds) if args.pid else True
     if args.pid and not exited:
-        terminate_pid_tree(args.pid, markers=("emulebb-rust-diagnostics",), timeout_seconds=15.0)
+        terminate_pid_tree(args.pid, markers=("emulebb-rust",), timeout_seconds=15.0)
     return {"rustPid": args.pid, "stopped": not args.pid or not pid_exists(args.pid)}
 
 
-def rust_processes(_: argparse.Namespace) -> dict[str, object]:
-    """Returns current eMuleBB Rust process rows through the Python WMI helper."""
+def rust_process_rows() -> list[dict[str, object]]:
+    """Returns current eMuleBB Rust process rows."""
 
     matches = [
         process
@@ -3005,17 +3068,228 @@ def rust_processes(_: argparse.Namespace) -> dict[str, object]:
         if process.name.lower().startswith("emulebb-rust")
     ]
     matches.sort(key=lambda process: (process.name.lower(), process.pid))
-    return {
-        "processes": [
+    return [
+        {
+            "pid": process.pid,
+            "parentPid": process.parent_pid,
+            "name": process.name,
+            "creationDate": process.creation_date,
+            "commandLine": process.command_line,
+        }
+        for process in matches
+    ]
+
+
+def rust_processes(_: argparse.Namespace) -> dict[str, object]:
+    """Returns current eMuleBB Rust process rows through the Python WMI helper."""
+
+    return {"processes": rust_process_rows()}
+
+
+def profile_launcher_process_rows(manifest: dict[str, object]) -> list[dict[str, object]]:
+    """Returns the live launcher row for a manifest, if still present."""
+
+    pid = safe_int(manifest.get("pid"))
+    if pid is None:
+        return []
+    rows = []
+    for process in collect_processes():
+        if process.pid != pid:
+            continue
+        command_line = getattr(process, "command_line", "")
+        rows.append(
             {
                 "pid": process.pid,
                 "parentPid": process.parent_pid,
                 "name": process.name,
                 "creationDate": process.creation_date,
-                "commandLine": process.command_line,
+                "commandLine": command_line,
+                "hasLaunchSoak": "launch-soak.py" in command_line.lower(),
             }
-            for process in matches
-        ]
+        )
+    return rows
+
+
+def stop_profile_launch(args: argparse.Namespace) -> dict[str, object]:
+    """Stops the manifest-recorded Rust live profile launcher process tree."""
+
+    manifest = load_profile_launch_manifest(args.manifest)
+    launcher_pid = safe_int(manifest.get("pid"))
+    rust_before = rust_process_rows()
+    if launcher_pid is not None and pid_exists(launcher_pid):
+        terminate_pid_tree(launcher_pid, markers=("launch-soak.py",), timeout_seconds=args.timeout_seconds)
+    rust_after = rust_process_rows()
+    return {
+        "manifest": str(args.manifest),
+        "launcherPid": launcher_pid,
+        "launcherStopped": launcher_pid is None or not pid_exists(launcher_pid),
+        "rustProcessCountBefore": len(rust_before),
+        "rustProcessCountAfter": len(rust_after),
+        "rustProcessesAfter": rust_after,
+    }
+
+
+def sqlite_table_names(connection: sqlite3.Connection) -> set[str]:
+    """Returns table names in one SQLite database."""
+
+    rows = connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def sqlite_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    """Returns columns for one SQLite table."""
+
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def sqlite_count_table(connection: sqlite3.Connection, tables: set[str], table: str) -> int | None:
+    """Counts one table if it exists."""
+
+    if table not in tables:
+        return None
+    return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def sqlite_count_truthy(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    table: str,
+    candidate_columns: tuple[str, ...],
+) -> int | None:
+    """Counts rows where the first available candidate column is truthy."""
+
+    if table not in tables:
+        return None
+    columns = sqlite_columns(connection, table)
+    for column in candidate_columns:
+        if column in columns:
+            return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} != 0").fetchone()[0])
+    return None
+
+
+def sqlite_sum_column(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    table: str,
+    candidate_columns: tuple[str, ...],
+) -> int | None:
+    """Sums the first available candidate column from one table."""
+
+    if table not in tables:
+        return None
+    columns = sqlite_columns(connection, table)
+    for column in candidate_columns:
+        if column in columns:
+            value = connection.execute(f"SELECT COALESCE(SUM({column}), 0) FROM {table}").fetchone()[0]
+            return int(value or 0)
+    return None
+
+
+def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
+    """Returns compact persisted Rust metadata counters."""
+
+    if not metadata_db.is_file():
+        return {"metadataDb": str(metadata_db), "metadataDbExists": False}
+    connection = sqlite3.connect(metadata_db)
+    try:
+        tables = sqlite_table_names(connection)
+        return {
+            "metadataDb": str(metadata_db),
+            "metadataDbExists": True,
+            "knownFilesTotal": sqlite_count_table(connection, tables, "known_files"),
+            "knownFilesCompleted": sqlite_count_truthy(
+                connection,
+                tables,
+                "known_files",
+                ("completed", "is_completed"),
+            ),
+            "knownCompletedBytes": sqlite_sum_column(
+                connection,
+                tables,
+                "known_files",
+                ("completed_bytes", "size", "size_bytes", "file_size"),
+            ),
+            "knownUploadedBytes": sqlite_sum_column(
+                connection,
+                tables,
+                "known_files",
+                ("uploaded_bytes", "all_time_uploaded_bytes"),
+            ),
+            "knownUploadRequests": sqlite_sum_column(
+                connection,
+                tables,
+                "known_files",
+                ("upload_requests", "all_time_upload_requests"),
+            ),
+            "knownUploadAccepts": sqlite_sum_column(
+                connection,
+                tables,
+                "known_files",
+                ("upload_accepts", "all_time_upload_accepts"),
+            ),
+            "transfersTotal": sqlite_count_table(connection, tables, "transfers"),
+            "sharedRootsTotal": sqlite_count_table(connection, tables, "shared_roots"),
+            "serversTotal": sqlite_count_table(connection, tables, "servers"),
+            "kadBootstrapEndpoints": sqlite_count_table(connection, tables, "kad_bootstrap_endpoints"),
+            "peersTotal": sqlite_count_table(connection, tables, "peers"),
+            "transferSourcesTotal": sqlite_count_table(connection, tables, "transfer_sources"),
+            "ed2kPartHashRows": sqlite_count_table(connection, tables, "ed2k_part_hashes"),
+            "aichPartHashRows": sqlite_count_table(connection, tables, "aich_part_hashes"),
+            "kadKeywordPublishRows": sqlite_count_table(connection, tables, "kad_keyword_publishes"),
+            "kadSourcePublishRows": sqlite_count_table(connection, tables, "kad_source_publishes"),
+        }
+    finally:
+        connection.close()
+
+
+def rust_profile_status(args: argparse.Namespace) -> dict[str, object]:
+    """Returns one self-contained status summary for the operator Rust live profile."""
+
+    inputs_path = args.inputs
+    profile_dir = args.profile_dir or live_wire_rust_profile_dir(inputs_path)
+    packet_dump_dir = profile_dir / "packet-dump"
+    metadata_db = profile_dir / RUST_PROFILE_METADATA_FILE
+    manifest = load_profile_launch_manifest(args.manifest)
+    watch_paths = default_profile_launch_watch_paths()
+    watch = watch_status(
+        argparse.Namespace(
+            watch_pid_file=watch_paths["watchPidFile"],
+            watch_jsonl=watch_paths["watchJsonl"],
+            watch_heartbeat=watch_paths["watchHeartbeat"],
+            watch_stop_file=watch_paths["watchStopFile"],
+            stale_seconds=args.stale_seconds,
+        )
+    )
+    return {
+        "schema": "emulebb.rust-profile-status.v1",
+        "inputs": str(inputs_path),
+        "profileDir": str(profile_dir),
+        "packetDumpDir": str(packet_dump_dir),
+        "metadata": rust_metadata_counts(metadata_db),
+        "manifest": {
+            "path": str(args.manifest),
+            "exists": bool(manifest),
+            "pid": manifest.get("pid"),
+            "startedUtc": manifest.get("startedUtc"),
+            "stdout": manifest.get("stdout"),
+            "stderr": manifest.get("stderr"),
+            "seconds": manifest.get("seconds"),
+            "lanBindAddr": manifest.get("lanBindAddr"),
+        },
+        "launcherProcesses": profile_launcher_process_rows(manifest),
+        "rustProcesses": rust_process_rows(),
+        "watch": watch,
+        "vpn": vpn_allowlist_status(
+            argparse.Namespace(
+                exe=None,
+                rust_regular=True,
+                include_mfc=False,
+                settings_path=args.vpn_settings_path,
+                check_adapter=args.check_vpn_adapter,
+            )
+        )
+        if args.include_vpn_status
+        else None,
     }
 
 
@@ -4793,8 +5067,33 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
     stop_parser.set_defaults(func=stop_rust)
 
+    stop_profile_parser = sub.add_parser(
+        "stop-profile-launch",
+        help="Stop the manifest-recorded Rust live profile launcher process tree.",
+    )
+    stop_profile_parser.add_argument("--manifest", type=Path, default=default_profile_launch_manifest())
+    stop_profile_parser.add_argument("--timeout-seconds", type=float, default=15.0)
+    stop_profile_parser.set_defaults(func=stop_profile_launch)
+
     rust_processes_parser = sub.add_parser("rust-processes", help="List Rust process rows through Python WMI.")
     rust_processes_parser.set_defaults(func=rust_processes)
+
+    profile_status_parser = sub.add_parser(
+        "profile-status",
+        help="Print one self-contained Rust live profile status summary.",
+    )
+    profile_status_parser.add_argument("--inputs", type=Path, default=default_live_wire_inputs())
+    profile_status_parser.add_argument("--profile-dir", type=Path)
+    profile_status_parser.add_argument("--manifest", type=Path, default=default_profile_launch_manifest())
+    profile_status_parser.add_argument("--stale-seconds", type=float, default=900.0)
+    profile_status_parser.add_argument("--include-vpn-status", action="store_true")
+    profile_status_parser.add_argument("--check-vpn-adapter", action="store_true")
+    profile_status_parser.add_argument(
+        "--vpn-settings-path",
+        type=Path,
+        default=REPO_ROOT / "vpn-guard-live.local.json",
+    )
+    profile_status_parser.set_defaults(func=rust_profile_status)
 
     mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")
     mfc_processes_parser.set_defaults(func=mfc_processes)
@@ -4930,6 +5229,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report hide.me split-tunnel allow-list status without changing settings.",
     )
     vpn_parser.add_argument("--exe", type=Path, action="append")
+    vpn_parser.add_argument(
+        "--rust-regular",
+        action="store_true",
+        help="Default to the staged regular emulebb-rust.exe instead of diagnostics+MFC.",
+    )
+    vpn_parser.add_argument(
+        "--include-mfc",
+        action="store_true",
+        help="Also include the MFC diagnostics executable when --rust-regular is used.",
+    )
     vpn_parser.add_argument("--settings-path", type=Path)
     vpn_parser.add_argument("--check-adapter", action="store_true")
     vpn_parser.set_defaults(func=vpn_allowlist_status)

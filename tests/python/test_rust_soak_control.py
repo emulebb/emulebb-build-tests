@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 from types import ModuleType
@@ -1274,6 +1275,33 @@ def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path)
     assert str(tmp_path) not in rendered
 
 
+def test_vpn_allowlist_status_can_default_to_regular_rust_only(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    output_root = tmp_path / "out"
+    regular_exe = output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    settings = tmp_path / "vpn.settings"
+    regular_exe.parent.mkdir(parents=True)
+    regular_exe.write_text("placeholder", encoding="utf-8")
+    settings.write_text(
+        json.dumps({"SplitTunneling": {"Whitelisted": [{"Path": str(regular_exe)}]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(control, "output_root", lambda: output_root)
+
+    result = control.vpn_allowlist_status(
+        SimpleNamespace(
+            exe=None,
+            rust_regular=True,
+            include_mfc=False,
+            settings_path=settings,
+            check_adapter=False,
+        )
+    )
+
+    assert result["allWhitelisted"] is True
+    assert [row["name"] for row in result["executables"]] == ["emulebb-rust.exe"]
+
+
 def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> None:
     control = _load_rust_soak_control()
     calls: list[tuple[str, str, dict[str, object] | None]] = []
@@ -2097,6 +2125,155 @@ def test_stop_watch_processes_terminates_only_watch_loop_rows(monkeypatch) -> No
     assert result["stoppedCount"] == 1
     assert result["processes"][0]["pid"] == 8765
     assert result["processes"][0]["stopped"] is True
+
+
+def test_stop_profile_launch_terminates_manifest_launcher_tree(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    manifest = tmp_path / "rust-regular-soak.latest.json"
+    manifest.write_text(json.dumps({"pid": 4321}), encoding="utf-8")
+    launcher = SimpleNamespace(
+        pid=4321,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000000.000000+000",
+        command_line="python scripts/launch-soak.py --rust-regular",
+    )
+    rust = SimpleNamespace(
+        pid=5432,
+        parent_pid=4321,
+        name="emulebb-rust.exe",
+        creation_date="20260101000001.000000+000",
+        command_line="emulebb-rust.exe --profile C:\\soak\\rust-runtime",
+    )
+    live_pids = {4321, 5432}
+    terminated: list[tuple[int, tuple[str, ...], float]] = []
+
+    def fake_terminate(pid: int, *, markers: tuple[str, ...], timeout_seconds: float) -> None:
+        terminated.append((pid, markers, timeout_seconds))
+        live_pids.clear()
+
+    monkeypatch.setattr(control, "collect_processes", lambda: [p for p in (launcher, rust) if p.pid in live_pids])
+    monkeypatch.setattr(control, "pid_exists", lambda pid: pid in live_pids)
+    monkeypatch.setattr(control, "terminate_pid_tree", fake_terminate)
+
+    result = control.stop_profile_launch(SimpleNamespace(manifest=manifest, timeout_seconds=9.0))
+
+    assert terminated == [(4321, ("launch-soak.py",), 9.0)]
+    assert result["launcherPid"] == 4321
+    assert result["launcherStopped"] is True
+    assert result["rustProcessCountBefore"] == 1
+    assert result["rustProcessCountAfter"] == 0
+
+
+def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    output_root = tmp_path / "out"
+    profile_dir = output_root / "soak" / "rust-runtime"
+    metadata_db = profile_dir / "emulebb-rust-metadata.db"
+    manifest = tmp_path / "rust-regular-soak.latest.json"
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    profile_dir.mkdir(parents=True)
+    inputs.write_text(
+        json.dumps(
+            {
+                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "rust_profile": {"profile_dir": str(profile_dir)},
+                "search_terms": {
+                    "generic_open": ["linux iso"],
+                    "documents": ["linux pdf"],
+                    "radarr_movies": ["public domain"],
+                },
+                "auto_browse": {
+                    "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],
+                    "direct_bootstrap_transfers": [
+                        {
+                            "hash": "0123456789abcdef0123456789abcdef",
+                            "name": "fixture.iso",
+                            "size": 123,
+                            "method": "direct_ed2k",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.write_text(
+        json.dumps(
+            {
+                "pid": 4321,
+                "startedUtc": "20260716T000000Z",
+                "stdout": str(tmp_path / "out.log"),
+                "stderr": str(tmp_path / "err.log"),
+                "seconds": 3600,
+                "lanBindAddr": "192.0.2.10",
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = sqlite3.connect(metadata_db)
+    try:
+        connection.execute("CREATE TABLE known_files (completed INTEGER, size INTEGER, uploaded_bytes INTEGER, upload_requests INTEGER, upload_accepts INTEGER)")
+        connection.execute("INSERT INTO known_files VALUES (1, 100, 10, 2, 1)")
+        connection.execute("INSERT INTO known_files VALUES (0, 200, 20, 3, 2)")
+        for table in (
+            "transfers",
+            "shared_roots",
+            "servers",
+            "kad_bootstrap_endpoints",
+            "peers",
+            "transfer_sources",
+            "ed2k_part_hashes",
+            "aich_part_hashes",
+            "kad_keyword_publishes",
+            "kad_source_publishes",
+        ):
+            connection.execute(f"CREATE TABLE {table} (id INTEGER)")
+            connection.execute(f"INSERT INTO {table} VALUES (1)")
+        connection.commit()
+    finally:
+        connection.close()
+    launcher = SimpleNamespace(
+        pid=4321,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000000.000000+000",
+        command_line="python scripts/launch-soak.py --rust-regular",
+    )
+    rust = SimpleNamespace(
+        pid=5432,
+        parent_pid=4321,
+        name="emulebb-rust.exe",
+        creation_date="20260101000001.000000+000",
+        command_line=f"emulebb-rust.exe --profile {profile_dir}",
+    )
+    monkeypatch.setattr(control, "output_root", lambda: output_root)
+    monkeypatch.setattr(control, "collect_processes", lambda: [launcher, rust])
+    monkeypatch.setattr(control, "pid_exists", lambda pid: pid in {4321, 5432})
+
+    result = control.rust_profile_status(
+        SimpleNamespace(
+            inputs=inputs,
+            profile_dir=None,
+            manifest=manifest,
+            stale_seconds=900.0,
+            include_vpn_status=False,
+            check_vpn_adapter=False,
+            vpn_settings_path=None,
+        )
+    )
+
+    assert result["profileDir"] == str(profile_dir)
+    assert result["manifest"]["pid"] == 4321
+    assert result["launcherProcesses"][0]["hasLaunchSoak"] is True
+    assert result["rustProcesses"][0]["pid"] == 5432
+    assert result["metadata"]["knownFilesTotal"] == 2
+    assert result["metadata"]["knownFilesCompleted"] == 1
+    assert result["metadata"]["knownCompletedBytes"] == 300
+    assert result["metadata"]["knownUploadedBytes"] == 30
+    assert result["metadata"]["knownUploadRequests"] == 5
+    assert result["metadata"]["ed2kPartHashRows"] == 1
+    assert result["watch"]["findings"] == ["watch-not-running", "watch-stale"]
 
 
 def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, monkeypatch) -> None:
