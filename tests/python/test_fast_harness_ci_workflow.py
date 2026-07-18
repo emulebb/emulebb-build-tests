@@ -15,4 +15,5 @@ def test_fast_harness_ci_runs_rust_openapi_route_drift_check() -> None:
     workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "fast-harness-ci.yml"
     text = workflow.read_text(encoding="utf-8")
 
+    assert "Check Rust OpenAPI metadata drift" in text
     assert "python scripts/check-rust-openapi-routes.py" in text

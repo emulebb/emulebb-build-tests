@@ -3,12 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from emule_test_harness.rust_openapi_routes import (
+    BodyFieldDrift,
     QueryParameterDrift,
     Route,
     compare_route_contract,
     compare_route_inventory,
+    openapi_body_field_inventory,
     openapi_query_parameter_inventory,
     openapi_route_inventory,
+    rust_body_field_inventory,
     rust_query_parameter_inventory,
     rust_route_inventory,
 )
@@ -191,6 +194,10 @@ def test_compare_route_contract_reports_query_parameter_drift(tmp_path: Path) ->
         }
         ''',
     )
+    route_body_metadata_rs = write(
+        tmp_path / "route_body_metadata.rs",
+        'fn route_body_fields(method: &str, path: &str) -> Option<&static [&static str]> { None }',
+    )
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -204,12 +211,149 @@ paths:
 """,
     )
 
-    report = compare_route_contract(routes_rs, route_metadata_rs, openapi_yaml)
+    report = compare_route_contract(routes_rs, route_metadata_rs, route_body_metadata_rs, openapi_yaml)
 
     assert report.query_parameter_drift == (
         QueryParameterDrift(
             route=Route("GET", "/snapshot"),
             rust_query_parameters=("limit",),
             openapi_query_parameters=("since",),
+        ),
+    )
+
+
+def test_openapi_body_field_inventory_reads_ref_schema_properties(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /transfers:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferCreateRequest"
+      responses: {}
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      properties:
+        link: { type: string }
+        links: { type: array }
+        paused: { type: boolean }
+""",
+    )
+
+    assert openapi_body_field_inventory(openapi_yaml) == {
+        Route("POST", "/transfers"): ("link", "links", "paused"),
+    }
+
+
+def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path) -> None:
+    routes_rs = write(
+        tmp_path / "routes.rs",
+        '''
+        Router::new()
+            .route("/api/v1/app", get(app))
+            .route("/api/v1/transfers", post(create_transfer))
+            .route("/api/v1/transfers/{hash}", patch(update_transfer))
+            .route("/api/v1/servers/operations/import-met-url", post(import_servers))
+            .route("/api/v1/searches/{searchId}/results/{hash}/operations/download", post(download));
+        ''',
+    )
+    route_body_metadata_rs = write(
+        tmp_path / "route_body_metadata.rs",
+        '''
+        fn route_body_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
+            const TRANSFER_ADD: &[&str] = &["link", "links", "categoryId", "categoryName", "paused"];
+            const TRANSFER_PATCH: &[&str] = &["name", "priority", "categoryId", "categoryName"];
+            const SEARCH_RESULT_DOWNLOAD: &[&str] = &["categoryId", "categoryName", "paused"];
+            const URL_IMPORT: &[&str] = &["url"];
+            if method == "POST" && path == "/api/v1/transfers" {
+                return Some(TRANSFER_ADD);
+            }
+            if uses_url_import_body(method, path) {
+                return Some(URL_IMPORT);
+            }
+            let segments = api_segments(path)?;
+            match (method, segments.as_slice()) {
+                ("PATCH", ["transfers", _]) => Some(TRANSFER_PATCH),
+                ("POST", ["searches", _, "results", _, "operations", "download"]) => {
+                    Some(SEARCH_RESULT_DOWNLOAD)
+                }
+                _ => None,
+            }
+        }
+        fn uses_url_import_body(method: &str, path: &str) -> bool {
+            method == "POST"
+                && matches!(
+                    path,
+                    "/api/v1/servers/operations/import-met-url" | "/api/v1/kad/operations/import-nodes-url"
+                )
+        }
+        ''',
+    )
+
+    assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
+        Route("GET", "/app"): (),
+        Route("POST", "/transfers"): ("categoryId", "categoryName", "link", "links", "paused"),
+        Route("PATCH", "/transfers/{hash}"): ("categoryId", "categoryName", "name", "priority"),
+        Route("POST", "/servers/operations/import-met-url"): ("url",),
+        Route("POST", "/searches/{searchId}/results/{hash}/operations/download"): (
+            "categoryId",
+            "categoryName",
+            "paused",
+        ),
+    }
+
+
+def test_compare_route_contract_reports_body_field_drift(tmp_path: Path) -> None:
+    routes_rs = write(
+        tmp_path / "routes.rs",
+        'Router::new().route("/api/v1/transfers", post(create_transfer));',
+    )
+    route_metadata_rs = write(
+        tmp_path / "route_metadata.rs",
+        'fn route_query_fields(method: &str, path: &str) -> Option<&static [&static str]> { None }',
+    )
+    route_body_metadata_rs = write(
+        tmp_path / "route_body_metadata.rs",
+        '''
+        fn route_body_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
+            const TRANSFER_ADD: &[&str] = &["link"];
+            if method == "POST" && path == "/api/v1/transfers" {
+                return Some(TRANSFER_ADD);
+            }
+            None
+        }
+        ''',
+    )
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /transfers:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                link: { type: string }
+                paused: { type: boolean }
+      responses: {}
+""",
+    )
+
+    report = compare_route_contract(routes_rs, route_metadata_rs, route_body_metadata_rs, openapi_yaml)
+
+    assert report.body_field_drift == (
+        BodyFieldDrift(
+            route=Route("POST", "/transfers"),
+            rust_body_fields=("link",),
+            openapi_body_fields=("link", "paused"),
         ),
     )

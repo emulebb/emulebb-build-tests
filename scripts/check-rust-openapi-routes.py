@@ -1,4 +1,4 @@
-"""Checks emulebb-rust router path inventory against the OpenAPI contract."""
+"""Checks emulebb-rust router metadata inventory against OpenAPI."""
 
 from __future__ import annotations
 
