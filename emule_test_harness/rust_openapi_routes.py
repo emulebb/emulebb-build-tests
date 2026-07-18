@@ -54,6 +54,7 @@ class RouteDriftReport:
     parameter_metadata_drift: tuple[ParameterMetadataDrift, ...] = ()
     parameter_ref_drift: tuple[ParameterRefDrift, ...] = ()
     schema_component_drift: tuple[SchemaComponentDrift, ...] = ()
+    confirmation_contract_drift: tuple[ConfirmationContractDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
@@ -77,6 +78,7 @@ class RouteDriftReport:
             and not self.parameter_metadata_drift
             and not self.parameter_ref_drift
             and not self.schema_component_drift
+            and not self.confirmation_contract_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
             and not self.body_field_drift
@@ -100,6 +102,7 @@ class RouteDriftReport:
             "parameterMetadataDrift": parameter_metadata_drift_json(self.parameter_metadata_drift),
             "parameterRefDrift": parameter_ref_drift_json(self.parameter_ref_drift),
             "schemaComponentDrift": schema_component_drift_json(self.schema_component_drift),
+            "confirmationContractDrift": confirmation_contract_drift_json(self.confirmation_contract_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
@@ -162,6 +165,14 @@ class SchemaComponentDrift:
     """An OpenAPI schema component whose reusable shape is incomplete."""
 
     component: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class ConfirmationContractDrift:
+    """A destructive-operation confirmation contract gap."""
+
+    source: str
     issue: str
 
 
@@ -330,6 +341,16 @@ def schema_component_drift_json(drifts: Iterable[SchemaComponentDrift]) -> list[
     return [
         {
             "component": drift.component,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def confirmation_contract_drift_json(drifts: Iterable[ConfirmationContractDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": drift.source,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -743,6 +764,73 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         if enum_values is not None and (not isinstance(enum_values, list) or not enum_values):
             drift.append(SchemaComponentDrift(component=name, issue="enum must be a non-empty list"))
     return tuple(sorted(drift))
+
+
+def openapi_confirmation_contract_drift(openapi_yaml: Path) -> tuple[ConfirmationContractDrift, ...]:
+    """Returns destructive confirmation schemas that are not explicit true sentinels."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    parameters = components.get("parameters", {}) if isinstance(components, dict) else {}
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    drift: list[ConfirmationContractDrift] = []
+
+    confirm_parameter = parameters.get("Confirm") if isinstance(parameters, dict) else None
+    if not isinstance(confirm_parameter, dict):
+        drift.append(
+            ConfirmationContractDrift(
+                source="components.parameters.Confirm",
+                issue="missing shared destructive confirmation parameter",
+            )
+        )
+    else:
+        if confirm_parameter.get("required") is not True:
+            drift.append(
+                ConfirmationContractDrift(
+                    source="components.parameters.Confirm.required",
+                    issue="confirm query parameter must be required",
+                )
+            )
+        assert_true_boolean_schema(
+            drift,
+            "components.parameters.Confirm.schema",
+            confirm_parameter.get("schema"),
+        )
+
+    if isinstance(schemas, dict):
+        for name, schema in schemas.items():
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            if not isinstance(properties, dict):
+                continue
+            required = schema.get("required", []) if isinstance(schema, dict) else []
+            required_names = set(required) if isinstance(required, list) else set()
+            for property_name, property_schema in properties.items():
+                if not isinstance(property_name, str) or not property_name.startswith("confirm"):
+                    continue
+                source = f"components.schemas.{name}.properties.{property_name}"
+                if property_name not in required_names:
+                    drift.append(
+                        ConfirmationContractDrift(
+                            source=source,
+                            issue="confirmation property must be required",
+                        )
+                    )
+                assert_true_boolean_schema(drift, source, property_schema)
+    return tuple(sorted(drift))
+
+
+def assert_true_boolean_schema(
+    drift: list[ConfirmationContractDrift],
+    source: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(ConfirmationContractDrift(source=source, issue="confirmation schema must be an object"))
+        return
+    if schema.get("type") != "boolean":
+        drift.append(ConfirmationContractDrift(source=source, issue="confirmation schema type must be boolean"))
+    if schema.get("enum") != [True]:
+        drift.append(ConfirmationContractDrift(source=source, issue="confirmation schema enum must be [true]"))
 
 
 def append_parameter_metadata_drift(
@@ -1613,6 +1701,7 @@ def compare_route_contract(
     parameter_metadata_drift = openapi_parameter_metadata_drift(openapi_yaml)
     parameter_ref_drift = openapi_parameter_ref_drift(openapi_yaml)
     schema_component_drift = openapi_schema_component_drift(openapi_yaml)
+    confirmation_contract_drift = openapi_confirmation_contract_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
     path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
@@ -1662,6 +1751,7 @@ def compare_route_contract(
         parameter_metadata_drift=parameter_metadata_drift,
         parameter_ref_drift=parameter_ref_drift,
         schema_component_drift=schema_component_drift,
+        confirmation_contract_drift=confirmation_contract_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
@@ -1732,7 +1822,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, confirmation, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1771,6 +1861,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("Schema component drift:")
         for drift in report.schema_component_drift:
             print(f"  {drift.component}: {drift.issue}")
+    if report.confirmation_contract_drift:
+        print("Confirmation contract drift:")
+        for drift in report.confirmation_contract_drift:
+            print(f"  {drift.source}: {drift.issue}")
     if report.query_parameter_drift:
         print("Query parameter drift:")
         for drift in report.query_parameter_drift:

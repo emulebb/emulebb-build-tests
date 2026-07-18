@@ -5,6 +5,7 @@ from pathlib import Path
 from emule_test_harness.rust_openapi_routes import (
     AuthDrift,
     BodyFieldDrift,
+    ConfirmationContractDrift,
     ComponentRefDrift,
     ErrorResponseDrift,
     MethodNotAllowedDrift,
@@ -25,6 +26,7 @@ from emule_test_harness.rust_openapi_routes import (
     compare_route_inventory,
     openapi_auth_drift,
     openapi_body_field_inventory,
+    openapi_confirmation_contract_drift,
     openapi_component_ref_drift,
     openapi_error_response_drift,
     openapi_method_not_allowed_drift,
@@ -434,6 +436,66 @@ components:
         SchemaComponentDrift(
             component="NotObject",
             issue="schema component must be an object",
+        ),
+    )
+
+
+def test_openapi_confirmation_contract_drift_requires_true_sentinels(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    Confirm:
+      name: confirm
+      in: query
+      required: false
+      schema:
+        type: boolean
+  schemas:
+    ClearLogsRequest:
+      type: object
+      required: []
+      properties:
+        confirmClearLogs:
+          type: boolean
+    ShutdownRequest:
+      type: object
+      required: [confirmShutdown]
+      properties:
+        confirmShutdown:
+          type: string
+          enum: [true]
+    GoodConfirmRequest:
+      type: object
+      required: [confirmDump]
+      properties:
+        confirmDump:
+          type: boolean
+          enum: [true]
+""",
+    )
+
+    assert openapi_confirmation_contract_drift(openapi_yaml) == (
+        ConfirmationContractDrift(
+            source="components.parameters.Confirm.required",
+            issue="confirm query parameter must be required",
+        ),
+        ConfirmationContractDrift(
+            source="components.parameters.Confirm.schema",
+            issue="confirmation schema enum must be [true]",
+        ),
+        ConfirmationContractDrift(
+            source="components.schemas.ClearLogsRequest.properties.confirmClearLogs",
+            issue="confirmation property must be required",
+        ),
+        ConfirmationContractDrift(
+            source="components.schemas.ClearLogsRequest.properties.confirmClearLogs",
+            issue="confirmation schema enum must be [true]",
+        ),
+        ConfirmationContractDrift(
+            source="components.schemas.ShutdownRequest.properties.confirmShutdown",
+            issue="confirmation schema type must be boolean",
         ),
     )
 
