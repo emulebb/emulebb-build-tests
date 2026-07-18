@@ -38,6 +38,8 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
 }
 TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
+URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
+URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1052,6 +1054,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_event_schema_drift(drift, schemas)
     if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
         append_transfer_create_schema_drift(drift, schemas)
+    if URL_IMPORT_REQUEST_COMPONENT in schemas:
+        append_url_import_schema_drift(drift, schemas)
     return tuple(sorted(drift))
 
 
@@ -1171,6 +1175,78 @@ def assert_transfer_link_text_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="link text pattern must require case-insensitive ed2k:// without whitespace",
+            )
+        )
+
+
+def append_url_import_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(URL_IMPORT_REQUEST_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=URL_IMPORT_REQUEST_COMPONENT,
+                issue="missing URL import request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=URL_IMPORT_REQUEST_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_url_import_text_schema(
+        drift,
+        "UrlImportRequest.properties.url",
+        properties.get("url"),
+    )
+
+
+def assert_url_import_text_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="URL import text schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="URL import text type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="URL import text minLength must be 1",
+            )
+        )
+    if schema.get("maxLength") != 2048:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="URL import text maxLength must be 2048",
+            )
+        )
+    if schema.get("pattern") != URL_IMPORT_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="URL import text pattern must require case-insensitive http(s) with a host and no whitespace",
             )
         )
 
