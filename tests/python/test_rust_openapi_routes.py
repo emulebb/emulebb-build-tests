@@ -786,6 +786,101 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_category_text_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.name",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.path",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.name",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.path",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_text_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_friend_name_constraints(
     tmp_path: Path,
 ) -> None:

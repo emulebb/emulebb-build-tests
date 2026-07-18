@@ -40,11 +40,13 @@ TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
+NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
 SERVER_CREATE_REQUEST_COMPONENT = "ServerCreateRequest"
 KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
-ENDPOINT_ADDRESS_PATTERN = r"\S"
 FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
 CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
+CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
+CATEGORY_PATCH_COMPONENT = "CategoryPatch"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1077,6 +1079,14 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         )
     if FRIEND_CREATE_REQUEST_COMPONENT in schemas:
         append_friend_create_schema_drift(drift, schemas)
+    if CATEGORY_CREATE_REQUEST_COMPONENT in schemas:
+        append_category_mutation_schema_drift(
+            drift,
+            schemas,
+            CATEGORY_CREATE_REQUEST_COMPONENT,
+        )
+    if CATEGORY_PATCH_COMPONENT in schemas:
+        append_category_mutation_schema_drift(drift, schemas, CATEGORY_PATCH_COMPONENT)
     return tuple(sorted(drift))
 
 
@@ -1326,11 +1336,87 @@ def assert_endpoint_address_schema(
                 issue="endpoint address minLength must be 1",
             )
         )
-    if schema.get("pattern") != ENDPOINT_ADDRESS_PATTERN:
+    if schema.get("pattern") != NON_EMPTY_AFTER_TRIM_PATTERN:
         drift.append(
             SchemaComponentDrift(
                 component=component,
                 issue="endpoint address pattern must require at least one non-whitespace character",
+            )
+        )
+
+
+def append_category_mutation_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+    component: str,
+) -> None:
+    schema = schemas.get(component)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="missing category mutation schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_trim_non_empty_text_schema(
+        drift,
+        f"{component}.properties.name",
+        properties.get("name"),
+        nullable=False,
+    )
+    assert_trim_non_empty_text_schema(
+        drift,
+        f"{component}.properties.path",
+        properties.get("path"),
+        nullable=True,
+    )
+
+
+def assert_trim_non_empty_text_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    *,
+    nullable: bool,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="trim-non-empty text schema must be an object",
+            )
+        )
+        return
+    expected_type: object = ["string", "null"] if nullable else "string"
+    if schema.get("type") != expected_type:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"trim-non-empty text type must be {expected_type!r}",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="trim-non-empty text minLength must be 1",
+            )
+        )
+    if schema.get("pattern") != NON_EMPTY_AFTER_TRIM_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="trim-non-empty text pattern must require at least one non-whitespace character",
             )
         )
 
