@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -42,8 +43,11 @@ def require_rest_base_url(base_url: str) -> str:
     """Returns the daemon base URL, rejecting API-root URLs that would double-prefix paths."""
 
     normalized = base_url.rstrip("/")
-    if normalized.endswith("/api/v1"):
-        raise ValueError("REST conformance --base-url must be the daemon root, without /api/v1.")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.path not in ("", "/"):
+        raise ValueError(
+            "REST conformance --base-url must be the daemon root, without a path such as /api/v1."
+        )
     return normalized
 
 

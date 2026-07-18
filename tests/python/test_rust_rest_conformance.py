@@ -72,11 +72,23 @@ def test_run_response_conformance_rejects_api_root_base_url() -> None:
     def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
         raise AssertionError("exercise should not run after base-url preflight failure")
 
-    with pytest.raises(ValueError, match="without /api/v1"):
+    with pytest.raises(ValueError, match="without a path"):
         rust_rest_conformance.run_response_conformance(
             "http://127.0.0.1:4711/api/v1",
             "test-key",
             rest_smoke_module=SimpleNamespace(exercise_rest_contract_completeness=exercise),
+            event_stream_checker=lambda _base_url, _api_key: {"ok": True},
+        )
+
+
+def test_run_response_conformance_rejects_non_root_base_url() -> None:
+    with pytest.raises(ValueError, match="without a path"):
+        rust_rest_conformance.run_response_conformance(
+            "http://127.0.0.1:4711/rest",
+            "test-key",
+            rest_smoke_module=SimpleNamespace(
+                exercise_rest_contract_completeness=lambda *_args: {"ok": True}
+            ),
             event_stream_checker=lambda _base_url, _api_key: {"ok": True},
         )
 
@@ -161,7 +173,7 @@ def test_run_event_stream_conformance_rejects_api_root_base_url() -> None:
     def opener(_request, *, timeout: float):
         raise AssertionError("event stream opener should not run after base-url preflight failure")
 
-    with pytest.raises(ValueError, match="without /api/v1"):
+    with pytest.raises(ValueError, match="without a path"):
         rust_rest_conformance.run_event_stream_conformance(
             "http://127.0.0.1:4711/api/v1/",
             "test-key",
