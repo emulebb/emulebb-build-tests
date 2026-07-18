@@ -152,7 +152,6 @@ def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> N
         [
             {
                 "path": str(root),
-                "recursive": True,
                 "monitorOwned": False,
                 "shareable": True,
                 "accessible": False,
@@ -163,7 +162,7 @@ def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> N
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT local_paths.display_path, shared_directory_roots.recursive,
+            SELECT local_paths.display_path,
                    shared_directory_roots.monitor_owned,
                    shared_directory_roots.shareable,
                    shared_directory_roots.accessible,
@@ -174,7 +173,7 @@ def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> N
             """
         ).fetchall()
 
-    assert rows == [(str(root), 1, 0, 1, 0, 1, None)]
+    assert rows == [(str(root), 0, 1, 0, 1, None)]
 
 
 def test_import_known_met_seeds_all_duplicate_paths(tmp_path: Path) -> None:

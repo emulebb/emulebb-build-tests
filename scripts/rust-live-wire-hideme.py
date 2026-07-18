@@ -685,23 +685,20 @@ def _shared_root_path(root: object) -> str:
     return str(root or "")
 
 
-def _shared_root_is_recursive(root: object) -> bool:
-    return bool(root.get("recursive")) if isinstance(root, dict) else False
-
-
-def _normalize_shared_root_entry(root: object) -> object:
+def _normalize_shared_root_entry(root: object) -> str:
     path = _shared_root_path(root).strip()
     if not path.endswith(("\\", "/")):
         path += "\\"
-    if _shared_root_is_recursive(root):
-        return {"path": path, "recursive": True}
     return path
 
 
 def share_directories(base_url: str, roots: list[object]) -> dict[str, Any]:
-    """Shares `roots` via PATCH /api/v1/shared-directories (same body shape both
-    clients accept). With a persisted runtime the daemon reuses cached MD4/AICH
-    hashes (incremental reload), so re-sharing across launches is cheap."""
+    """Shares `roots` via the current Rust PATCH /api/v1/shared-directories shape.
+
+    Operator inputs may still describe their original recursive intent, but the
+    Rust product schema is current-only; the soak harness expands or normalizes
+    outside the daemon and does not send retired REST fields.
+    """
 
     if not roots:
         return {"shared": False, "reason": "no shared_directories.roots in inputs"}

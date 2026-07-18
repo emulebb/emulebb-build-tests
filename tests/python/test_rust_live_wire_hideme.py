@@ -58,6 +58,13 @@ def test_p2p_bound_to_uses_python_socket_inventory(monkeypatch) -> None:
     assert not module.p2p_bound_to("192.0.2.11")
 
 
+def test_shared_root_normalization_uses_current_rust_shape() -> None:
+    module = load_live_wire_module()
+
+    assert module._normalize_shared_root_entry({"path": r"C:\Tree", "recursive": True}) == "C:\\Tree\\"
+    assert module._normalize_shared_root_entry(r"D:\Flat") == "D:\\Flat\\"
+
+
 def test_resolve_rust_live_wire_exe_uses_plain_release_by_default(tmp_path: Path) -> None:
     module = load_live_wire_module()
     exe = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"

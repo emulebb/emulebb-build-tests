@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from emule_test_harness import rust_metadata
+from emule_test_harness.rust_soak_metadata_migration import migrate_v15_to_v16
+
+
+def workspace_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def rust_repo() -> Path:
+    return workspace_root() / "repos" / "emulebb-rust"
+
+
+def make_v15_db(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    with sqlite3.connect(path) as conn:
+        conn.executescript(rust_metadata._schema_sql(rust_repo()))
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 15, 0)",
+            (schema_id,),
+        )
+        conn.execute(
+            "INSERT INTO profile(id, uuid, created_by, created_at_ms, updated_at_ms) VALUES (1, 'profile', 'test', 0, 0)"
+        )
+        conn.execute(
+            "ALTER TABLE shared_directory_roots ADD COLUMN recursive INTEGER NOT NULL DEFAULT 0 CHECK(recursive IN (0, 1))"
+        )
+        conn.execute(
+            """
+            INSERT INTO local_paths(
+                display_path, native_path, canonical_display_path, normalized_key,
+                platform, file_identity_kind, file_identity, size_bytes, mtime_ms,
+                last_stat_ms
+            )
+            VALUES ('C:/share', X'433A2F7368617265', 'C:/share', 'c:/share',
+                    'windows', NULL, NULL, NULL, NULL, NULL)
+            """
+        )
+        path_id = conn.execute("SELECT id FROM local_paths").fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO shared_directory_roots(
+                path_id, recursive, monitor_owned, shareable, accessible,
+                enabled, last_scan_ms, created_at_ms, deleted_at_ms
+            )
+            VALUES (?, 1, 0, 1, 1, 1, 123, 0, NULL)
+            """,
+            (path_id,),
+        )
+        conn.commit()
+
+
+def test_migrates_v15_soak_metadata_to_exact_v16_shape(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v15_db(db_path)
+
+    result = migrate_v15_to_v16(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
+
+    assert result["action"] == "migrated-v15-to-v16"
+    assert Path(str(result["backup"])).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 16
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(shared_directory_roots)")]
+        assert "recursive" not in columns
+        assert conn.execute("SELECT count(*) FROM shared_directory_roots").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_current_schema_is_noop(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), db_path)
+
+    result = migrate_v15_to_v16(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
+
+    assert result["action"] == "noop-current"

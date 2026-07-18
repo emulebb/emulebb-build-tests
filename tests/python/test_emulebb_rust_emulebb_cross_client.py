@@ -284,14 +284,14 @@ def test_materialize_local_profile_seed_adds_run_server_met(tmp_path: Path) -> N
     assert b"local-cross-client" in server_met.read_bytes()
 
 
-def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(monkeypatch, tmp_path: Path) -> None:
+def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     calls: list[tuple[str, str, object]] = []
 
     def fake_request_json(_base_url, method, path, _api_key, body=None):
         calls.append((method, path, body))
         if path == "/api/v1/shared-directories":
-            return {"roots": [{"path": body["roots"][0]["path"], "recursive": True}], "items": []}
+            return {"roots": [{"path": body["roots"][0]}], "items": []}
         if path == "/api/v1/shared-directories/operations/reload":
             return {"ok": True}
         if path == "/api/v1/shared-files":
@@ -320,7 +320,7 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
     assert calls[0] == (
         "PATCH",
         "/api/v1/shared-directories",
-        {"roots": [{"path": str(tmp_path / "shared-tree"), "recursive": True}], "confirmReplaceRoots": True},
+        {"roots": [str(tmp_path / "shared-tree")], "confirmReplaceRoots": True},
     )
     assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)

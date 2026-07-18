@@ -34,6 +34,7 @@ def test_background_starter_builds_python_launch_soak_command() -> None:
     assert "--no-mfc" in command
     assert command[command.index("--lan-bind-addr") + 1] == "192.0.2.10"
     assert command[command.index("--cpu-profile-seconds") + 1] == "3600"
+    assert command[command.index("--rest-timeout-seconds") + 1] == "60.0"
     assert "--cpu-profile-stack" in command
     assert "--process-metrics" in command
     assert "vpn-guard-live.local.json" in command[command.index("--vpn-guard-live-config") + 1]
@@ -135,6 +136,7 @@ def test_background_starter_describe_reports_effective_operator_contract(
     assert result["rustProfileDir"] == str(rust_profile)
     assert result["rustExe"] == str(output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe")
     assert result["p2pBindInterface"] == "hide.me"
+    assert result["restTimeoutSeconds"] == 60.0
     assert result["bootstrapHashCount"] == 1
     assert result["directBootstrapTransferCount"] == 1
     assert "launch-soak.py" in result["launchCommand"][1]
@@ -173,6 +175,28 @@ def test_background_starter_describe_reports_diagnostics_and_fallback(
     assert result["rustFallbackServers"] == ["176.123.5.89:4725"]
     assert result["rustExe"] == str(output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-diagnostics.exe")
     assert "--rust-regular" not in result["launchCommand"]
+
+
+def test_background_starter_describe_reports_custom_rest_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_start_soak_module()
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    rust_profile = output_root / "soak" / "rust-runtime"
+    repo_root.mkdir()
+    rust_profile.mkdir(parents=True)
+    write_minimal_live_inputs(repo_root, rust_profile)
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
+
+    assert module.main(["--seconds", "3600", "--describe", "--rest-timeout-seconds", "300"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["restTimeoutSeconds"] == 300.0
+    assert result["launchCommand"][result["launchCommand"].index("--rest-timeout-seconds") + 1] == "300.0"
 
 
 def test_background_starter_requires_inherited_cargo_target_dir(

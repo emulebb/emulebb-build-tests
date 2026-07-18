@@ -122,6 +122,7 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "singleServer": bool(args.single_server),
         "diagnostics": bool(args.diagnostics),
         "rustFallbackServers": list(args.rust_fallback_server),
+        "restTimeoutSeconds": args.rest_timeout_seconds,
         "launchCommand": build_launch_command(
             argparse.Namespace(
                 seconds=args.seconds,
@@ -129,6 +130,7 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
                 single_server=args.single_server,
                 diagnostics=args.diagnostics,
                 rust_fallback_server=list(args.rust_fallback_server),
+                rest_timeout_seconds=args.rest_timeout_seconds,
             )
         ),
         "stopCommand": [
@@ -161,6 +163,8 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         str(args.seconds),
         "--cpu-profile-stack",
         "--process-metrics",
+        "--rest-timeout-seconds",
+        str(args.rest_timeout_seconds),
     ]
     if not args.diagnostics:
         command.append("--rust-regular")
@@ -197,6 +201,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Explicit Rust-only fallback eD2K server endpoint, host:port. May be repeated.",
     )
+    parser.add_argument(
+        "--rest-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="Timeout for the launcher's Rust REST readiness checks.",
+    )
     parser.add_argument("--describe", action="store_true", help="Print effective paths and commands without launching.")
     return parser
 
@@ -205,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.seconds < 3600:
         raise RuntimeError("--seconds must be at least 3600 for the operator soak profile run.")
+    if args.rest_timeout_seconds <= 0:
+        raise RuntimeError("--rest-timeout-seconds must be greater than zero.")
 
     env = require_operator_environment()
     if args.describe:

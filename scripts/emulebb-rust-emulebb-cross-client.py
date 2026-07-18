@@ -469,7 +469,7 @@ def publish_rust_shared_tree(
     file_name: str,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Configures and reloads one recursive Rust shared directory root."""
+    """Configures and reloads one current Rust shared-directory root."""
 
     directories = request_json(
         base_url,
@@ -477,7 +477,7 @@ def publish_rust_shared_tree(
         "/api/v1/shared-directories",
         api_key,
         {
-            "roots": [{"path": str(root), "recursive": True}],
+            "roots": [str(root)],
             "confirmReplaceRoots": True,
         },
     )

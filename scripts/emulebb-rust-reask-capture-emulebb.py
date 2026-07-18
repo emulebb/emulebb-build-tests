@@ -118,7 +118,7 @@ def start_rust_uploader(*, repo, paths, lan_bind_addr, api_key, p2p_address, ser
     # carries it once the server session comes up.
     cc.request_json(
         base_url, "PATCH", "/api/v1/shared-directories", api_key,
-        {"roots": [{"path": str(shared_dir), "recursive": False}], "confirmReplaceRoots": True},
+        {"roots": [str(shared_dir)], "confirmReplaceRoots": True},
     )
     cc.request_json(base_url, "POST", "/api/v1/shared-directories/operations/reload", api_key)
     cc.request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)

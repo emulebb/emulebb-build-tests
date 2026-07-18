@@ -446,9 +446,8 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "PATCH",
             "/api/v1/shared-directories",
-            {"roots": [{"path": str(shared_root), "recursive": True}], "confirmReplaceRoots": True},
+            {"roots": [str(shared_root)], "confirmReplaceRoots": True},
         )["data"]
-        assert shared_directories["roots"][0]["recursive"] is True
         assert shared_directories["roots"][0]["accessible"] is True
         listed_directories = request_json(base_url, "GET", "/api/v1/shared-directories")["data"]
         assert listed_directories["roots"][0]["path"] == shared_directories["roots"][0]["path"]

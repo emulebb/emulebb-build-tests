@@ -532,12 +532,11 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
             conn.execute(
                 """
                 INSERT INTO shared_directory_roots(
-                    path_id, recursive, monitor_owned, shareable, accessible,
+                    path_id, monitor_owned, shareable, accessible,
                     enabled, created_at_ms, deleted_at_ms
                 )
-                VALUES (?, ?, ?, ?, ?, 1, ?, NULL)
+                VALUES (?, ?, ?, ?, 1, ?, NULL)
                 ON CONFLICT(path_id) DO UPDATE SET
-                    recursive = excluded.recursive,
                     monitor_owned = excluded.monitor_owned,
                     shareable = excluded.shareable,
                     accessible = excluded.accessible,
@@ -546,7 +545,6 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
                 """,
                 (
                     path_id,
-                    1 if root.get("recursive") else 0,
                     1 if root.get("monitorOwned") else 0,
                     1 if root.get("shareable", True) else 0,
                     1 if root.get("accessible", True) else 0,
