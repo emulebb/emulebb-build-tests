@@ -3588,13 +3588,26 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
                 json_body=request_body,
             )
             status = int(result["status"])
+            openapi_response_path = str(
+                route.get("openapiPath") or normalize_contract_path_for_openapi(str(route["path"]))
+            )
             if 200 <= status < 300:
                 require_success_envelope(result)
-                validate_openapi_response_payload(str(route["responseEnvelope"]), result.get("raw_json"))
+                validate_openapi_operation_response_payload(
+                    str(route["method"]),
+                    openapi_response_path,
+                    status,
+                    result.get("raw_json"),
+                )
                 outcome = "success"
             elif status >= 400:
                 require_error_response(result, status, str(require_json_object(result, status).get("error") or ""))
-                validate_openapi_response_payload("ErrorResponse", result.get("raw_json"))
+                validate_openapi_operation_response_payload(
+                    str(route["method"]),
+                    openapi_response_path,
+                    status,
+                    result.get("raw_json"),
+                )
                 outcome = "expected_error" if status in expected_error_statuses else "unexpected_error"
             else:
                 outcome = "unexpected_status"

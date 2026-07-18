@@ -4252,7 +4252,7 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(module, "http_request", fake_http_request)
-    monkeypatch.setattr(module, "validate_openapi_response_payload", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "validate_openapi_operation_response_payload", lambda *_args, **_kwargs: None)
 
     summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
 
