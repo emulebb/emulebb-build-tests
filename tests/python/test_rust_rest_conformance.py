@@ -22,6 +22,7 @@ class FakeEventStreamResponse:
         self.headers = {
             "Content-Type": content_type,
             "Cache-Control": "no-cache, no-transform",
+            "X-Contract-Version": "1.2.0",
             "X-Accel-Buffering": "no",
             **(headers or {}),
         }
@@ -131,6 +132,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
         "contentType": "text/event-stream",
         "responseHeaders": {
             "Cache-Control": "no-cache, no-transform",
+            "X-Contract-Version": "1.2.0",
             "X-Accel-Buffering": "no",
         },
     }
@@ -152,7 +154,7 @@ def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
                 b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
                 b"\n",
             ],
-            headers={"Cache-Control": "", "X-Accel-Buffering": ""},
+            headers={"Cache-Control": "", "X-Contract-Version": "", "X-Accel-Buffering": ""},
         )
 
     summary = rust_rest_conformance.run_event_stream_conformance(
@@ -163,7 +165,11 @@ def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
     )
 
     assert summary["ok"] is False
-    assert summary["missingResponseHeaders"] == ["Cache-Control", "X-Accel-Buffering"]
+    assert summary["missingResponseHeaders"] == [
+        "Cache-Control",
+        "X-Contract-Version",
+        "X-Accel-Buffering",
+    ]
 
 
 def test_run_cli_writes_failed_conformance_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

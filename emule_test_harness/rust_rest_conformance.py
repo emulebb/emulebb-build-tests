@@ -17,6 +17,7 @@ EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
 EVENT_STREAM_EXPECTED_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
+    "X-Contract-Version": "1.2.0",
     "X-Accel-Buffering": "no",
 }
 
