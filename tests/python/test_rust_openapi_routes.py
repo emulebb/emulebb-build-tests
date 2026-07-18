@@ -9,6 +9,7 @@ from emule_test_harness.rust_openapi_routes import (
     ErrorResponseDrift,
     MethodNotAllowedDrift,
     OperationMetadataDrift,
+    ParameterMetadataDrift,
     PathParameterDrift,
     QueryParameterDrift,
     Route,
@@ -24,6 +25,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_error_response_drift,
     openapi_method_not_allowed_drift,
     openapi_operation_metadata_drift,
+    openapi_parameter_metadata_drift,
     openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
     openapi_request_body_metadata_drift,
@@ -211,6 +213,75 @@ paths:
             method="POST",
             path="/app",
             issue="missing tags",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_requires_explicit_client_metadata(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /events:
+    get:
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - in: query
+          required: false
+          schema:
+            type: string
+        - name: broken
+          in: body
+          required: "false"
+      responses: {}
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+    FileHash:
+      name: hash
+      in: path
+      required: true
+      schema:
+        type: string
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.Limit",
+            issue="required must be an explicit boolean",
+        ),
+        ParameterMetadataDrift(
+            source="paths./events.get.parameters[1]",
+            issue="required must be an explicit boolean",
+        ),
+        ParameterMetadataDrift(
+            source="paths./events.get.parameters[2]",
+            issue="missing name",
+        ),
+        ParameterMetadataDrift(
+            source="paths./events.get.parameters[3]",
+            issue="in must be one of cookie, header, path, query",
+        ),
+        ParameterMetadataDrift(
+            source="paths./events.get.parameters[3]",
+            issue="required must be an explicit boolean",
+        ),
+        ParameterMetadataDrift(
+            source="paths./events.get.parameters[3]",
+            issue="schema must be an object",
         ),
     )
 
