@@ -99,6 +99,8 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
     inputs = load_live_wire_inputs(inputs_path)
     output_root = Path(env["EMULEBB_WORKSPACE_OUTPUT_ROOT"])
     lan_bind_addr = args.lan_bind_addr.strip() or str(env["X_LOCAL_IP"])
+    rust_rest_base_url = f"http://{lan_bind_addr}:4731"
+    rust_api_key = "converged-soak"
     return {
         "schema": "emulebb.rust-soak-profile.describe.v1",
         "mode": "rust-diagnostics-live-profile" if args.diagnostics else "rust-regular-live-profile",
@@ -112,8 +114,9 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "vpnGuardConfig": str(default_vpn_guard_path()),
         "rustProfileDir": str(inputs.rust_profile_dir) if inputs.rust_profile_dir is not None else None,
         "rustExe": str(diagnostics_rust_exe(output_root) if args.diagnostics else regular_rust_exe(output_root)),
-        "rustRest": f"http://{lan_bind_addr}:4731/api/v1",
-        "rustApiKey": "converged-soak",
+        "rustRest": f"{rust_rest_base_url}/api/v1",
+        "rustRestBaseUrl": rust_rest_base_url,
+        "rustApiKey": rust_api_key,
         "p2pBindInterface": "hide.me",
         "p2pPorts": {"ed2kTcp": 42662, "kadUdp": 42672},
         "sharedRootCount": len(inputs.video_roots),
@@ -133,6 +136,11 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
                 rest_timeout_seconds=args.rest_timeout_seconds,
             )
         ),
+        "restOpenApiConformanceCommand": build_rest_conformance_command(
+            rust_rest_base_url,
+            rust_api_key,
+            output_root,
+        ),
         "stopCommand": [
             sys.executable,
             str(REPO_ROOT / "scripts" / "rust-soak-control.py"),
@@ -141,6 +149,29 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
             str(output_root / "logs" / "soak-launch" / "rust-regular-soak.latest.json"),
         ],
     }
+
+
+def build_rest_conformance_command(base_url: str, api_key: str, output_root: Path) -> list[str]:
+    """Builds the already-running daemon REST/OpenAPI conformance command."""
+
+    report_path = (
+        output_root
+        / "reports"
+        / "rust-rest-openapi-conformance"
+        / "rust-rest-openapi-conformance.latest.json"
+    )
+    return [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "check-rust-rest-openapi-responses.py"),
+        "--base-url",
+        base_url,
+        "--api-key",
+        api_key,
+        "--rest-coverage-budget",
+        "contract",
+        "--json-output",
+        str(report_path),
+    ]
 
 
 def build_launch_command(args: argparse.Namespace) -> list[str]:

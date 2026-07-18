@@ -135,11 +135,21 @@ def test_background_starter_describe_reports_effective_operator_contract(
     assert result["lanBindAddr"] == "192.0.2.10"
     assert result["rustProfileDir"] == str(rust_profile)
     assert result["rustExe"] == str(output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe")
+    assert result["rustRest"] == "http://192.0.2.10:4731/api/v1"
+    assert result["rustRestBaseUrl"] == "http://192.0.2.10:4731"
     assert result["p2pBindInterface"] == "hide.me"
     assert result["restTimeoutSeconds"] == 60.0
     assert result["bootstrapHashCount"] == 1
     assert result["directBootstrapTransferCount"] == 1
     assert "launch-soak.py" in result["launchCommand"][1]
+    conformance_command = result["restOpenApiConformanceCommand"]
+    assert "check-rust-rest-openapi-responses.py" in conformance_command[1]
+    assert conformance_command[conformance_command.index("--base-url") + 1] == "http://192.0.2.10:4731"
+    assert conformance_command[conformance_command.index("--api-key") + 1] == "converged-soak"
+    assert conformance_command[conformance_command.index("--rest-coverage-budget") + 1] == "contract"
+    assert conformance_command[conformance_command.index("--json-output") + 1] == str(
+        output_root / "reports" / "rust-rest-openapi-conformance" / "rust-rest-openapi-conformance.latest.json"
+    )
     assert "stop-profile-launch" in result["stopCommand"]
 
 
