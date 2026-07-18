@@ -36,6 +36,8 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
     "TransferRemovedEvent": ("hash", "id", "type"),
     "TransferSyncResetEvent": ("id", "reason", "type"),
 }
+TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
+TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1048,6 +1050,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             )
     if TRANSFER_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
         append_transfer_event_schema_drift(drift, schemas)
+    if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
+        append_transfer_create_schema_drift(drift, schemas)
     return tuple(sorted(drift))
 
 
@@ -1069,6 +1073,106 @@ def schema_rejects_empty_object(schema: dict[str, object]) -> bool:
         ):
             return True
     return False
+
+
+def append_transfer_create_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(TRANSFER_CREATE_REQUEST_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_CREATE_REQUEST_COMPONENT,
+                issue="missing transfer create request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_CREATE_REQUEST_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_transfer_link_text_schema(
+        drift,
+        "TransferCreateRequest.properties.link",
+        properties.get("link"),
+    )
+    links = properties.get("links")
+    if not isinstance(links, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component="TransferCreateRequest.properties.links",
+                issue="links must be an array schema",
+            )
+        )
+        return
+    if links.get("minItems") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component="TransferCreateRequest.properties.links",
+                issue="links minItems must be 1",
+            )
+        )
+    if links.get("maxItems") != 100:
+        drift.append(
+            SchemaComponentDrift(
+                component="TransferCreateRequest.properties.links",
+                issue="links maxItems must be 100",
+            )
+        )
+    assert_transfer_link_text_schema(
+        drift,
+        "TransferCreateRequest.properties.links.items",
+        links.get("items"),
+    )
+
+
+def assert_transfer_link_text_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="link text schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="link text type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="link text minLength must be 1",
+            )
+        )
+    if schema.get("maxLength") != 2048:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="link text maxLength must be 2048",
+            )
+        )
+    if schema.get("pattern") != TRANSFER_ADD_LINK_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="link text pattern must require case-insensitive ed2k:// without whitespace",
+            )
+        )
 
 
 def append_transfer_event_schema_drift(
