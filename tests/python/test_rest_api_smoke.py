@@ -1262,7 +1262,7 @@ def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pyt
             "content_type": "application/json",
             "raw_json": {"data": {"ok": True, "imported": True}, "meta": {"apiVersion": "v1"}},
             "json": {"ok": True, "imported": True},
-            "headers": {},
+            "headers": {"X-Contract-Version": "1.2.0"},
             "body_text": "",
         }
 
@@ -1318,7 +1318,7 @@ def test_live_seed_import_evidence_rejects_failed_import(monkeypatch: pytest.Mon
             "content_type": "application/json",
             "raw_json": {"data": {"ok": False, "imported": False}, "meta": {"apiVersion": "v1"}},
             "json": {"ok": False, "imported": False},
-            "headers": {},
+            "headers": {"X-Contract-Version": "1.2.0"},
             "body_text": "",
         }
 
@@ -2336,6 +2336,46 @@ def test_rest_error_response_requires_json_not_html() -> None:
     html_body = {**error_result, "body_text": "<html><body>login</body></html>"}
     with pytest.raises(AssertionError):
         module.require_error_response(html_body, 404, "NOT_FOUND")
+
+
+def test_native_rest_envelopes_require_contract_version_header() -> None:
+    module = load_rest_api_smoke_module()
+    success_result = {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "headers": {"x-contract-version": "1.2.0"},
+        "body_text": '{"data":{"ok":true},"meta":{"apiVersion":"v1"}}',
+        "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+        "json": {"ok": True},
+    }
+    error_result = {
+        "status": 404,
+        "content_type": "application/json; charset=utf-8",
+        "headers": {"X-Contract-Version": "1.2.0"},
+        "body_text": '{"error":{"code":"NOT_FOUND","message":"route missing","details":{}}}',
+        "raw_json": {
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "route missing",
+                "details": {},
+            },
+        },
+        "json": {"error": "NOT_FOUND", "message": "route missing", "details": {}},
+    }
+
+    assert module.require_success_envelope(success_result)["data"]["ok"] is True
+    assert module.require_error_response(error_result, 404, "NOT_FOUND")["error"] == "NOT_FOUND"
+
+    with pytest.raises(AssertionError):
+        module.require_success_envelope({**success_result, "headers": {}})
+    with pytest.raises(AssertionError):
+        module.require_error_response(
+            {**error_result, "headers": {"X-Contract-Version": "1.1.0"}},
+            404,
+            "NOT_FOUND",
+        )
+
+
 def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
     module = load_rest_api_smoke_module()
 

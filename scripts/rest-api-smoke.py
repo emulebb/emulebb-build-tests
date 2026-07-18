@@ -193,6 +193,8 @@ REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_SURFACE_QBIT_DOWNLOAD_HASH = "11223344556677889900aabbccddeeff"
+REST_CONTRACT_VERSION = "1.2.0"
+REST_CONTRACT_VERSION_HEADER = "X-Contract-Version"
 REST_CORE_SETTING_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
@@ -2749,6 +2751,7 @@ def require_json_array(result: dict[str, object], expected_status: int) -> list[
 def require_success_envelope(result: dict[str, object]) -> dict[str, Any]:
     """Asserts one successful REST response uses the strict `{data, meta}` envelope."""
 
+    require_rest_contract_version_header(result)
     raw = result.get("raw_json")
     assert isinstance(raw, dict), compact_http_result(result)
     assert "data" in raw and "meta" in raw, compact_http_result(result)
@@ -2766,6 +2769,7 @@ def require_error_response(
 ) -> dict[str, Any]:
     """Asserts one REST error response carries the stable JSON error envelope."""
 
+    require_rest_contract_version_header(result)
     content_type = str(result.get("content_type") or "").lower()
     body_text = str(result.get("body_text") or "")
     assert "application/json" in content_type, compact_http_result(result)
@@ -2784,6 +2788,17 @@ def require_error_response(
     if message_contains is not None:
         assert message_contains in message, compact_http_result(result)
     return payload
+
+
+def require_rest_contract_version_header(result: dict[str, object]) -> None:
+    """Asserts live native REST responses carry the OpenAPI contract version header."""
+
+    headers = result.get("headers")
+    if not isinstance(headers, dict):
+        return
+    assert get_response_header(result, REST_CONTRACT_VERSION_HEADER) == REST_CONTRACT_VERSION, compact_http_result(
+        result
+    )
 
 
 def is_native_rest_json_response(result: dict[str, object]) -> bool:
