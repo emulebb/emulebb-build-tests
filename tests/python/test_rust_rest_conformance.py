@@ -69,6 +69,42 @@ def test_run_response_conformance_invokes_rest_contract_budget() -> None:
     assert summary["event_stream"] == {"ok": True, "operationId": "getEvents"}
 
 
+def test_load_rest_smoke_module_pins_rust_openapi_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, str | None] = {}
+    monkeypatch.delenv(rust_rest_conformance.OPENAPI_CONTRACT_ENV, raising=False)
+
+    def load_script_module(_module_name: str, _filename: str) -> object:
+        observed["during_load"] = rust_rest_conformance.os.environ.get(
+            rust_rest_conformance.OPENAPI_CONTRACT_ENV
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setattr(rust_rest_conformance, "load_script_module", load_script_module)
+
+    rust_rest_conformance.load_rest_smoke_module()
+
+    assert observed["during_load"] == str(rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH)
+    assert rust_rest_conformance.OPENAPI_CONTRACT_ENV not in rust_rest_conformance.os.environ
+
+
+def test_load_rest_smoke_module_restores_existing_openapi_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, str | None] = {}
+    monkeypatch.setenv(rust_rest_conformance.OPENAPI_CONTRACT_ENV, "operator-contract.yaml")
+
+    def load_script_module(_module_name: str, _filename: str) -> object:
+        observed["during_load"] = rust_rest_conformance.os.environ.get(
+            rust_rest_conformance.OPENAPI_CONTRACT_ENV
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setattr(rust_rest_conformance, "load_script_module", load_script_module)
+
+    rust_rest_conformance.load_rest_smoke_module()
+
+    assert observed["during_load"] == str(rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH)
+    assert rust_rest_conformance.os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV] == "operator-contract.yaml"
+
+
 def test_run_response_conformance_rejects_api_root_base_url() -> None:
     def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
         raise AssertionError("exercise should not run after base-url preflight failure")

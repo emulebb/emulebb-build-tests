@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +23,7 @@ EVENT_STREAM_PATH = "/api/v1/events"
 EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
 TRANSFER_EVENT_SCHEMA_COMPONENT = "TransferEvent"
+OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUST_OPENAPI_CONTRACT_PATH = (
     get_emule_workspace_root(REPO_ROOT)
@@ -49,7 +51,15 @@ class RestConformanceError(AssertionError):
 
 
 def load_rest_smoke_module() -> Any:
-    return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py")
+    previous = os.environ.get(OPENAPI_CONTRACT_ENV)
+    os.environ[OPENAPI_CONTRACT_ENV] = str(RUST_OPENAPI_CONTRACT_PATH)
+    try:
+        return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py")
+    finally:
+        if previous is None:
+            os.environ.pop(OPENAPI_CONTRACT_ENV, None)
+        else:
+            os.environ[OPENAPI_CONTRACT_ENV] = previous
 
 
 def _event_stream_url(base_url: str) -> str:
