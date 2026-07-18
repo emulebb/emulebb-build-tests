@@ -39,6 +39,7 @@ class RouteDriftReport:
     implemented_missing_from_openapi: tuple[Route, ...]
     openapi_missing_from_implemented: tuple[Route, ...]
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
+    path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
@@ -52,6 +53,7 @@ class RouteDriftReport:
             not self.implemented_missing_from_openapi
             and not self.openapi_missing_from_implemented
             and not self.query_parameter_drift
+            and not self.path_parameter_drift
             and not self.body_field_drift
             and not self.response_header_drift
             and not self.auth_drift
@@ -65,6 +67,7 @@ class RouteDriftReport:
             "implementedMissingFromOpenapi": route_list_json(self.implemented_missing_from_openapi),
             "openapiMissingFromImplemented": route_list_json(self.openapi_missing_from_implemented),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
+            "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
@@ -81,6 +84,17 @@ class QueryParameterDrift:
     route: Route
     rust_query_parameters: tuple[str, ...]
     openapi_query_parameters: tuple[str, ...]
+
+
+@dataclass(frozen=True, order=True)
+class PathParameterDrift:
+    """An OpenAPI path whose template placeholders do not match path parameters."""
+
+    method: str
+    path: str
+    template_parameters: tuple[str, ...]
+    documented_path_parameters: tuple[str, ...]
+    issue: str
 
 
 @dataclass(frozen=True, order=True)
@@ -148,6 +162,19 @@ def query_parameter_drift_json(drifts: Iterable[QueryParameterDrift]) -> list[di
             "path": drift.route.path,
             "rustQueryParameters": list(drift.rust_query_parameters),
             "openapiQueryParameters": list(drift.openapi_query_parameters),
+        }
+        for drift in drifts
+    ]
+
+
+def path_parameter_drift_json(drifts: Iterable[PathParameterDrift]) -> list[dict[str, object]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "templateParameters": list(drift.template_parameters),
+            "documentedPathParameters": list(drift.documented_path_parameters),
+            "issue": drift.issue,
         }
         for drift in drifts
     ]
@@ -331,6 +358,49 @@ def openapi_query_parameter_inventory(openapi_yaml: Path) -> dict[Route, tuple[s
             ]
             inventory[Route(method.upper(), path)] = tuple(sorted(query_names))
     return inventory
+
+
+def openapi_path_parameter_drift(openapi_yaml: Path) -> tuple[PathParameterDrift, ...]:
+    """Returns OpenAPI path-template parameters that are missing, extra, or not required."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    component_parameters = document.get("components", {}).get("parameters", {})
+    drift: list[PathParameterDrift] = []
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        template_parameters = tuple(sorted(re.findall(r"\{([^}]+)\}", path)))
+        path_parameters = path_item.get("parameters", []) or []
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            parameters = [*path_parameters, *(operation.get("parameters", []) or [])]
+            documented = [
+                parameter
+                for parameter in resolved_parameters(parameters, component_parameters)
+                if parameter.get("in") == "path"
+            ]
+            documented_names = tuple(sorted(str(parameter.get("name")) for parameter in documented))
+            if documented_names != template_parameters:
+                drift.append(
+                    PathParameterDrift(
+                        method=method.upper(),
+                        path=path,
+                        template_parameters=template_parameters,
+                        documented_path_parameters=documented_names,
+                        issue="path template parameters must match documented path parameters",
+                    )
+                )
+            for parameter in documented:
+                if parameter.get("required") is not True:
+                    drift.append(
+                        PathParameterDrift(
+                            method=method.upper(),
+                            path=path,
+                            template_parameters=template_parameters,
+                            documented_path_parameters=documented_names,
+                            issue=f"path parameter {parameter.get('name')!r} must be required",
+                        )
+                    )
+    return tuple(sorted(drift))
 
 
 def rust_body_field_inventory(route_body_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:
@@ -820,6 +890,7 @@ def compare_route_contract(
     documented = openapi_route_inventory(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
+    path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
     rust_bodies = rust_body_field_inventory(route_body_metadata_rs, routes_rs)
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
@@ -858,6 +929,7 @@ def compare_route_contract(
         implemented_missing_from_openapi=tuple(sorted(implemented - documented)),
         openapi_missing_from_implemented=tuple(sorted(documented - implemented)),
         query_parameter_drift=query_drift,
+        path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
@@ -923,7 +995,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, path, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -944,6 +1016,12 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
             rust_names = ", ".join(drift.rust_query_parameters) or "<none>"
             openapi_names = ", ".join(drift.openapi_query_parameters) or "<none>"
             print(f"  {drift.route.method} {drift.route.path}: rust=[{rust_names}] openapi=[{openapi_names}]")
+    if report.path_parameter_drift:
+        print("Path parameter drift:")
+        for drift in report.path_parameter_drift:
+            template_names = ", ".join(drift.template_parameters) or "<none>"
+            documented_names = ", ".join(drift.documented_path_parameters) or "<none>"
+            print(f"  {drift.method} {drift.path}: template=[{template_names}] openapi=[{documented_names}] {drift.issue}")
     if report.body_field_drift:
         print("JSON body field drift:")
         for drift in report.body_field_drift:

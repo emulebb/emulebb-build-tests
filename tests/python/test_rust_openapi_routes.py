@@ -7,6 +7,7 @@ from emule_test_harness.rust_openapi_routes import (
     BodyFieldDrift,
     ErrorResponseDrift,
     MethodNotAllowedDrift,
+    PathParameterDrift,
     QueryParameterDrift,
     Route,
     ResponseHeaderDrift,
@@ -17,6 +18,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_body_field_inventory,
     openapi_error_response_drift,
     openapi_method_not_allowed_drift,
+    openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
     openapi_route_inventory,
@@ -126,6 +128,49 @@ components:
 
     assert openapi_query_parameter_inventory(openapi_yaml) == {
         Route("GET", "/transfers"): ("limit", "state"),
+    }
+
+
+def test_openapi_path_parameter_drift_requires_template_parameter_docs(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /transfers/{hash}/sources/{clientId}:
+    parameters:
+      - $ref: "#/components/parameters/FileHash"
+      - name: extra
+        in: path
+        required: true
+    get:
+      parameters:
+        - name: clientId
+          in: path
+      responses: {}
+components:
+  parameters:
+    FileHash:
+      name: hash
+      in: path
+      required: true
+""",
+    )
+
+    assert set(openapi_path_parameter_drift(openapi_yaml)) == {
+        PathParameterDrift(
+            method="GET",
+            path="/transfers/{hash}/sources/{clientId}",
+            template_parameters=("clientId", "hash"),
+            documented_path_parameters=("clientId", "extra", "hash"),
+            issue="path template parameters must match documented path parameters",
+        ),
+        PathParameterDrift(
+            method="GET",
+            path="/transfers/{hash}/sources/{clientId}",
+            template_parameters=("clientId", "hash"),
+            documented_path_parameters=("clientId", "extra", "hash"),
+            issue="path parameter 'clientId' must be required",
+        ),
     }
 
 
