@@ -6,10 +6,12 @@ from emule_test_harness.rust_openapi_routes import (
     BodyFieldDrift,
     QueryParameterDrift,
     Route,
+    ResponseHeaderDrift,
     compare_route_contract,
     compare_route_inventory,
     openapi_body_field_inventory,
     openapi_query_parameter_inventory,
+    openapi_response_header_drift,
     openapi_route_inventory,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
@@ -249,6 +251,43 @@ components:
     assert openapi_body_field_inventory(openapi_yaml) == {
         Route("POST", "/transfers"): ("link", "links", "paused"),
     }
+
+
+def test_openapi_response_header_drift_resolves_response_refs(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/AppResponse"
+        "404":
+          description: Route missing.
+          headers: {}
+components:
+  responses:
+    AppResponse:
+      description: App response.
+      headers:
+        X-Contract-Version:
+          $ref: "#/components/headers/ContractVersionHeader"
+  headers:
+    ContractVersionHeader:
+      description: Native contract version.
+      schema:
+        type: string
+""",
+    )
+
+    assert openapi_response_header_drift(openapi_yaml) == (
+        ResponseHeaderDrift(
+            route=Route("GET", "/app"),
+            status="404",
+            missing_header="X-Contract-Version",
+        ),
+    )
 
 
 def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path) -> None:
