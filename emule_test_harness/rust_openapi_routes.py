@@ -43,6 +43,8 @@ URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
 SERVER_CREATE_REQUEST_COMPONENT = "ServerCreateRequest"
 KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
 ENDPOINT_ADDRESS_PATTERN = r"\S"
+FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
+CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1073,6 +1075,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             KAD_BOOTSTRAP_REQUEST_COMPONENT,
             "KadBootstrapRequest.properties.address",
         )
+    if FRIEND_CREATE_REQUEST_COMPONENT in schemas:
+        append_friend_create_schema_drift(drift, schemas)
     return tuple(sorted(drift))
 
 
@@ -1327,6 +1331,67 @@ def assert_endpoint_address_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="endpoint address pattern must require at least one non-whitespace character",
+            )
+        )
+
+
+def append_friend_create_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(FRIEND_CREATE_REQUEST_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=FRIEND_CREATE_REQUEST_COMPONENT,
+                issue="missing friend create request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=FRIEND_CREATE_REQUEST_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_friend_name_schema(drift, properties.get("name"))
+
+
+def assert_friend_name_schema(
+    drift: list[SchemaComponentDrift],
+    schema: object,
+) -> None:
+    component = "FriendCreateRequest.properties.name"
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend name schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend name type must be string",
+            )
+        )
+    if schema.get("maxLength") != 128:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend name maxLength must be 128",
+            )
+        )
+    if schema.get("pattern") != CONTROL_FREE_TEXT_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend name pattern must reject C0 and C1 control characters",
             )
         )
 

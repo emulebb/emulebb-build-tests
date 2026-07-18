@@ -786,6 +786,58 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_friend_name_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    FriendCreateRequest:
+      type: object
+      properties:
+        userHash:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        name:
+          type: string
+          maxLength: 128
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="FriendCreateRequest.properties.name",
+            issue="friend name pattern must reject C0 and C1 control characters",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_friend_name_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    FriendCreateRequest:
+      type: object
+      properties:
+        userHash:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        name:
+          type: string
+          maxLength: 128
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_transfer_event_variants(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
