@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 from .paths import get_required_emule_workspace_root
 
 HTTP_METHODS = ("delete", "get", "patch", "post", "put")
@@ -24,24 +26,51 @@ class Route:
 
 @dataclass(frozen=True)
 class RouteDriftReport:
-    """Route drift between the Rust router and OpenAPI path inventory."""
+    """Route/query drift between the Rust router metadata and OpenAPI inventory."""
 
     implemented_missing_from_openapi: tuple[Route, ...]
     openapi_missing_from_implemented: tuple[Route, ...]
+    query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
-        return not self.implemented_missing_from_openapi and not self.openapi_missing_from_implemented
+        return (
+            not self.implemented_missing_from_openapi
+            and not self.openapi_missing_from_implemented
+            and not self.query_parameter_drift
+        )
 
-    def as_json_dict(self) -> dict[str, list[dict[str, str]]]:
+    def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
         return {
             "implementedMissingFromOpenapi": route_list_json(self.implemented_missing_from_openapi),
             "openapiMissingFromImplemented": route_list_json(self.openapi_missing_from_implemented),
+            "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
         }
+
+
+@dataclass(frozen=True, order=True)
+class QueryParameterDrift:
+    """A route whose Rust query allowlist does not match OpenAPI query names."""
+
+    route: Route
+    rust_query_parameters: tuple[str, ...]
+    openapi_query_parameters: tuple[str, ...]
 
 
 def route_list_json(routes: Iterable[Route]) -> list[dict[str, str]]:
     return [{"method": route.method, "path": route.path} for route in routes]
+
+
+def query_parameter_drift_json(drifts: Iterable[QueryParameterDrift]) -> list[dict[str, object]]:
+    return [
+        {
+            "method": drift.route.method,
+            "path": drift.route.path,
+            "rustQueryParameters": list(drift.rust_query_parameters),
+            "openapiQueryParameters": list(drift.openapi_query_parameters),
+        }
+        for drift in drifts
+    ]
 
 
 def rust_route_inventory(routes_rs: Path) -> set[Route]:
@@ -81,6 +110,93 @@ def openapi_route_inventory(openapi_yaml: Path) -> set[Route]:
     return routes
 
 
+def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:
+    """Returns Rust middleware query allowlists for the declared router paths."""
+
+    routes = rust_route_inventory(routes_rs)
+    text = route_metadata_rs.read_text(encoding="utf-8")
+    constants = query_constants(text)
+    inventory = {route: () for route in routes}
+
+    for method, path, constant in re.findall(r'\("([A-Z]+)",\s*"([^"]+)"\)\s*=>\s*Some\((\w+)\)', text):
+        route = Route(method, path.removeprefix("/api/v1"))
+        if route in inventory:
+            inventory[route] = tuple(sorted(constants[constant]))
+
+    for method, path, constant in exact_query_overrides(text):
+        route = Route(method, path.removeprefix("/api/v1"))
+        if route in inventory:
+            inventory[route] = tuple(sorted(constants[constant]))
+
+    for route, constant in parameterized_query_overrides(text).items():
+        if route in inventory:
+            inventory[route] = tuple(sorted(constants[constant]))
+
+    return inventory
+
+
+def query_constants(route_metadata_rs_text: str) -> dict[str, tuple[str, ...]]:
+    constants: dict[str, tuple[str, ...]] = {}
+    for name, values in re.findall(r"const\s+(\w+):\s*&\[&str\]\s*=\s*&\[([^\]]*)\]", route_metadata_rs_text):
+        constants[name] = tuple(re.findall(r'"([^"]+)"', values))
+    return constants
+
+
+def exact_query_overrides(route_metadata_rs_text: str) -> list[tuple[str, str, str]]:
+    overrides: list[tuple[str, str, str]] = []
+    for path, method, constant in re.findall(
+        r'"([^"]+)"\s+if\s+method\s*==\s*"([A-Z]+)"\s*=>\s*(\w+)', route_metadata_rs_text
+    ):
+        overrides.append((method, path, constant))
+    return overrides
+
+
+def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, str]:
+    overrides: dict[Route, str] = {}
+    parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
+    for pattern, method, path in (
+        (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
+        (r'\("DELETE",\s*\["transfers", _, "files"\]\)\s*=>\s*Some\((\w+)\)', "DELETE", "/transfers/{hash}/files"),
+    ):
+        match = re.search(pattern, parameterized)
+        if match is not None:
+            overrides[Route(method, path)] = match.group(1)
+    return overrides
+
+
+def openapi_query_parameter_inventory(openapi_yaml: Path) -> dict[Route, tuple[str, ...]]:
+    """Returns OpenAPI query parameter names for every documented route."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    component_parameters = document.get("components", {}).get("parameters", {})
+    inventory: dict[Route, tuple[str, ...]] = {}
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        path_parameters = path_item.get("parameters", []) or []
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            parameters = [*path_parameters, *(operation.get("parameters", []) or [])]
+            query_names = [
+                parameter["name"]
+                for parameter in resolved_parameters(parameters, component_parameters)
+                if parameter.get("in") == "query"
+            ]
+            inventory[Route(method.upper(), path)] = tuple(sorted(query_names))
+    return inventory
+
+
+def resolved_parameters(
+    parameters: Iterable[dict[str, object]], component_parameters: dict[str, dict[str, object]]
+) -> Iterable[dict[str, object]]:
+    for parameter in parameters:
+        reference = parameter.get("$ref")
+        if isinstance(reference, str):
+            name = reference.rsplit("/", 1)[-1]
+            yield component_parameters[name]
+        else:
+            yield parameter
+
+
 def compare_route_inventory(routes_rs: Path, openapi_yaml: Path) -> RouteDriftReport:
     implemented = rust_route_inventory(routes_rs)
     documented = openapi_route_inventory(openapi_yaml)
@@ -90,8 +206,36 @@ def compare_route_inventory(routes_rs: Path, openapi_yaml: Path) -> RouteDriftRe
     )
 
 
+def compare_route_contract(routes_rs: Path, route_metadata_rs: Path, openapi_yaml: Path) -> RouteDriftReport:
+    implemented = rust_route_inventory(routes_rs)
+    documented = openapi_route_inventory(openapi_yaml)
+    rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
+    openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
+    common_routes = implemented & documented
+    query_drift = tuple(
+        sorted(
+            QueryParameterDrift(
+                route=route,
+                rust_query_parameters=rust_queries.get(route, ()),
+                openapi_query_parameters=openapi_queries.get(route, ()),
+            )
+            for route in common_routes
+            if rust_queries.get(route, ()) != openapi_queries.get(route, ())
+        )
+    )
+    return RouteDriftReport(
+        implemented_missing_from_openapi=tuple(sorted(implemented - documented)),
+        openapi_missing_from_implemented=tuple(sorted(documented - implemented)),
+        query_parameter_drift=query_drift,
+    )
+
+
 def default_routes_rs(workspace_root: Path) -> Path:
     return workspace_root / "repos" / "emulebb-rust" / "crates" / "emulebb-rest" / "src" / "routes.rs"
+
+
+def default_route_metadata_rs(workspace_root: Path) -> Path:
+    return workspace_root / "repos" / "emulebb-rust" / "crates" / "emulebb-rest" / "src" / "route_metadata.rs"
 
 
 def default_openapi_yaml(workspace_root: Path) -> Path:
@@ -108,8 +252,9 @@ def default_openapi_yaml(workspace_root: Path) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Check emulebb-rust router paths against the OpenAPI contract.")
+    parser = argparse.ArgumentParser(description="Check emulebb-rust router metadata against the OpenAPI contract.")
     parser.add_argument("--rust-routes", type=Path, help="Path to crates/emulebb-rest/src/routes.rs.")
+    parser.add_argument("--route-metadata", type=Path, help="Path to crates/emulebb-rest/src/route_metadata.rs.")
     parser.add_argument("--openapi", type=Path, help="Path to the emulebb-rust OpenAPI YAML artifact.")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report.")
     return parser
@@ -119,12 +264,13 @@ def run_cli(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     workspace_root = get_required_emule_workspace_root()
     routes_rs = args.rust_routes or default_routes_rs(workspace_root)
+    route_metadata_rs = args.route_metadata or default_route_metadata_rs(workspace_root)
     openapi_yaml = args.openapi or default_openapi_yaml(workspace_root)
-    report = compare_route_inventory(routes_rs, openapi_yaml)
+    report = compare_route_contract(routes_rs, route_metadata_rs, openapi_yaml)
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route inventory matches the router.")
+        print("emulebb-rust OpenAPI route and query inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -139,3 +285,9 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("OpenAPI routes missing from the Rust router:")
         for route in report.openapi_missing_from_implemented:
             print(f"  {route.method} {route.path}")
+    if report.query_parameter_drift:
+        print("Query parameter drift:")
+        for drift in report.query_parameter_drift:
+            rust_names = ", ".join(drift.rust_query_parameters) or "<none>"
+            openapi_names = ", ".join(drift.openapi_query_parameters) or "<none>"
+            print(f"  {drift.route.method} {drift.route.path}: rust=[{rust_names}] openapi=[{openapi_names}]")
