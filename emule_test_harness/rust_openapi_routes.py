@@ -1247,6 +1247,19 @@ def openapi_error_response_drift(openapi_yaml: Path) -> tuple[ErrorResponseDrift
                             issue="must reference ErrorResponse",
                         )
                     )
+            for status, response in responses.items():
+                status_text = str(status)
+                if status_text in ERROR_RESPONSE_STATUSES or status_text == "405" or is_success_status(status_text):
+                    continue
+                if not isinstance(response, dict) or response.get("$ref") != ERROR_RESPONSE_REF:
+                    drift.append(
+                        ErrorResponseDrift(
+                            method=method.upper(),
+                            path=path,
+                            status=status_text,
+                            issue="documented non-success responses must reference ErrorResponse",
+                        )
+                    )
     return tuple(sorted(drift))
 
 

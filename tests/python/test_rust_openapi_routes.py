@@ -912,6 +912,8 @@ paths:
         "400": { description: Inline error }
         "404":
           $ref: "#/components/responses/AppMissingResponse"
+        "500":
+          description: Inline server error.
         default:
           $ref: "#/components/responses/ErrorResponse"
 components:
@@ -949,6 +951,12 @@ components:
             path="/app",
             status="404",
             issue="must reference ErrorResponse",
+        ),
+        ErrorResponseDrift(
+            method="GET",
+            path="/app",
+            status="500",
+            issue="documented non-success responses must reference ErrorResponse",
         ),
     )
 
