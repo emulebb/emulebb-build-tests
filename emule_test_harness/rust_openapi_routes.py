@@ -22,6 +22,7 @@ ERROR_ENVELOPE_REF = "#/components/schemas/ErrorEnvelope"
 ERROR_RESPONSE_STATUSES = ("400", "401", "404", "default")
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
+EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
 
 
 @dataclass(frozen=True, order=True)
@@ -56,6 +57,7 @@ class RouteDriftReport:
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
     request_body_metadata_drift: tuple[RequestBodyMetadataDrift, ...] = ()
     success_response_drift: tuple[SuccessResponseDrift, ...] = ()
+    response_component_drift: tuple[ResponseComponentDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
     error_response_drift: tuple[ErrorResponseDrift, ...] = ()
@@ -76,6 +78,7 @@ class RouteDriftReport:
             and not self.body_field_drift
             and not self.request_body_metadata_drift
             and not self.success_response_drift
+            and not self.response_component_drift
             and not self.response_header_drift
             and not self.auth_drift
             and not self.error_response_drift
@@ -96,6 +99,7 @@ class RouteDriftReport:
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
             "requestBodyMetadataDrift": request_body_metadata_drift_json(self.request_body_metadata_drift),
             "successResponseDrift": success_response_drift_json(self.success_response_drift),
+            "responseComponentDrift": response_component_drift_json(self.response_component_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
             "errorResponseDrift": error_response_drift_json(self.error_response_drift),
@@ -175,6 +179,14 @@ class SuccessResponseDrift:
     method: str
     path: str
     status: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class ResponseComponentDrift:
+    """An OpenAPI response component whose reusable metadata is incomplete."""
+
+    component: str
     issue: str
 
 
@@ -324,6 +336,16 @@ def success_response_drift_json(drifts: Iterable[SuccessResponseDrift]) -> list[
             "method": drift.method,
             "path": drift.path,
             "status": drift.status,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def response_component_drift_json(drifts: Iterable[ResponseComponentDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "component": drift.component,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -902,6 +924,61 @@ def openapi_response_header_drift(openapi_yaml: Path) -> tuple[ResponseHeaderDri
     return tuple(sorted(drift))
 
 
+def openapi_response_component_drift(openapi_yaml: Path) -> tuple[ResponseComponentDrift, ...]:
+    """Returns shared response components that weaken client-facing metadata."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    component_responses = components.get("responses", {}) if isinstance(components, dict) else {}
+    drift: list[ResponseComponentDrift] = []
+    if not isinstance(component_responses, dict):
+        return (
+            ResponseComponentDrift(
+                component="<components.responses>",
+                issue="components.responses must be an object",
+            ),
+        )
+
+    for name, response in component_responses.items():
+        if not isinstance(response, dict):
+            drift.append(ResponseComponentDrift(component=name, issue="response component must be an object"))
+            continue
+        description = response.get("description")
+        if not isinstance(description, str) or description.strip() == "":
+            drift.append(ResponseComponentDrift(component=name, issue="description must be non-empty"))
+        headers = response.get("headers", {})
+        header = headers.get(REST_CONTRACT_VERSION_HEADER) if isinstance(headers, dict) else None
+        if not isinstance(header, dict) or header.get("$ref") != CONTRACT_VERSION_HEADER_REF:
+            drift.append(
+                ResponseComponentDrift(
+                    component=name,
+                    issue=f"must reference {CONTRACT_VERSION_HEADER_REF}",
+                )
+            )
+        content = response.get("content", {})
+        expected_media_types = ("text/event-stream",) if name == EVENT_STREAM_RESPONSE_COMPONENT else ("application/json",)
+        actual_media_types = tuple(sorted(content)) if isinstance(content, dict) else ()
+        if actual_media_types != expected_media_types:
+            drift.append(
+                ResponseComponentDrift(
+                    component=name,
+                    issue=f"content media types must be {', '.join(expected_media_types)}",
+                )
+            )
+        if isinstance(content, dict):
+            for media_type in expected_media_types:
+                media = content.get(media_type, {})
+                schema = media.get("schema") if isinstance(media, dict) else None
+                if not isinstance(schema, dict) or not schema:
+                    drift.append(
+                        ResponseComponentDrift(
+                            component=name,
+                            issue=f"{media_type} schema must be an object",
+                        )
+                    )
+    return tuple(sorted(drift))
+
+
 def openapi_success_response_drift(openapi_yaml: Path) -> tuple[SuccessResponseDrift, ...]:
     """Returns success responses that are absent, ambiguous, inline, or schema-less."""
 
@@ -1375,6 +1452,7 @@ def compare_route_contract(
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
     request_body_metadata_drift = openapi_request_body_metadata_drift(openapi_yaml)
     success_response_drift = openapi_success_response_drift(openapi_yaml)
+    response_component_drift = openapi_response_component_drift(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
     error_response_drift = openapi_error_response_drift(openapi_yaml)
@@ -1419,6 +1497,7 @@ def compare_route_contract(
         body_field_drift=body_drift,
         request_body_metadata_drift=request_body_metadata_drift,
         success_response_drift=success_response_drift,
+        response_component_drift=response_component_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
         error_response_drift=error_response_drift,
@@ -1483,7 +1562,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1541,6 +1620,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         for drift in report.success_response_drift:
             route = f"{drift.method} {drift.path}".strip()
             print(f"  {route} {drift.status}: {drift.issue}")
+    if report.response_component_drift:
+        print("Response component drift:")
+        for drift in report.response_component_drift:
+            print(f"  {drift.component}: {drift.issue}")
     if report.response_header_drift:
         print("Response header drift:")
         for drift in report.response_header_drift:

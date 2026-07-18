@@ -14,6 +14,7 @@ from emule_test_harness.rust_openapi_routes import (
     QueryParameterDrift,
     Route,
     RequestBodyMetadataDrift,
+    ResponseComponentDrift,
     ResponseHeaderDrift,
     SuccessResponseDrift,
     TagTaxonomyDrift,
@@ -30,6 +31,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
     openapi_request_body_metadata_drift,
+    openapi_response_component_drift,
     openapi_response_header_drift,
     openapi_route_inventory,
     openapi_success_response_drift,
@@ -644,6 +646,58 @@ components:
             missing_header="X-Contract-Version",
         ),
     )
+
+
+def test_openapi_response_component_drift_requires_shared_response_metadata(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  responses:
+    BrokenJsonResponse:
+      description: ""
+      headers:
+        X-Contract-Version:
+          schema:
+            type: string
+      content:
+        application/json: {}
+        text/plain:
+          schema:
+            type: string
+    EventStreamResponse:
+      description: Event stream.
+      headers:
+        X-Contract-Version:
+          $ref: "#/components/headers/ContractVersionHeader"
+        Cache-Control:
+          schema:
+            type: string
+      content:
+        text/event-stream:
+          schema:
+            type: string
+""",
+    )
+
+    assert set(openapi_response_component_drift(openapi_yaml)) == {
+        ResponseComponentDrift(
+            component="BrokenJsonResponse",
+            issue="application/json schema must be an object",
+        ),
+        ResponseComponentDrift(
+            component="BrokenJsonResponse",
+            issue="content media types must be application/json",
+        ),
+        ResponseComponentDrift(
+            component="BrokenJsonResponse",
+            issue="description must be non-empty",
+        ),
+        ResponseComponentDrift(
+            component="BrokenJsonResponse",
+            issue="must reference #/components/headers/ContractVersionHeader",
+        ),
+    }
 
 
 def test_openapi_success_response_drift_requires_single_shared_schema_response(tmp_path: Path) -> None:
