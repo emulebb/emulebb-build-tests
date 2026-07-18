@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from emule_test_harness.script_modules import load_script_module
 
 REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
+EVENT_STREAM_PATH = "/api/v1/events"
+EVENT_STREAM_LAST_EVENT_ID = "1"
+EVENT_STREAM_READ_LINES = 16
 
 
 class RestConformanceError(AssertionError):
@@ -24,12 +29,84 @@ def load_rest_smoke_module() -> Any:
     return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py")
 
 
+def _event_stream_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}{EVENT_STREAM_PATH}"
+
+
+def _read_first_sse_frame(response: Any) -> str:
+    lines: list[str] = []
+    for _ in range(EVENT_STREAM_READ_LINES):
+        raw_line = response.readline()
+        if raw_line == b"":
+            break
+        line = raw_line.decode("utf-8", errors="replace")
+        lines.append(line)
+        if line in ("\n", "\r\n"):
+            break
+    return "".join(lines)
+
+
+def run_event_stream_conformance(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 5.0,
+    opener: Callable[..., Any] | None = None,
+) -> dict[str, object]:
+    """Checks the long-lived SSE route through its immediate resume-reset frame."""
+
+    url = _event_stream_url(base_url)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/event-stream",
+            "Last-Event-ID": EVENT_STREAM_LAST_EVENT_ID,
+            "X-API-Key": api_key,
+        },
+    )
+    open_url = opener or urllib.request.urlopen
+    try:
+        with open_url(request, timeout=timeout_seconds) as response:
+            status = int(getattr(response, "status", None) or response.getcode())
+            content_type = str(response.headers.get("Content-Type", ""))
+            frame = _read_first_sse_frame(response)
+    except urllib.error.URLError as exc:
+        return {
+            "ok": False,
+            "operationId": "getEvents",
+            "path": EVENT_STREAM_PATH,
+            "error": str(exc),
+        }
+
+    expected = {
+        "event": "event: sync.reset",
+        "id": "id: ",
+        "type": '"type":"sync.reset"',
+        "reason": '"reason":"last-event-id"',
+        "lastEventId": f'"lastEventId":"{EVENT_STREAM_LAST_EVENT_ID}"',
+    }
+    missing = [name for name, needle in expected.items() if needle not in frame]
+    ok = status == 200 and content_type.startswith("text/event-stream") and not missing
+    result: dict[str, object] = {
+        "ok": ok,
+        "operationId": "getEvents",
+        "path": EVENT_STREAM_PATH,
+        "status": status,
+        "contentType": content_type,
+    }
+    if missing:
+        result["missing"] = missing
+        result["frameSample"] = frame[:500]
+    return result
+
+
 def run_response_conformance(
     base_url: str,
     api_key: str,
     *,
     budget: str = "contract",
     rest_smoke_module: Any | None = None,
+    event_stream_checker: Callable[[str, str], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Runs live REST contract completeness and fails on OpenAPI response drift."""
 
@@ -37,6 +114,15 @@ def run_response_conformance(
         raise ValueError(f"REST conformance budget must be one of {REST_COVERAGE_BUDGETS!r}: {budget!r}")
     rest_smoke = rest_smoke_module or load_rest_smoke_module()
     summary = rest_smoke.exercise_rest_contract_completeness(base_url, api_key, budget)
+    checker = event_stream_checker or run_event_stream_conformance
+    event_stream_summary = checker(base_url, api_key)
+    summary["event_stream"] = event_stream_summary
+    if not bool(event_stream_summary.get("ok")):
+        summary["ok"] = False
+        failed_routes = list(summary.get("failed_routes", []))
+        if "getEvents" not in failed_routes:
+            failed_routes.append("getEvents")
+        summary["failed_routes"] = failed_routes
     if not bool(summary.get("ok")):
         raise RestConformanceError(summary)
     return summary
