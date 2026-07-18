@@ -17,6 +17,9 @@ from .rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEA
 HTTP_METHODS = ("delete", "get", "patch", "post", "put")
 API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
 API_KEY_HEADER = "X-API-Key"
+ERROR_RESPONSE_REF = "#/components/responses/ErrorResponse"
+ERROR_ENVELOPE_REF = "#/components/schemas/ErrorEnvelope"
+ERROR_RESPONSE_STATUSES = ("400", "401", "404", "default")
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 
@@ -39,6 +42,7 @@ class RouteDriftReport:
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
+    error_response_drift: tuple[ErrorResponseDrift, ...] = ()
     method_not_allowed_drift: tuple[MethodNotAllowedDrift, ...] = ()
     contract_version_drift: tuple[ContractVersionDrift, ...] = ()
 
@@ -51,6 +55,7 @@ class RouteDriftReport:
             and not self.body_field_drift
             and not self.response_header_drift
             and not self.auth_drift
+            and not self.error_response_drift
             and not self.method_not_allowed_drift
             and not self.contract_version_drift
         )
@@ -63,6 +68,7 @@ class RouteDriftReport:
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
+            "errorResponseDrift": error_response_drift_json(self.error_response_drift),
             "methodNotAllowedDrift": method_not_allowed_drift_json(self.method_not_allowed_drift),
             "contractVersionDrift": contract_version_drift_json(self.contract_version_drift),
         }
@@ -110,6 +116,16 @@ class MethodNotAllowedDrift:
 
     method: str
     path: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class ErrorResponseDrift:
+    """An OpenAPI shared error-envelope response contract gap."""
+
+    method: str
+    path: str
+    status: str
     issue: str
 
 
@@ -166,6 +182,18 @@ def auth_drift_json(drifts: Iterable[AuthDrift]) -> list[dict[str, str]]:
         {
             "method": drift.method,
             "path": drift.path,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def error_response_drift_json(drifts: Iterable[ErrorResponseDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "status": drift.status,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -473,6 +501,70 @@ def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
     return tuple(sorted(drift))
 
 
+def openapi_error_response_drift(openapi_yaml: Path) -> tuple[ErrorResponseDrift, ...]:
+    """Returns native OpenAPI gaps in shared ErrorResponse references."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[ErrorResponseDrift] = []
+    error_response = (
+        document.get("components", {})
+        .get("responses", {})
+        .get("ErrorResponse")
+    )
+    error_schema = (
+        error_response.get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+        if isinstance(error_response, dict)
+        else {}
+    )
+    if not isinstance(error_response, dict):
+        drift.append(
+            ErrorResponseDrift(
+                method="",
+                path="<components.responses.ErrorResponse>",
+                status="",
+                issue="missing shared ErrorResponse component",
+            )
+        )
+    elif not isinstance(error_schema, dict) or error_schema.get("$ref") != ERROR_ENVELOPE_REF:
+        drift.append(
+            ErrorResponseDrift(
+                method="",
+                path="<components.responses.ErrorResponse>",
+                status="",
+                issue=f"ErrorResponse must reference {ERROR_ENVELOPE_REF}",
+            )
+        )
+
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            responses = operation.get("responses", {}) or {}
+            for status in ERROR_RESPONSE_STATUSES:
+                response = responses.get(status)
+                if not isinstance(response, dict):
+                    drift.append(
+                        ErrorResponseDrift(
+                            method=method.upper(),
+                            path=path,
+                            status=status,
+                            issue="missing error response",
+                        )
+                    )
+                elif response.get("$ref") != ERROR_RESPONSE_REF:
+                    drift.append(
+                        ErrorResponseDrift(
+                            method=method.upper(),
+                            path=path,
+                            status=status,
+                            issue="must reference ErrorResponse",
+                        )
+                    )
+    return tuple(sorted(drift))
+
+
 def openapi_method_not_allowed_drift(openapi_yaml: Path) -> tuple[MethodNotAllowedDrift, ...]:
     """Returns native OpenAPI gaps in the 405 MethodNotAllowedResponse contract."""
 
@@ -732,6 +824,7 @@ def compare_route_contract(
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
+    error_response_drift = openapi_error_response_drift(openapi_yaml)
     method_not_allowed_drift = openapi_method_not_allowed_drift(openapi_yaml)
     contract_version_drift = (
         openapi_contract_version_drift(openapi_yaml, responses_rs)
@@ -768,6 +861,7 @@ def compare_route_contract(
         body_field_drift=body_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
+        error_response_drift=error_response_drift,
         method_not_allowed_drift=method_not_allowed_drift,
         contract_version_drift=contract_version_drift,
     )
@@ -829,7 +923,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, query, body, auth, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -865,6 +959,11 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         for drift in report.auth_drift:
             route = f"{drift.method} {drift.path}".strip()
             print(f"  {route}: {drift.issue}")
+    if report.error_response_drift:
+        print("Error response contract drift:")
+        for drift in report.error_response_drift:
+            route = f"{drift.method} {drift.path}".strip()
+            print(f"  {route} {drift.status}: {drift.issue}")
     if report.method_not_allowed_drift:
         print("405 method-not-allowed contract drift:")
         for drift in report.method_not_allowed_drift:

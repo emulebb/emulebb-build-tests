@@ -5,6 +5,7 @@ from pathlib import Path
 from emule_test_harness.rust_openapi_routes import (
     AuthDrift,
     BodyFieldDrift,
+    ErrorResponseDrift,
     MethodNotAllowedDrift,
     QueryParameterDrift,
     Route,
@@ -14,6 +15,7 @@ from emule_test_harness.rust_openapi_routes import (
     compare_route_inventory,
     openapi_auth_drift,
     openapi_body_field_inventory,
+    openapi_error_response_drift,
     openapi_method_not_allowed_drift,
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
@@ -365,6 +367,59 @@ components:
             method="GET",
             path="/events",
             issue="operation security override must include ApiKeyAuth",
+        ),
+    )
+
+
+def test_openapi_error_response_drift_requires_shared_error_responses(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      responses:
+        "200": { description: OK }
+        "400": { description: Inline error }
+        "404":
+          $ref: "#/components/responses/AppMissingResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+components:
+  responses:
+    ErrorResponse:
+      description: Error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrongEnvelope"
+""",
+    )
+
+    assert openapi_error_response_drift(openapi_yaml) == (
+        ErrorResponseDrift(
+            method="",
+            path="<components.responses.ErrorResponse>",
+            status="",
+            issue="ErrorResponse must reference #/components/schemas/ErrorEnvelope",
+        ),
+        ErrorResponseDrift(
+            method="GET",
+            path="/app",
+            status="400",
+            issue="must reference ErrorResponse",
+        ),
+        ErrorResponseDrift(
+            method="GET",
+            path="/app",
+            status="401",
+            issue="missing error response",
+        ),
+        ErrorResponseDrift(
+            method="GET",
+            path="/app",
+            status="404",
+            issue="must reference ErrorResponse",
         ),
     )
 
