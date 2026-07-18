@@ -78,6 +78,18 @@ def validate_openapi_operation_response_payload(
     validate_openapi_schema(document, schema, payload)
 
 
+def validate_openapi_schema_component_payload(
+    component_name: str,
+    payload: object,
+    openapi_path: Path = OPENAPI_CONTRACT_PATH,
+) -> None:
+    """Validates a payload against one named OpenAPI schema component."""
+
+    document = load_openapi_document(openapi_path)
+    schema = openapi_schema_component(document, component_name)
+    validate_openapi_schema(document, schema, payload)
+
+
 def openapi_component_response(document: dict[str, Any], response_name: str) -> dict[str, Any]:
     response = (((document.get("components") or {}).get("responses") or {}).get(response_name) or {})
     if not isinstance(response, dict):
@@ -85,6 +97,15 @@ def openapi_component_response(document: dict[str, Any], response_name: str) -> 
     if not response:
         raise RuntimeError(f"OpenAPI response component is missing: {response_name}")
     return response
+
+
+def openapi_schema_component(document: dict[str, Any], component_name: str) -> dict[str, Any]:
+    schema = (((document.get("components") or {}).get("schemas") or {}).get(component_name) or {})
+    if not isinstance(schema, dict):
+        raise RuntimeError(f"OpenAPI schema component is not an object: {component_name}")
+    if not schema:
+        raise RuntimeError(f"OpenAPI schema component is missing: {component_name}")
+    return schema
 
 
 def openapi_operation_response(

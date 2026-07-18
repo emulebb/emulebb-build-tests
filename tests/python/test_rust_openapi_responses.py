@@ -9,6 +9,7 @@ from emule_test_harness.rust_openapi_responses import (
     get_openapi_operation_response_schema,
     get_openapi_response_schema,
     load_openapi_document,
+    validate_openapi_schema_component_payload,
     validate_openapi_operation_response_payload,
     validate_openapi_response_payload,
 )
@@ -88,6 +89,45 @@ components:
     validate_openapi_operation_response_payload("GET", "/app", 200, {"data": {"name": "emulebb-rust"}}, openapi_yaml)
     with pytest.raises(jsonschema.ValidationError):
         validate_openapi_operation_response_payload("GET", "/app", 200, {"data": {}}, openapi_yaml)
+
+
+def test_schema_component_payload_validation_resolves_component_refs(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+openapi: 3.1.0
+components:
+  schemas:
+    TransferEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TransferSyncResetEvent"
+    TransferSyncResetEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, reason]
+      properties:
+        id: { type: integer, minimum: 1 }
+        type:
+          type: string
+          enum: [sync.reset]
+        reason:
+          type: string
+          enum: [last-event-id]
+        lastEventId: { type: string }
+""",
+    )
+
+    validate_openapi_schema_component_payload(
+        "TransferEvent",
+        {"id": 1, "type": "sync.reset", "reason": "last-event-id", "lastEventId": "0"},
+        openapi_yaml,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema_component_payload(
+            "TransferEvent",
+            {"id": 1, "type": "sync.reset", "lastEventId": "0"},
+            openapi_yaml,
+        )
 
 
 def test_operation_response_schema_reports_missing_contract_entries(tmp_path: Path) -> None:

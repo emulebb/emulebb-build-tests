@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -128,8 +129,37 @@ def test_run_response_conformance_reports_event_stream_failure() -> None:
     assert raised.value.summary["event_stream"] == {"ok": False, "reason": "missing reset"}
 
 
-def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
+def write_transfer_event_openapi(path: Path) -> Path:
+    path.write_text(
+        """
+openapi: 3.1.0
+components:
+  schemas:
+    TransferEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TransferSyncResetEvent"
+    TransferSyncResetEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, reason]
+      properties:
+        id: { type: integer, minimum: 1 }
+        type:
+          type: string
+          enum: [sync.reset]
+        reason:
+          type: string
+          enum: [last-event-id]
+        lastEventId: { type: string }
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -> None:
     requests = []
+    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(request, *, timeout: float):
         requests.append((request, timeout))
@@ -147,6 +177,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
         "test-key",
         timeout_seconds=2.0,
         opener=opener,
+        openapi_path=openapi_yaml,
     )
 
     assert summary == {
@@ -160,6 +191,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
             "X-Contract-Version": "1.2.0",
             "X-Accel-Buffering": "no",
         },
+        "payloadSchema": "TransferEvent",
     }
     request, timeout = requests[0]
     assert request.full_url == "http://127.0.0.1:4711/api/v1/events"
@@ -182,7 +214,9 @@ def test_run_event_stream_conformance_rejects_api_root_base_url() -> None:
         )
 
 
-def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
+def test_run_event_stream_conformance_fails_without_stream_headers(tmp_path: Path) -> None:
+    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+
     def opener(_request, *, timeout: float):
         assert timeout == 2.0
         return FakeEventStreamResponse(
@@ -200,6 +234,7 @@ def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
         "test-key",
         timeout_seconds=2.0,
         opener=opener,
+        openapi_path=openapi_yaml,
     )
 
     assert summary["ok"] is False
@@ -208,6 +243,33 @@ def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
         "X-Contract-Version",
         "X-Accel-Buffering",
     ]
+
+
+def test_run_event_stream_conformance_fails_on_schema_invalid_payload(tmp_path: Path) -> None:
+    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+
+    def opener(_request, *, timeout: float):
+        assert timeout == 2.0
+        return FakeEventStreamResponse(
+            [
+                b"event: sync.reset\n",
+                b"id: 42\n",
+                b'data: {"id":42,"type":"sync.reset","lastEventId":"1"}\n',
+                b"\n",
+            ]
+        )
+
+    summary = rust_rest_conformance.run_event_stream_conformance(
+        "http://127.0.0.1:4711/",
+        "test-key",
+        timeout_seconds=2.0,
+        opener=opener,
+        openapi_path=openapi_yaml,
+    )
+
+    assert summary["ok"] is False
+    assert "payloadSchemaError" in summary
+    assert "not valid under any of the given schemas" in str(summary["payloadSchemaError"])
 
 
 def test_run_cli_writes_failed_conformance_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

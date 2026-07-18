@@ -10,6 +10,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+import jsonschema
+
+from emule_test_harness import rust_openapi_responses
+from emule_test_harness.paths import get_emule_workspace_root
 from emule_test_harness.script_modules import load_script_module
 from emule_test_harness.rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
 
@@ -17,6 +21,18 @@ REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
 EVENT_STREAM_PATH = "/api/v1/events"
 EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
+TRANSFER_EVENT_SCHEMA_COMPONENT = "TransferEvent"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RUST_OPENAPI_CONTRACT_PATH = (
+    get_emule_workspace_root(REPO_ROOT)
+    / "repos"
+    / "emulebb-tooling"
+    / "docs"
+    / "products"
+    / "emulebb-rust"
+    / "api"
+    / "REST-API-OPENAPI.yaml"
+)
 EVENT_STREAM_EXPECTED_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     REST_CONTRACT_VERSION_HEADER: REST_CONTRACT_VERSION,
@@ -65,12 +81,21 @@ def _read_first_sse_frame(response: Any) -> str:
     return "".join(lines)
 
 
+def _sse_frame_data(frame: str) -> str:
+    return "\n".join(
+        line.removeprefix("data:").lstrip()
+        for line in frame.splitlines()
+        if line.startswith("data:")
+    )
+
+
 def run_event_stream_conformance(
     base_url: str,
     api_key: str,
     *,
     timeout_seconds: float = 5.0,
     opener: Callable[..., Any] | None = None,
+    openapi_path: Path = RUST_OPENAPI_CONTRACT_PATH,
 ) -> dict[str, object]:
     """Checks the long-lived SSE route through its immediate resume-reset frame."""
 
@@ -115,11 +140,24 @@ def run_event_stream_conformance(
         for name, expected_value in EVENT_STREAM_EXPECTED_HEADERS.items()
         if response_headers.get(name) != expected_value
     ]
+    payload: object | None = None
+    payload_error: str | None = None
+    try:
+        data = _sse_frame_data(frame)
+        payload = json.loads(data)
+        rust_openapi_responses.validate_openapi_schema_component_payload(
+            TRANSFER_EVENT_SCHEMA_COMPONENT,
+            payload,
+            openapi_path,
+        )
+    except (json.JSONDecodeError, RuntimeError, jsonschema.ValidationError) as exc:
+        payload_error = str(exc)
     ok = (
         status == 200
         and content_type.startswith("text/event-stream")
         and not missing
         and not missing_headers
+        and payload_error is None
     )
     result: dict[str, object] = {
         "ok": ok,
@@ -134,6 +172,11 @@ def run_event_stream_conformance(
         result["frameSample"] = frame[:500]
     if missing_headers:
         result["missingResponseHeaders"] = missing_headers
+    if payload_error is not None:
+        result["payloadSchemaError"] = payload_error
+        result["frameSample"] = frame[:500]
+    elif payload is not None:
+        result["payloadSchema"] = TRANSFER_EVENT_SCHEMA_COMPONENT
     return result
 
 
