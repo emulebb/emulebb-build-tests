@@ -40,6 +40,7 @@ GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
 }
+NON_EMPTY_UPDATE_SCHEMA_SUFFIXES = ("Patch", "Update")
 
 
 @dataclass(frozen=True, order=True)
@@ -1034,9 +1035,40 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         enum_values = schema.get("enum")
         if enum_values is not None and (not isinstance(enum_values, list) or not enum_values):
             drift.append(SchemaComponentDrift(component=name, issue="enum must be a non-empty list"))
+        if (
+            name.endswith(NON_EMPTY_UPDATE_SCHEMA_SUFFIXES)
+            and schema.get("type") == "object"
+            and not schema_rejects_empty_object(schema)
+        ):
+            drift.append(
+                SchemaComponentDrift(
+                    component=name,
+                    issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
+                )
+            )
     if TRANSFER_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
         append_transfer_event_schema_drift(drift, schemas)
     return tuple(sorted(drift))
+
+
+def schema_rejects_empty_object(schema: dict[str, object]) -> bool:
+    """Returns whether a schema component rejects `{}` without relying on prose."""
+
+    min_properties = schema.get("minProperties")
+    if isinstance(min_properties, int) and min_properties >= 1:
+        return True
+    for combiner in ("anyOf", "oneOf"):
+        branches = schema.get(combiner)
+        if not isinstance(branches, list) or not branches:
+            continue
+        if all(
+            isinstance(branch, dict)
+            and isinstance(branch.get("required"), list)
+            and bool(branch.get("required"))
+            for branch in branches
+        ):
+            return True
+    return False
 
 
 def append_transfer_event_schema_drift(

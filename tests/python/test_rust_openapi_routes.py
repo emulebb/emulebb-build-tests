@@ -657,6 +657,56 @@ components:
     )
 
 
+def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    AppSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        core:
+          $ref: "#/components/schemas/CoreSettingsUpdate"
+    CoreSettingsUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        maxUploadSlots:
+          type: integer
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [priority]
+        - required: [name]
+      properties:
+        priority:
+          type: string
+        name:
+          type: string
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        priority:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="AppSettingsUpdate",
+            issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
+        ),
+    )
+
+
 def test_openapi_schema_component_drift_requires_transfer_event_variants(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
