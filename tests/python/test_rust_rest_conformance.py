@@ -105,6 +105,31 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(monkeypatch: pyte
     assert rust_rest_conformance.os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV] == "operator-contract.yaml"
 
 
+def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    assert "transferEvents" in schemas["RuntimeDiagnostics"]["required"]
+    assert schemas["RuntimeDiagnostics"]["properties"]["transferEvents"] == {
+        "$ref": "#/components/schemas/TransferEventRuntimeDiagnostics"
+    }
+    assert schemas["TransferEventRuntimeDiagnostics"]["required"] == [
+        "enabled",
+        "stream",
+        "channelCapacity",
+        "queuedEventCount",
+        "subscriberCount",
+        "latestEventId",
+        "nextEventId",
+        "resumeBehavior",
+    ]
+    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["stream"]["enum"] == ["sse"]
+    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["resumeBehavior"]["enum"] == ["reset"]
+    for field_name in ("channelCapacity", "queuedEventCount", "subscriberCount", "latestEventId"):
+        assert schemas["TransferEventRuntimeDiagnostics"]["properties"][field_name]["minimum"] == 0
+    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["nextEventId"]["minimum"] == 1
+
+
 def test_run_response_conformance_rejects_api_root_base_url() -> None:
     def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
         raise AssertionError("exercise should not run after base-url preflight failure")
