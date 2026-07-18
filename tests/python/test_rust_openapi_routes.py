@@ -707,6 +707,85 @@ components:
     )
 
 
+def test_openapi_schema_component_drift_requires_endpoint_address_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    KadBootstrapRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="KadBootstrapRequest.properties.address",
+            issue="endpoint address pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.address",
+            issue="endpoint address pattern must require at least one non-whitespace character",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_endpoint_address_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    KadBootstrapRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_transfer_event_variants(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",

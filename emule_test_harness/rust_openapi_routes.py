@@ -40,6 +40,9 @@ TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
+SERVER_CREATE_REQUEST_COMPONENT = "ServerCreateRequest"
+KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
+ENDPOINT_ADDRESS_PATTERN = r"\S"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1056,6 +1059,20 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_create_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
         append_url_import_schema_drift(drift, schemas)
+    if SERVER_CREATE_REQUEST_COMPONENT in schemas:
+        append_endpoint_request_schema_drift(
+            drift,
+            schemas,
+            SERVER_CREATE_REQUEST_COMPONENT,
+            "ServerCreateRequest.properties.address",
+        )
+    if KAD_BOOTSTRAP_REQUEST_COMPONENT in schemas:
+        append_endpoint_request_schema_drift(
+            drift,
+            schemas,
+            KAD_BOOTSTRAP_REQUEST_COMPONENT,
+            "KadBootstrapRequest.properties.address",
+        )
     return tuple(sorted(drift))
 
 
@@ -1247,6 +1264,69 @@ def assert_url_import_text_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="URL import text pattern must require case-insensitive http(s) with a host and no whitespace",
+            )
+        )
+
+
+def append_endpoint_request_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+    component: str,
+    address_component: str,
+) -> None:
+    schema = schemas.get(component)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="missing endpoint request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_endpoint_address_schema(drift, address_component, properties.get("address"))
+
+
+def assert_endpoint_address_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint address schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint address type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint address minLength must be 1",
+            )
+        )
+    if schema.get("pattern") != ENDPOINT_ADDRESS_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint address pattern must require at least one non-whitespace character",
             )
         )
 
