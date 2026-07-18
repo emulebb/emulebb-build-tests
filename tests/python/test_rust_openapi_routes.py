@@ -16,6 +16,7 @@ from emule_test_harness.rust_openapi_routes import (
     RequestBodyMetadataDrift,
     ResponseHeaderDrift,
     SuccessResponseDrift,
+    TagTaxonomyDrift,
     compare_route_contract,
     openapi_contract_version_drift,
     compare_route_inventory,
@@ -32,6 +33,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_response_header_drift,
     openapi_route_inventory,
     openapi_success_response_drift,
+    openapi_tag_taxonomy_drift,
     rust_contract_version,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
@@ -213,6 +215,53 @@ paths:
             method="POST",
             path="/app",
             issue="missing tags",
+        ),
+    )
+
+
+def test_openapi_tag_taxonomy_drift_requires_declared_used_unique_tags(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+tags:
+  - name: App
+  - name: App
+  - name: Unused
+  - description: missing name
+paths:
+  /app:
+    get:
+      operationId: getApp
+      tags: [App]
+      responses: {}
+  /diagnostics:
+    get:
+      operationId: getDiagnostics
+      tags: [Diagnostics]
+      responses: {}
+""",
+    )
+
+    assert openapi_tag_taxonomy_drift(openapi_yaml) == (
+        TagTaxonomyDrift(
+            source="paths./diagnostics.get.tags",
+            tag="Diagnostics",
+            issue="operation tag is not declared",
+        ),
+        TagTaxonomyDrift(
+            source="tags",
+            tag="Unused",
+            issue="declared tag is unused",
+        ),
+        TagTaxonomyDrift(
+            source="tags[1]",
+            tag="App",
+            issue="duplicate top-level tag",
+        ),
+        TagTaxonomyDrift(
+            source="tags[3]",
+            tag="",
+            issue="tag entry must have a non-empty name",
         ),
     )
 

@@ -49,6 +49,7 @@ class RouteDriftReport:
     openapi_missing_from_implemented: tuple[Route, ...]
     component_ref_drift: tuple[ComponentRefDrift, ...] = ()
     operation_metadata_drift: tuple[OperationMetadataDrift, ...] = ()
+    tag_taxonomy_drift: tuple[TagTaxonomyDrift, ...] = ()
     parameter_metadata_drift: tuple[ParameterMetadataDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
@@ -68,6 +69,7 @@ class RouteDriftReport:
             and not self.openapi_missing_from_implemented
             and not self.component_ref_drift
             and not self.operation_metadata_drift
+            and not self.tag_taxonomy_drift
             and not self.parameter_metadata_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
@@ -87,6 +89,7 @@ class RouteDriftReport:
             "openapiMissingFromImplemented": route_list_json(self.openapi_missing_from_implemented),
             "componentRefDrift": component_ref_drift_json(self.component_ref_drift),
             "operationMetadataDrift": operation_metadata_drift_json(self.operation_metadata_drift),
+            "tagTaxonomyDrift": tag_taxonomy_drift_json(self.tag_taxonomy_drift),
             "parameterMetadataDrift": parameter_metadata_drift_json(self.parameter_metadata_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
@@ -116,6 +119,15 @@ class OperationMetadataDrift:
 
     method: str
     path: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class TagTaxonomyDrift:
+    """An OpenAPI tag that is undeclared, duplicated, invalid, or unused."""
+
+    source: str
+    tag: str
     issue: str
 
 
@@ -243,6 +255,17 @@ def operation_metadata_drift_json(drifts: Iterable[OperationMetadataDrift]) -> l
         {
             "method": drift.method,
             "path": drift.path,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def tag_taxonomy_drift_json(drifts: Iterable[TagTaxonomyDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": drift.source,
+            "tag": drift.tag,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -441,6 +464,54 @@ def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetad
                         issue="missing tags",
                     )
                 )
+    return tuple(sorted(drift))
+
+
+def openapi_tag_taxonomy_drift(openapi_yaml: Path) -> tuple[TagTaxonomyDrift, ...]:
+    """Returns OpenAPI tag taxonomy drift for generator/client grouping."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[TagTaxonomyDrift] = []
+    declared_tags: set[str] = set()
+    tag_items = document.get("tags", []) if isinstance(document, dict) else []
+    if not isinstance(tag_items, list):
+        drift.append(TagTaxonomyDrift(source="tags", tag="", issue="top-level tags must be a list"))
+    else:
+        for index, tag_item in enumerate(tag_items):
+            name = tag_item.get("name") if isinstance(tag_item, dict) else None
+            source = f"tags[{index}]"
+            if not isinstance(name, str) or name.strip() == "":
+                drift.append(TagTaxonomyDrift(source=source, tag="", issue="tag entry must have a non-empty name"))
+            elif name in declared_tags:
+                drift.append(TagTaxonomyDrift(source=source, tag=name, issue="duplicate top-level tag"))
+            else:
+                declared_tags.add(name)
+
+    used_tags: set[str] = set()
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            tags = operation.get("tags", [])
+            if not isinstance(tags, list):
+                continue
+            for tag in tags:
+                if not isinstance(tag, str) or tag.strip() == "":
+                    continue
+                used_tags.add(tag)
+                if tag not in declared_tags:
+                    drift.append(
+                        TagTaxonomyDrift(
+                            source=f"paths.{path}.{method}.tags",
+                            tag=tag,
+                            issue="operation tag is not declared",
+                        )
+                    )
+
+    for tag in declared_tags - used_tags:
+        drift.append(TagTaxonomyDrift(source="tags", tag=tag, issue="declared tag is unused"))
     return tuple(sorted(drift))
 
 
@@ -1295,6 +1366,7 @@ def compare_route_contract(
     documented = openapi_route_inventory(openapi_yaml)
     component_ref_drift = openapi_component_ref_drift(openapi_yaml)
     operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
+    tag_taxonomy_drift = openapi_tag_taxonomy_drift(openapi_yaml)
     parameter_metadata_drift = openapi_parameter_metadata_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
@@ -1340,6 +1412,7 @@ def compare_route_contract(
         openapi_missing_from_implemented=tuple(sorted(documented - implemented)),
         component_ref_drift=component_ref_drift,
         operation_metadata_drift=operation_metadata_drift,
+        tag_taxonomy_drift=tag_taxonomy_drift,
         parameter_metadata_drift=parameter_metadata_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
@@ -1410,7 +1483,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, parameter metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1433,6 +1506,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("Operation metadata drift:")
         for drift in report.operation_metadata_drift:
             print(f"  {drift.method} {drift.path}: {drift.issue}")
+    if report.tag_taxonomy_drift:
+        print("Tag taxonomy drift:")
+        for drift in report.tag_taxonomy_drift:
+            print(f"  {drift.source}: {drift.tag}: {drift.issue}")
     if report.parameter_metadata_drift:
         print("Parameter metadata drift:")
         for drift in report.parameter_metadata_drift:
