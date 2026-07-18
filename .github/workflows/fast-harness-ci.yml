@@ -78,6 +78,10 @@ jobs:
         working-directory: repos/emulebb-build-tests
         run: python -m pip install -e .[dev,live]
 
+      - name: Check Rust OpenAPI route drift
+        working-directory: repos/emulebb-build-tests
+        run: python scripts/check-rust-openapi-routes.py
+
       - name: Run fast harness tests
         working-directory: repos/emulebb-build-tests
         run: python -m pytest

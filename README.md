@@ -107,6 +107,7 @@ Script inventory:
 | `scripts\validate-protocol-goldens.py` | protocol parity guard | maintained | validates compact Kad/eD2K oracle goldens and redaction rules |
 | `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
+| `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust router path inventory against the Rust OpenAPI artifact |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
 | `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB MFC/Rust cross-client transfers and records optional eMuleAI readiness |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
