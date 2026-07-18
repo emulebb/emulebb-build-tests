@@ -914,6 +914,8 @@ def openapi_request_body_metadata_drift(openapi_yaml: Path) -> tuple[RequestBody
     """Returns request bodies that are ambiguous for JSON-only native clients."""
 
     document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
     drift: list[RequestBodyMetadataDrift] = []
     for path, path_item in (document.get("paths", {}) or {}).items():
         for method, operation in path_item.items():
@@ -960,6 +962,27 @@ def openapi_request_body_metadata_drift(openapi_yaml: Path) -> tuple[RequestBody
                         method=route.method,
                         path=route.path,
                         issue="requestBody application/json schema must reference a shared schema component",
+                    )
+                )
+                continue
+            component_name = reference.rsplit("/", 1)[-1]
+            schema_component = schemas.get(component_name) if isinstance(schemas, dict) else None
+            if not isinstance(schema_component, dict):
+                continue
+            if schema_component.get("type") != "object":
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue=f"requestBody schema component {component_name} must be an object",
+                    )
+                )
+            if schema_component.get("additionalProperties") is not False:
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue=f"requestBody schema component {component_name} must set additionalProperties: false",
                     )
                 )
     return tuple(sorted(drift))

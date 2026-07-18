@@ -638,12 +638,37 @@ paths:
             schema:
               $ref: "#/components/schemas/SearchResultDownloadRequest"
       responses: {}
+  /open-body:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenRequest"
+      responses: {}
+  /array-body:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArrayRequest"
+      responses: {}
 components:
   schemas:
     TransferCreateRequest:
       type: object
+      additionalProperties: false
     SearchResultDownloadRequest:
       type: object
+      additionalProperties: false
+    OpenRequest:
+      type: object
+    ArrayRequest:
+      type: array
+      additionalProperties: false
 """,
     )
 
@@ -655,6 +680,11 @@ components:
         ),
         RequestBodyMetadataDrift(
             method="POST",
+            path="/array-body",
+            issue="requestBody schema component ArrayRequest must be an object",
+        ),
+        RequestBodyMetadataDrift(
+            method="POST",
             path="/extra-media",
             issue="requestBody content must contain only application/json",
         ),
@@ -662,6 +692,11 @@ components:
             method="POST",
             path="/missing-required",
             issue="requestBody.required must be explicit true or false",
+        ),
+        RequestBodyMetadataDrift(
+            method="POST",
+            path="/open-body",
+            issue="requestBody schema component OpenRequest must set additionalProperties: false",
         ),
     )
 
