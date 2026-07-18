@@ -172,7 +172,7 @@ paths:
     assert report.openapi_missing_from_implemented == (Route("GET", "/searches/{searchId}"),)
 
 
-def test_openapi_operation_metadata_drift_requires_ids_tags_and_unique_ids(tmp_path: Path) -> None:
+def test_openapi_operation_metadata_drift_requires_ids_tags_summaries_and_unique_ids(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -180,14 +180,17 @@ paths:
   /app:
     get:
       operationId: getApp
+      summary: Return app state.
       tags: [App]
       responses: {}
     post:
       operationId: getApp
+      summary: Duplicate operation ID.
       tags: []
       responses: {}
   /status:
     get:
+      summary: Return status.
       tags: [Stats]
       responses: {}
   /stats:
@@ -198,6 +201,11 @@ paths:
     )
 
     assert openapi_operation_metadata_drift(openapi_yaml) == (
+        OperationMetadataDrift(
+            method="GET",
+            path="/stats",
+            issue="missing summary",
+        ),
         OperationMetadataDrift(
             method="GET",
             path="/stats",

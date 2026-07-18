@@ -486,6 +486,15 @@ def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetad
                         issue="missing tags",
                     )
                 )
+            summary = operation.get("summary")
+            if not isinstance(summary, str) or summary.strip() == "":
+                drift.append(
+                    OperationMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="missing summary",
+                    )
+                )
     return tuple(sorted(drift))
 
 
