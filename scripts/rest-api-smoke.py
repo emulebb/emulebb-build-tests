@@ -305,7 +305,7 @@ NATIVE_JSON_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerJson.cpp"
 QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
-UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "triggerDiagnosticCrashTest", "shutdownApp"}
+UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "getEvents", "triggerDiagnosticCrashTest", "shutdownApp"}
 UNSAFE_BROAD_MUTATION_PATHS = (
     "/api/v1/app/shutdown",
     "/api/v1/diagnostics/dumps",
