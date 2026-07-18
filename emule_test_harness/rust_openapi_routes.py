@@ -406,6 +406,15 @@ def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
         for method, operation in path_item.items():
             if method not in HTTP_METHODS:
                 continue
+            operation_security = operation.get("security")
+            if operation_security is not None and not has_api_key_requirement(operation_security):
+                drift.append(
+                    AuthDrift(
+                        method=method.upper(),
+                        path=path,
+                        issue=f"operation security override must include {API_KEY_SECURITY_SCHEME}",
+                    )
+                )
             responses = operation.get("responses", {}) or {}
             if "401" not in responses:
                 drift.append(
@@ -416,6 +425,15 @@ def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
                     )
                 )
     return tuple(sorted(drift))
+
+
+def has_api_key_requirement(security: object) -> bool:
+    if not isinstance(security, list):
+        return False
+    return any(
+        isinstance(requirement, dict) and API_KEY_SECURITY_SCHEME in requirement
+        for requirement in security
+    )
 
 
 def resolved_response(

@@ -334,6 +334,37 @@ components:
     )
 
 
+def test_openapi_auth_drift_rejects_operation_security_override_without_api_key(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+security:
+  - ApiKeyAuth: []
+paths:
+  /events:
+    get:
+      security: []
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+""",
+    )
+
+    assert openapi_auth_drift(openapi_yaml) == (
+        AuthDrift(
+            method="GET",
+            path="/events",
+            issue="operation security override must include ApiKeyAuth",
+        ),
+    )
+
+
 def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path) -> None:
     routes_rs = write(
         tmp_path / "routes.rs",
