@@ -38,6 +38,7 @@ class RouteDriftReport:
 
     implemented_missing_from_openapi: tuple[Route, ...]
     openapi_missing_from_implemented: tuple[Route, ...]
+    operation_metadata_drift: tuple[OperationMetadataDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
@@ -52,6 +53,7 @@ class RouteDriftReport:
         return (
             not self.implemented_missing_from_openapi
             and not self.openapi_missing_from_implemented
+            and not self.operation_metadata_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
             and not self.body_field_drift
@@ -66,6 +68,7 @@ class RouteDriftReport:
         return {
             "implementedMissingFromOpenapi": route_list_json(self.implemented_missing_from_openapi),
             "openapiMissingFromImplemented": route_list_json(self.openapi_missing_from_implemented),
+            "operationMetadataDrift": operation_metadata_drift_json(self.operation_metadata_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
@@ -84,6 +87,15 @@ class QueryParameterDrift:
     route: Route
     rust_query_parameters: tuple[str, ...]
     openapi_query_parameters: tuple[str, ...]
+
+
+@dataclass(frozen=True, order=True)
+class OperationMetadataDrift:
+    """An OpenAPI operation whose generator-facing metadata is incomplete."""
+
+    method: str
+    path: str
+    issue: str
 
 
 @dataclass(frozen=True, order=True)
@@ -162,6 +174,17 @@ def query_parameter_drift_json(drifts: Iterable[QueryParameterDrift]) -> list[di
             "path": drift.route.path,
             "rustQueryParameters": list(drift.rust_query_parameters),
             "openapiQueryParameters": list(drift.openapi_query_parameters),
+        }
+        for drift in drifts
+    ]
+
+
+def operation_metadata_drift_json(drifts: Iterable[OperationMetadataDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "issue": drift.issue,
         }
         for drift in drifts
     ]
@@ -283,6 +306,50 @@ def openapi_route_inventory(openapi_yaml: Path) -> set[Route]:
         if method_match is not None:
             routes.add(Route(method_match.group(1).upper(), current_path))
     return routes
+
+
+def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetadataDrift, ...]:
+    """Returns OpenAPI operations missing stable generator-facing metadata."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[OperationMetadataDrift] = []
+    operation_ids: dict[str, Route] = {}
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            route = Route(method.upper(), path)
+            operation_id = operation.get("operationId")
+            if not isinstance(operation_id, str) or operation_id.strip() == "":
+                drift.append(
+                    OperationMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="missing operationId",
+                    )
+                )
+            elif operation_id in operation_ids:
+                previous = operation_ids[operation_id]
+                drift.append(
+                    OperationMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue=f"duplicate operationId {operation_id!r} also used by {previous.method} {previous.path}",
+                    )
+                )
+            else:
+                operation_ids[operation_id] = route
+
+            tags = operation.get("tags")
+            if not isinstance(tags, list) or not tags or not all(isinstance(tag, str) and tag for tag in tags):
+                drift.append(
+                    OperationMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="missing tags",
+                    )
+                )
+    return tuple(sorted(drift))
 
 
 def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:
@@ -888,6 +955,7 @@ def compare_route_contract(
 ) -> RouteDriftReport:
     implemented = rust_route_inventory(routes_rs)
     documented = openapi_route_inventory(openapi_yaml)
+    operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
     path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
@@ -928,6 +996,7 @@ def compare_route_contract(
     return RouteDriftReport(
         implemented_missing_from_openapi=tuple(sorted(implemented - documented)),
         openapi_missing_from_implemented=tuple(sorted(documented - implemented)),
+        operation_metadata_drift=operation_metadata_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
@@ -995,7 +1064,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, path, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, operation metadata, path, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1010,6 +1079,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("OpenAPI routes missing from the Rust router:")
         for route in report.openapi_missing_from_implemented:
             print(f"  {route.method} {route.path}")
+    if report.operation_metadata_drift:
+        print("Operation metadata drift:")
+        for drift in report.operation_metadata_drift:
+            print(f"  {drift.method} {drift.path}: {drift.issue}")
     if report.query_parameter_drift:
         print("Query parameter drift:")
         for drift in report.query_parameter_drift:

@@ -7,6 +7,7 @@ from emule_test_harness.rust_openapi_routes import (
     BodyFieldDrift,
     ErrorResponseDrift,
     MethodNotAllowedDrift,
+    OperationMetadataDrift,
     PathParameterDrift,
     QueryParameterDrift,
     Route,
@@ -18,6 +19,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_body_field_inventory,
     openapi_error_response_drift,
     openapi_method_not_allowed_drift,
+    openapi_operation_metadata_drift,
     openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
@@ -102,6 +104,55 @@ paths:
 
     assert report.implemented_missing_from_openapi == (Route("GET", "/searches/{search_id}"),)
     assert report.openapi_missing_from_implemented == (Route("GET", "/searches/{searchId}"),)
+
+
+def test_openapi_operation_metadata_drift_requires_ids_tags_and_unique_ids(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      operationId: getApp
+      tags: [App]
+      responses: {}
+    post:
+      operationId: getApp
+      tags: []
+      responses: {}
+  /status:
+    get:
+      tags: [Stats]
+      responses: {}
+  /stats:
+    get:
+      operationId: getStats
+      responses: {}
+""",
+    )
+
+    assert openapi_operation_metadata_drift(openapi_yaml) == (
+        OperationMetadataDrift(
+            method="GET",
+            path="/stats",
+            issue="missing tags",
+        ),
+        OperationMetadataDrift(
+            method="GET",
+            path="/status",
+            issue="missing operationId",
+        ),
+        OperationMetadataDrift(
+            method="POST",
+            path="/app",
+            issue="duplicate operationId 'getApp' also used by GET /app",
+        ),
+        OperationMetadataDrift(
+            method="POST",
+            path="/app",
+            issue="missing tags",
+        ),
+    )
 
 
 def test_openapi_query_parameter_inventory_resolves_refs_and_inline_params(tmp_path: Path) -> None:
