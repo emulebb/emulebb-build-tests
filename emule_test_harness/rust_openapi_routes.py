@@ -42,6 +42,7 @@ class RouteDriftReport:
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
+    success_response_drift: tuple[SuccessResponseDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
     error_response_drift: tuple[ErrorResponseDrift, ...] = ()
@@ -57,6 +58,7 @@ class RouteDriftReport:
             and not self.query_parameter_drift
             and not self.path_parameter_drift
             and not self.body_field_drift
+            and not self.success_response_drift
             and not self.response_header_drift
             and not self.auth_drift
             and not self.error_response_drift
@@ -72,6 +74,7 @@ class RouteDriftReport:
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
+            "successResponseDrift": success_response_drift_json(self.success_response_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
             "errorResponseDrift": error_response_drift_json(self.error_response_drift),
@@ -116,6 +119,16 @@ class BodyFieldDrift:
     route: Route
     rust_body_fields: tuple[str, ...]
     openapi_body_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, order=True)
+class SuccessResponseDrift:
+    """An OpenAPI success response that is missing or bypasses shared components."""
+
+    method: str
+    path: str
+    status: str
+    issue: str
 
 
 @dataclass(frozen=True, order=True)
@@ -210,6 +223,18 @@ def body_field_drift_json(drifts: Iterable[BodyFieldDrift]) -> list[dict[str, ob
             "path": drift.route.path,
             "rustBodyFields": list(drift.rust_body_fields),
             "openapiBodyFields": list(drift.openapi_body_fields),
+        }
+        for drift in drifts
+    ]
+
+
+def success_response_drift_json(drifts: Iterable[SuccessResponseDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "status": drift.status,
+            "issue": drift.issue,
         }
         for drift in drifts
     ]
@@ -571,6 +596,82 @@ def openapi_response_header_drift(openapi_yaml: Path) -> tuple[ResponseHeaderDri
                         )
                     )
     return tuple(sorted(drift))
+
+
+def openapi_success_response_drift(openapi_yaml: Path) -> tuple[SuccessResponseDrift, ...]:
+    """Returns success responses that are absent, ambiguous, inline, or schema-less."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    component_responses = document.get("components", {}).get("responses", {}) or {}
+    drift: list[SuccessResponseDrift] = []
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            responses = operation.get("responses", {}) or {}
+            success_statuses = tuple(sorted(status for status in responses if is_success_status(status)))
+            if not success_statuses:
+                drift.append(
+                    SuccessResponseDrift(
+                        method=method.upper(),
+                        path=path,
+                        status="",
+                        issue="missing 2xx response",
+                    )
+                )
+                continue
+            if len(success_statuses) > 1:
+                drift.append(
+                    SuccessResponseDrift(
+                        method=method.upper(),
+                        path=path,
+                        status=",".join(success_statuses),
+                        issue="must document exactly one 2xx response",
+                    )
+                )
+            for status in success_statuses:
+                response = responses.get(status)
+                reference = response.get("$ref") if isinstance(response, dict) else None
+                if not isinstance(reference, str) or not reference.startswith("#/components/responses/"):
+                    drift.append(
+                        SuccessResponseDrift(
+                            method=method.upper(),
+                            path=path,
+                            status=str(status),
+                            issue="2xx response must reference a shared response component",
+                        )
+                    )
+                    continue
+                component_name = reference.rsplit("/", 1)[-1]
+                component = component_responses.get(component_name)
+                if not response_component_has_media_schema(component):
+                    drift.append(
+                        SuccessResponseDrift(
+                            method=method.upper(),
+                            path=path,
+                            status=str(status),
+                            issue=f"response component {component_name} must define a media schema",
+                        )
+                    )
+    return tuple(sorted(drift))
+
+
+def is_success_status(status: object) -> bool:
+    status_text = str(status)
+    return len(status_text) == 3 and status_text.startswith("2") and status_text.isdecimal()
+
+
+def response_component_has_media_schema(component: object) -> bool:
+    if not isinstance(component, dict):
+        return False
+    content = component.get("content", {})
+    if not isinstance(content, dict):
+        return False
+    for media in content.values():
+        schema = media.get("schema") if isinstance(media, dict) else None
+        if isinstance(schema, dict) and schema:
+            return True
+    return False
 
 
 def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
@@ -961,6 +1062,7 @@ def compare_route_contract(
     path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
     rust_bodies = rust_body_field_inventory(route_body_metadata_rs, routes_rs)
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
+    success_response_drift = openapi_success_response_drift(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
     error_response_drift = openapi_error_response_drift(openapi_yaml)
@@ -1000,6 +1102,7 @@ def compare_route_contract(
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
+        success_response_drift=success_response_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
         error_response_drift=error_response_drift,
@@ -1064,7 +1167,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, operation metadata, path, query, body, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, operation metadata, path, query, body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1101,6 +1204,11 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
             rust_names = ", ".join(drift.rust_body_fields) or "<none>"
             openapi_names = ", ".join(drift.openapi_body_fields) or "<none>"
             print(f"  {drift.route.method} {drift.route.path}: rust=[{rust_names}] openapi=[{openapi_names}]")
+    if report.success_response_drift:
+        print("Success response contract drift:")
+        for drift in report.success_response_drift:
+            route = f"{drift.method} {drift.path}".strip()
+            print(f"  {route} {drift.status}: {drift.issue}")
     if report.response_header_drift:
         print("Response header drift:")
         for drift in report.response_header_drift:

@@ -12,6 +12,7 @@ from emule_test_harness.rust_openapi_routes import (
     QueryParameterDrift,
     Route,
     ResponseHeaderDrift,
+    SuccessResponseDrift,
     compare_route_contract,
     openapi_contract_version_drift,
     compare_route_inventory,
@@ -24,6 +25,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
     openapi_route_inventory,
+    openapi_success_response_drift,
     rust_contract_version,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
@@ -392,6 +394,78 @@ components:
             missing_header="X-Contract-Version",
         ),
     )
+
+
+def test_openapi_success_response_drift_requires_single_shared_schema_response(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /missing:
+    get:
+      responses:
+        "400": { description: Error }
+  /inline:
+    get:
+      responses:
+        "200":
+          description: Inline response.
+  /multiple:
+    post:
+      responses:
+        "200":
+          $ref: "#/components/responses/OkResponse"
+        "202":
+          $ref: "#/components/responses/AcceptedResponse"
+  /schema-less:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/NoSchemaResponse"
+components:
+  responses:
+    OkResponse:
+      content:
+        application/json:
+          schema:
+            type: object
+    AcceptedResponse:
+      content:
+        application/json:
+          schema:
+            type: object
+    NoSchemaResponse:
+      content:
+        application/json: {}
+""",
+    )
+
+    assert set(openapi_success_response_drift(openapi_yaml)) == {
+        SuccessResponseDrift(
+            method="GET",
+            path="/inline",
+            status="200",
+            issue="2xx response must reference a shared response component",
+        ),
+        SuccessResponseDrift(
+            method="GET",
+            path="/missing",
+            status="",
+            issue="missing 2xx response",
+        ),
+        SuccessResponseDrift(
+            method="POST",
+            path="/multiple",
+            status="200,202",
+            issue="must document exactly one 2xx response",
+        ),
+        SuccessResponseDrift(
+            method="GET",
+            path="/schema-less",
+            status="200",
+            issue="response component NoSchemaResponse must define a media schema",
+        ),
+    }
 
 
 def test_openapi_auth_drift_requires_api_key_scheme_and_401_responses(tmp_path: Path) -> None:
