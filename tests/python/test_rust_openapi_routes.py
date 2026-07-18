@@ -20,6 +20,7 @@ from emule_test_harness.rust_openapi_routes import (
     ResponseHeaderDrift,
     SchemaComponentDrift,
     SettingsSectionResourceOpenApiDrift,
+    SettingsSectionResourceResponseDrift,
     SuccessResponseDrift,
     TagTaxonomyDrift,
     compare_route_contract,
@@ -45,6 +46,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_tag_taxonomy_drift,
     rust_settings_section_resource_inventory,
     settings_section_resource_openapi_drift,
+    settings_section_resource_response_drift,
     rust_contract_version,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
@@ -184,6 +186,136 @@ paths:
             name="nat",
             route="/api/v1/nat",
             issue="missing GET operation in OpenAPI paths",
+        ),
+    )
+
+
+def test_settings_section_resource_response_drift_requires_named_closed_data_dtos(tmp_path: Path) -> None:
+    surface_rs = write(
+        tmp_path / "surface.rs",
+        '''
+        const SETTINGS_SECTION_RESOURCES: &[SettingsSectionResourceSpec] = &[
+            SettingsSectionResourceSpec {
+                name: "diagnostics",
+                route: "/api/v1/diagnostics",
+                ui_section: "Diagnostics",
+                description: "Runtime diagnostics.",
+            },
+            SettingsSectionResourceSpec {
+                name: "nat",
+                route: "/api/v1/nat",
+                ui_section: "NAT",
+                description: "Live NAT status.",
+            },
+            SettingsSectionResourceSpec {
+                name: "ipFilter",
+                route: "/api/v1/ip-filter",
+                ui_section: "IP Filter",
+                description: "IP filter status.",
+            },
+            SettingsSectionResourceSpec {
+                name: "servers",
+                route: "/api/v1/servers",
+                ui_section: "Servers",
+                description: "Servers.",
+            },
+        ];
+        ''',
+    )
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /diagnostics:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/RuntimeDiagnosticsResponse"
+  /nat:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/NatResponse"
+  /ip-filter:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/OkResponse"
+  /servers:
+    get:
+      responses:
+        "200":
+          $ref: "#/components/responses/ServerListResponse"
+components:
+  responses:
+    RuntimeDiagnosticsResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeDiagnosticsEnvelope"
+    NatResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/NatStatusEnvelope"
+    OkResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkEnvelope"
+    ServerListResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ServerListEnvelope"
+  schemas:
+    RuntimeDiagnosticsEnvelope:
+      unevaluatedProperties: false
+      allOf:
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RuntimeDiagnostics"
+    RuntimeDiagnostics:
+      type: object
+      additionalProperties: false
+    NatStatusEnvelope:
+      unevaluatedProperties: false
+      allOf:
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/NatStatus"
+    NatStatus:
+      type: object
+    OkEnvelope:
+      unevaluatedProperties: false
+    ServerListEnvelope:
+      unevaluatedProperties: false
+      allOf:
+        - type: object
+          properties:
+            data:
+              type: object
+              additionalProperties: false
+""",
+    )
+
+    assert settings_section_resource_response_drift(surface_rs, openapi_yaml) == (
+        SettingsSectionResourceResponseDrift(
+            name="ipFilter",
+            route="/api/v1/ip-filter",
+            issue="GET operation must not use generic OkResponse",
+        ),
+        SettingsSectionResourceResponseDrift(
+            name="nat",
+            route="/api/v1/nat",
+            issue="data schema NatStatus must be a closed object",
+        ),
+        SettingsSectionResourceResponseDrift(
+            name="servers",
+            route="/api/v1/servers",
+            issue="envelope schema ServerListEnvelope data must reference a named schema component",
         ),
     )
 

@@ -36,6 +36,10 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
     "TransferRemovedEvent": ("hash", "id", "type"),
     "TransferSyncResetEvent": ("id", "reason", "type"),
 }
+GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
+    "BulkOperationResponse",
+    "OkResponse",
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -80,6 +84,7 @@ class RouteDriftReport:
     method_not_allowed_drift: tuple[MethodNotAllowedDrift, ...] = ()
     contract_version_drift: tuple[ContractVersionDrift, ...] = ()
     section_resource_openapi_drift: tuple[SettingsSectionResourceOpenApiDrift, ...] = ()
+    section_resource_response_drift: tuple[SettingsSectionResourceResponseDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -105,6 +110,7 @@ class RouteDriftReport:
             and not self.method_not_allowed_drift
             and not self.contract_version_drift
             and not self.section_resource_openapi_drift
+            and not self.section_resource_response_drift
         )
 
     def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
@@ -131,6 +137,9 @@ class RouteDriftReport:
             "contractVersionDrift": contract_version_drift_json(self.contract_version_drift),
             "sectionResourceOpenapiDrift": settings_section_resource_openapi_drift_json(
                 self.section_resource_openapi_drift
+            ),
+            "sectionResourceResponseDrift": settings_section_resource_response_drift_json(
+                self.section_resource_response_drift
             ),
         }
 
@@ -289,6 +298,15 @@ class ContractVersionDrift:
 @dataclass(frozen=True, order=True)
 class SettingsSectionResourceOpenApiDrift:
     """A Settings section resource route that is not documented as an OpenAPI GET operation."""
+
+    name: str
+    route: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class SettingsSectionResourceResponseDrift:
+    """A Settings section resource OpenAPI response that is too weak for generated clients."""
 
     name: str
     route: str
@@ -511,6 +529,19 @@ def settings_section_resource_openapi_drift_json(
     ]
 
 
+def settings_section_resource_response_drift_json(
+    drifts: Iterable[SettingsSectionResourceResponseDrift],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "name": drift.name,
+            "route": drift.route,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
 def rust_route_inventory(routes_rs: Path) -> set[Route]:
     """Returns route method/path pairs declared in `crates/emulebb-rest/src/routes.rs`."""
 
@@ -603,6 +634,148 @@ def settings_section_resource_openapi_drift(
                 )
             )
     return tuple(sorted(drift))
+
+
+def settings_section_resource_response_drift(
+    settings_surface_rs: Path,
+    openapi_yaml: Path,
+) -> tuple[SettingsSectionResourceResponseDrift, ...]:
+    """Returns Settings section resources whose documented response is not a closed named DTO."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    responses = components.get("responses", {}) if isinstance(components, dict) else {}
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    paths = document.get("paths", {}) if isinstance(document, dict) else {}
+    drift: list[SettingsSectionResourceResponseDrift] = []
+
+    for name, route in rust_settings_section_resource_inventory(settings_surface_rs).items():
+        if not route.startswith("/api/v1/"):
+            continue
+        openapi_path = route.removeprefix("/api/v1")
+        operation = (paths.get(openapi_path, {}) or {}).get("get")
+        if not isinstance(operation, dict):
+            continue
+
+        success_ref = operation_success_response_ref(operation)
+        if success_ref is None:
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue="GET operation must reference exactly one 2xx response component",
+                )
+            )
+            continue
+        response_component = success_ref.rsplit("/", 1)[-1]
+        if response_component in GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS:
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue=f"GET operation must not use generic {response_component}",
+                )
+            )
+            continue
+
+        response = responses.get(response_component)
+        envelope_ref = response_schema_ref(response)
+        if envelope_ref is None:
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue=f"response component {response_component} must reference a named envelope schema",
+                )
+            )
+            continue
+
+        envelope_name = envelope_ref.rsplit("/", 1)[-1]
+        envelope = schemas.get(envelope_name)
+        if not schema_is_closed_object(envelope):
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue=f"envelope schema {envelope_name} must be closed",
+                )
+            )
+            continue
+
+        data_ref = envelope_data_ref(envelope)
+        if data_ref is None:
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue=f"envelope schema {envelope_name} data must reference a named schema component",
+                )
+            )
+            continue
+
+        data_name = data_ref.rsplit("/", 1)[-1]
+        data_schema = schemas.get(data_name)
+        if not schema_is_closed_object(data_schema):
+            drift.append(
+                SettingsSectionResourceResponseDrift(
+                    name=name,
+                    route=route,
+                    issue=f"data schema {data_name} must be a closed object",
+                )
+            )
+    return tuple(sorted(drift))
+
+
+def operation_success_response_ref(operation: dict[str, object]) -> str | None:
+    responses = operation.get("responses", {})
+    if not isinstance(responses, dict):
+        return None
+    success_statuses = tuple(sorted(status for status in responses if is_success_status(status)))
+    if len(success_statuses) != 1:
+        return None
+    response = responses.get(success_statuses[0])
+    reference = response.get("$ref") if isinstance(response, dict) else None
+    if not isinstance(reference, str) or not reference.startswith("#/components/responses/"):
+        return None
+    return reference
+
+
+def response_schema_ref(response: object) -> str | None:
+    if not isinstance(response, dict):
+        return None
+    content = response.get("content", {})
+    media = content.get("application/json", {}) if isinstance(content, dict) else {}
+    schema = media.get("schema", {}) if isinstance(media, dict) else {}
+    reference = schema.get("$ref") if isinstance(schema, dict) else None
+    if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+        return reference
+    return None
+
+
+def envelope_data_ref(envelope: object) -> str | None:
+    if not isinstance(envelope, dict):
+        return None
+    candidates = [envelope]
+    all_of = envelope.get("allOf", [])
+    if isinstance(all_of, list):
+        candidates.extend(candidate for candidate in all_of if isinstance(candidate, dict))
+    for candidate in candidates:
+        properties = candidate.get("properties", {})
+        data = properties.get("data") if isinstance(properties, dict) else None
+        reference = data.get("$ref") if isinstance(data, dict) else None
+        if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+            return reference
+    return None
+
+
+def schema_is_closed_object(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("type") == "object" and schema.get("additionalProperties") is False:
+        return True
+    if schema.get("unevaluatedProperties") is False:
+        return True
+    return False
 
 
 def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetadataDrift, ...]:
@@ -1928,6 +2101,11 @@ def compare_route_contract(
         if settings_surface_rs is not None
         else ()
     )
+    section_resource_response_drift = (
+        settings_section_resource_response_drift(settings_surface_rs, openapi_yaml)
+        if settings_surface_rs is not None
+        else ()
+    )
     common_routes = implemented & documented
     query_drift = tuple(
         sorted(
@@ -1973,6 +2151,7 @@ def compare_route_contract(
         method_not_allowed_drift=method_not_allowed_drift,
         contract_version_drift=contract_version_drift,
         section_resource_openapi_drift=section_resource_drift,
+        section_resource_response_drift=section_resource_response_drift,
     )
 
 
@@ -2053,7 +2232,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, confirmation, path, query, request body, success, response component, auth, error, 405, contract-version, response-header, and Settings section-resource inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, confirmation, path, query, request body, success, response component, auth, error, 405, contract-version, response-header, Settings section-resource inventory, and Settings section-resource response shape matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -2153,4 +2332,8 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
     if report.section_resource_openapi_drift:
         print("Settings section-resource OpenAPI drift:")
         for drift in report.section_resource_openapi_drift:
+            print(f"  {drift.name} {drift.route}: {drift.issue}")
+    if report.section_resource_response_drift:
+        print("Settings section-resource response drift:")
+        for drift in report.section_resource_response_drift:
             print(f"  {drift.name} {drift.route}: {drift.issue}")
