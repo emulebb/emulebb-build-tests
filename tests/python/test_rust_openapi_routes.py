@@ -16,6 +16,7 @@ from emule_test_harness.rust_openapi_routes import (
     RequestBodyMetadataDrift,
     ResponseComponentDrift,
     ResponseHeaderDrift,
+    SchemaComponentDrift,
     SuccessResponseDrift,
     TagTaxonomyDrift,
     compare_route_contract,
@@ -34,6 +35,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_response_component_drift,
     openapi_response_header_drift,
     openapi_route_inventory,
+    openapi_schema_component_drift,
     openapi_success_response_drift,
     openapi_tag_taxonomy_drift,
     rust_contract_version,
@@ -341,6 +343,51 @@ components:
         ParameterMetadataDrift(
             source="paths./events.get.parameters[3]",
             issue="schema must be an object",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_requires_reusable_schema_shape(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    Empty: {}
+    NotObject: true
+    NoShape:
+      description: Missing a concrete shape.
+    EmptyEnum:
+      type: string
+      enum: []
+    GoodObject:
+      type: object
+      properties: {}
+    GoodComposition:
+      allOf:
+        - $ref: "#/components/schemas/GoodObject"
+    GoodEnum:
+      type: string
+      enum: [one]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="Empty",
+            issue="schema component must not be empty",
+        ),
+        SchemaComponentDrift(
+            component="EmptyEnum",
+            issue="enum must be a non-empty list",
+        ),
+        SchemaComponentDrift(
+            component="NoShape",
+            issue="schema component must declare type, composition, enum, or const",
+        ),
+        SchemaComponentDrift(
+            component="NotObject",
+            issue="schema component must be an object",
         ),
     )
 

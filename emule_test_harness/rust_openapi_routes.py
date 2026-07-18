@@ -52,6 +52,7 @@ class RouteDriftReport:
     operation_metadata_drift: tuple[OperationMetadataDrift, ...] = ()
     tag_taxonomy_drift: tuple[TagTaxonomyDrift, ...] = ()
     parameter_metadata_drift: tuple[ParameterMetadataDrift, ...] = ()
+    schema_component_drift: tuple[SchemaComponentDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
@@ -73,6 +74,7 @@ class RouteDriftReport:
             and not self.operation_metadata_drift
             and not self.tag_taxonomy_drift
             and not self.parameter_metadata_drift
+            and not self.schema_component_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
             and not self.body_field_drift
@@ -94,6 +96,7 @@ class RouteDriftReport:
             "operationMetadataDrift": operation_metadata_drift_json(self.operation_metadata_drift),
             "tagTaxonomyDrift": tag_taxonomy_drift_json(self.tag_taxonomy_drift),
             "parameterMetadataDrift": parameter_metadata_drift_json(self.parameter_metadata_drift),
+            "schemaComponentDrift": schema_component_drift_json(self.schema_component_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
@@ -140,6 +143,14 @@ class ParameterMetadataDrift:
     """An OpenAPI parameter whose client-facing metadata is incomplete."""
 
     source: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class SchemaComponentDrift:
+    """An OpenAPI schema component whose reusable shape is incomplete."""
+
+    component: str
     issue: str
 
 
@@ -288,6 +299,16 @@ def parameter_metadata_drift_json(drifts: Iterable[ParameterMetadataDrift]) -> l
     return [
         {
             "source": drift.source,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def schema_component_drift_json(drifts: Iterable[SchemaComponentDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "component": drift.component,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -631,6 +652,42 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
                 continue
             for index, parameter in enumerate(operation.get("parameters", []) or []):
                 append_parameter_metadata_drift(drift, f"paths.{path}.{method}.parameters[{index}]", parameter)
+    return tuple(sorted(drift))
+
+
+def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentDrift, ...]:
+    """Returns shared schema components with incomplete generator-facing shape."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    if not isinstance(schemas, dict):
+        return (
+            SchemaComponentDrift(
+                component="<components.schemas>",
+                issue="components.schemas must be an object",
+            ),
+        )
+
+    drift: list[SchemaComponentDrift] = []
+    shape_keywords = {"allOf", "anyOf", "const", "enum", "oneOf", "type"}
+    for name, schema in schemas.items():
+        if not isinstance(schema, dict):
+            drift.append(SchemaComponentDrift(component=name, issue="schema component must be an object"))
+            continue
+        if not schema:
+            drift.append(SchemaComponentDrift(component=name, issue="schema component must not be empty"))
+            continue
+        if not any(keyword in schema for keyword in shape_keywords):
+            drift.append(
+                SchemaComponentDrift(
+                    component=name,
+                    issue="schema component must declare type, composition, enum, or const",
+                )
+            )
+        enum_values = schema.get("enum")
+        if enum_values is not None and (not isinstance(enum_values, list) or not enum_values):
+            drift.append(SchemaComponentDrift(component=name, issue="enum must be a non-empty list"))
     return tuple(sorted(drift))
 
 
@@ -1454,6 +1511,7 @@ def compare_route_contract(
     operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
     tag_taxonomy_drift = openapi_tag_taxonomy_drift(openapi_yaml)
     parameter_metadata_drift = openapi_parameter_metadata_drift(openapi_yaml)
+    schema_component_drift = openapi_schema_component_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
     path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
@@ -1501,6 +1559,7 @@ def compare_route_contract(
         operation_metadata_drift=operation_metadata_drift,
         tag_taxonomy_drift=tag_taxonomy_drift,
         parameter_metadata_drift=parameter_metadata_drift,
+        schema_component_drift=schema_component_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
@@ -1571,7 +1630,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, schema component, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1602,6 +1661,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("Parameter metadata drift:")
         for drift in report.parameter_metadata_drift:
             print(f"  {drift.source}: {drift.issue}")
+    if report.schema_component_drift:
+        print("Schema component drift:")
+        for drift in report.schema_component_drift:
+            print(f"  {drift.component}: {drift.issue}")
     if report.query_parameter_drift:
         print("Query parameter drift:")
         for drift in report.query_parameter_drift:
