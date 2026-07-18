@@ -79,6 +79,7 @@ class RouteDriftReport:
     error_response_drift: tuple[ErrorResponseDrift, ...] = ()
     method_not_allowed_drift: tuple[MethodNotAllowedDrift, ...] = ()
     contract_version_drift: tuple[ContractVersionDrift, ...] = ()
+    section_resource_openapi_drift: tuple[SettingsSectionResourceOpenApiDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -103,6 +104,7 @@ class RouteDriftReport:
             and not self.error_response_drift
             and not self.method_not_allowed_drift
             and not self.contract_version_drift
+            and not self.section_resource_openapi_drift
         )
 
     def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
@@ -127,6 +129,9 @@ class RouteDriftReport:
             "errorResponseDrift": error_response_drift_json(self.error_response_drift),
             "methodNotAllowedDrift": method_not_allowed_drift_json(self.method_not_allowed_drift),
             "contractVersionDrift": contract_version_drift_json(self.contract_version_drift),
+            "sectionResourceOpenapiDrift": settings_section_resource_openapi_drift_json(
+                self.section_resource_openapi_drift
+            ),
         }
 
 
@@ -278,6 +283,15 @@ class ContractVersionDrift:
     """A Rust/OpenAPI/harness contract-version mismatch."""
 
     source: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class SettingsSectionResourceOpenApiDrift:
+    """A Settings section resource route that is not documented as an OpenAPI GET operation."""
+
+    name: str
+    route: str
     issue: str
 
 
@@ -484,6 +498,19 @@ def contract_version_drift_json(drifts: Iterable[ContractVersionDrift]) -> list[
     ]
 
 
+def settings_section_resource_openapi_drift_json(
+    drifts: Iterable[SettingsSectionResourceOpenApiDrift],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "name": drift.name,
+            "route": drift.route,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
 def rust_route_inventory(routes_rs: Path) -> set[Route]:
     """Returns route method/path pairs declared in `crates/emulebb-rest/src/routes.rs`."""
 
@@ -519,6 +546,63 @@ def openapi_route_inventory(openapi_yaml: Path) -> set[Route]:
         if method_match is not None:
             routes.add(Route(method_match.group(1).upper(), current_path))
     return routes
+
+
+def rust_settings_section_resource_inventory(settings_surface_rs: Path) -> dict[str, str]:
+    """Returns Settings section resource names and full REST routes from `surface.rs`."""
+
+    text = settings_surface_rs.read_text(encoding="utf-8")
+    inventory_match = re.search(
+        r"const\s+SETTINGS_SECTION_RESOURCES\s*:\s*&\[SettingsSectionResourceSpec\]\s*=\s*&\[(?P<body>.*?)\];",
+        text,
+        re.DOTALL,
+    )
+    if inventory_match is None:
+        raise RuntimeError("Rust Settings section resource inventory is missing")
+
+    resources: dict[str, str] = {}
+    for resource_match in re.finditer(
+        r"SettingsSectionResourceSpec\s*\{(?P<body>.*?)\}",
+        inventory_match.group("body"),
+        re.DOTALL,
+    ):
+        body = resource_match.group("body")
+        name_match = re.search(r'name:\s*"([^"]+)"', body)
+        route_match = re.search(r'route:\s*"([^"]+)"', body)
+        if name_match is None or route_match is None:
+            raise RuntimeError("Rust Settings section resource is missing name or route")
+        resources[name_match.group(1)] = route_match.group(1)
+    return resources
+
+
+def settings_section_resource_openapi_drift(
+    settings_surface_rs: Path,
+    openapi_yaml: Path,
+) -> tuple[SettingsSectionResourceOpenApiDrift, ...]:
+    """Returns Settings section resources not documented as OpenAPI GET operations."""
+
+    documented = openapi_route_inventory(openapi_yaml)
+    drift: list[SettingsSectionResourceOpenApiDrift] = []
+    for name, route in rust_settings_section_resource_inventory(settings_surface_rs).items():
+        if not route.startswith("/api/v1/"):
+            drift.append(
+                SettingsSectionResourceOpenApiDrift(
+                    name=name,
+                    route=route,
+                    issue="route must start with /api/v1/",
+                )
+            )
+            continue
+
+        if Route("GET", route.removeprefix("/api/v1")) not in documented:
+            drift.append(
+                SettingsSectionResourceOpenApiDrift(
+                    name=name,
+                    route=route,
+                    issue="missing GET operation in OpenAPI paths",
+                )
+            )
+    return tuple(sorted(drift))
 
 
 def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetadataDrift, ...]:
@@ -1811,6 +1895,7 @@ def compare_route_contract(
     route_body_metadata_rs: Path,
     openapi_yaml: Path,
     responses_rs: Path | None = None,
+    settings_surface_rs: Path | None = None,
 ) -> RouteDriftReport:
     implemented = rust_route_inventory(routes_rs)
     documented = openapi_route_inventory(openapi_yaml)
@@ -1836,6 +1921,11 @@ def compare_route_contract(
     contract_version_drift = (
         openapi_contract_version_drift(openapi_yaml, responses_rs)
         if responses_rs is not None
+        else ()
+    )
+    section_resource_drift = (
+        settings_section_resource_openapi_drift(settings_surface_rs, openapi_yaml)
+        if settings_surface_rs is not None
         else ()
     )
     common_routes = implemented & documented
@@ -1882,6 +1972,7 @@ def compare_route_contract(
         error_response_drift=error_response_drift,
         method_not_allowed_drift=method_not_allowed_drift,
         contract_version_drift=contract_version_drift,
+        section_resource_openapi_drift=section_resource_drift,
     )
 
 
@@ -1899,6 +1990,18 @@ def default_route_body_metadata_rs(workspace_root: Path) -> Path:
 
 def default_responses_rs(workspace_root: Path) -> Path:
     return workspace_root / "repos" / "emulebb-rust" / "crates" / "emulebb-rest" / "src" / "responses.rs"
+
+
+def default_settings_surface_rs(workspace_root: Path) -> Path:
+    return (
+        workspace_root
+        / "repos"
+        / "emulebb-rust"
+        / "crates"
+        / "emulebb-settings"
+        / "src"
+        / "surface.rs"
+    )
 
 
 def default_openapi_yaml(workspace_root: Path) -> Path:
@@ -1924,6 +2027,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to crates/emulebb-rest/src/route_body_metadata.rs.",
     )
     parser.add_argument("--rust-responses", type=Path, help="Path to crates/emulebb-rest/src/responses.rs.")
+    parser.add_argument("--settings-surface", type=Path, help="Path to crates/emulebb-settings/src/surface.rs.")
     parser.add_argument("--openapi", type=Path, help="Path to the emulebb-rust OpenAPI YAML artifact.")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report.")
     return parser
@@ -1936,12 +2040,20 @@ def run_cli(argv: list[str] | None = None) -> int:
     route_metadata_rs = args.route_metadata or default_route_metadata_rs(workspace_root)
     route_body_metadata_rs = args.route_body_metadata or default_route_body_metadata_rs(workspace_root)
     responses_rs = args.rust_responses or default_responses_rs(workspace_root)
+    settings_surface_rs = args.settings_surface or default_settings_surface_rs(workspace_root)
     openapi_yaml = args.openapi or default_openapi_yaml(workspace_root)
-    report = compare_route_contract(routes_rs, route_metadata_rs, route_body_metadata_rs, openapi_yaml, responses_rs)
+    report = compare_route_contract(
+        routes_rs,
+        route_metadata_rs,
+        route_body_metadata_rs,
+        openapi_yaml,
+        responses_rs,
+        settings_surface_rs,
+    )
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, confirmation, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, confirmation, path, query, request body, success, response component, auth, error, 405, contract-version, response-header, and Settings section-resource inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -2038,3 +2150,7 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("Contract-version drift:")
         for drift in report.contract_version_drift:
             print(f"  {drift.source}: {drift.issue}")
+    if report.section_resource_openapi_drift:
+        print("Settings section-resource OpenAPI drift:")
+        for drift in report.section_resource_openapi_drift:
+            print(f"  {drift.name} {drift.route}: {drift.issue}")

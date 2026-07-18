@@ -19,6 +19,7 @@ from emule_test_harness.rust_openapi_routes import (
     ResponseComponentDrift,
     ResponseHeaderDrift,
     SchemaComponentDrift,
+    SettingsSectionResourceOpenApiDrift,
     SuccessResponseDrift,
     TagTaxonomyDrift,
     compare_route_contract,
@@ -42,6 +43,8 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_schema_component_drift,
     openapi_success_response_drift,
     openapi_tag_taxonomy_drift,
+    rust_settings_section_resource_inventory,
+    settings_section_resource_openapi_drift,
     rust_contract_version,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
@@ -101,6 +104,88 @@ paths:
         Route("GET", "/categories/{categoryId}"),
         Route("PATCH", "/categories/{categoryId}"),
     }
+
+
+def test_rust_settings_section_resource_inventory_reads_full_rest_routes(tmp_path: Path) -> None:
+    surface_rs = write(
+        tmp_path / "surface.rs",
+        '''
+        const SETTINGS_SECTION_RESOURCES: &[SettingsSectionResourceSpec] = &[
+            SettingsSectionResourceSpec {
+                name: "diagnostics",
+                class: SettingSurfaceClass::ExistingSectionResource,
+                route: "/api/v1/diagnostics",
+                ui_section: "Diagnostics",
+                description: "Runtime diagnostics.",
+            },
+            SettingsSectionResourceSpec {
+                name: "nat",
+                class: SettingSurfaceClass::ExistingSectionResource,
+                route: "/api/v1/nat",
+                ui_section: "NAT",
+                description: "Live NAT status.",
+            },
+        ];
+        ''',
+    )
+
+    assert rust_settings_section_resource_inventory(surface_rs) == {
+        "diagnostics": "/api/v1/diagnostics",
+        "nat": "/api/v1/nat",
+    }
+
+
+def test_settings_section_resource_openapi_drift_requires_documented_get_operations(tmp_path: Path) -> None:
+    surface_rs = write(
+        tmp_path / "surface.rs",
+        '''
+        const SETTINGS_SECTION_RESOURCES: &[SettingsSectionResourceSpec] = &[
+            SettingsSectionResourceSpec {
+                name: "diagnostics",
+                route: "/api/v1/diagnostics",
+                ui_section: "Diagnostics",
+                description: "Runtime diagnostics.",
+            },
+            SettingsSectionResourceSpec {
+                name: "nat",
+                route: "/api/v1/nat",
+                ui_section: "NAT",
+                description: "Live NAT status.",
+            },
+            SettingsSectionResourceSpec {
+                name: "external",
+                route: "https://example.invalid/external",
+                ui_section: "External",
+                description: "Invalid external route.",
+            },
+        ];
+        ''',
+    )
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /diagnostics:
+    get:
+      responses: {}
+  /nat:
+    post:
+      responses: {}
+""",
+    )
+
+    assert settings_section_resource_openapi_drift(surface_rs, openapi_yaml) == (
+        SettingsSectionResourceOpenApiDrift(
+            name="external",
+            route="https://example.invalid/external",
+            issue="route must start with /api/v1/",
+        ),
+        SettingsSectionResourceOpenApiDrift(
+            name="nat",
+            route="/api/v1/nat",
+            issue="missing GET operation in OpenAPI paths",
+        ),
+    )
 
 
 def test_openapi_component_ref_drift_rejects_missing_and_external_refs(tmp_path: Path) -> None:
