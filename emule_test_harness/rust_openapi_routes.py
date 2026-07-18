@@ -52,6 +52,7 @@ class RouteDriftReport:
     operation_metadata_drift: tuple[OperationMetadataDrift, ...] = ()
     tag_taxonomy_drift: tuple[TagTaxonomyDrift, ...] = ()
     parameter_metadata_drift: tuple[ParameterMetadataDrift, ...] = ()
+    parameter_ref_drift: tuple[ParameterRefDrift, ...] = ()
     schema_component_drift: tuple[SchemaComponentDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
@@ -74,6 +75,7 @@ class RouteDriftReport:
             and not self.operation_metadata_drift
             and not self.tag_taxonomy_drift
             and not self.parameter_metadata_drift
+            and not self.parameter_ref_drift
             and not self.schema_component_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
@@ -96,6 +98,7 @@ class RouteDriftReport:
             "operationMetadataDrift": operation_metadata_drift_json(self.operation_metadata_drift),
             "tagTaxonomyDrift": tag_taxonomy_drift_json(self.tag_taxonomy_drift),
             "parameterMetadataDrift": parameter_metadata_drift_json(self.parameter_metadata_drift),
+            "parameterRefDrift": parameter_ref_drift_json(self.parameter_ref_drift),
             "schemaComponentDrift": schema_component_drift_json(self.schema_component_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
@@ -141,6 +144,14 @@ class TagTaxonomyDrift:
 @dataclass(frozen=True, order=True)
 class ParameterMetadataDrift:
     """An OpenAPI parameter whose client-facing metadata is incomplete."""
+
+    source: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class ParameterRefDrift:
+    """An OpenAPI operation/path parameter that bypasses shared components."""
 
     source: str
     issue: str
@@ -296,6 +307,16 @@ def tag_taxonomy_drift_json(drifts: Iterable[TagTaxonomyDrift]) -> list[dict[str
 
 
 def parameter_metadata_drift_json(drifts: Iterable[ParameterMetadataDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": drift.source,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def parameter_ref_drift_json(drifts: Iterable[ParameterRefDrift]) -> list[dict[str, str]]:
     return [
         {
             "source": drift.source,
@@ -653,6 +674,39 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             for index, parameter in enumerate(operation.get("parameters", []) or []):
                 append_parameter_metadata_drift(drift, f"paths.{path}.{method}.parameters[{index}]", parameter)
     return tuple(sorted(drift))
+
+
+def openapi_parameter_ref_drift(openapi_yaml: Path) -> tuple[ParameterRefDrift, ...]:
+    """Returns path/operation parameters that bypass shared parameter components."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[ParameterRefDrift] = []
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for index, parameter in enumerate(path_item.get("parameters", []) or []):
+            append_parameter_ref_drift(drift, f"paths.{path}.parameters[{index}]", parameter)
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            for index, parameter in enumerate(operation.get("parameters", []) or []):
+                append_parameter_ref_drift(drift, f"paths.{path}.{method}.parameters[{index}]", parameter)
+    return tuple(sorted(drift))
+
+
+def append_parameter_ref_drift(
+    drift: list[ParameterRefDrift],
+    source: str,
+    parameter: object,
+) -> None:
+    reference = parameter.get("$ref") if isinstance(parameter, dict) else None
+    if not isinstance(reference, str) or not reference.startswith("#/components/parameters/"):
+        drift.append(
+            ParameterRefDrift(
+                source=source,
+                issue="parameter must reference a shared parameter component",
+            )
+        )
 
 
 def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentDrift, ...]:
@@ -1557,6 +1611,7 @@ def compare_route_contract(
     operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
     tag_taxonomy_drift = openapi_tag_taxonomy_drift(openapi_yaml)
     parameter_metadata_drift = openapi_parameter_metadata_drift(openapi_yaml)
+    parameter_ref_drift = openapi_parameter_ref_drift(openapi_yaml)
     schema_component_drift = openapi_schema_component_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
@@ -1605,6 +1660,7 @@ def compare_route_contract(
         operation_metadata_drift=operation_metadata_drift,
         tag_taxonomy_drift=tag_taxonomy_drift,
         parameter_metadata_drift=parameter_metadata_drift,
+        parameter_ref_drift=parameter_ref_drift,
         schema_component_drift=schema_component_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
@@ -1676,7 +1732,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, schema component, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, tag taxonomy, parameter metadata, parameter ref, schema component, path, query, request body, success, response component, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1706,6 +1762,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
     if report.parameter_metadata_drift:
         print("Parameter metadata drift:")
         for drift in report.parameter_metadata_drift:
+            print(f"  {drift.source}: {drift.issue}")
+    if report.parameter_ref_drift:
+        print("Parameter ref drift:")
+        for drift in report.parameter_ref_drift:
             print(f"  {drift.source}: {drift.issue}")
     if report.schema_component_drift:
         print("Schema component drift:")

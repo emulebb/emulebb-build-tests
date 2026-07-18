@@ -10,6 +10,7 @@ from emule_test_harness.rust_openapi_routes import (
     MethodNotAllowedDrift,
     OperationMetadataDrift,
     ParameterMetadataDrift,
+    ParameterRefDrift,
     PathParameterDrift,
     QueryParameterDrift,
     Route,
@@ -29,6 +30,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_method_not_allowed_drift,
     openapi_operation_metadata_drift,
     openapi_parameter_metadata_drift,
+    openapi_parameter_ref_drift,
     openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
     openapi_request_body_metadata_drift,
@@ -343,6 +345,50 @@ components:
         ParameterMetadataDrift(
             source="paths./events.get.parameters[3]",
             issue="schema must be an object",
+        ),
+    )
+
+
+def test_openapi_parameter_ref_drift_requires_shared_parameter_refs(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /transfers/{hash}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses: {}
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+""",
+    )
+
+    assert openapi_parameter_ref_drift(openapi_yaml) == (
+        ParameterRefDrift(
+            source="paths./transfers/{hash}.get.parameters[0]",
+            issue="parameter must reference a shared parameter component",
+        ),
+        ParameterRefDrift(
+            source="paths./transfers/{hash}.parameters[0]",
+            issue="parameter must reference a shared parameter component",
         ),
     )
 
