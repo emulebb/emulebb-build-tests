@@ -5,6 +5,7 @@ from pathlib import Path
 from emule_test_harness.rust_openapi_routes import (
     AuthDrift,
     BodyFieldDrift,
+    MethodNotAllowedDrift,
     QueryParameterDrift,
     Route,
     ResponseHeaderDrift,
@@ -12,6 +13,7 @@ from emule_test_harness.rust_openapi_routes import (
     compare_route_inventory,
     openapi_auth_drift,
     openapi_body_field_inventory,
+    openapi_method_not_allowed_drift,
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
     openapi_route_inventory,
@@ -361,6 +363,47 @@ components:
             method="GET",
             path="/events",
             issue="operation security override must include ApiKeyAuth",
+        ),
+    )
+
+
+def test_openapi_method_not_allowed_drift_requires_405_ref_and_allow_header(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      responses:
+        "200": { description: OK }
+  /status:
+    get:
+      responses:
+        "200": { description: OK }
+        "405": { description: Wrong shape }
+components:
+  responses:
+    MethodNotAllowedResponse:
+      description: Method not allowed.
+      headers: {}
+""",
+    )
+
+    assert openapi_method_not_allowed_drift(openapi_yaml) == (
+        MethodNotAllowedDrift(
+            method="",
+            path="<components.responses.MethodNotAllowedResponse>",
+            issue="missing Allow header",
+        ),
+        MethodNotAllowedDrift(
+            method="GET",
+            path="/app",
+            issue="missing 405 response",
+        ),
+        MethodNotAllowedDrift(
+            method="GET",
+            path="/status",
+            issue="405 response must reference MethodNotAllowedResponse",
         ),
     )
 

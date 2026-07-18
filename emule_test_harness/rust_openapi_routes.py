@@ -17,6 +17,7 @@ HTTP_METHODS = ("delete", "get", "patch", "post", "put")
 CONTRACT_VERSION_HEADER = "X-Contract-Version"
 API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
 API_KEY_HEADER = "X-API-Key"
+METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 
 
 @dataclass(frozen=True, order=True)
@@ -37,6 +38,7 @@ class RouteDriftReport:
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
+    method_not_allowed_drift: tuple[MethodNotAllowedDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -47,6 +49,7 @@ class RouteDriftReport:
             and not self.body_field_drift
             and not self.response_header_drift
             and not self.auth_drift
+            and not self.method_not_allowed_drift
         )
 
     def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
@@ -57,6 +60,7 @@ class RouteDriftReport:
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
+            "methodNotAllowedDrift": method_not_allowed_drift_json(self.method_not_allowed_drift),
         }
 
 
@@ -90,6 +94,15 @@ class ResponseHeaderDrift:
 @dataclass(frozen=True, order=True)
 class AuthDrift:
     """An OpenAPI document or operation whose API-key contract is incomplete."""
+
+    method: str
+    path: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class MethodNotAllowedDrift:
+    """An OpenAPI 405 response contract gap."""
 
     method: str
     path: str
@@ -137,6 +150,17 @@ def response_header_drift_json(drifts: Iterable[ResponseHeaderDrift]) -> list[di
 
 
 def auth_drift_json(drifts: Iterable[AuthDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def method_not_allowed_drift_json(drifts: Iterable[MethodNotAllowedDrift]) -> list[dict[str, str]]:
     return [
         {
             "method": drift.method,
@@ -427,6 +451,50 @@ def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
     return tuple(sorted(drift))
 
 
+def openapi_method_not_allowed_drift(openapi_yaml: Path) -> tuple[MethodNotAllowedDrift, ...]:
+    """Returns native OpenAPI gaps in the 405 MethodNotAllowedResponse contract."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[MethodNotAllowedDrift] = []
+    method_not_allowed = (
+        document.get("components", {})
+        .get("responses", {})
+        .get("MethodNotAllowedResponse")
+    )
+    headers = method_not_allowed.get("headers", {}) if isinstance(method_not_allowed, dict) else {}
+    if "Allow" not in headers:
+        drift.append(
+            MethodNotAllowedDrift(
+                method="",
+                path="<components.responses.MethodNotAllowedResponse>",
+                issue="missing Allow header",
+            )
+        )
+
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            response = (operation.get("responses", {}) or {}).get("405")
+            if not isinstance(response, dict):
+                drift.append(
+                    MethodNotAllowedDrift(
+                        method=method.upper(),
+                        path=path,
+                        issue="missing 405 response",
+                    )
+                )
+            elif response.get("$ref") != METHOD_NOT_ALLOWED_RESPONSE_REF:
+                drift.append(
+                    MethodNotAllowedDrift(
+                        method=method.upper(),
+                        path=path,
+                        issue="405 response must reference MethodNotAllowedResponse",
+                    )
+                )
+    return tuple(sorted(drift))
+
+
 def has_api_key_requirement(security: object) -> bool:
     if not isinstance(security, list):
         return False
@@ -500,6 +568,7 @@ def compare_route_contract(
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
+    method_not_allowed_drift = openapi_method_not_allowed_drift(openapi_yaml)
     common_routes = implemented & documented
     query_drift = tuple(
         sorted(
@@ -530,6 +599,7 @@ def compare_route_contract(
         body_field_drift=body_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
+        method_not_allowed_drift=method_not_allowed_drift,
     )
 
 
@@ -583,7 +653,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, query, body, auth, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, query, body, auth, 405, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -617,5 +687,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
     if report.auth_drift:
         print("Auth contract drift:")
         for drift in report.auth_drift:
+            route = f"{drift.method} {drift.path}".strip()
+            print(f"  {route}: {drift.issue}")
+    if report.method_not_allowed_drift:
+        print("405 method-not-allowed contract drift:")
+        for drift in report.method_not_allowed_drift:
             route = f"{drift.method} {drift.path}".strip()
             print(f"  {route}: {drift.issue}")
