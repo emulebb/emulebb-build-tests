@@ -12,12 +12,13 @@ from typing import Iterable
 import yaml
 
 from .paths import get_required_emule_workspace_root
+from .rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
 
 HTTP_METHODS = ("delete", "get", "patch", "post", "put")
-CONTRACT_VERSION_HEADER = "X-Contract-Version"
 API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
 API_KEY_HEADER = "X-API-Key"
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
+CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 
 
 @dataclass(frozen=True, order=True)
@@ -39,6 +40,7 @@ class RouteDriftReport:
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
     method_not_allowed_drift: tuple[MethodNotAllowedDrift, ...] = ()
+    contract_version_drift: tuple[ContractVersionDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -50,6 +52,7 @@ class RouteDriftReport:
             and not self.response_header_drift
             and not self.auth_drift
             and not self.method_not_allowed_drift
+            and not self.contract_version_drift
         )
 
     def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
@@ -61,6 +64,7 @@ class RouteDriftReport:
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
             "methodNotAllowedDrift": method_not_allowed_drift_json(self.method_not_allowed_drift),
+            "contractVersionDrift": contract_version_drift_json(self.contract_version_drift),
         }
 
 
@@ -106,6 +110,14 @@ class MethodNotAllowedDrift:
 
     method: str
     path: str
+    issue: str
+
+
+@dataclass(frozen=True, order=True)
+class ContractVersionDrift:
+    """A Rust/OpenAPI/harness contract-version mismatch."""
+
+    source: str
     issue: str
 
 
@@ -165,6 +177,16 @@ def method_not_allowed_drift_json(drifts: Iterable[MethodNotAllowedDrift]) -> li
         {
             "method": drift.method,
             "path": drift.path,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
+
+
+def contract_version_drift_json(drifts: Iterable[ContractVersionDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": drift.source,
             "issue": drift.issue,
         }
         for drift in drifts
@@ -375,12 +397,12 @@ def openapi_response_header_drift(openapi_yaml: Path) -> tuple[ResponseHeaderDri
             for status, response in (operation.get("responses", {}) or {}).items():
                 resolved = resolved_response(response, component_responses)
                 headers = resolved.get("headers", {}) if isinstance(resolved, dict) else {}
-                if CONTRACT_VERSION_HEADER not in headers:
+                if REST_CONTRACT_VERSION_HEADER not in headers:
                     drift.append(
                         ResponseHeaderDrift(
                             route=route,
                             status=str(status),
-                            missing_header=CONTRACT_VERSION_HEADER,
+                            missing_header=REST_CONTRACT_VERSION_HEADER,
                         )
                     )
     return tuple(sorted(drift))
@@ -495,6 +517,147 @@ def openapi_method_not_allowed_drift(openapi_yaml: Path) -> tuple[MethodNotAllow
     return tuple(sorted(drift))
 
 
+def rust_contract_version(responses_rs: Path) -> str | None:
+    """Returns the Rust native REST contract version constant."""
+
+    text = responses_rs.read_text(encoding="utf-8")
+    match = re.search(r'const\s+CONTRACT_VERSION:\s*&str\s*=\s*"([^"]+)"', text)
+    return match.group(1) if match is not None else None
+
+
+def openapi_contract_version_drift(
+    openapi_yaml: Path,
+    responses_rs: Path,
+    expected_version: str = REST_CONTRACT_VERSION,
+) -> tuple[ContractVersionDrift, ...]:
+    """Returns Rust/OpenAPI version-value drift from the shared harness constant."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[ContractVersionDrift] = []
+    rust_version = rust_contract_version(responses_rs)
+    if rust_version is None:
+        drift.append(
+            ContractVersionDrift(
+                source=str(responses_rs),
+                issue="missing CONTRACT_VERSION constant",
+            )
+        )
+    elif rust_version != expected_version:
+        drift.append(
+            ContractVersionDrift(
+                source=str(responses_rs),
+                issue=f"CONTRACT_VERSION must be {expected_version}, got {rust_version}",
+            )
+        )
+
+    info = document.get("info", {}) if isinstance(document, dict) else {}
+    if info.get("version") != expected_version:
+        drift.append(
+            ContractVersionDrift(
+                source="info.version",
+                issue=f"must be {expected_version}, got {info.get('version')!r}",
+            )
+        )
+    if info.get("x-contract-version") != expected_version:
+        drift.append(
+            ContractVersionDrift(
+                source="info.x-contract-version",
+                issue=f"must be {expected_version}, got {info.get('x-contract-version')!r}",
+            )
+        )
+
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    headers = components.get("headers", {}) if isinstance(components, dict) else {}
+    contract_header = headers.get("ContractVersionHeader", {}) if isinstance(headers, dict) else {}
+    contract_header_schema = contract_header.get("schema", {}) if isinstance(contract_header, dict) else {}
+    append_contract_schema_value_drift(
+        drift,
+        "components.headers.ContractVersionHeader.schema.const",
+        contract_header_schema.get("const") if isinstance(contract_header_schema, dict) else None,
+        expected_version,
+    )
+    append_contract_schema_value_drift(
+        drift,
+        "components.headers.ContractVersionHeader.schema.example",
+        contract_header_schema.get("example") if isinstance(contract_header_schema, dict) else None,
+        expected_version,
+    )
+
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    capabilities = schemas.get("CapabilityDiscovery", {}) if isinstance(schemas, dict) else {}
+    capabilities_properties = capabilities.get("properties", {}) if isinstance(capabilities, dict) else {}
+    contract_version_property = (
+        capabilities_properties.get("contractVersion", {})
+        if isinstance(capabilities_properties, dict)
+        else {}
+    )
+    append_contract_schema_value_drift(
+        drift,
+        "components.schemas.CapabilityDiscovery.properties.contractVersion.const",
+        contract_version_property.get("const") if isinstance(contract_version_property, dict) else None,
+        expected_version,
+    )
+    append_contract_schema_value_drift(
+        drift,
+        "components.schemas.CapabilityDiscovery.properties.contractVersion.example",
+        contract_version_property.get("example") if isinstance(contract_version_property, dict) else None,
+        expected_version,
+    )
+
+    for source in contract_header_reference_sources(document):
+        drift.append(
+            ContractVersionDrift(
+                source=source,
+                issue=f"must reference {CONTRACT_VERSION_HEADER_REF}",
+            )
+        )
+    return tuple(sorted(drift))
+
+
+def append_contract_schema_value_drift(
+    drift: list[ContractVersionDrift],
+    source: str,
+    actual: object,
+    expected: str,
+) -> None:
+    if actual != expected:
+        drift.append(
+            ContractVersionDrift(
+                source=source,
+                issue=f"must be {expected}, got {actual!r}",
+            )
+        )
+
+
+def contract_header_reference_sources(document: dict[str, object]) -> tuple[str, ...]:
+    """Returns response locations where X-Contract-Version is not the shared header ref."""
+
+    components = document.get("components", {}) if isinstance(document, dict) else {}
+    component_responses = components.get("responses", {}) if isinstance(components, dict) else {}
+    drift_sources: list[str] = []
+    if isinstance(component_responses, dict):
+        for name, response in component_responses.items():
+            headers = response.get("headers", {}) if isinstance(response, dict) else {}
+            header = headers.get(REST_CONTRACT_VERSION_HEADER) if isinstance(headers, dict) else None
+            if header is not None and (not isinstance(header, dict) or header.get("$ref") != CONTRACT_VERSION_HEADER_REF):
+                drift_sources.append(f"components.responses.{name}.headers.{REST_CONTRACT_VERSION_HEADER}")
+
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            for status, response in (operation.get("responses", {}) or {}).items():
+                headers = response.get("headers", {}) if isinstance(response, dict) else {}
+                header = headers.get(REST_CONTRACT_VERSION_HEADER) if isinstance(headers, dict) else None
+                if header is not None and (
+                    not isinstance(header, dict) or header.get("$ref") != CONTRACT_VERSION_HEADER_REF
+                ):
+                    drift_sources.append(f"paths.{path}.{method}.responses.{status}.headers.{REST_CONTRACT_VERSION_HEADER}")
+    return tuple(sorted(drift_sources))
+
+
 def has_api_key_requirement(security: object) -> bool:
     if not isinstance(security, list):
         return False
@@ -559,6 +722,7 @@ def compare_route_contract(
     route_metadata_rs: Path,
     route_body_metadata_rs: Path,
     openapi_yaml: Path,
+    responses_rs: Path | None = None,
 ) -> RouteDriftReport:
     implemented = rust_route_inventory(routes_rs)
     documented = openapi_route_inventory(openapi_yaml)
@@ -569,6 +733,11 @@ def compare_route_contract(
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
     method_not_allowed_drift = openapi_method_not_allowed_drift(openapi_yaml)
+    contract_version_drift = (
+        openapi_contract_version_drift(openapi_yaml, responses_rs)
+        if responses_rs is not None
+        else ()
+    )
     common_routes = implemented & documented
     query_drift = tuple(
         sorted(
@@ -600,6 +769,7 @@ def compare_route_contract(
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
         method_not_allowed_drift=method_not_allowed_drift,
+        contract_version_drift=contract_version_drift,
     )
 
 
@@ -613,6 +783,10 @@ def default_route_metadata_rs(workspace_root: Path) -> Path:
 
 def default_route_body_metadata_rs(workspace_root: Path) -> Path:
     return workspace_root / "repos" / "emulebb-rust" / "crates" / "emulebb-rest" / "src" / "route_body_metadata.rs"
+
+
+def default_responses_rs(workspace_root: Path) -> Path:
+    return workspace_root / "repos" / "emulebb-rust" / "crates" / "emulebb-rest" / "src" / "responses.rs"
 
 
 def default_openapi_yaml(workspace_root: Path) -> Path:
@@ -637,6 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to crates/emulebb-rest/src/route_body_metadata.rs.",
     )
+    parser.add_argument("--rust-responses", type=Path, help="Path to crates/emulebb-rest/src/responses.rs.")
     parser.add_argument("--openapi", type=Path, help="Path to the emulebb-rust OpenAPI YAML artifact.")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report.")
     return parser
@@ -648,12 +823,13 @@ def run_cli(argv: list[str] | None = None) -> int:
     routes_rs = args.rust_routes or default_routes_rs(workspace_root)
     route_metadata_rs = args.route_metadata or default_route_metadata_rs(workspace_root)
     route_body_metadata_rs = args.route_body_metadata or default_route_body_metadata_rs(workspace_root)
+    responses_rs = args.rust_responses or default_responses_rs(workspace_root)
     openapi_yaml = args.openapi or default_openapi_yaml(workspace_root)
-    report = compare_route_contract(routes_rs, route_metadata_rs, route_body_metadata_rs, openapi_yaml)
+    report = compare_route_contract(routes_rs, route_metadata_rs, route_body_metadata_rs, openapi_yaml, responses_rs)
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, query, body, auth, 405, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, query, body, auth, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -694,3 +870,7 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         for drift in report.method_not_allowed_drift:
             route = f"{drift.method} {drift.path}".strip()
             print(f"  {route}: {drift.issue}")
+    if report.contract_version_drift:
+        print("Contract-version drift:")
+        for drift in report.contract_version_drift:
+            print(f"  {drift.source}: {drift.issue}")

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from emule_test_harness.script_modules import load_script_module
+from emule_test_harness.rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
 
 REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
 EVENT_STREAM_PATH = "/api/v1/events"
@@ -18,7 +19,7 @@ EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
 EVENT_STREAM_EXPECTED_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
-    "X-Contract-Version": "1.2.0",
+    REST_CONTRACT_VERSION_HEADER: REST_CONTRACT_VERSION,
     "X-Accel-Buffering": "no",
 }
 

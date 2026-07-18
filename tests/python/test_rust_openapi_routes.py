@@ -10,6 +10,7 @@ from emule_test_harness.rust_openapi_routes import (
     Route,
     ResponseHeaderDrift,
     compare_route_contract,
+    openapi_contract_version_drift,
     compare_route_inventory,
     openapi_auth_drift,
     openapi_body_field_inventory,
@@ -17,6 +18,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
     openapi_route_inventory,
+    rust_contract_version,
     rust_body_field_inventory,
     rust_query_parameter_inventory,
     rust_route_inventory,
@@ -406,6 +408,125 @@ components:
             issue="405 response must reference MethodNotAllowedResponse",
         ),
     )
+
+
+def test_openapi_contract_version_drift_requires_rust_openapi_and_header_ref_consistency(
+    tmp_path: Path,
+) -> None:
+    responses_rs = write(
+        tmp_path / "responses.rs",
+        'pub(crate) const CONTRACT_VERSION: &str = "1.1.0";',
+    )
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+info:
+  version: 1.1.0
+  x-contract-version: "1.0.0"
+paths:
+  /app:
+    get:
+      responses:
+        "200":
+          headers:
+            X-Contract-Version:
+              schema: { type: string }
+components:
+  headers:
+    ContractVersionHeader:
+      schema:
+        type: string
+        const: "1.1.0"
+        example: "1.1.0"
+  responses:
+    AppResponse:
+      description: App response.
+      headers:
+        X-Contract-Version:
+          schema: { type: string }
+  schemas:
+    CapabilityDiscovery:
+      type: object
+      properties:
+        contractVersion:
+          type: string
+          example: "1.0.0"
+""",
+    )
+
+    drift_by_source = {
+        drift.source: drift.issue
+        for drift in openapi_contract_version_drift(openapi_yaml, responses_rs)
+    }
+
+    assert drift_by_source[str(responses_rs)] == "CONTRACT_VERSION must be 1.2.0, got 1.1.0"
+    assert drift_by_source["info.version"] == "must be 1.2.0, got '1.1.0'"
+    assert drift_by_source["info.x-contract-version"] == "must be 1.2.0, got '1.0.0'"
+    assert (
+        drift_by_source["components.headers.ContractVersionHeader.schema.const"]
+        == "must be 1.2.0, got '1.1.0'"
+    )
+    assert (
+        drift_by_source["components.headers.ContractVersionHeader.schema.example"]
+        == "must be 1.2.0, got '1.1.0'"
+    )
+    assert (
+        drift_by_source["components.schemas.CapabilityDiscovery.properties.contractVersion.const"]
+        == "must be 1.2.0, got None"
+    )
+    assert (
+        drift_by_source["components.schemas.CapabilityDiscovery.properties.contractVersion.example"]
+        == "must be 1.2.0, got '1.0.0'"
+    )
+    assert (
+        drift_by_source["components.responses.AppResponse.headers.X-Contract-Version"]
+        == "must reference #/components/headers/ContractVersionHeader"
+    )
+    assert (
+        drift_by_source["paths./app.get.responses.200.headers.X-Contract-Version"]
+        == "must reference #/components/headers/ContractVersionHeader"
+    )
+
+
+def test_openapi_contract_version_drift_accepts_shared_version_and_header_refs(tmp_path: Path) -> None:
+    responses_rs = write(
+        tmp_path / "responses.rs",
+        'pub(crate) const CONTRACT_VERSION: &str = "1.2.0";',
+    )
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+info:
+  version: 1.2.0
+  x-contract-version: "1.2.0"
+paths:
+  /app:
+    get:
+      responses:
+        "200":
+          headers:
+            X-Contract-Version:
+              $ref: "#/components/headers/ContractVersionHeader"
+components:
+  headers:
+    ContractVersionHeader:
+      schema:
+        type: string
+        const: "1.2.0"
+        example: "1.2.0"
+  schemas:
+    CapabilityDiscovery:
+      type: object
+      properties:
+        contractVersion:
+          type: string
+          const: "1.2.0"
+          example: "1.2.0"
+""",
+    )
+
+    assert rust_contract_version(responses_rs) == "1.2.0"
+    assert openapi_contract_version_drift(openapi_yaml, responses_rs) == ()
 
 
 def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path) -> None:

@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import live_wire_inputs, rust_openapi_responses, vpn_guard_live
+from emule_test_harness import live_wire_inputs, rust_openapi_responses, rust_rest_contract, vpn_guard_live
 from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     EMULE_SECURITY_NODES_DAT_URL,
@@ -193,8 +193,8 @@ REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_SURFACE_QBIT_DOWNLOAD_HASH = "11223344556677889900aabbccddeeff"
-REST_CONTRACT_VERSION = "1.2.0"
-REST_CONTRACT_VERSION_HEADER = "X-Contract-Version"
+REST_CONTRACT_VERSION = rust_rest_contract.REST_CONTRACT_VERSION
+REST_CONTRACT_VERSION_HEADER = rust_rest_contract.REST_CONTRACT_VERSION_HEADER
 REST_CORE_SETTING_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
