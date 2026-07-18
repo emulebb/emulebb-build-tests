@@ -2308,6 +2308,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
     method_not_allowed = {
         **error_result,
         "status": 405,
+        "headers": {"Allow": "GET", "X-Contract-Version": "1.2.0"},
         "body_text": (
             '{"error":{"code":"METHOD_NOT_ALLOWED",'
             '"message":"HTTP method is not allowed for this API route","details":{}}}'
@@ -2326,6 +2327,18 @@ def test_rest_error_response_requires_json_not_html() -> None:
         },
     }
     assert module.require_error_response(method_not_allowed, 405, "METHOD_NOT_ALLOWED")["error"] == "METHOD_NOT_ALLOWED"
+    assert (
+        module.require_method_not_allowed_response(
+            method_not_allowed,
+            expected_allow_methods=("GET",),
+        )["error"]
+        == "METHOD_NOT_ALLOWED"
+    )
+    with pytest.raises(AssertionError):
+        module.require_method_not_allowed_response(
+            {**method_not_allowed, "headers": {"X-Contract-Version": "1.2.0"}},
+            expected_allow_methods=("GET",),
+        )
 
     html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
     assert module.is_native_rest_json_response(html_content_type) is False

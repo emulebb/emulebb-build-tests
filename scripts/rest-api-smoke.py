@@ -2790,6 +2790,31 @@ def require_error_response(
     return payload
 
 
+def require_method_not_allowed_response(
+    result: dict[str, object],
+    *,
+    expected_allow_methods: Iterable[str],
+    message_contains: str | None = None,
+) -> dict[str, Any]:
+    """Asserts one 405 response carries the stable error envelope and Allow header."""
+
+    payload = require_error_response(
+        result,
+        405,
+        "METHOD_NOT_ALLOWED",
+        message_contains=message_contains,
+    )
+    allow = get_response_header(result, "Allow")
+    allowed_methods = {
+        method.strip().upper()
+        for method in allow.split(",")
+        if method.strip()
+    }
+    expected_methods = {method.upper() for method in expected_allow_methods}
+    assert expected_methods <= allowed_methods, compact_http_result(result)
+    return payload
+
+
 def require_rest_contract_version_header(result: dict[str, object]) -> None:
     """Asserts live native REST responses carry the OpenAPI contract version header."""
 
@@ -4974,10 +4999,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
-        "invalid_method": require_error_response(
+        "invalid_method": require_method_not_allowed_response(
             invalid_method,
-            405,
-            "METHOD_NOT_ALLOWED",
+            expected_allow_methods=("GET",),
             message_contains="HTTP method is not allowed",
         ),
         "invalid_json_shape": require_error_response(
