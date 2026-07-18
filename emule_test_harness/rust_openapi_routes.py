@@ -32,12 +32,22 @@ class Route:
     path: str
 
 
+@dataclass(frozen=True, order=True)
+class ComponentRefDrift:
+    """An OpenAPI reference that is not a resolvable local component ref."""
+
+    source: str
+    reference: str
+    issue: str
+
+
 @dataclass(frozen=True)
 class RouteDriftReport:
     """Route, query, and body drift between Rust metadata and OpenAPI."""
 
     implemented_missing_from_openapi: tuple[Route, ...]
     openapi_missing_from_implemented: tuple[Route, ...]
+    component_ref_drift: tuple[ComponentRefDrift, ...] = ()
     operation_metadata_drift: tuple[OperationMetadataDrift, ...] = ()
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
@@ -55,6 +65,7 @@ class RouteDriftReport:
         return (
             not self.implemented_missing_from_openapi
             and not self.openapi_missing_from_implemented
+            and not self.component_ref_drift
             and not self.operation_metadata_drift
             and not self.query_parameter_drift
             and not self.path_parameter_drift
@@ -72,6 +83,7 @@ class RouteDriftReport:
         return {
             "implementedMissingFromOpenapi": route_list_json(self.implemented_missing_from_openapi),
             "openapiMissingFromImplemented": route_list_json(self.openapi_missing_from_implemented),
+            "componentRefDrift": component_ref_drift_json(self.component_ref_drift),
             "operationMetadataDrift": operation_metadata_drift_json(self.operation_metadata_drift),
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
@@ -190,6 +202,17 @@ class ContractVersionDrift:
 
 def route_list_json(routes: Iterable[Route]) -> list[dict[str, str]]:
     return [{"method": route.method, "path": route.path} for route in routes]
+
+
+def component_ref_drift_json(drifts: Iterable[ComponentRefDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": drift.source,
+            "reference": drift.reference,
+            "issue": drift.issue,
+        }
+        for drift in drifts
+    ]
 
 
 def query_parameter_drift_json(drifts: Iterable[QueryParameterDrift]) -> list[dict[str, object]]:
@@ -398,6 +421,70 @@ def openapi_operation_metadata_drift(openapi_yaml: Path) -> tuple[OperationMetad
                     )
                 )
     return tuple(sorted(drift))
+
+
+def openapi_component_ref_drift(openapi_yaml: Path) -> tuple[ComponentRefDrift, ...]:
+    """Returns OpenAPI $refs that are external, non-component, or unresolved."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[ComponentRefDrift] = []
+    for source, reference in openapi_refs(document):
+        if not isinstance(reference, str):
+            drift.append(
+                ComponentRefDrift(
+                    source=source,
+                    reference=repr(reference),
+                    issue="$ref must be a string",
+                )
+            )
+        elif not reference.startswith("#/components/"):
+            drift.append(
+                ComponentRefDrift(
+                    source=source,
+                    reference=reference,
+                    issue="unsupported non-local component reference",
+                )
+            )
+        elif not openapi_pointer_exists(document, reference):
+            drift.append(
+                ComponentRefDrift(
+                    source=source,
+                    reference=reference,
+                    issue="missing local component target",
+                )
+            )
+    return tuple(sorted(drift))
+
+
+def openapi_refs(value: object, source: str = "$") -> Iterable[tuple[str, object]]:
+    if isinstance(value, dict):
+        if "$ref" in value:
+            yield (f"{source}.$ref", value["$ref"])
+        for key, child in value.items():
+            yield from openapi_refs(child, f"{source}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from openapi_refs(child, f"{source}[{index}]")
+
+
+def openapi_pointer_exists(document: object, reference: str) -> bool:
+    if not reference.startswith("#/"):
+        return False
+    value = document
+    for raw_token in reference[2:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(value, dict):
+            if token not in value:
+                return False
+            value = value[token]
+        elif isinstance(value, list) and token.isdecimal():
+            index = int(token)
+            if index >= len(value):
+                return False
+            value = value[index]
+        else:
+            return False
+    return True
 
 
 def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:
@@ -1082,7 +1169,7 @@ def resolved_response(
         return {}
     reference = response.get("$ref")
     if isinstance(reference, str):
-        return component_responses[reference.rsplit("/", 1)[-1]]
+        return component_responses.get(reference.rsplit("/", 1)[-1], {})
     return response
 
 
@@ -1091,7 +1178,9 @@ def schema_property_names(schema: object, schemas: dict[str, dict[str, object]])
         return set()
     reference = schema.get("$ref")
     if isinstance(reference, str):
-        schema = schemas[reference.rsplit("/", 1)[-1]]
+        schema = schemas.get(reference.rsplit("/", 1)[-1], {})
+    if not isinstance(schema, dict):
+        return set()
     names: set[str] = set()
     properties = schema.get("properties", {})
     if isinstance(properties, dict):
@@ -1108,10 +1197,12 @@ def resolved_parameters(
     parameters: Iterable[dict[str, object]], component_parameters: dict[str, dict[str, object]]
 ) -> Iterable[dict[str, object]]:
     for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
         reference = parameter.get("$ref")
         if isinstance(reference, str):
             name = reference.rsplit("/", 1)[-1]
-            yield component_parameters[name]
+            yield component_parameters.get(name, {})
         else:
             yield parameter
 
@@ -1134,6 +1225,7 @@ def compare_route_contract(
 ) -> RouteDriftReport:
     implemented = rust_route_inventory(routes_rs)
     documented = openapi_route_inventory(openapi_yaml)
+    component_ref_drift = openapi_component_ref_drift(openapi_yaml)
     operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
     rust_queries = rust_query_parameter_inventory(route_metadata_rs, routes_rs)
     openapi_queries = openapi_query_parameter_inventory(openapi_yaml)
@@ -1177,6 +1269,7 @@ def compare_route_contract(
     return RouteDriftReport(
         implemented_missing_from_openapi=tuple(sorted(implemented - documented)),
         openapi_missing_from_implemented=tuple(sorted(documented - implemented)),
+        component_ref_drift=component_ref_drift,
         operation_metadata_drift=operation_metadata_drift,
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
@@ -1247,7 +1340,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, operation metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, component ref, operation metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1262,6 +1355,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("OpenAPI routes missing from the Rust router:")
         for route in report.openapi_missing_from_implemented:
             print(f"  {route.method} {route.path}")
+    if report.component_ref_drift:
+        print("Component reference drift:")
+        for drift in report.component_ref_drift:
+            print(f"  {drift.source}: {drift.reference}: {drift.issue}")
     if report.operation_metadata_drift:
         print("Operation metadata drift:")
         for drift in report.operation_metadata_drift:

@@ -5,6 +5,7 @@ from pathlib import Path
 from emule_test_harness.rust_openapi_routes import (
     AuthDrift,
     BodyFieldDrift,
+    ComponentRefDrift,
     ErrorResponseDrift,
     MethodNotAllowedDrift,
     OperationMetadataDrift,
@@ -19,6 +20,7 @@ from emule_test_harness.rust_openapi_routes import (
     compare_route_inventory,
     openapi_auth_drift,
     openapi_body_field_inventory,
+    openapi_component_ref_drift,
     openapi_error_response_drift,
     openapi_method_not_allowed_drift,
     openapi_operation_metadata_drift,
@@ -87,6 +89,60 @@ paths:
         Route("GET", "/categories/{categoryId}"),
         Route("PATCH", "/categories/{categoryId}"),
     }
+
+
+def test_openapi_component_ref_drift_rejects_missing_and_external_refs(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/MissingParameter"
+      responses:
+        "200":
+          $ref: "#/components/responses/MissingResponse"
+  /imports:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "https://example.invalid/schema.json"
+      responses:
+        "200":
+          $ref: "#/components/responses/ImportResponse"
+components:
+  responses:
+    ImportResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ImportResult"
+  schemas:
+    ImportResult:
+      type: object
+""",
+    )
+
+    assert openapi_component_ref_drift(openapi_yaml) == (
+        ComponentRefDrift(
+            source="$.paths./app.get.parameters[0].$ref",
+            reference="#/components/parameters/MissingParameter",
+            issue="missing local component target",
+        ),
+        ComponentRefDrift(
+            source="$.paths./app.get.responses.200.$ref",
+            reference="#/components/responses/MissingResponse",
+            issue="missing local component target",
+        ),
+        ComponentRefDrift(
+            source="$.paths./imports.post.requestBody.content.application/json.schema.$ref",
+            reference="https://example.invalid/schema.json",
+            issue="unsupported non-local component reference",
+        ),
+    )
 
 
 def test_compare_route_inventory_reports_exact_placeholder_drift(tmp_path: Path) -> None:
