@@ -1044,6 +1044,16 @@ def openapi_response_component_drift(openapi_yaml: Path) -> tuple[ResponseCompon
                     issue=f"must reference {CONTRACT_VERSION_HEADER_REF}",
                 )
             )
+        if name == EVENT_STREAM_RESPONSE_COMPONENT:
+            for header_name in ("Cache-Control", "X-Accel-Buffering"):
+                event_header = headers.get(header_name) if isinstance(headers, dict) else None
+                if not isinstance(event_header, dict):
+                    drift.append(
+                        ResponseComponentDrift(
+                            component=name,
+                            issue=f"must document {header_name} header",
+                        )
+                    )
         content = response.get("content", {})
         expected_media_types = ("text/event-stream",) if name == EVENT_STREAM_RESPONSE_COMPONENT else ("application/json",)
         actual_media_types = tuple(sorted(content)) if isinstance(content, dict) else ()

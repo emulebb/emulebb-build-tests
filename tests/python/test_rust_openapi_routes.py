@@ -763,6 +763,9 @@ components:
         Cache-Control:
           schema:
             type: string
+        X-Accel-Buffering:
+          schema:
+            type: string
       content:
         text/event-stream:
           schema:
@@ -788,6 +791,35 @@ components:
             issue="must reference #/components/headers/ContractVersionHeader",
         ),
     }
+
+
+def test_openapi_response_component_drift_requires_sse_proxy_headers(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  responses:
+    EventStreamResponse:
+      description: Event stream.
+      headers:
+        X-Contract-Version:
+          $ref: "#/components/headers/ContractVersionHeader"
+        Cache-Control:
+          schema:
+            type: string
+      content:
+        text/event-stream:
+          schema:
+            type: string
+""",
+    )
+
+    assert openapi_response_component_drift(openapi_yaml) == (
+        ResponseComponentDrift(
+            component="EventStreamResponse",
+            issue="must document X-Accel-Buffering header",
+        ),
+    )
 
 
 def test_openapi_success_response_drift_requires_single_shared_schema_response(tmp_path: Path) -> None:
