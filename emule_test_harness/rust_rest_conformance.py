@@ -38,6 +38,15 @@ def _event_stream_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}{EVENT_STREAM_PATH}"
 
 
+def require_rest_base_url(base_url: str) -> str:
+    """Returns the daemon base URL, rejecting API-root URLs that would double-prefix paths."""
+
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/api/v1"):
+        raise ValueError("REST conformance --base-url must be the daemon root, without /api/v1.")
+    return normalized
+
+
 def _read_first_sse_frame(response: Any) -> str:
     lines: list[str] = []
     for _ in range(EVENT_STREAM_READ_LINES):
@@ -60,6 +69,7 @@ def run_event_stream_conformance(
 ) -> dict[str, object]:
     """Checks the long-lived SSE route through its immediate resume-reset frame."""
 
+    base_url = require_rest_base_url(base_url)
     url = _event_stream_url(base_url)
     request = urllib.request.Request(
         url,
@@ -134,6 +144,7 @@ def run_response_conformance(
 
     if budget not in REST_COVERAGE_BUDGETS:
         raise ValueError(f"REST conformance budget must be one of {REST_COVERAGE_BUDGETS!r}: {budget!r}")
+    base_url = require_rest_base_url(base_url)
     rest_smoke = rest_smoke_module or load_rest_smoke_module()
     summary = rest_smoke.exercise_rest_contract_completeness(base_url, api_key, budget)
     checker = event_stream_checker or run_event_stream_conformance
@@ -166,6 +177,9 @@ def run_cli(argv: list[str] | None = None) -> int:
     summary: dict[str, object] = {}
     try:
         summary = run_response_conformance(args.base_url, args.api_key, budget=args.rest_coverage_budget)
+    except ValueError as exc:
+        print(f"emulebb-rust REST OpenAPI response conformance preflight failed: {exc}")
+        return 2
     except RestConformanceError as exc:
         summary = exc.summary
         if args.json_output is not None:

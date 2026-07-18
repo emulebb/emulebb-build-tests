@@ -68,6 +68,19 @@ def test_run_response_conformance_invokes_rest_contract_budget() -> None:
     assert summary["event_stream"] == {"ok": True, "operationId": "getEvents"}
 
 
+def test_run_response_conformance_rejects_api_root_base_url() -> None:
+    def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
+        raise AssertionError("exercise should not run after base-url preflight failure")
+
+    with pytest.raises(ValueError, match="without /api/v1"):
+        rust_rest_conformance.run_response_conformance(
+            "http://127.0.0.1:4711/api/v1",
+            "test-key",
+            rest_smoke_module=SimpleNamespace(exercise_rest_contract_completeness=exercise),
+            event_stream_checker=lambda _base_url, _api_key: {"ok": True},
+        )
+
+
 def test_run_response_conformance_raises_on_contract_failure() -> None:
     def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
         return {"ok": False, "failed_routes": ["getApp"]}
@@ -144,6 +157,19 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
     assert timeout == 2.0
 
 
+def test_run_event_stream_conformance_rejects_api_root_base_url() -> None:
+    def opener(_request, *, timeout: float):
+        raise AssertionError("event stream opener should not run after base-url preflight failure")
+
+    with pytest.raises(ValueError, match="without /api/v1"):
+        rust_rest_conformance.run_event_stream_conformance(
+            "http://127.0.0.1:4711/api/v1/",
+            "test-key",
+            timeout_seconds=2.0,
+            opener=opener,
+        )
+
+
 def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
     def opener(_request, *, timeout: float):
         assert timeout == 2.0
@@ -205,3 +231,17 @@ def test_run_cli_writes_failed_conformance_report(monkeypatch: pytest.MonkeyPatc
         "failed_routes": ["getApp"],
         "ok": False,
     }
+
+
+def test_run_cli_reports_api_root_base_url_as_preflight_error(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = rust_rest_conformance.run_cli(
+        [
+            "--base-url",
+            "http://127.0.0.1:4711/api/v1",
+            "--api-key",
+            "test-key",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "preflight failed" in capsys.readouterr().out
