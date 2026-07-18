@@ -440,6 +440,152 @@ components:
     )
 
 
+def test_openapi_schema_component_drift_requires_transfer_event_variants(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  responses:
+    EventStreamResponse:
+      description: Event stream.
+  schemas:
+    TransferEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TransferAddedEvent"
+        - $ref: "#/components/schemas/WrongUpdatedEvent"
+        - $ref: "#/components/schemas/TransferRemovedEvent"
+        - $ref: "#/components/schemas/TransferSyncResetEvent"
+      discriminator:
+        propertyName: event
+        mapping:
+          transfer.added: "#/components/schemas/TransferAddedEvent"
+    TransferAddedEvent:
+      type: object
+      additionalProperties: true
+      required: [id, type]
+      properties:
+        type:
+          type: string
+          enum: [transfer.added, transfer.updated]
+    TransferUpdatedEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, transfer]
+      properties:
+        type:
+          type: string
+          enum: [transfer.updated]
+    TransferRemovedEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, hash]
+      properties:
+        type:
+          type: string
+          enum: [transfer.removed]
+    TransferSyncResetEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type]
+      properties:
+        type:
+          type: string
+          enum: [sync.reset]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferAddedEvent",
+            issue="required fields must be ['id', 'transfer', 'type']",
+        ),
+        SchemaComponentDrift(
+            component="TransferAddedEvent",
+            issue="transfer event variant must set additionalProperties: false",
+        ),
+        SchemaComponentDrift(
+            component="TransferAddedEvent",
+            issue="type enum must be [transfer.added]",
+        ),
+        SchemaComponentDrift(
+            component="TransferEvent",
+            issue="discriminator mapping must cover every transfer event variant",
+        ),
+        SchemaComponentDrift(
+            component="TransferEvent",
+            issue="discriminator propertyName must be type",
+        ),
+        SchemaComponentDrift(
+            component="TransferEvent",
+            issue="must oneOf the transfer event variant schemas in event-name order",
+        ),
+        SchemaComponentDrift(
+            component="TransferSyncResetEvent",
+            issue="required fields must be ['id', 'reason', 'type']",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_event_variants(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  responses:
+    EventStreamResponse:
+      description: Event stream.
+  schemas:
+    TransferEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TransferAddedEvent"
+        - $ref: "#/components/schemas/TransferUpdatedEvent"
+        - $ref: "#/components/schemas/TransferRemovedEvent"
+        - $ref: "#/components/schemas/TransferSyncResetEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          transfer.added: "#/components/schemas/TransferAddedEvent"
+          transfer.updated: "#/components/schemas/TransferUpdatedEvent"
+          transfer.removed: "#/components/schemas/TransferRemovedEvent"
+          sync.reset: "#/components/schemas/TransferSyncResetEvent"
+    TransferAddedEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, transfer]
+      properties:
+        type:
+          type: string
+          enum: [transfer.added]
+    TransferUpdatedEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, transfer]
+      properties:
+        type:
+          type: string
+          enum: [transfer.updated]
+    TransferRemovedEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, hash]
+      properties:
+        type:
+          type: string
+          enum: [transfer.removed]
+    TransferSyncResetEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, reason]
+      properties:
+        type:
+          type: string
+          enum: [sync.reset]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_confirmation_contract_drift_requires_true_sentinels(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",

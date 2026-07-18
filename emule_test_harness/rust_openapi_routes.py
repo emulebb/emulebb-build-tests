@@ -23,6 +23,19 @@ ERROR_RESPONSE_STATUSES = ("400", "401", "404", "default")
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
+TRANSFER_EVENT_COMPONENT = "TransferEvent"
+TRANSFER_EVENT_VARIANTS = {
+    "transfer.added": "TransferAddedEvent",
+    "transfer.updated": "TransferUpdatedEvent",
+    "transfer.removed": "TransferRemovedEvent",
+    "sync.reset": "TransferSyncResetEvent",
+}
+TRANSFER_EVENT_REQUIRED_FIELDS = {
+    "TransferAddedEvent": ("id", "transfer", "type"),
+    "TransferUpdatedEvent": ("id", "transfer", "type"),
+    "TransferRemovedEvent": ("hash", "id", "type"),
+    "TransferSyncResetEvent": ("id", "reason", "type"),
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -736,6 +749,7 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
     document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
     components = document.get("components", {}) if isinstance(document, dict) else {}
     schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    responses = components.get("responses", {}) if isinstance(components, dict) else {}
     if not isinstance(schemas, dict):
         return (
             SchemaComponentDrift(
@@ -763,7 +777,112 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         enum_values = schema.get("enum")
         if enum_values is not None and (not isinstance(enum_values, list) or not enum_values):
             drift.append(SchemaComponentDrift(component=name, issue="enum must be a non-empty list"))
+    if TRANSFER_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
+        append_transfer_event_schema_drift(drift, schemas)
     return tuple(sorted(drift))
+
+
+def append_transfer_event_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    transfer_event = schemas.get(TRANSFER_EVENT_COMPONENT)
+    if not isinstance(transfer_event, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_EVENT_COMPONENT,
+                issue="missing transfer event schema component",
+            )
+        )
+        return
+
+    expected_refs = tuple(
+        f"#/components/schemas/{component}"
+        for component in TRANSFER_EVENT_VARIANTS.values()
+    )
+    actual_refs = tuple(
+        entry.get("$ref")
+        for entry in transfer_event.get("oneOf", [])
+        if isinstance(entry, dict)
+    )
+    if actual_refs != expected_refs:
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_EVENT_COMPONENT,
+                issue="must oneOf the transfer event variant schemas in event-name order",
+            )
+        )
+
+    discriminator = transfer_event.get("discriminator")
+    expected_mapping = {
+        event_name: f"#/components/schemas/{component}"
+        for event_name, component in TRANSFER_EVENT_VARIANTS.items()
+    }
+    if not isinstance(discriminator, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_EVENT_COMPONENT,
+                issue="must declare a type discriminator",
+            )
+        )
+    else:
+        if discriminator.get("propertyName") != "type":
+            drift.append(
+                SchemaComponentDrift(
+                    component=TRANSFER_EVENT_COMPONENT,
+                    issue="discriminator propertyName must be type",
+                )
+            )
+        if discriminator.get("mapping") != expected_mapping:
+            drift.append(
+                SchemaComponentDrift(
+                    component=TRANSFER_EVENT_COMPONENT,
+                    issue="discriminator mapping must cover every transfer event variant",
+                )
+            )
+
+    for event_name, component in TRANSFER_EVENT_VARIANTS.items():
+        schema = schemas.get(component)
+        if not isinstance(schema, dict):
+            drift.append(
+                SchemaComponentDrift(
+                    component=component,
+                    issue="missing transfer event variant schema component",
+                )
+            )
+            continue
+        if schema.get("type") != "object":
+            drift.append(
+                SchemaComponentDrift(
+                    component=component,
+                    issue="transfer event variant must be an object",
+                )
+            )
+        if schema.get("additionalProperties") is not False:
+            drift.append(
+                SchemaComponentDrift(
+                    component=component,
+                    issue="transfer event variant must set additionalProperties: false",
+                )
+            )
+        required = tuple(sorted(schema.get("required", []))) if isinstance(schema.get("required"), list) else ()
+        if required != TRANSFER_EVENT_REQUIRED_FIELDS[component]:
+            drift.append(
+                SchemaComponentDrift(
+                    component=component,
+                    issue=f"required fields must be {list(TRANSFER_EVENT_REQUIRED_FIELDS[component])}",
+                )
+            )
+        properties = schema.get("properties", {}) if isinstance(schema.get("properties"), dict) else {}
+        type_schema = properties.get("type") if isinstance(properties, dict) else None
+        type_values = type_schema.get("enum") if isinstance(type_schema, dict) else None
+        if type_values != [event_name]:
+            drift.append(
+                SchemaComponentDrift(
+                    component=component,
+                    issue=f"type enum must be [{event_name}]",
+                )
+            )
 
 
 def openapi_confirmation_contract_drift(openapi_yaml: Path) -> tuple[ConfirmationContractDrift, ...]:
