@@ -15,6 +15,8 @@ from .paths import get_required_emule_workspace_root
 
 HTTP_METHODS = ("delete", "get", "patch", "post", "put")
 CONTRACT_VERSION_HEADER = "X-Contract-Version"
+API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
+API_KEY_HEADER = "X-API-Key"
 
 
 @dataclass(frozen=True, order=True)
@@ -34,6 +36,7 @@ class RouteDriftReport:
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
+    auth_drift: tuple[AuthDrift, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -43,6 +46,7 @@ class RouteDriftReport:
             and not self.query_parameter_drift
             and not self.body_field_drift
             and not self.response_header_drift
+            and not self.auth_drift
         )
 
     def as_json_dict(self) -> dict[str, list[dict[str, object]]]:
@@ -52,6 +56,7 @@ class RouteDriftReport:
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
+            "authDrift": auth_drift_json(self.auth_drift),
         }
 
 
@@ -80,6 +85,15 @@ class ResponseHeaderDrift:
     route: Route
     status: str
     missing_header: str
+
+
+@dataclass(frozen=True, order=True)
+class AuthDrift:
+    """An OpenAPI document or operation whose API-key contract is incomplete."""
+
+    method: str
+    path: str
+    issue: str
 
 
 def route_list_json(routes: Iterable[Route]) -> list[dict[str, str]]:
@@ -117,6 +131,17 @@ def response_header_drift_json(drifts: Iterable[ResponseHeaderDrift]) -> list[di
             "path": drift.route.path,
             "status": drift.status,
             "missingHeader": drift.missing_header,
+        }
+        for drift in drifts
+    ]
+
+
+def auth_drift_json(drifts: Iterable[AuthDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "issue": drift.issue,
         }
         for drift in drifts
     ]
@@ -337,6 +362,62 @@ def openapi_response_header_drift(openapi_yaml: Path) -> tuple[ResponseHeaderDri
     return tuple(sorted(drift))
 
 
+def openapi_auth_drift(openapi_yaml: Path) -> tuple[AuthDrift, ...]:
+    """Returns native OpenAPI auth contract gaps for the global X-API-Key surface."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[AuthDrift] = []
+    security = document.get("security", []) or []
+    has_global_api_key = any(
+        isinstance(requirement, dict) and API_KEY_SECURITY_SCHEME in requirement
+        for requirement in security
+    )
+    if not has_global_api_key:
+        drift.append(
+            AuthDrift(
+                method="",
+                path="<document>",
+                issue=f"missing top-level {API_KEY_SECURITY_SCHEME} security requirement",
+            )
+        )
+
+    security_scheme = (
+        document.get("components", {})
+        .get("securitySchemes", {})
+        .get(API_KEY_SECURITY_SCHEME)
+    )
+    expected_scheme = {
+        "type": "apiKey",
+        "in": "header",
+        "name": API_KEY_HEADER,
+    }
+    if not isinstance(security_scheme, dict) or any(
+        security_scheme.get(key) != value for key, value in expected_scheme.items()
+    ):
+        drift.append(
+            AuthDrift(
+                method="",
+                path="<document>",
+                issue=f"{API_KEY_SECURITY_SCHEME} must be an apiKey header named {API_KEY_HEADER}",
+            )
+        )
+
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            responses = operation.get("responses", {}) or {}
+            if "401" not in responses:
+                drift.append(
+                    AuthDrift(
+                        method=method.upper(),
+                        path=path,
+                        issue="missing 401 response",
+                    )
+                )
+    return tuple(sorted(drift))
+
+
 def resolved_response(
     response: object, component_responses: dict[str, dict[str, object]]
 ) -> dict[str, object]:
@@ -400,6 +481,7 @@ def compare_route_contract(
     rust_bodies = rust_body_field_inventory(route_body_metadata_rs, routes_rs)
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
+    auth_drift = openapi_auth_drift(openapi_yaml)
     common_routes = implemented & documented
     query_drift = tuple(
         sorted(
@@ -429,6 +511,7 @@ def compare_route_contract(
         query_parameter_drift=query_drift,
         body_field_drift=body_drift,
         response_header_drift=response_header_drift,
+        auth_drift=auth_drift,
     )
 
 
@@ -482,7 +565,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, query, body, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, query, body, auth, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -513,3 +596,8 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
         print("Response header drift:")
         for drift in report.response_header_drift:
             print(f"  {drift.route.method} {drift.route.path} {drift.status}: missing {drift.missing_header}")
+    if report.auth_drift:
+        print("Auth contract drift:")
+        for drift in report.auth_drift:
+            route = f"{drift.method} {drift.path}".strip()
+            print(f"  {route}: {drift.issue}")

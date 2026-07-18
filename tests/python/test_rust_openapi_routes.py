@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from emule_test_harness.rust_openapi_routes import (
+    AuthDrift,
     BodyFieldDrift,
     QueryParameterDrift,
     Route,
     ResponseHeaderDrift,
     compare_route_contract,
     compare_route_inventory,
+    openapi_auth_drift,
     openapi_body_field_inventory,
     openapi_query_parameter_inventory,
     openapi_response_header_drift,
@@ -286,6 +288,48 @@ components:
             route=Route("GET", "/app"),
             status="404",
             missing_header="X-Contract-Version",
+        ),
+    )
+
+
+def test_openapi_auth_drift_requires_api_key_scheme_and_401_responses(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /app:
+    get:
+      responses:
+        "200": { description: OK }
+  /status:
+    get:
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: query
+      name: api_key
+""",
+    )
+
+    assert openapi_auth_drift(openapi_yaml) == (
+        AuthDrift(
+            method="",
+            path="<document>",
+            issue="ApiKeyAuth must be an apiKey header named X-API-Key",
+        ),
+        AuthDrift(
+            method="",
+            path="<document>",
+            issue="missing top-level ApiKeyAuth security requirement",
+        ),
+        AuthDrift(
+            method="GET",
+            path="/app",
+            issue="missing 401 response",
         ),
     )
 
