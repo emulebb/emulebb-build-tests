@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import live_wire_inputs, vpn_guard_live
+from emule_test_harness import live_wire_inputs, rust_openapi_responses, vpn_guard_live
 from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     EMULE_SECURITY_NODES_DAT_URL,
@@ -487,32 +487,42 @@ def load_openapi_method_paths(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> set
 def load_openapi_document(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> dict[str, Any]:
     """Loads the OpenAPI document with the harness-pinned YAML parser."""
 
-    document = yaml.safe_load(openapi_path.read_text(encoding="utf-8"))
-    if not isinstance(document, dict):
-        raise RuntimeError(f"OpenAPI document is not an object: {openapi_path}")
-    return document
+    return rust_openapi_responses.load_openapi_document(openapi_path)
 
 
 def get_openapi_response_schema(response_name: str, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> dict[str, Any]:
     """Returns the JSON schema for one named OpenAPI response component."""
 
-    document = load_openapi_document(openapi_path)
-    response = (((document.get("components") or {}).get("responses") or {}).get(response_name) or {})
-    content = response.get("content") if isinstance(response, dict) else None
-    media_type = (content or {}).get("application/json") if isinstance(content, dict) else None
-    schema = (media_type or {}).get("schema") if isinstance(media_type, dict) else None
-    if not isinstance(schema, dict):
-        raise RuntimeError(f"OpenAPI response does not define an application/json schema: {response_name}")
-    return schema
+    return rust_openapi_responses.get_openapi_response_schema(response_name, openapi_path)
+
+
+def get_openapi_operation_response_schema(
+    method: str,
+    path: str,
+    status: int | str,
+    openapi_path: Path = OPENAPI_CONTRACT_PATH,
+) -> dict[str, Any]:
+    """Returns the JSON schema for one operation/status response."""
+
+    return rust_openapi_responses.get_openapi_operation_response_schema(method, path, status, openapi_path)
 
 
 def validate_openapi_response_payload(response_name: str, payload: object, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> None:
     """Validates one REST response payload against its OpenAPI response schema."""
 
-    document = load_openapi_document(openapi_path)
-    schema = get_openapi_response_schema(response_name, openapi_path)
-    validator = jsonschema.Draft202012Validator(document).evolve(schema=schema)
-    validator.validate(payload)
+    rust_openapi_responses.validate_openapi_response_payload(response_name, payload, openapi_path)
+
+
+def validate_openapi_operation_response_payload(
+    method: str,
+    path: str,
+    status: int | str,
+    payload: object,
+    openapi_path: Path = OPENAPI_CONTRACT_PATH,
+) -> None:
+    """Validates one REST response payload against its operation/status OpenAPI schema."""
+
+    rust_openapi_responses.validate_openapi_operation_response_payload(method, path, status, payload, openapi_path)
 
 
 def get_openapi_schema_properties(schema_name: str, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> tuple[str, ...]:
