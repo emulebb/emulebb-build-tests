@@ -15,6 +15,10 @@ REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
 EVENT_STREAM_PATH = "/api/v1/events"
 EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
+EVENT_STREAM_EXPECTED_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+}
 
 
 class RestConformanceError(AssertionError):
@@ -69,6 +73,10 @@ def run_event_stream_conformance(
         with open_url(request, timeout=timeout_seconds) as response:
             status = int(getattr(response, "status", None) or response.getcode())
             content_type = str(response.headers.get("Content-Type", ""))
+            response_headers = {
+                name: str(response.headers.get(name, ""))
+                for name in EVENT_STREAM_EXPECTED_HEADERS
+            }
             frame = _read_first_sse_frame(response)
     except urllib.error.URLError as exc:
         return {
@@ -86,17 +94,30 @@ def run_event_stream_conformance(
         "lastEventId": f'"lastEventId":"{EVENT_STREAM_LAST_EVENT_ID}"',
     }
     missing = [name for name, needle in expected.items() if needle not in frame]
-    ok = status == 200 and content_type.startswith("text/event-stream") and not missing
+    missing_headers = [
+        name
+        for name, expected_value in EVENT_STREAM_EXPECTED_HEADERS.items()
+        if response_headers.get(name) != expected_value
+    ]
+    ok = (
+        status == 200
+        and content_type.startswith("text/event-stream")
+        and not missing
+        and not missing_headers
+    )
     result: dict[str, object] = {
         "ok": ok,
         "operationId": "getEvents",
         "path": EVENT_STREAM_PATH,
         "status": status,
         "contentType": content_type,
+        "responseHeaders": response_headers,
     }
     if missing:
         result["missing"] = missing
         result["frameSample"] = frame[:500]
+    if missing_headers:
+        result["missingResponseHeaders"] = missing_headers
     return result
 
 

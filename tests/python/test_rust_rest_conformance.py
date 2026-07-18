@@ -15,10 +15,16 @@ class FakeEventStreamResponse:
         *,
         status: int = 200,
         content_type: str = "text/event-stream",
+        headers: dict[str, str] | None = None,
     ):
         self._lines = list(lines)
         self.status = status
-        self.headers = {"Content-Type": content_type}
+        self.headers = {
+            "Content-Type": content_type,
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            **(headers or {}),
+        }
 
     def __enter__(self) -> "FakeEventStreamResponse":
         return self
@@ -123,6 +129,10 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
         "path": "/api/v1/events",
         "status": 200,
         "contentType": "text/event-stream",
+        "responseHeaders": {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     }
     request, timeout = requests[0]
     assert request.full_url == "http://127.0.0.1:4711/api/v1/events"
@@ -130,6 +140,30 @@ def test_run_event_stream_conformance_reads_resume_reset_frame() -> None:
     assert request.headers["Last-event-id"] == "1"
     assert request.headers["X-api-key"] == "test-key"
     assert timeout == 2.0
+
+
+def test_run_event_stream_conformance_fails_without_stream_headers() -> None:
+    def opener(_request, *, timeout: float):
+        assert timeout == 2.0
+        return FakeEventStreamResponse(
+            [
+                b"event: sync.reset\n",
+                b"id: 42\n",
+                b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
+                b"\n",
+            ],
+            headers={"Cache-Control": "", "X-Accel-Buffering": ""},
+        )
+
+    summary = rust_rest_conformance.run_event_stream_conformance(
+        "http://127.0.0.1:4711/",
+        "test-key",
+        timeout_seconds=2.0,
+        opener=opener,
+    )
+
+    assert summary["ok"] is False
+    assert summary["missingResponseHeaders"] == ["Cache-Control", "X-Accel-Buffering"]
 
 
 def test_run_cli_writes_failed_conformance_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
