@@ -11,6 +11,7 @@ from emule_test_harness.rust_openapi_routes import (
     PathParameterDrift,
     QueryParameterDrift,
     Route,
+    RequestBodyMetadataDrift,
     ResponseHeaderDrift,
     SuccessResponseDrift,
     compare_route_contract,
@@ -23,6 +24,7 @@ from emule_test_harness.rust_openapi_routes import (
     openapi_operation_metadata_drift,
     openapi_path_parameter_drift,
     openapi_query_parameter_inventory,
+    openapi_request_body_metadata_drift,
     openapi_response_header_drift,
     openapi_route_inventory,
     openapi_success_response_drift,
@@ -357,6 +359,78 @@ components:
     assert openapi_body_field_inventory(openapi_yaml) == {
         Route("POST", "/transfers"): ("link", "links", "paused"),
     }
+
+
+def test_openapi_request_body_metadata_drift_requires_json_schema_ref_and_explicit_required(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /missing-required:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferCreateRequest"
+      responses: {}
+  /extra-media:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferCreateRequest"
+          text/plain:
+            schema: { type: string }
+      responses: {}
+  /inline-schema:
+    patch:
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses: {}
+  /optional-body:
+    post:
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchResultDownloadRequest"
+      responses: {}
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+    SearchResultDownloadRequest:
+      type: object
+""",
+    )
+
+    assert openapi_request_body_metadata_drift(openapi_yaml) == (
+        RequestBodyMetadataDrift(
+            method="PATCH",
+            path="/inline-schema",
+            issue="requestBody application/json schema must reference a shared schema component",
+        ),
+        RequestBodyMetadataDrift(
+            method="POST",
+            path="/extra-media",
+            issue="requestBody content must contain only application/json",
+        ),
+        RequestBodyMetadataDrift(
+            method="POST",
+            path="/missing-required",
+            issue="requestBody.required must be explicit true or false",
+        ),
+    )
 
 
 def test_openapi_response_header_drift_resolves_response_refs(tmp_path: Path) -> None:

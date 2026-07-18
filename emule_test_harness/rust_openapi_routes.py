@@ -42,6 +42,7 @@ class RouteDriftReport:
     query_parameter_drift: tuple[QueryParameterDrift, ...] = ()
     path_parameter_drift: tuple[PathParameterDrift, ...] = ()
     body_field_drift: tuple[BodyFieldDrift, ...] = ()
+    request_body_metadata_drift: tuple[RequestBodyMetadataDrift, ...] = ()
     success_response_drift: tuple[SuccessResponseDrift, ...] = ()
     response_header_drift: tuple[ResponseHeaderDrift, ...] = ()
     auth_drift: tuple[AuthDrift, ...] = ()
@@ -58,6 +59,7 @@ class RouteDriftReport:
             and not self.query_parameter_drift
             and not self.path_parameter_drift
             and not self.body_field_drift
+            and not self.request_body_metadata_drift
             and not self.success_response_drift
             and not self.response_header_drift
             and not self.auth_drift
@@ -74,6 +76,7 @@ class RouteDriftReport:
             "queryParameterDrift": query_parameter_drift_json(self.query_parameter_drift),
             "pathParameterDrift": path_parameter_drift_json(self.path_parameter_drift),
             "bodyFieldDrift": body_field_drift_json(self.body_field_drift),
+            "requestBodyMetadataDrift": request_body_metadata_drift_json(self.request_body_metadata_drift),
             "successResponseDrift": success_response_drift_json(self.success_response_drift),
             "responseHeaderDrift": response_header_drift_json(self.response_header_drift),
             "authDrift": auth_drift_json(self.auth_drift),
@@ -119,6 +122,15 @@ class BodyFieldDrift:
     route: Route
     rust_body_fields: tuple[str, ...]
     openapi_body_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, order=True)
+class RequestBodyMetadataDrift:
+    """An OpenAPI request body that is ambiguous or bypasses shared JSON schemas."""
+
+    method: str
+    path: str
+    issue: str
 
 
 @dataclass(frozen=True, order=True)
@@ -223,6 +235,17 @@ def body_field_drift_json(drifts: Iterable[BodyFieldDrift]) -> list[dict[str, ob
             "path": drift.route.path,
             "rustBodyFields": list(drift.rust_body_fields),
             "openapiBodyFields": list(drift.openapi_body_fields),
+        }
+        for drift in drifts
+    ]
+
+
+def request_body_metadata_drift_json(drifts: Iterable[RequestBodyMetadataDrift]) -> list[dict[str, str]]:
+    return [
+        {
+            "method": drift.method,
+            "path": drift.path,
+            "issue": drift.issue,
         }
         for drift in drifts
     ]
@@ -571,6 +594,61 @@ def openapi_body_field_inventory(openapi_yaml: Path) -> dict[Route, tuple[str, .
             )
             inventory[Route(method.upper(), path)] = tuple(sorted(schema_property_names(schema, schemas)))
     return inventory
+
+
+def openapi_request_body_metadata_drift(openapi_yaml: Path) -> tuple[RequestBodyMetadataDrift, ...]:
+    """Returns request bodies that are ambiguous for JSON-only native clients."""
+
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
+    drift: list[RequestBodyMetadataDrift] = []
+    for path, path_item in (document.get("paths", {}) or {}).items():
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            request_body = operation.get("requestBody")
+            if request_body is None:
+                continue
+            route = Route(method.upper(), path)
+            if not isinstance(request_body, dict):
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="requestBody must be an object",
+                    )
+                )
+                continue
+            if not isinstance(request_body.get("required"), bool):
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="requestBody.required must be explicit true or false",
+                    )
+                )
+            content = request_body.get("content", {})
+            media_types = tuple(sorted(content.keys())) if isinstance(content, dict) else ()
+            if media_types != ("application/json",):
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="requestBody content must contain only application/json",
+                    )
+                )
+                continue
+            media = content.get("application/json", {})
+            schema = media.get("schema") if isinstance(media, dict) else None
+            reference = schema.get("$ref") if isinstance(schema, dict) else None
+            if not isinstance(reference, str) or not reference.startswith("#/components/schemas/"):
+                drift.append(
+                    RequestBodyMetadataDrift(
+                        method=route.method,
+                        path=route.path,
+                        issue="requestBody application/json schema must reference a shared schema component",
+                    )
+                )
+    return tuple(sorted(drift))
 
 
 def openapi_response_header_drift(openapi_yaml: Path) -> tuple[ResponseHeaderDrift, ...]:
@@ -1062,6 +1140,7 @@ def compare_route_contract(
     path_parameter_drift = openapi_path_parameter_drift(openapi_yaml)
     rust_bodies = rust_body_field_inventory(route_body_metadata_rs, routes_rs)
     openapi_bodies = openapi_body_field_inventory(openapi_yaml)
+    request_body_metadata_drift = openapi_request_body_metadata_drift(openapi_yaml)
     success_response_drift = openapi_success_response_drift(openapi_yaml)
     response_header_drift = openapi_response_header_drift(openapi_yaml)
     auth_drift = openapi_auth_drift(openapi_yaml)
@@ -1102,6 +1181,7 @@ def compare_route_contract(
         query_parameter_drift=query_drift,
         path_parameter_drift=path_parameter_drift,
         body_field_drift=body_drift,
+        request_body_metadata_drift=request_body_metadata_drift,
         success_response_drift=success_response_drift,
         response_header_drift=response_header_drift,
         auth_drift=auth_drift,
@@ -1167,7 +1247,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
     elif report.ok:
-        print("emulebb-rust OpenAPI route, operation metadata, path, query, body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
+        print("emulebb-rust OpenAPI route, operation metadata, path, query, request body, success, auth, error, 405, contract-version, and response-header inventory matches the router metadata.")
     else:
         print_route_drift_report(report)
     return 0 if report.ok else 1
@@ -1204,6 +1284,10 @@ def print_route_drift_report(report: RouteDriftReport) -> None:
             rust_names = ", ".join(drift.rust_body_fields) or "<none>"
             openapi_names = ", ".join(drift.openapi_body_fields) or "<none>"
             print(f"  {drift.route.method} {drift.route.path}: rust=[{rust_names}] openapi=[{openapi_names}]")
+    if report.request_body_metadata_drift:
+        print("Request body metadata drift:")
+        for drift in report.request_body_metadata_drift:
+            print(f"  {drift.method} {drift.path}: {drift.issue}")
     if report.success_response_drift:
         print("Success response contract drift:")
         for drift in report.success_response_drift:
