@@ -47,6 +47,17 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
     "TransferRemovedEvent": ("hash", "id", "type"),
     "TransferSyncResetEvent": ("id", "reason", "type"),
 }
+TRANSFER_STATE_COMPONENT = "TransferState"
+TRANSFER_STATE_VALUES = (
+    "downloading",
+    "paused",
+    "queued",
+    "checking",
+    "completing",
+    "completed",
+    "error",
+    "missingfiles",
+)
 TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
 TRANSFER_PRIORITY_COMPONENT = "TransferPriority"
@@ -1008,6 +1019,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
+            append_transfer_state_parameter_schema_drift(drift, name, source, parameter)
 
     for path, path_item in (document.get("paths", {}) or {}).items():
         if not isinstance(path_item, dict):
@@ -1104,6 +1116,14 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_event_schema_drift(drift, schemas)
     if DIAGNOSTIC_DUMP_REQUEST_COMPONENT in schemas:
         append_diagnostic_dump_schema_drift(drift, schemas)
+    if TRANSFER_STATE_COMPONENT in schemas:
+        assert_priority_enum_schema(
+            drift,
+            TRANSFER_STATE_COMPONENT,
+            schemas.get(TRANSFER_STATE_COMPONENT),
+            TRANSFER_STATE_VALUES,
+            "transfer state",
+        )
     if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
         append_transfer_create_schema_drift(drift, schemas)
     if TRANSFER_PRIORITY_COMPONENT in schemas:
@@ -3017,6 +3037,26 @@ def append_query_boolean_parameter_schema_drift(
             ParameterMetadataDrift(
                 source=f"{source}.schema",
                 issue=f"{label} query parameter type must be boolean",
+            )
+        )
+
+
+def append_transfer_state_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    if component_name != "TransferStateFilter" or not isinstance(parameter, dict):
+        return
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    if schema.get("$ref") != "#/components/schemas/TransferState":
+        drift.append(
+            ParameterMetadataDrift(
+                source=f"{source}.schema",
+                issue="state query parameter must reference #/components/schemas/TransferState",
             )
         )
 

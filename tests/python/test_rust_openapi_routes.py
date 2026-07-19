@@ -735,6 +735,47 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
+def test_openapi_parameter_metadata_drift_requires_transfer_state_filter_ref(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    TransferStateFilter:
+      name: state
+      in: query
+      required: false
+      schema:
+        type: string
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.TransferStateFilter.schema",
+            issue="state query parameter must reference #/components/schemas/TransferState",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_transfer_state_filter_ref(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    TransferStateFilter:
+      name: state
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/TransferState"
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
 def test_openapi_parameter_ref_drift_requires_shared_parameter_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
@@ -822,6 +863,44 @@ components:
             issue="schema component must be an object",
         ),
     )
+
+
+def test_openapi_schema_component_drift_requires_transfer_state_values(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    TransferState:
+      type: string
+      enum: [downloading, paused, queued, completed, error]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferState",
+            issue=(
+                "transfer state enum must be downloading, paused, queued, checking, "
+                "completing, completed, error, missingfiles"
+            ),
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_state_values(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    TransferState:
+      type: string
+      enum: [downloading, paused, queued, checking, completing, completed, error, missingfiles]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
