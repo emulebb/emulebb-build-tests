@@ -106,6 +106,7 @@ SEARCH_TYPE_VALUES = (
     "doc",
     "emulecollection",
 )
+SEARCH_RESULT_COMPONENT = "SearchResult"
 SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT = "SearchResultDownloadRequest"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#\x00-\x1F\x7F-\x9F][^\s\x00-\x1F\x7F-\x9F]*$"
@@ -1201,6 +1202,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_search_response_schema_drift(drift, schemas)
     if SEARCH_SESSION_COMPONENT in schemas:
         append_search_session_schema_drift(drift, schemas)
+    if SEARCH_RESULT_COMPONENT in schemas:
+        append_search_result_schema_drift(drift, schemas)
     if SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT in schemas:
         append_search_result_download_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
@@ -2076,6 +2079,38 @@ def assert_search_status_reason_schema(
             SchemaComponentDrift(
                 component=f"{component}.properties.statusReason",
                 issue=f"{label} statusReason must be nullable string",
+            )
+        )
+
+
+def append_search_result_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SEARCH_RESULT_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_RESULT_COMPONENT,
+                issue="missing search result schema component",
+            )
+        )
+        return
+    required = schema.get("required")
+    if not isinstance(required, list) or "extension" not in required:
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_RESULT_COMPONENT,
+                issue="search result schema must require extension",
+            )
+        )
+    properties = schema.get("properties")
+    extension = properties.get("extension") if isinstance(properties, dict) else None
+    if not isinstance(extension, dict) or extension.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component="SearchResult.properties.extension",
+                issue="search result extension schema must be string",
             )
         )
 

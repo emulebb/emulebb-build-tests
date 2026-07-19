@@ -1351,6 +1351,53 @@ components:
     )
 
 
+def test_openapi_schema_component_drift_requires_search_result_extension(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    SearchResult:
+      type: object
+      additionalProperties: false
+      required: [searchId, method, type, hash, name, sizeBytes]
+      properties:
+        extension:
+          type: [string, "null"]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchResult",
+            issue="search result schema must require extension",
+        ),
+        SchemaComponentDrift(
+            component="SearchResult.properties.extension",
+            issue="search result extension schema must be string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_result_extension(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    SearchResult:
+      type: object
+      additionalProperties: false
+      required: [searchId, method, type, hash, name, sizeBytes, extension]
+      properties:
+        extension:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
     tmp_path: Path,
 ) -> None:
