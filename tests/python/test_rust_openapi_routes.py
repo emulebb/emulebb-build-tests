@@ -1089,6 +1089,12 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
 """,
     )
 
@@ -1125,6 +1131,12 @@ components:
           minLength: 1
           maxLength: 160
           pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
 """,
     )
 
@@ -1148,6 +1160,12 @@ components:
           minLength: 1
           maxLength: 160
           pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
 """,
     )
 
@@ -1177,6 +1195,88 @@ components:
           minLength: 1
           maxLength: 160
           pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_search_mode_type_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [server, global, kad]
+        type:
+          type: integer
+          enum: [audio, video]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.method",
+            issue="search method enum must be automatic, server, global, kad",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.type",
+            issue=(
+                'search type enum must be "", arc, audio, iso, image, pro, '
+                "video, doc, emulecollection"
+            ),
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.type",
+            issue="search type type must be string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_mode_type_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
 """,
     )
 

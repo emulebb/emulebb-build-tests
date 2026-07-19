@@ -47,6 +47,18 @@ SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
 SHARED_FILE_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "release")
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
+SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
+SEARCH_TYPE_VALUES = (
+    "",
+    "arc",
+    "audio",
+    "iso",
+    "image",
+    "pro",
+    "video",
+    "doc",
+    "emulecollection",
+)
 SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT = "SearchResultDownloadRequest"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#\x00-\x1F\x7F-\x9F][^\s\x00-\x1F\x7F-\x9F]*$"
@@ -1598,6 +1610,20 @@ def append_search_create_schema_drift(
         return
     assert_search_create_required_fields_schema(drift, schema)
     assert_search_query_schema(drift, properties.get("query"))
+    assert_search_enum_schema(
+        drift,
+        "SearchCreateRequest.properties.method",
+        properties.get("method"),
+        SEARCH_METHOD_VALUES,
+        "search method",
+    )
+    assert_search_enum_schema(
+        drift,
+        "SearchCreateRequest.properties.type",
+        properties.get("type"),
+        SEARCH_TYPE_VALUES,
+        "search type",
+    )
 
 
 def assert_search_create_required_fields_schema(
@@ -1657,6 +1683,41 @@ def assert_search_query_schema(
                 ),
             )
         )
+
+
+def assert_search_enum_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    expected_values: tuple[str, ...],
+    label: str,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} type must be string",
+            )
+        )
+    if tuple(schema.get("enum", ())) != expected_values:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} enum must be {search_enum_values_label(expected_values)}",
+            )
+        )
+
+
+def search_enum_values_label(values: tuple[str, ...]) -> str:
+    return ", ".join(value if value != "" else '""' for value in values)
 
 
 def append_search_result_download_schema_drift(
