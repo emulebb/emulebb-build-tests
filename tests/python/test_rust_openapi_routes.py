@@ -767,6 +767,65 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_search_query_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 255
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.query",
+            issue="search query maxLength must be 160",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.query",
+            issue=(
+                "search query pattern must require non-whitespace text "
+                "and reject non-whitespace control characters"
+            ),
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_query_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_endpoint_address_constraints(
     tmp_path: Path,
 ) -> None:

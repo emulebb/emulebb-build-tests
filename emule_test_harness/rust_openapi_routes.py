@@ -40,6 +40,8 @@ TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
 TRANSFER_PATCH_COMPONENT = "TransferPatch"
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
+SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
 NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
@@ -1065,6 +1067,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_create_schema_drift(drift, schemas)
     if TRANSFER_PATCH_COMPONENT in schemas:
         append_transfer_patch_schema_drift(drift, schemas)
+    if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
+        append_search_create_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
         append_url_import_schema_drift(drift, schemas)
     if SERVER_CREATE_REQUEST_COMPONENT in schemas:
@@ -1280,6 +1284,77 @@ def assert_transfer_rename_schema(
                 issue=(
                     "transfer rename pattern must reject trim-empty text, "
                     "Windows-forbidden filename characters, and controls"
+                ),
+            )
+        )
+
+
+def append_search_create_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SEARCH_CREATE_REQUEST_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_CREATE_REQUEST_COMPONENT,
+                issue="missing search create request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_CREATE_REQUEST_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_search_query_schema(drift, properties.get("query"))
+
+
+def assert_search_query_schema(
+    drift: list[SchemaComponentDrift],
+    schema: object,
+) -> None:
+    component = "SearchCreateRequest.properties.query"
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="search query schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="search query type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="search query minLength must be 1",
+            )
+        )
+    if schema.get("maxLength") != 160:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="search query maxLength must be 160",
+            )
+        )
+    if schema.get("pattern") != SEARCH_QUERY_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=(
+                    "search query pattern must require non-whitespace text "
+                    "and reject non-whitespace control characters"
                 ),
             )
         )
