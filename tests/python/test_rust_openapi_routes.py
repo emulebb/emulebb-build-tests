@@ -2411,6 +2411,8 @@ components:
             - string
             - "null"
           minLength: 1
+        comment:
+          type: string
     CategoryPatch:
       type: object
       minProperties: 1
@@ -2423,6 +2425,8 @@ components:
             - string
             - "null"
           minLength: 1
+        comment:
+          type: string
 """,
     )
 
@@ -2467,6 +2471,8 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
     CategoryPatch:
       type: object
       minProperties: 1
@@ -2481,6 +2487,8 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
 """,
     )
 
@@ -2508,6 +2516,8 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
         color:
           type: integer
           minimum: 1
@@ -2529,6 +2539,8 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
         color:
           type: integer
           minimum: 1
@@ -2588,6 +2600,8 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
         color:
           type:
             - integer
@@ -2610,6 +2624,137 @@ components:
             - "null"
           minLength: 1
           pattern: '\S'
+        comment:
+          type: string
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_category_comment_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        comment:
+          type: integer
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.comment",
+            issue="category comment type must be string",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.comment",
+            issue="category comment schema must be an object",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_comment_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        comment:
+          type: string
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        comment:
+          type: string
         color:
           type:
             - integer

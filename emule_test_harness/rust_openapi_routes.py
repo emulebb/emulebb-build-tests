@@ -2133,6 +2133,11 @@ def append_category_mutation_schema_drift(
         properties.get("path"),
         nullable=True,
     )
+    assert_category_comment_schema(
+        drift,
+        f"{component}.properties.comment",
+        properties.get("comment"),
+    )
     assert_category_color_schema(
         drift,
         f"{component}.properties.color",
@@ -2145,6 +2150,28 @@ def append_category_mutation_schema_drift(
         "#/components/schemas/CategoryPriorityInput",
         "category priority",
     )
+
+
+def assert_category_comment_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category comment schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category comment type must be string",
+            )
+        )
 
 
 def assert_category_color_schema(
