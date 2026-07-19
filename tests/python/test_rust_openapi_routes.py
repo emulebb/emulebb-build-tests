@@ -767,6 +767,79 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_transfer_link_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://\S+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://\S+$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.link",
+            issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.links.items",
+            issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_link_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_search_query_constraints(
     tmp_path: Path,
 ) -> None:

@@ -37,7 +37,7 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
     "TransferSyncResetEvent": ("id", "reason", "type"),
 }
 TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
-TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
+TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
 TRANSFER_PATCH_COMPONENT = "TransferPatch"
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
@@ -1216,7 +1216,7 @@ def assert_transfer_link_text_schema(
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="link text pattern must require case-insensitive ed2k:// without whitespace",
+                issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
             )
         )
 
