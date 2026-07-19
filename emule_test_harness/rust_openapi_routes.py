@@ -1596,7 +1596,21 @@ def append_search_create_schema_drift(
             )
         )
         return
+    assert_search_create_required_fields_schema(drift, schema)
     assert_search_query_schema(drift, properties.get("query"))
+
+
+def assert_search_create_required_fields_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    if schema.get("required") != ["query"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_CREATE_REQUEST_COMPONENT,
+                issue="search create schema must require query",
+            )
+        )
 
 
 def assert_search_query_schema(
