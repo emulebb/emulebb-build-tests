@@ -2121,6 +2121,8 @@ def append_category_mutation_schema_drift(
             )
         )
         return
+    if component == CATEGORY_CREATE_REQUEST_COMPONENT:
+        assert_category_create_required_fields_schema(drift, schema)
     assert_trim_non_empty_text_schema(
         drift,
         f"{component}.properties.name",
@@ -2150,6 +2152,20 @@ def append_category_mutation_schema_drift(
         "#/components/schemas/CategoryPriorityInput",
         "category priority",
     )
+
+
+def assert_category_create_required_fields_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    required = schema.get("required")
+    if required != ["name"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=CATEGORY_CREATE_REQUEST_COMPONENT,
+                issue="category create schema must require name",
+            )
+        )
 
 
 def assert_category_comment_schema(

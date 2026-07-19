@@ -2402,6 +2402,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
@@ -2460,6 +2461,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
@@ -2495,6 +2497,87 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_category_create_required_fields(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      required: [path]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        comment:
+          type: string
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="CategoryCreateRequest",
+            issue="category create schema must require name",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_create_required_fields(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        comment:
+          type: string
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_category_mutation_field_constraints(
     tmp_path: Path,
 ) -> None:
@@ -2505,6 +2588,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
@@ -2589,6 +2673,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
@@ -2650,6 +2735,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
@@ -2718,6 +2804,7 @@ components:
   schemas:
     CategoryCreateRequest:
       type: object
+      required: [name]
       properties:
         name:
           type: string
