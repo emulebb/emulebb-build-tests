@@ -1230,6 +1230,11 @@ def append_transfer_create_schema_drift(
         TRANSFER_CREATE_REQUEST_COMPONENT,
         schema,
     )
+    assert_paused_boolean_schema(
+        drift,
+        "TransferCreateRequest.properties.paused",
+        properties.get("paused"),
+    )
 
 
 def assert_transfer_create_link_choice_schema(
@@ -1645,6 +1650,33 @@ def append_search_result_download_schema_drift(
         SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
         schema,
     )
+    assert_paused_boolean_schema(
+        drift,
+        "SearchResultDownloadRequest.properties.paused",
+        properties.get("paused"),
+    )
+
+
+def assert_paused_boolean_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="paused schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "boolean":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="paused type must be boolean",
+            )
+        )
 
 
 def assert_category_selector_name_schema(

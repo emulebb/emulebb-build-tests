@@ -815,6 +815,8 @@ components:
             minLength: 1
             maxLength: 2048
             pattern: '^[eE][dD]2[kK]://\S+$'
+        paused:
+          type: boolean
 """,
     )
 
@@ -858,6 +860,8 @@ components:
             minLength: 1
             maxLength: 2048
             pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        paused:
+          type: boolean
 """,
     )
 
@@ -904,6 +908,119 @@ components:
             minLength: 1
             maxLength: 2048
             pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        paused:
+          type: boolean
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_paused_boolean_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        paused:
+          type: string
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        paused:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchResultDownloadRequest.properties.paused",
+            issue="paused type must be boolean",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.paused",
+            issue="paused type must be boolean",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_paused_boolean_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        paused:
+          type: boolean
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        paused:
+          type: boolean
 """,
     )
 
@@ -945,6 +1062,8 @@ components:
             minLength: 1
             maxLength: 2048
             pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        paused:
+          type: boolean
 """,
     )
 
@@ -1101,6 +1220,8 @@ components:
         categoryName:
           type: string
           minLength: 1
+        paused:
+          type: boolean
     TransferPatch:
       type: object
       additionalProperties: false
@@ -1122,6 +1243,8 @@ components:
         categoryName:
           type: string
           minLength: 1
+        paused:
+          type: boolean
 """,
     )
 
@@ -1180,6 +1303,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
     TransferPatch:
       type: object
       additionalProperties: false
@@ -1203,6 +1328,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
 """,
     )
 
@@ -1246,6 +1373,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
     SearchResultDownloadRequest:
       type: object
       additionalProperties: false
@@ -1254,6 +1383,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
 """,
     )
 
@@ -1308,6 +1439,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
     SearchResultDownloadRequest:
       type: object
       additionalProperties: false
@@ -1318,6 +1451,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
 """,
     )
 
@@ -1367,6 +1502,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
     TransferPatch:
       type: object
       additionalProperties: false
@@ -1400,6 +1537,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
 """,
     )
 
@@ -1477,6 +1616,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
     TransferPatch:
       type: object
       additionalProperties: false
@@ -1510,6 +1651,8 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        paused:
+          type: boolean
 """,
     )
 
