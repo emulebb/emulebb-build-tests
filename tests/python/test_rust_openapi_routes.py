@@ -1215,6 +1215,9 @@ components:
       unevaluatedProperties: false
       required: [id, query, method, type, status, items]
       properties:
+        status:
+          type: string
+          enum: [queued, running, stopped, complete, error]
         statusReason:
           type: string
 """,
@@ -1243,6 +1246,9 @@ components:
       unevaluatedProperties: false
       required: [id, query, method, type, status, statusReason, items]
       properties:
+        status:
+          type: string
+          enum: [queued, running, stopped, complete, error]
         statusReason:
           type: [string, "null"]
 """,
@@ -1262,6 +1268,9 @@ components:
       additionalProperties: false
       required: [id, query, method, type, status, resultCount]
       properties:
+        status:
+          type: string
+          enum: [queued, running, stopped, complete, error]
         statusReason:
           type: string
 """,
@@ -1290,12 +1299,56 @@ components:
       additionalProperties: false
       required: [id, query, method, type, status, statusReason, resultCount]
       properties:
+        status:
+          type: string
+          enum: [queued, running, stopped, complete, error]
         statusReason:
           type: [string, "null"]
 """,
     )
 
     assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_search_status_values(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    Search:
+      type: object
+      unevaluatedProperties: false
+      required: [id, query, method, type, status, statusReason, items]
+      properties:
+        status:
+          type: string
+          enum: [running, stopped, complete, error]
+        statusReason:
+          type: [string, "null"]
+    SearchSession:
+      type: object
+      additionalProperties: false
+      required: [id, query, method, type, status, statusReason, resultCount]
+      properties:
+        status:
+          type: string
+          enum: [running, complete]
+        statusReason:
+          type: [string, "null"]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="Search.properties.status",
+            issue="search response status enum must be queued, running, stopped, complete, error",
+        ),
+        SchemaComponentDrift(
+            component="SearchSession.properties.status",
+            issue="search session schema status enum must be queued, running, stopped, complete, error",
+        ),
+    )
 
 
 def test_openapi_schema_component_drift_requires_non_empty_update_shapes(

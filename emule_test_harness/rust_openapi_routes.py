@@ -94,6 +94,7 @@ SEARCH_SESSION_COMPONENT = "SearchSession"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
+SEARCH_STATUS_VALUES = ("queued", "running", "stopped", "complete", "error")
 SEARCH_TYPE_VALUES = (
     "",
     "arc",
@@ -2011,6 +2012,7 @@ def append_search_response_schema_drift(
             )
         )
         return
+    assert_search_status_enum_schema(drift, SEARCH_COMPONENT, "search response", schema)
     assert_search_status_reason_schema(drift, SEARCH_COMPONENT, "search response", schema)
 
 
@@ -2027,12 +2029,30 @@ def append_search_session_schema_drift(
             )
         )
         return
+    assert_search_status_enum_schema(drift, SEARCH_SESSION_COMPONENT, "search session schema", schema)
     assert_search_status_reason_schema(
         drift,
         SEARCH_SESSION_COMPONENT,
         "search session schema",
         schema,
     )
+
+
+def assert_search_status_enum_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    label: str,
+    schema: dict[str, object],
+) -> None:
+    properties = schema.get("properties")
+    status = properties.get("status") if isinstance(properties, dict) else None
+    if not isinstance(status, dict) or tuple(status.get("enum", ())) != SEARCH_STATUS_VALUES:
+        drift.append(
+            SchemaComponentDrift(
+                component=f"{component}.properties.status",
+                issue=f"{label} status enum must be {', '.join(SEARCH_STATUS_VALUES)}",
+            )
+        )
 
 
 def assert_search_status_reason_schema(
