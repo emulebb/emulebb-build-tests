@@ -1487,6 +1487,7 @@ def append_shared_file_patch_schema_drift(
             )
         )
         return
+    assert_shared_file_comment_rating_dependency_schema(drift, schema)
     assert_priority_ref_schema(
         drift,
         "SharedFilePatch.properties.priority",
@@ -1517,6 +1518,23 @@ def append_shared_file_patch_schema_drift(
                 issue="shared file rating range must be 0..5",
             )
         )
+
+
+def assert_shared_file_comment_rating_dependency_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    if schema.get("dependentRequired") == {
+        "comment": ["rating"],
+        "rating": ["comment"],
+    }:
+        return
+    drift.append(
+        SchemaComponentDrift(
+            component=SHARED_FILE_PATCH_COMPONENT,
+            issue="shared file comment and rating must be mutually dependent",
+        )
+    )
 
 
 def append_search_create_schema_drift(

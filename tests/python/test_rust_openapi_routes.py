@@ -701,6 +701,9 @@ components:
       type: object
       additionalProperties: false
       minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
       properties:
         priority:
           $ref: "#/components/schemas/SharedFilePriority"
@@ -1547,6 +1550,9 @@ components:
       type: object
       additionalProperties: false
       minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
       properties:
         priority:
           type: string
@@ -1657,6 +1663,9 @@ components:
       type: object
       additionalProperties: false
       minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
       properties:
         priority:
           $ref: "#/components/schemas/SharedFilePriority"
@@ -1690,6 +1699,74 @@ components:
         priority:
           type: string
           enum: [low, normal, high]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_shared_file_comment_rating_dependency(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        priority:
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        comment:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SharedFilePatch",
+            issue="shared file comment and rating must be mutually dependent",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_shared_file_comment_rating_dependency(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
+      properties:
+        priority:
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        comment:
+          type: string
 """,
     )
 
