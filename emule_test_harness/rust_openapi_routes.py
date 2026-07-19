@@ -1839,6 +1839,49 @@ def append_category_mutation_schema_drift(
         properties.get("path"),
         nullable=True,
     )
+    assert_category_color_schema(
+        drift,
+        f"{component}.properties.color",
+        properties.get("color"),
+    )
+    assert_priority_ref_schema(
+        drift,
+        f"{component}.properties.priority",
+        properties.get("priority"),
+        "#/components/schemas/CategoryPriorityInput",
+        "category priority",
+    )
+
+
+def assert_category_color_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if schema is None:
+        return
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category color schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != ["integer", "null"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category color type must be ['integer', 'null']",
+            )
+        )
+    if schema.get("minimum") != 0 or schema.get("maximum") != 16777215:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category color range must be 0..16777215",
+            )
+        )
 
 
 def assert_trim_non_empty_text_schema(

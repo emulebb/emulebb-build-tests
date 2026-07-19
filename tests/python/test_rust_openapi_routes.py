@@ -1443,6 +1443,143 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_category_mutation_field_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        color:
+          type: integer
+          minimum: 1
+          maximum: 255
+        priority:
+          type: string
+          enum: [normal]
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        color:
+          type: integer
+          minimum: 1
+          maximum: 255
+        priority:
+          type: string
+          enum: [normal]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.color",
+            issue="category color range must be 0..16777215",
+        ),
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.color",
+            issue="category color type must be ['integer', 'null']",
+        ),
+        SchemaComponentDrift(
+            component="CategoryCreateRequest.properties.priority",
+            issue="category priority must reference #/components/schemas/CategoryPriorityInput",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.color",
+            issue="category color range must be 0..16777215",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.color",
+            issue="category color type must be ['integer', 'null']",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPatch.properties.priority",
+            issue="category priority must reference #/components/schemas/CategoryPriorityInput",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_mutation_field_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    CategoryCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+    CategoryPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        path:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          pattern: '\S'
+        color:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 16777215
+        priority:
+          $ref: "#/components/schemas/CategoryPriorityInput"
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_shared_directory_root_constraints(
     tmp_path: Path,
 ) -> None:
