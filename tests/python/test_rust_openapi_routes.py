@@ -1725,6 +1725,10 @@ components:
         priority:
           type: string
           enum: [normal, high]
+        static:
+          type: boolean
+        connect:
+          type: boolean
     ServerPatch:
       type: object
       minProperties: 1
@@ -1732,6 +1736,10 @@ components:
         priority:
           type: string
           enum: [normal, high]
+        static:
+          type: boolean
+        enabled:
+          type: boolean
 """,
     )
 
@@ -1837,6 +1845,10 @@ components:
         priority:
           type: string
           enum: [low, normal, high]
+        static:
+          type: boolean
+        connect:
+          type: boolean
     ServerPatch:
       type: object
       minProperties: 1
@@ -1844,6 +1856,10 @@ components:
         priority:
           type: string
           enum: [low, normal, high]
+        static:
+          type: boolean
+        enabled:
+          type: boolean
 """,
     )
 
@@ -2007,6 +2023,10 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
     KadBootstrapRequest:
       type: object
       properties:
@@ -2051,6 +2071,10 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
     KadBootstrapRequest:
       type: object
       properties:
@@ -2062,6 +2086,97 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_server_boolean_controls(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: string
+        connect:
+          type: string
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        static:
+          type: string
+        enabled:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.connect",
+            issue="server boolean control type must be boolean",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.static",
+            issue="server boolean control type must be boolean",
+        ),
+        SchemaComponentDrift(
+            component="ServerPatch.properties.enabled",
+            issue="server boolean control type must be boolean",
+        ),
+        SchemaComponentDrift(
+            component="ServerPatch.properties.static",
+            issue="server boolean control type must be boolean",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_server_boolean_controls(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        static:
+          type: boolean
+        enabled:
+          type: boolean
 """,
     )
 

@@ -1110,8 +1110,20 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             "ServerCreateRequest.properties.address",
         )
         append_server_priority_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
+        append_server_boolean_schema_drift(
+            drift,
+            schemas,
+            SERVER_CREATE_REQUEST_COMPONENT,
+            ("static", "connect"),
+        )
     if SERVER_PATCH_COMPONENT in schemas:
         append_server_priority_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
+        append_server_boolean_schema_drift(
+            drift,
+            schemas,
+            SERVER_PATCH_COMPONENT,
+            ("static", "enabled"),
+        )
     if KAD_BOOTSTRAP_REQUEST_COMPONENT in schemas:
         append_endpoint_request_schema_drift(
             drift,
@@ -1985,6 +1997,48 @@ def append_server_priority_schema_drift(
         SERVER_PRIORITY_VALUES,
         "server priority",
     )
+
+
+def append_server_boolean_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+    component: str,
+    fields: tuple[str, ...],
+) -> None:
+    schema = schemas.get(component)
+    if not isinstance(schema, dict):
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    for field in fields:
+        assert_server_boolean_schema(
+            drift,
+            f"{component}.properties.{field}",
+            properties.get(field),
+        )
+
+
+def assert_server_boolean_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="server boolean control schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "boolean":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="server boolean control type must be boolean",
+            )
+        )
 
 
 def append_category_mutation_schema_drift(
