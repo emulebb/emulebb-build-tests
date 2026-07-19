@@ -1727,6 +1727,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         priority:
           type: string
           enum: [normal, high]
@@ -1738,6 +1740,8 @@ components:
       type: object
       minProperties: 1
       properties:
+        name:
+          type: string
         priority:
           type: string
           enum: [normal, high]
@@ -1852,6 +1856,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         priority:
           type: string
           enum: [low, normal, high]
@@ -1863,6 +1869,8 @@ components:
       type: object
       minProperties: 1
       properties:
+        name:
+          type: string
         priority:
           type: string
           enum: [low, normal, high]
@@ -2034,6 +2042,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2084,6 +2094,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2126,6 +2138,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: string
         connect:
@@ -2134,6 +2148,8 @@ components:
       type: object
       minProperties: 1
       properties:
+        name:
+          type: string
         static:
           type: string
         enabled:
@@ -2181,6 +2197,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2189,6 +2207,99 @@ components:
       type: object
       minProperties: 1
       properties:
+        name:
+          type: string
+        static:
+          type: boolean
+        enabled:
+          type: boolean
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_server_name_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      required: [address, port]
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: integer
+        static:
+          type: boolean
+        enabled:
+          type: boolean
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.name",
+            issue="server name schema must be an object",
+        ),
+        SchemaComponentDrift(
+            component="ServerPatch.properties.name",
+            issue="server name type must be string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_server_name_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      required: [address, port]
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        name:
+          type: string
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
         static:
           type: boolean
         enabled:
@@ -2219,6 +2330,8 @@ components:
           type: number
           minimum: 0
           maximum: 70000
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2278,6 +2391,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2320,6 +2435,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:
@@ -2370,6 +2487,8 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        name:
+          type: string
         static:
           type: boolean
         connect:

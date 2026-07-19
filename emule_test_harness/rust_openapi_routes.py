@@ -1110,6 +1110,7 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             "ServerCreateRequest.properties.address",
             "ServerCreateRequest.properties.port",
         )
+        append_server_name_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
         append_server_priority_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
         append_server_boolean_schema_drift(
             drift,
@@ -1118,6 +1119,7 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             ("static", "connect"),
         )
     if SERVER_PATCH_COMPONENT in schemas:
+        append_server_name_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
         append_server_priority_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
         append_server_boolean_schema_drift(
             drift,
@@ -2029,6 +2031,46 @@ def assert_endpoint_port_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="endpoint port range must be 1..65535",
+            )
+        )
+
+
+def append_server_name_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+    component: str,
+) -> None:
+    schema = schemas.get(component)
+    if not isinstance(schema, dict):
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    assert_server_name_schema(
+        drift,
+        f"{component}.properties.name",
+        properties.get("name"),
+    )
+
+
+def assert_server_name_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="server name schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="server name type must be string",
             )
         )
 
