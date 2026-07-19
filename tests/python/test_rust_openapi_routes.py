@@ -659,6 +659,71 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
+def test_openapi_parameter_metadata_drift_requires_numeric_path_bounds(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema:
+        type: number
+        minimum: 0
+        maximum: 4294967295
+    SearchId:
+      name: searchId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.CategoryId.schema",
+            issue="categoryId path parameter type must be integer",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.SearchId.schema",
+            issue="searchId path parameter range must be 0..4294967295",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_numeric_path_bounds(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 4294967295
+    SearchId:
+      name: searchId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
 def test_openapi_parameter_metadata_drift_requires_boolean_query_types(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",

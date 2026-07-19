@@ -29,6 +29,10 @@ QUERY_NUMERIC_PARAMETER_SCHEMAS = {
     "Offset": ("offset", 0, 2_147_483_647),
     "TransferCategoryIdFilter": ("categoryId", 0, 4_294_967_295),
 }
+PATH_NUMERIC_PARAMETER_SCHEMAS = {
+    "CategoryId": ("categoryId", 0, 4_294_967_295),
+    "SearchId": ("searchId", 0, 4_294_967_295),
+}
 QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
     "IncludeScoreBreakdown": "includeScoreBreakdown",
     "IncludeEvidence": "includeEvidence",
@@ -1018,6 +1022,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             source = f"components.parameters.{name}"
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_path_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
             append_transfer_state_parameter_schema_drift(drift, name, source, parameter)
 
@@ -3016,6 +3021,36 @@ def append_query_numeric_parameter_schema_drift(
             ParameterMetadataDrift(
                 source=schema_source,
                 issue=f"{label} query parameter range must be {minimum}..{maximum}",
+            )
+        )
+
+
+def append_path_numeric_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    expected = PATH_NUMERIC_PARAMETER_SCHEMAS.get(component_name)
+    if expected is None or not isinstance(parameter, dict):
+        return
+    label, minimum, maximum = expected
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    schema_source = f"{source}.schema"
+    if schema.get("type") != "integer":
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} path parameter type must be integer",
+            )
+        )
+    if schema.get("minimum") != minimum or schema.get("maximum") != maximum:
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} path parameter range must be {minimum}..{maximum}",
             )
         )
 
