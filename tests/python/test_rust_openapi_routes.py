@@ -788,6 +788,8 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         link:
           type: string
@@ -829,6 +831,8 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         link:
           type: string
@@ -973,6 +977,8 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         link:
           type: string
@@ -1006,6 +1012,8 @@ components:
     SearchResultDownloadRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         categoryName:
           type: string
@@ -1040,6 +1048,8 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         link:
           type: string
@@ -1075,6 +1085,109 @@ components:
     SearchResultDownloadRequest:
       type: object
       additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_category_selector_exclusion(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchResultDownloadRequest",
+            issue="category selector schema must reject categoryId and categoryName together",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest",
+            issue="category selector schema must reject categoryId and categoryName together",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_selector_exclusion(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
       properties:
         categoryName:
           type: string

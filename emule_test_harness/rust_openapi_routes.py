@@ -1219,6 +1219,11 @@ def append_transfer_create_schema_drift(
         "TransferCreateRequest.properties.categoryName",
         properties.get("categoryName"),
     )
+    assert_category_selector_exclusion_schema(
+        drift,
+        TRANSFER_CREATE_REQUEST_COMPONENT,
+        schema,
+    )
 
 
 def assert_transfer_link_text_schema(
@@ -1556,6 +1561,11 @@ def append_search_result_download_schema_drift(
         "SearchResultDownloadRequest.properties.categoryName",
         properties.get("categoryName"),
     )
+    assert_category_selector_exclusion_schema(
+        drift,
+        SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
+        schema,
+    )
 
 
 def assert_category_selector_name_schema(
@@ -1592,6 +1602,21 @@ def assert_category_selector_name_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="category selector name pattern must require at least one non-whitespace character",
+            )
+        )
+
+
+def assert_category_selector_exclusion_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: dict[str, object],
+) -> None:
+    not_schema = schema.get("not")
+    if not isinstance(not_schema, dict) or not_schema.get("required") != ["categoryId", "categoryName"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector schema must reject categoryId and categoryName together",
             )
         )
 
