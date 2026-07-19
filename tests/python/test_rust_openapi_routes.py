@@ -788,6 +788,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -820,6 +827,86 @@ components:
     )
 
 
+def test_openapi_schema_component_drift_requires_transfer_create_link_choice(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferCreateRequest",
+            issue="transfer create schema must require exactly one of link or links",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_create_link_choice(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_accepts_transfer_link_constraints(
     tmp_path: Path,
 ) -> None:
@@ -831,6 +918,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -977,6 +1071,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -1048,6 +1149,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -1109,6 +1217,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       properties:
         link:
           type: string
@@ -1162,6 +1277,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -1210,6 +1332,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:
@@ -1313,6 +1442,13 @@ components:
     TransferCreateRequest:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [link]
+          not:
+            required: [links]
+        - required: [links]
+          not:
+            required: [link]
       not:
         required: [categoryId, categoryName]
       properties:

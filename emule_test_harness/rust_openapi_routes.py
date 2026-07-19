@@ -1181,6 +1181,7 @@ def append_transfer_create_schema_drift(
             )
         )
         return
+    assert_transfer_create_link_choice_schema(drift, schema)
     assert_transfer_link_text_schema(
         drift,
         "TransferCreateRequest.properties.link",
@@ -1228,6 +1229,51 @@ def append_transfer_create_schema_drift(
         drift,
         TRANSFER_CREATE_REQUEST_COMPONENT,
         schema,
+    )
+
+
+def assert_transfer_create_link_choice_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    branches = schema.get("oneOf")
+    if not isinstance(branches, list) or len(branches) != 2:
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_CREATE_REQUEST_COMPONENT,
+                issue="transfer create schema must require exactly one of link or links",
+            )
+        )
+        return
+    choices: set[tuple[str, str]] = set()
+    for branch in branches:
+        if not isinstance(branch, dict):
+            break
+        required = branch.get("required")
+        not_schema = branch.get("not")
+        if (
+            not isinstance(required, list)
+            or len(required) != 1
+            or not isinstance(required[0], str)
+            or not isinstance(not_schema, dict)
+        ):
+            break
+        excluded = not_schema.get("required")
+        if (
+            not isinstance(excluded, list)
+            or len(excluded) != 1
+            or not isinstance(excluded[0], str)
+        ):
+            break
+        choices.add((required[0], excluded[0]))
+    else:
+        if choices == {("link", "links"), ("links", "link")}:
+            return
+    drift.append(
+        SchemaComponentDrift(
+            component=TRANSFER_CREATE_REQUEST_COMPONENT,
+            issue="transfer create schema must require exactly one of link or links",
+        )
     )
 
 
