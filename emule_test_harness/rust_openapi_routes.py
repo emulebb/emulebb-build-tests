@@ -38,6 +38,8 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
 }
 TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://\S+$"
+TRANSFER_PATCH_COMPONENT = "TransferPatch"
+TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
 NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
@@ -1061,6 +1063,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_event_schema_drift(drift, schemas)
     if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
         append_transfer_create_schema_drift(drift, schemas)
+    if TRANSFER_PATCH_COMPONENT in schemas:
+        append_transfer_patch_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
         append_url_import_schema_drift(drift, schemas)
     if SERVER_CREATE_REQUEST_COMPONENT in schemas:
@@ -1206,6 +1210,77 @@ def assert_transfer_link_text_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="link text pattern must require case-insensitive ed2k:// without whitespace",
+            )
+        )
+
+
+def append_transfer_patch_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(TRANSFER_PATCH_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_PATCH_COMPONENT,
+                issue="missing transfer patch request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_PATCH_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_transfer_rename_schema(drift, properties.get("name"))
+
+
+def assert_transfer_rename_schema(
+    drift: list[SchemaComponentDrift],
+    schema: object,
+) -> None:
+    component = "TransferPatch.properties.name"
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="transfer rename schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="transfer rename type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="transfer rename minLength must be 1",
+            )
+        )
+    if "maxLength" in schema:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="transfer rename schema must not claim an unsupported maxLength",
+            )
+        )
+    if schema.get("pattern") != TRANSFER_RENAME_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=(
+                    "transfer rename pattern must reject trim-empty text, "
+                    "Windows-forbidden filename characters, and controls"
+                ),
             )
         )
 

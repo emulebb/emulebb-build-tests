@@ -662,7 +662,7 @@ def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
 ) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
-        """
+        r"""
 components:
   schemas:
     AppSettingsUpdate:
@@ -689,6 +689,8 @@ components:
           type: string
         name:
           type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -705,6 +707,64 @@ components:
             issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
         ),
     )
+
+
+def test_openapi_schema_component_drift_requires_transfer_rename_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferPatch.properties.name",
+            issue=(
+                "transfer rename pattern must reject trim-empty text, "
+                "Windows-forbidden filename characters, and controls"
+            ),
+        ),
+        SchemaComponentDrift(
+            component="TransferPatch.properties.name",
+            issue="transfer rename schema must not claim an unsupported maxLength",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_rename_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_endpoint_address_constraints(
