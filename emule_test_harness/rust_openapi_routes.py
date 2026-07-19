@@ -1624,6 +1624,12 @@ def append_search_create_schema_drift(
         SEARCH_TYPE_VALUES,
         "search type",
     )
+    assert_search_string_schema(
+        drift,
+        "SearchCreateRequest.properties.extension",
+        properties.get("extension"),
+        "search extension",
+    )
 
 
 def assert_search_create_required_fields_schema(
@@ -1718,6 +1724,29 @@ def assert_search_enum_schema(
 
 def search_enum_values_label(values: tuple[str, ...]) -> str:
     return ", ".join(value if value != "" else '""' for value in values)
+
+
+def assert_search_string_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    label: str,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} type must be string",
+            )
+        )
 
 
 def append_search_result_download_schema_drift(
