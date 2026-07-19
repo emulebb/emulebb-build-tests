@@ -1097,6 +1097,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1141,6 +1151,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1172,6 +1192,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1209,6 +1239,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1241,6 +1281,16 @@ components:
           enum: [audio, video]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1289,6 +1339,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1321,6 +1381,16 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: integer
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 
@@ -1358,6 +1428,120 @@ components:
           enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
         extension:
           type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_search_numeric_filter_schemas(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
+        extension:
+          type: string
+        minSizeBytes:
+          type: number
+          minimum: -1
+        maxSizeBytes:
+          type: integer
+        minAvailability:
+          type: integer
+          minimum: 1
+          maximum: 999999
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.maxSizeBytes",
+            issue="search maxSizeBytes minimum must be 0",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.minAvailability",
+            issue="search minAvailability maximum must be 1000000",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.minAvailability",
+            issue="search minAvailability minimum must be 0",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.minSizeBytes",
+            issue="search minSizeBytes minimum must be 0",
+        ),
+        SchemaComponentDrift(
+            component="SearchCreateRequest.properties.minSizeBytes",
+            issue="search minSizeBytes type must be integer",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_numeric_filter_schemas(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SearchCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$'
+        method:
+          type: string
+          enum: [automatic, server, global, kad]
+        type:
+          type: string
+          enum: ["", arc, audio, iso, image, pro, video, doc, emulecollection]
+        extension:
+          type: string
+        minSizeBytes:
+          type: integer
+          minimum: 0
+        maxSizeBytes:
+          type: integer
+          minimum: 0
+        minAvailability:
+          type: integer
+          minimum: 0
+          maximum: 1000000
 """,
     )
 

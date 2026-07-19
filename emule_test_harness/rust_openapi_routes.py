@@ -1630,6 +1630,27 @@ def append_search_create_schema_drift(
         properties.get("extension"),
         "search extension",
     )
+    assert_search_unsigned_integer_schema(
+        drift,
+        "SearchCreateRequest.properties.minSizeBytes",
+        properties.get("minSizeBytes"),
+        "search minSizeBytes",
+        maximum=None,
+    )
+    assert_search_unsigned_integer_schema(
+        drift,
+        "SearchCreateRequest.properties.maxSizeBytes",
+        properties.get("maxSizeBytes"),
+        "search maxSizeBytes",
+        maximum=None,
+    )
+    assert_search_unsigned_integer_schema(
+        drift,
+        "SearchCreateRequest.properties.minAvailability",
+        properties.get("minAvailability"),
+        "search minAvailability",
+        maximum=1_000_000,
+    )
 
 
 def assert_search_create_required_fields_schema(
@@ -1745,6 +1766,45 @@ def assert_search_string_schema(
             SchemaComponentDrift(
                 component=component,
                 issue=f"{label} type must be string",
+            )
+        )
+
+
+def assert_search_unsigned_integer_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    label: str,
+    *,
+    maximum: int | None,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "integer":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} type must be integer",
+            )
+        )
+    if schema.get("minimum") != 0:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} minimum must be 0",
+            )
+        )
+    if maximum is not None and schema.get("maximum") != maximum:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} maximum must be {maximum}",
             )
         )
 
