@@ -29,6 +29,11 @@ QUERY_NUMERIC_PARAMETER_SCHEMAS = {
     "Offset": ("offset", 0, 2_147_483_647),
     "TransferCategoryIdFilter": ("categoryId", 0, 4_294_967_295),
 }
+QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
+    "IncludeScoreBreakdown": "includeScoreBreakdown",
+    "IncludeEvidence": "includeEvidence",
+    "ExactTotal": "exactTotal",
+}
 TRANSFER_EVENT_COMPONENT = "TransferEvent"
 TRANSFER_EVENT_VARIANTS = {
     "transfer.added": "TransferAddedEvent",
@@ -1002,6 +1007,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             source = f"components.parameters.{name}"
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
 
     for path, path_item in (document.get("paths", {}) or {}).items():
         if not isinstance(path_item, dict):
@@ -2990,6 +2996,27 @@ def append_query_numeric_parameter_schema_drift(
             ParameterMetadataDrift(
                 source=schema_source,
                 issue=f"{label} query parameter range must be {minimum}..{maximum}",
+            )
+        )
+
+
+def append_query_boolean_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    label = QUERY_BOOLEAN_PARAMETER_SCHEMAS.get(component_name)
+    if label is None or not isinstance(parameter, dict):
+        return
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    if schema.get("type") != "boolean":
+        drift.append(
+            ParameterMetadataDrift(
+                source=f"{source}.schema",
+                issue=f"{label} query parameter type must be boolean",
             )
         )
 

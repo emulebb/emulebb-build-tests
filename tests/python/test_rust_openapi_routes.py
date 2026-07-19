@@ -659,6 +659,82 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
+def test_openapi_parameter_metadata_drift_requires_boolean_query_types(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    IncludeScoreBreakdown:
+      name: includeScoreBreakdown
+      in: query
+      required: false
+      schema:
+        type: string
+    IncludeEvidence:
+      name: includeEvidence
+      in: query
+      required: false
+      schema:
+        type: integer
+    ExactTotal:
+      name: exactTotal
+      in: query
+      required: false
+      schema:
+        type: string
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.ExactTotal.schema",
+            issue="exactTotal query parameter type must be boolean",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.IncludeEvidence.schema",
+            issue="includeEvidence query parameter type must be boolean",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.IncludeScoreBreakdown.schema",
+            issue="includeScoreBreakdown query parameter type must be boolean",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_boolean_query_types(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    IncludeScoreBreakdown:
+      name: includeScoreBreakdown
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    IncludeEvidence:
+      name: includeEvidence
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+    ExactTotal:
+      name: exactTotal
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
 def test_openapi_parameter_ref_drift_requires_shared_parameter_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
