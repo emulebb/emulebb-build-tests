@@ -1940,8 +1940,32 @@ def append_endpoint_request_schema_drift(
             )
         )
         return
+    assert_endpoint_required_fields_schema(drift, component, schema)
     assert_endpoint_address_schema(drift, address_component, properties.get("address"))
     assert_endpoint_port_schema(drift, port_component, properties.get("port"))
+
+
+def assert_endpoint_required_fields_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: dict[str, object],
+) -> None:
+    required = schema.get("required")
+    if not isinstance(required, list):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint request schema must require address and port",
+            )
+        )
+        return
+    if set(required) != {"address", "port"} or len(required) != 2:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint request schema must require address and port",
+            )
+        )
 
 
 def assert_endpoint_address_schema(

@@ -1717,6 +1717,7 @@ components:
           maximum: 255
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -1841,6 +1842,7 @@ components:
           maximum: 4294967295
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2023,6 +2025,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2037,6 +2040,7 @@ components:
           type: boolean
     KadBootstrapRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2070,6 +2074,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2085,6 +2090,7 @@ components:
           type: boolean
     KadBootstrapRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2110,6 +2116,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2164,6 +2171,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2201,6 +2209,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2216,6 +2225,7 @@ components:
           type: boolean
     KadBootstrapRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2258,6 +2268,7 @@ components:
   schemas:
     ServerCreateRequest:
       type: object
+      required: [address, port]
       properties:
         address:
           type: string
@@ -2273,6 +2284,99 @@ components:
           type: boolean
     KadBootstrapRequest:
       type: object
+      required: [address, port]
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_endpoint_required_fields(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      required: [address]
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    KadBootstrapRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="KadBootstrapRequest",
+            issue="endpoint request schema must require address and port",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest",
+            issue="endpoint request schema must require address and port",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_endpoint_required_fields(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      required: [address, port]
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    KadBootstrapRequest:
+      type: object
+      required: [address, port]
       properties:
         address:
           type: string
