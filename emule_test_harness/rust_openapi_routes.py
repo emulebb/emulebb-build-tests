@@ -1108,6 +1108,7 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             schemas,
             SERVER_CREATE_REQUEST_COMPONENT,
             "ServerCreateRequest.properties.address",
+            "ServerCreateRequest.properties.port",
         )
         append_server_priority_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
         append_server_boolean_schema_drift(
@@ -1130,6 +1131,7 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             schemas,
             KAD_BOOTSTRAP_REQUEST_COMPONENT,
             "KadBootstrapRequest.properties.address",
+            "KadBootstrapRequest.properties.port",
         )
     if CATEGORY_PRIORITY_INPUT_COMPONENT in schemas:
         assert_category_priority_input_schema(
@@ -1918,6 +1920,7 @@ def append_endpoint_request_schema_drift(
     schemas: dict[str, object],
     component: str,
     address_component: str,
+    port_component: str,
 ) -> None:
     schema = schemas.get(component)
     if not isinstance(schema, dict):
@@ -1938,6 +1941,7 @@ def append_endpoint_request_schema_drift(
         )
         return
     assert_endpoint_address_schema(drift, address_component, properties.get("address"))
+    assert_endpoint_port_schema(drift, port_component, properties.get("port"))
 
 
 def assert_endpoint_address_schema(
@@ -1972,6 +1976,35 @@ def assert_endpoint_address_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="endpoint address pattern must require at least one non-whitespace character",
+            )
+        )
+
+
+def assert_endpoint_port_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint port schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "integer":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint port type must be integer",
+            )
+        )
+    if schema.get("minimum") != 1 or schema.get("maximum") != 65535:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="endpoint port range must be 1..65535",
             )
         )
 

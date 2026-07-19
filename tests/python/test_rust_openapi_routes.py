@@ -1722,6 +1722,10 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
         priority:
           type: string
           enum: [normal, high]
@@ -1842,6 +1846,10 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
         priority:
           type: string
           enum: [low, normal, high]
@@ -2177,6 +2185,103 @@ components:
           type: boolean
         enabled:
           type: boolean
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_endpoint_port_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: number
+          minimum: 0
+          maximum: 70000
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    KadBootstrapRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: number
+          minimum: 0
+          maximum: 70000
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="KadBootstrapRequest.properties.port",
+            issue="endpoint port range must be 1..65535",
+        ),
+        SchemaComponentDrift(
+            component="KadBootstrapRequest.properties.port",
+            issue="endpoint port type must be integer",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.port",
+            issue="endpoint port range must be 1..65535",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.port",
+            issue="endpoint port type must be integer",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_endpoint_port_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        static:
+          type: boolean
+        connect:
+          type: boolean
+    KadBootstrapRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
 """,
     )
 
