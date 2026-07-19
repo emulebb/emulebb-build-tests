@@ -952,6 +952,130 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_category_selector_name_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryName:
+          type: string
+          minLength: 1
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        categoryName:
+          type: string
+          minLength: 1
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        categoryName:
+          type: string
+          minLength: 1
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchResultDownloadRequest.properties.categoryName",
+            issue="category selector name pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.categoryName",
+            issue="category selector name pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="TransferPatch.properties.categoryName",
+            issue="category selector name pattern must require at least one non-whitespace character",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_selector_name_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_endpoint_address_constraints(
     tmp_path: Path,
 ) -> None:

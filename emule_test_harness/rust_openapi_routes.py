@@ -42,6 +42,7 @@ TRANSFER_PATCH_COMPONENT = "TransferPatch"
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
+SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT = "SearchResultDownloadRequest"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#\x00-\x1F\x7F-\x9F][^\s\x00-\x1F\x7F-\x9F]*$"
 NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
@@ -1070,6 +1071,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_patch_schema_drift(drift, schemas)
     if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
         append_search_create_schema_drift(drift, schemas)
+    if SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT in schemas:
+        append_search_result_download_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
         append_url_import_schema_drift(drift, schemas)
     if SERVER_CREATE_REQUEST_COMPONENT in schemas:
@@ -1176,6 +1179,11 @@ def append_transfer_create_schema_drift(
         "TransferCreateRequest.properties.links.items",
         links.get("items"),
     )
+    assert_category_selector_name_schema(
+        drift,
+        "TransferCreateRequest.properties.categoryName",
+        properties.get("categoryName"),
+    )
 
 
 def assert_transfer_link_text_schema(
@@ -1244,6 +1252,11 @@ def append_transfer_patch_schema_drift(
         )
         return
     assert_transfer_rename_schema(drift, properties.get("name"))
+    assert_category_selector_name_schema(
+        drift,
+        "TransferPatch.properties.categoryName",
+        properties.get("categoryName"),
+    )
 
 
 def assert_transfer_rename_schema(
@@ -1359,6 +1372,73 @@ def assert_search_query_schema(
                     "search query pattern must require non-whitespace text "
                     "and reject non-whitespace control characters"
                 ),
+            )
+        )
+
+
+def append_search_result_download_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
+                issue="missing search result download request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_category_selector_name_schema(
+        drift,
+        "SearchResultDownloadRequest.properties.categoryName",
+        properties.get("categoryName"),
+    )
+
+
+def assert_category_selector_name_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if schema is None:
+        return
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector name schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector name type must be string",
+            )
+        )
+    if schema.get("minLength") != 1:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector name minLength must be 1",
+            )
+        )
+    if schema.get("pattern") != NON_EMPTY_AFTER_TRIM_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector name pattern must require at least one non-whitespace character",
             )
         )
 
