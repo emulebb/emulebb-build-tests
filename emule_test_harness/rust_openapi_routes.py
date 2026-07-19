@@ -43,7 +43,7 @@ TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
-URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#][^\s]*$"
+URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#\x00-\x1F\x7F-\x9F][^\s\x00-\x1F\x7F-\x9F]*$"
 NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
 SERVER_CREATE_REQUEST_COMPONENT = "ServerCreateRequest"
 KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
@@ -1430,7 +1430,7 @@ def assert_url_import_text_schema(
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="URL import text pattern must require case-insensitive http(s) with a host and no whitespace",
+                issue="URL import text pattern must require case-insensitive http(s) with a host and no whitespace or controls",
             )
         )
 
