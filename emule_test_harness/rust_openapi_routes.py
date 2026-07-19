@@ -1219,6 +1219,11 @@ def append_transfer_create_schema_drift(
         "TransferCreateRequest.properties.categoryName",
         properties.get("categoryName"),
     )
+    assert_category_selector_id_schema(
+        drift,
+        "TransferCreateRequest.properties.categoryId",
+        properties.get("categoryId"),
+    )
     assert_category_selector_exclusion_schema(
         drift,
         TRANSFER_CREATE_REQUEST_COMPONENT,
@@ -1355,6 +1360,11 @@ def append_transfer_patch_schema_drift(
         properties.get("priority"),
         "#/components/schemas/TransferPriority",
         "transfer patch priority",
+    )
+    assert_category_selector_id_schema(
+        drift,
+        "TransferPatch.properties.categoryId",
+        properties.get("categoryId"),
     )
     assert_category_selector_name_schema(
         drift,
@@ -1561,6 +1571,11 @@ def append_search_result_download_schema_drift(
         "SearchResultDownloadRequest.properties.categoryName",
         properties.get("categoryName"),
     )
+    assert_category_selector_id_schema(
+        drift,
+        "SearchResultDownloadRequest.properties.categoryId",
+        properties.get("categoryId"),
+    )
     assert_category_selector_exclusion_schema(
         drift,
         SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
@@ -1602,6 +1617,37 @@ def assert_category_selector_name_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="category selector name pattern must require at least one non-whitespace character",
+            )
+        )
+
+
+def assert_category_selector_id_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+) -> None:
+    if schema is None:
+        return
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector id schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "integer":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector id type must be integer",
+            )
+        )
+    if schema.get("minimum") != 0 or schema.get("maximum") != 4294967295:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category selector id range must be 0..4294967295",
             )
         )
 

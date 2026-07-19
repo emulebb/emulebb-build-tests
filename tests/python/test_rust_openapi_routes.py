@@ -1199,6 +1199,184 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_category_selector_id_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryId:
+          type: number
+          minimum: 1
+          maximum: 255
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          $ref: "#/components/schemas/TransferPriority"
+        categoryId:
+          type: number
+          minimum: 1
+          maximum: 255
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        categoryId:
+          type: number
+          minimum: 1
+          maximum: 255
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchResultDownloadRequest.properties.categoryId",
+            issue="category selector id range must be 0..4294967295",
+        ),
+        SchemaComponentDrift(
+            component="SearchResultDownloadRequest.properties.categoryId",
+            issue="category selector id type must be integer",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.categoryId",
+            issue="category selector id range must be 0..4294967295",
+        ),
+        SchemaComponentDrift(
+            component="TransferCreateRequest.properties.categoryId",
+            issue="category selector id type must be integer",
+        ),
+        SchemaComponentDrift(
+            component="TransferPatch.properties.categoryId",
+            issue="category selector id range must be 0..4294967295",
+        ),
+        SchemaComponentDrift(
+            component="TransferPatch.properties.categoryId",
+            issue="category selector id type must be integer",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_category_selector_id_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, veryhigh]
+    TransferCreateRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        link:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        links:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2048
+            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
+        categoryId:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          $ref: "#/components/schemas/TransferPriority"
+        categoryId:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SearchResultDownloadRequest:
+      type: object
+      additionalProperties: false
+      not:
+        required: [categoryId, categoryName]
+      properties:
+        categoryId:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_priority_constraints(
     tmp_path: Path,
 ) -> None:
