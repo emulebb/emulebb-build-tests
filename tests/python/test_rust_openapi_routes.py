@@ -539,6 +539,7 @@ components:
       required: true
       schema:
         type: string
+        pattern: "^[0-9a-f]{32}$"
 """,
     )
 
@@ -718,6 +719,67 @@ components:
         type: integer
         minimum: 0
         maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
+def test_openapi_parameter_metadata_drift_requires_lowercase_md4_path_patterns(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    FileHash:
+      name: hash
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9A-F]{32}$"
+    UserHash:
+      name: userHash
+      in: path
+      required: true
+      schema:
+        type: integer
+        pattern: "^[0-9a-f]{32}$"
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.FileHash.schema",
+            issue="hash path parameter pattern must be lowercase 32-character hex",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.UserHash.schema",
+            issue="userHash path parameter type must be string",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_lowercase_md4_path_patterns(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    FileHash:
+      name: hash
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{32}$"
+    UserHash:
+      name: userHash
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{32}$"
 """,
     )
 

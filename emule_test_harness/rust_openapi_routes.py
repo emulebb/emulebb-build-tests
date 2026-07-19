@@ -33,6 +33,10 @@ PATH_NUMERIC_PARAMETER_SCHEMAS = {
     "CategoryId": ("categoryId", 0, 4_294_967_295),
     "SearchId": ("searchId", 0, 4_294_967_295),
 }
+PATH_LOWERCASE_MD4_PARAMETER_SCHEMAS = {
+    "FileHash": "hash",
+    "UserHash": "userHash",
+}
 QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
     "IncludeScoreBreakdown": "includeScoreBreakdown",
     "IncludeEvidence": "includeEvidence",
@@ -1023,6 +1027,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_path_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_path_lowercase_md4_parameter_schema_drift(drift, name, source, parameter)
             append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
             append_transfer_state_parameter_schema_drift(drift, name, source, parameter)
 
@@ -3051,6 +3056,35 @@ def append_path_numeric_parameter_schema_drift(
             ParameterMetadataDrift(
                 source=schema_source,
                 issue=f"{label} path parameter range must be {minimum}..{maximum}",
+            )
+        )
+
+
+def append_path_lowercase_md4_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    label = PATH_LOWERCASE_MD4_PARAMETER_SCHEMAS.get(component_name)
+    if label is None or not isinstance(parameter, dict):
+        return
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    schema_source = f"{source}.schema"
+    if schema.get("type") != "string":
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} path parameter type must be string",
+            )
+        )
+    if schema.get("pattern") != FRIEND_USER_HASH_PATTERN:
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} path parameter pattern must be lowercase 32-character hex",
             )
         )
 
