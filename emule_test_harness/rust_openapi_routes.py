@@ -38,8 +38,13 @@ TRANSFER_EVENT_REQUIRED_FIELDS = {
 }
 TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
 TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
+TRANSFER_PRIORITY_COMPONENT = "TransferPriority"
+TRANSFER_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "veryhigh")
 TRANSFER_PATCH_COMPONENT = "TransferPatch"
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
+SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
+SHARED_FILE_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "release")
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT = "SearchResultDownloadRequest"
@@ -47,9 +52,13 @@ URL_IMPORT_REQUEST_COMPONENT = "UrlImportRequest"
 URL_IMPORT_PATTERN = r"^[hH][tT][tT][pP][sS]?://[^\s/?#\x00-\x1F\x7F-\x9F][^\s\x00-\x1F\x7F-\x9F]*$"
 NON_EMPTY_AFTER_TRIM_PATTERN = r"\S"
 SERVER_CREATE_REQUEST_COMPONENT = "ServerCreateRequest"
+SERVER_PATCH_COMPONENT = "ServerPatch"
+SERVER_PRIORITY_VALUES = ("low", "normal", "high")
 KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
 FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
 CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
+CATEGORY_PRIORITY_INPUT_COMPONENT = "CategoryPriorityInput"
+CATEGORY_PRIORITY_VALUES = ("verylow", "low", "normal", "high", "veryhigh")
 CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
 CATEGORY_PATCH_COMPONENT = "CategoryPatch"
 SHARED_DIRECTORY_ROOT_INPUT_COMPONENT = "SharedDirectoryRootInput"
@@ -1067,8 +1076,26 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_transfer_event_schema_drift(drift, schemas)
     if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
         append_transfer_create_schema_drift(drift, schemas)
+    if TRANSFER_PRIORITY_COMPONENT in schemas:
+        assert_priority_enum_schema(
+            drift,
+            TRANSFER_PRIORITY_COMPONENT,
+            schemas.get(TRANSFER_PRIORITY_COMPONENT),
+            TRANSFER_PRIORITY_VALUES,
+            "transfer priority",
+        )
     if TRANSFER_PATCH_COMPONENT in schemas:
         append_transfer_patch_schema_drift(drift, schemas)
+    if SHARED_FILE_PRIORITY_COMPONENT in schemas:
+        assert_priority_enum_schema(
+            drift,
+            SHARED_FILE_PRIORITY_COMPONENT,
+            schemas.get(SHARED_FILE_PRIORITY_COMPONENT),
+            SHARED_FILE_PRIORITY_VALUES,
+            "shared file priority",
+        )
+    if SHARED_FILE_PATCH_COMPONENT in schemas:
+        append_shared_file_patch_schema_drift(drift, schemas)
     if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
         append_search_create_schema_drift(drift, schemas)
     if SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT in schemas:
@@ -1082,12 +1109,20 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             SERVER_CREATE_REQUEST_COMPONENT,
             "ServerCreateRequest.properties.address",
         )
+        append_server_priority_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
+    if SERVER_PATCH_COMPONENT in schemas:
+        append_server_priority_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
     if KAD_BOOTSTRAP_REQUEST_COMPONENT in schemas:
         append_endpoint_request_schema_drift(
             drift,
             schemas,
             KAD_BOOTSTRAP_REQUEST_COMPONENT,
             "KadBootstrapRequest.properties.address",
+        )
+    if CATEGORY_PRIORITY_INPUT_COMPONENT in schemas:
+        assert_category_priority_input_schema(
+            drift,
+            schemas.get(CATEGORY_PRIORITY_INPUT_COMPONENT),
         )
     if FRIEND_CREATE_REQUEST_COMPONENT in schemas:
         append_friend_create_schema_drift(drift, schemas)
@@ -1229,6 +1264,63 @@ def assert_transfer_link_text_schema(
         )
 
 
+def assert_priority_enum_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    expected_values: tuple[str, ...],
+    label: str,
+) -> None:
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} type must be string",
+            )
+        )
+    if schema.get("enum") != list(expected_values):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} enum must be {', '.join(expected_values)}",
+            )
+        )
+
+
+def assert_priority_ref_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    schema: object,
+    expected_ref: str,
+    label: str,
+) -> None:
+    if schema is None:
+        return
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} schema must be an object",
+            )
+        )
+        return
+    if schema.get("$ref") != expected_ref:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"{label} must reference {expected_ref}",
+            )
+        )
+
+
 def append_transfer_patch_schema_drift(
     drift: list[SchemaComponentDrift],
     schemas: dict[str, object],
@@ -1252,6 +1344,13 @@ def append_transfer_patch_schema_drift(
         )
         return
     assert_transfer_rename_schema(drift, properties.get("name"))
+    assert_priority_ref_schema(
+        drift,
+        "TransferPatch.properties.priority",
+        properties.get("priority"),
+        "#/components/schemas/TransferPriority",
+        "transfer patch priority",
+    )
     assert_category_selector_name_schema(
         drift,
         "TransferPatch.properties.categoryName",
@@ -1301,6 +1400,60 @@ def assert_transfer_rename_schema(
                     "transfer rename pattern must reject trim-empty text, "
                     "Windows-forbidden filename characters, and controls"
                 ),
+            )
+        )
+
+
+def append_shared_file_patch_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SHARED_FILE_PATCH_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SHARED_FILE_PATCH_COMPONENT,
+                issue="missing shared file patch request schema component",
+            )
+        )
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SHARED_FILE_PATCH_COMPONENT,
+                issue="must declare request properties",
+            )
+        )
+        return
+    assert_priority_ref_schema(
+        drift,
+        "SharedFilePatch.properties.priority",
+        properties.get("priority"),
+        "#/components/schemas/SharedFilePriority",
+        "shared file patch priority",
+    )
+    rating = properties.get("rating")
+    if not isinstance(rating, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedFilePatch.properties.rating",
+                issue="shared file rating schema must be an object",
+            )
+        )
+        return
+    if rating.get("type") != "integer":
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedFilePatch.properties.rating",
+                issue="shared file rating type must be integer",
+            )
+        )
+    if rating.get("minimum") != 0 or rating.get("maximum") != 5:
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedFilePatch.properties.rating",
+                issue="shared file rating range must be 0..5",
             )
         )
 
@@ -1443,6 +1596,56 @@ def assert_category_selector_name_schema(
         )
 
 
+def assert_category_priority_input_schema(
+    drift: list[SchemaComponentDrift],
+    schema: object,
+) -> None:
+    component = CATEGORY_PRIORITY_INPUT_COMPONENT
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category priority input schema must be an object",
+            )
+        )
+        return
+    variants = schema.get("oneOf")
+    if not isinstance(variants, list) or len(variants) != 2:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category priority input must be oneOf string enum or u32 integer",
+            )
+        )
+        return
+    string_variant = next(
+        (variant for variant in variants if isinstance(variant, dict) and variant.get("type") == "string"),
+        None,
+    )
+    integer_variant = next(
+        (variant for variant in variants if isinstance(variant, dict) and variant.get("type") == "integer"),
+        None,
+    )
+    if not isinstance(string_variant, dict) or string_variant.get("enum") != list(CATEGORY_PRIORITY_VALUES):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue=f"category priority string enum must be {', '.join(CATEGORY_PRIORITY_VALUES)}",
+            )
+        )
+    if (
+        not isinstance(integer_variant, dict)
+        or integer_variant.get("minimum") != 0
+        or integer_variant.get("maximum") != 4294967295
+    ):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="category priority integer range must be 0..4294967295",
+            )
+        )
+
+
 def append_url_import_schema_drift(
     drift: list[SchemaComponentDrift],
     schemas: dict[str, object],
@@ -1576,6 +1779,29 @@ def assert_endpoint_address_schema(
                 issue="endpoint address pattern must require at least one non-whitespace character",
             )
         )
+
+
+def append_server_priority_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+    component: str,
+) -> None:
+    schema = schemas.get(component)
+    if not isinstance(schema, dict):
+        return
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    priority = properties.get("priority")
+    if priority is None:
+        return
+    assert_priority_enum_schema(
+        drift,
+        f"{component}.properties.priority",
+        priority,
+        SERVER_PRIORITY_VALUES,
+        "server priority",
+    )
 
 
 def append_category_mutation_schema_drift(

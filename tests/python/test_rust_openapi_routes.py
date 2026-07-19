@@ -678,6 +678,9 @@ components:
       properties:
         maxUploadSlots:
           type: integer
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, veryhigh]
     TransferPatch:
       type: object
       additionalProperties: false
@@ -686,18 +689,25 @@ components:
         - required: [name]
       properties:
         priority:
-          type: string
+          $ref: "#/components/schemas/TransferPriority"
         name:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
       properties:
         priority:
-          type: string
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
 """,
     )
 
@@ -1070,6 +1080,189 @@ components:
           type: string
           minLength: 1
           pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_priority_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high]
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          type: string
+          enum: [low, normal, high]
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        priority:
+          type: string
+          enum: [auto, normal, release]
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        comment:
+          type: string
+    CategoryPriorityInput:
+      oneOf:
+        - type: string
+          enum: [low, normal, high]
+        - type: integer
+          minimum: 1
+          maximum: 255
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        priority:
+          type: string
+          enum: [normal, high]
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        priority:
+          type: string
+          enum: [normal, high]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="CategoryPriorityInput",
+            issue="category priority integer range must be 0..4294967295",
+        ),
+        SchemaComponentDrift(
+            component="CategoryPriorityInput",
+            issue="category priority string enum must be verylow, low, normal, high, veryhigh",
+        ),
+        SchemaComponentDrift(
+            component="ServerCreateRequest.properties.priority",
+            issue="server priority enum must be low, normal, high",
+        ),
+        SchemaComponentDrift(
+            component="ServerPatch.properties.priority",
+            issue="server priority enum must be low, normal, high",
+        ),
+        SchemaComponentDrift(
+            component="SharedFilePatch.properties.priority",
+            issue="shared file patch priority must reference #/components/schemas/SharedFilePriority",
+        ),
+        SchemaComponentDrift(
+            component="SharedFilePatch.properties.rating",
+            issue="shared file rating range must be 0..5",
+        ),
+        SchemaComponentDrift(
+            component="SharedFilePriority",
+            issue="shared file priority enum must be auto, verylow, low, normal, high, release",
+        ),
+        SchemaComponentDrift(
+            component="TransferPatch.properties.priority",
+            issue="transfer patch priority must reference #/components/schemas/TransferPriority",
+        ),
+        SchemaComponentDrift(
+            component="TransferPriority",
+            issue="transfer priority enum must be auto, verylow, low, normal, high, veryhigh",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_priority_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, veryhigh]
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          $ref: "#/components/schemas/TransferPriority"
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        priority:
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        comment:
+          type: string
+    CategoryPriorityInput:
+      oneOf:
+        - type: string
+          enum: [verylow, low, normal, high, veryhigh]
+        - type: integer
+          minimum: 0
+          maximum: 4294967295
+    ServerCreateRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          pattern: '\S'
+        priority:
+          type: string
+          enum: [low, normal, high]
+    ServerPatch:
+      type: object
+      minProperties: 1
+      properties:
+        priority:
+          type: string
+          enum: [low, normal, high]
 """,
     )
 
