@@ -24,6 +24,11 @@ METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedRespon
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
 DIAGNOSTIC_DUMP_REQUEST_COMPONENT = "DiagnosticDumpRequest"
+QUERY_NUMERIC_PARAMETER_SCHEMAS = {
+    "Limit": ("limit", 1, 1000),
+    "Offset": ("offset", 0, 2_147_483_647),
+    "TransferCategoryIdFilter": ("categoryId", 0, 4_294_967_295),
+}
 TRANSFER_EVENT_COMPONENT = "TransferEvent"
 TRANSFER_EVENT_VARIANTS = {
     "transfer.added": "TransferAddedEvent",
@@ -994,7 +999,9 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
     component_parameters = components.get("parameters", {}) if isinstance(components, dict) else {}
     if isinstance(component_parameters, dict):
         for name, parameter in component_parameters.items():
-            append_parameter_metadata_drift(drift, f"components.parameters.{name}", parameter)
+            source = f"components.parameters.{name}"
+            append_parameter_metadata_drift(drift, source, parameter)
+            append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
 
     for path, path_item in (document.get("paths", {}) or {}).items():
         if not isinstance(path_item, dict):
@@ -2955,6 +2962,36 @@ def append_parameter_metadata_drift(
     schema = parameter.get("schema")
     if not isinstance(schema, dict):
         drift.append(ParameterMetadataDrift(source=source, issue="schema must be an object"))
+
+
+def append_query_numeric_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    expected = QUERY_NUMERIC_PARAMETER_SCHEMAS.get(component_name)
+    if expected is None or not isinstance(parameter, dict):
+        return
+    label, minimum, maximum = expected
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    schema_source = f"{source}.schema"
+    if schema.get("type") != "integer":
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} query parameter type must be integer",
+            )
+        )
+    if schema.get("minimum") != minimum or schema.get("maximum") != maximum:
+        drift.append(
+            ParameterMetadataDrift(
+                source=schema_source,
+                issue=f"{label} query parameter range must be {minimum}..{maximum}",
+            )
+        )
 
 
 def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:

@@ -531,6 +531,8 @@ components:
       in: query
       schema:
         type: integer
+        minimum: 1
+        maximum: 1000
     FileHash:
       name: hash
       in: path
@@ -566,6 +568,95 @@ components:
             issue="schema must be an object",
         ),
     )
+
+
+def test_openapi_parameter_metadata_drift_requires_numeric_query_bounds(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: number
+        minimum: 0
+        maximum: 1000
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 4294967295
+    TransferCategoryIdFilter:
+      name: categoryId
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.Limit.schema",
+            issue="limit query parameter range must be 1..1000",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.Limit.schema",
+            issue="limit query parameter type must be integer",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.Offset.schema",
+            issue="offset query parameter range must be 0..2147483647",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.TransferCategoryIdFilter.schema",
+            issue="categoryId query parameter range must be 0..4294967295",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_numeric_query_bounds(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 2147483647
+    TransferCategoryIdFilter:
+      name: categoryId
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
 def test_openapi_parameter_ref_drift_requires_shared_parameter_refs(tmp_path: Path) -> None:
