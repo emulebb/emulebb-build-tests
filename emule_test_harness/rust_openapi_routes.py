@@ -26,8 +26,12 @@ EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
 DIAGNOSTIC_DUMP_REQUEST_COMPONENT = "DiagnosticDumpRequest"
 QUERY_NUMERIC_PARAMETER_SCHEMAS = {
     "Limit": ("limit", 1, 1000),
+    "LogsLimit": ("limit", 1, 1000),
     "Offset": ("offset", 0, 2_147_483_647),
     "TransferCategoryIdFilter": ("categoryId", 0, 4_294_967_295),
+}
+QUERY_DEFAULT_PARAMETER_SCHEMAS = {
+    "LogsLimit": ("limit", 200),
 }
 PATH_NUMERIC_PARAMETER_SCHEMAS = {
     "CategoryId": ("categoryId", 0, 4_294_967_295),
@@ -1035,6 +1039,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             source = f"components.parameters.{name}"
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_query_default_parameter_schema_drift(drift, name, source, parameter)
             append_path_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_path_lowercase_md4_parameter_schema_drift(drift, name, source, parameter)
             append_path_token_parameter_schema_drift(drift, name, source, parameter)
@@ -1068,7 +1073,9 @@ def openapi_parameter_ref_drift(openapi_yaml: Path) -> tuple[ParameterRefDrift, 
             if method not in HTTP_METHODS or not isinstance(operation, dict):
                 continue
             for index, parameter in enumerate(operation.get("parameters", []) or []):
-                append_parameter_ref_drift(drift, f"paths.{path}.{method}.parameters[{index}]", parameter)
+                source = f"paths.{path}.{method}.parameters[{index}]"
+                append_parameter_ref_drift(drift, source, parameter)
+                append_logs_limit_parameter_ref_drift(drift, path, method, source, parameter)
     return tuple(sorted(drift))
 
 
@@ -1083,6 +1090,25 @@ def append_parameter_ref_drift(
             ParameterRefDrift(
                 source=source,
                 issue="parameter must reference a shared parameter component",
+            )
+        )
+
+
+def append_logs_limit_parameter_ref_drift(
+    drift: list[ParameterRefDrift],
+    path: str,
+    method: str,
+    source: str,
+    parameter: object,
+) -> None:
+    if path != "/logs" or method != "get":
+        return
+    reference = parameter.get("$ref") if isinstance(parameter, dict) else None
+    if reference != "#/components/parameters/LogsLimit":
+        drift.append(
+            ParameterRefDrift(
+                source=source,
+                issue="GET /logs must reference #/components/parameters/LogsLimit",
             )
         )
 
@@ -3036,6 +3062,28 @@ def append_query_numeric_parameter_schema_drift(
             ParameterMetadataDrift(
                 source=schema_source,
                 issue=f"{label} query parameter range must be {minimum}..{maximum}",
+            )
+        )
+
+
+def append_query_default_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    expected = QUERY_DEFAULT_PARAMETER_SCHEMAS.get(component_name)
+    if expected is None or not isinstance(parameter, dict):
+        return
+    label, default = expected
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict):
+        return
+    if schema.get("default") != default:
+        drift.append(
+            ParameterMetadataDrift(
+                source=f"{source}.schema",
+                issue=f"{label} query parameter default must be {default}",
             )
         )
 

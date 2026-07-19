@@ -646,6 +646,15 @@ components:
         type: integer
         minimum: 0
         maximum: 2147483647
+    LogsLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 200
     TransferCategoryIdFilter:
       name: categoryId
       in: query
@@ -654,6 +663,53 @@ components:
         type: integer
         minimum: 0
         maximum: 4294967295
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
+def test_openapi_parameter_metadata_drift_requires_logs_limit_default(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    LogsLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.LogsLimit.schema",
+            issue="limit query parameter default must be 200",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_logs_limit_default(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    LogsLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 200
 """,
     )
 
@@ -1010,6 +1066,59 @@ components:
             issue="parameter must reference a shared parameter component",
         ),
     )
+
+
+def test_openapi_parameter_ref_drift_requires_logs_limit_parameter(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /logs:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses: {}
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+""",
+    )
+
+    assert openapi_parameter_ref_drift(openapi_yaml) == (
+        ParameterRefDrift(
+            source="paths./logs.get.parameters[0]",
+            issue="GET /logs must reference #/components/parameters/LogsLimit",
+        ),
+    )
+
+
+def test_openapi_parameter_ref_drift_accepts_logs_limit_parameter(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /logs:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/LogsLimit"
+      responses: {}
+components:
+  parameters:
+    LogsLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+""",
+    )
+
+    assert openapi_parameter_ref_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_reusable_schema_shape(tmp_path: Path) -> None:
