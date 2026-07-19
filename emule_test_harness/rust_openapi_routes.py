@@ -51,6 +51,7 @@ FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
 CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
 CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
 CATEGORY_PATCH_COMPONENT = "CategoryPatch"
+SHARED_DIRECTORY_ROOT_INPUT_COMPONENT = "SharedDirectoryRootInput"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1095,6 +1096,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         )
     if CATEGORY_PATCH_COMPONENT in schemas:
         append_category_mutation_schema_drift(drift, schemas, CATEGORY_PATCH_COMPONENT)
+    if SHARED_DIRECTORY_ROOT_INPUT_COMPONENT in schemas:
+        append_shared_directory_root_schema_drift(drift, schemas)
     return tuple(sorted(drift))
 
 
@@ -1569,6 +1572,81 @@ def assert_trim_non_empty_text_schema(
                 issue="trim-non-empty text pattern must require at least one non-whitespace character",
             )
         )
+
+
+def append_shared_directory_root_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SHARED_DIRECTORY_ROOT_INPUT_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SHARED_DIRECTORY_ROOT_INPUT_COMPONENT,
+                issue="missing shared-directory root input schema component",
+            )
+        )
+        return
+    one_of = schema.get("oneOf")
+    if not isinstance(one_of, list) or len(one_of) != 2:
+        drift.append(
+            SchemaComponentDrift(
+                component=SHARED_DIRECTORY_ROOT_INPUT_COMPONENT,
+                issue="shared-directory root input must have string and object oneOf branches",
+            )
+        )
+        return
+    assert_trim_non_empty_text_schema(
+        drift,
+        "SharedDirectoryRootInput.oneOf[0]",
+        one_of[0],
+        nullable=False,
+    )
+    object_branch = one_of[1]
+    if not isinstance(object_branch, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedDirectoryRootInput.oneOf[1]",
+                issue="shared-directory root object branch must be an object schema",
+            )
+        )
+        return
+    if object_branch.get("type") != "object":
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedDirectoryRootInput.oneOf[1]",
+                issue="shared-directory root object branch type must be object",
+            )
+        )
+    if object_branch.get("additionalProperties") is not False:
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedDirectoryRootInput.oneOf[1]",
+                issue="shared-directory root object branch must reject unknown fields",
+            )
+        )
+    if object_branch.get("required") != ["path"]:
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedDirectoryRootInput.oneOf[1]",
+                issue="shared-directory root object branch must require path",
+            )
+        )
+    properties = object_branch.get("properties")
+    if not isinstance(properties, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedDirectoryRootInput.oneOf[1]",
+                issue="shared-directory root object branch must declare properties",
+            )
+        )
+        return
+    assert_trim_non_empty_text_schema(
+        drift,
+        "SharedDirectoryRootInput.oneOf[1].properties.path",
+        properties.get("path"),
+        nullable=False,
+    )
 
 
 def append_friend_create_schema_drift(

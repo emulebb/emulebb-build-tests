@@ -1000,6 +1000,67 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_shared_directory_root_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedDirectoryRootInput:
+      oneOf:
+        - type: string
+          minLength: 1
+        - type: object
+          additionalProperties: false
+          required: [path]
+          properties:
+            path:
+              type: string
+              minLength: 1
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SharedDirectoryRootInput.oneOf[0]",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+        SchemaComponentDrift(
+            component="SharedDirectoryRootInput.oneOf[1].properties.path",
+            issue="trim-non-empty text pattern must require at least one non-whitespace character",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_shared_directory_root_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedDirectoryRootInput:
+      oneOf:
+        - type: string
+          minLength: 1
+          pattern: '\S'
+        - type: object
+          additionalProperties: false
+          required: [path]
+          properties:
+            path:
+              type: string
+              minLength: 1
+              pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_friend_name_constraints(
     tmp_path: Path,
 ) -> None:
