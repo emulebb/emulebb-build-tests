@@ -1523,6 +1523,22 @@ def append_shared_file_patch_schema_drift(
                 issue="shared file rating range must be 0..5",
             )
         )
+    comment = properties.get("comment")
+    if not isinstance(comment, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedFilePatch.properties.comment",
+                issue="shared file comment schema must be an object",
+            )
+        )
+        return
+    if comment.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component="SharedFilePatch.properties.comment",
+                issue="shared file comment type must be string",
+            )
+        )
 
 
 def assert_shared_file_comment_rating_dependency_schema(

@@ -711,6 +711,8 @@ components:
           type: integer
           minimum: 0
           maximum: 5
+        comment:
+          type: string
 """,
     )
 
@@ -1881,6 +1883,77 @@ components:
             issue="shared file comment and rating must be mutually dependent",
         ),
     )
+
+
+def test_openapi_schema_component_drift_requires_shared_file_comment_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
+      properties:
+        priority:
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        comment:
+          type: integer
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SharedFilePatch.properties.comment",
+            issue="shared file comment type must be string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_shared_file_comment_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    SharedFilePriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, release]
+    SharedFilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      dependentRequired:
+        comment: [rating]
+        rating: [comment]
+      properties:
+        priority:
+          $ref: "#/components/schemas/SharedFilePriority"
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        comment:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_accepts_shared_file_comment_rating_dependency(
