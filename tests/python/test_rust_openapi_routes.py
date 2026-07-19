@@ -786,6 +786,71 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
+def test_openapi_parameter_metadata_drift_requires_endpoint_path_token_patterns(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    ServerId:
+      name: serverId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[^/]+:[0-9]+$"
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema:
+        type: integer
+        pattern: "^[0-9a-f]{32}$"
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == (
+        ParameterMetadataDrift(
+            source="components.parameters.ClientId.schema",
+            issue="clientId path parameter pattern must match REST path-token validation",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.ClientId.schema",
+            issue="clientId path parameter type must be string",
+        ),
+        ParameterMetadataDrift(
+            source="components.parameters.ServerId.schema",
+            issue="serverId path parameter pattern must match REST path-token validation",
+        ),
+    )
+
+
+def test_openapi_parameter_metadata_drift_accepts_endpoint_path_token_patterns(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  parameters:
+    ServerId:
+      name: serverId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[^/]+:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})$"
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^([0-9a-f]{32}|[^/]+:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}))$"
+""",
+    )
+
+    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
+
+
 def test_openapi_parameter_metadata_drift_requires_boolean_query_types(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
