@@ -70,6 +70,7 @@ SERVER_PRIORITY_VALUES = ("low", "normal", "high")
 KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
 FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
 CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
+FRIEND_USER_HASH_PATTERN = r"^[0-9a-f]{32}$"
 CATEGORY_PRIORITY_INPUT_COMPONENT = "CategoryPriorityInput"
 CATEGORY_PRIORITY_VALUES = ("verylow", "low", "normal", "high", "veryhigh")
 CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
@@ -2642,7 +2643,51 @@ def append_friend_create_schema_drift(
             )
         )
         return
+    assert_friend_create_required_fields_schema(drift, schema)
+    assert_friend_user_hash_schema(drift, properties.get("userHash"))
     assert_friend_name_schema(drift, properties.get("name"))
+
+
+def assert_friend_create_required_fields_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    if schema.get("required") != ["userHash"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=FRIEND_CREATE_REQUEST_COMPONENT,
+                issue="friend create schema must require userHash",
+            )
+        )
+
+
+def assert_friend_user_hash_schema(
+    drift: list[SchemaComponentDrift],
+    schema: object,
+) -> None:
+    component = "FriendCreateRequest.properties.userHash"
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend userHash schema must be an object",
+            )
+        )
+        return
+    if schema.get("type") != "string":
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend userHash type must be string",
+            )
+        )
+    if schema.get("pattern") != FRIEND_USER_HASH_PATTERN:
+        drift.append(
+            SchemaComponentDrift(
+                component=component,
+                issue="friend userHash pattern must be lowercase 32-character hex",
+            )
+        )
 
 
 def assert_friend_name_schema(

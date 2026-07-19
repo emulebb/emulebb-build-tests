@@ -3854,6 +3854,64 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_friend_user_hash_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    FriendCreateRequest:
+      type: object
+      properties:
+        userHash:
+          type: string
+          pattern: "^[0-9A-F]{32}$"
+        name:
+          type: string
+          maxLength: 128
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="FriendCreateRequest",
+            issue="friend create schema must require userHash",
+        ),
+        SchemaComponentDrift(
+            component="FriendCreateRequest.properties.userHash",
+            issue="friend userHash pattern must be lowercase 32-character hex",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_friend_user_hash_constraints(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    FriendCreateRequest:
+      type: object
+      required: [userHash]
+      properties:
+        userHash:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        name:
+          type: string
+          maxLength: 128
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_friend_name_constraints(
     tmp_path: Path,
 ) -> None:
@@ -3864,6 +3922,7 @@ components:
   schemas:
     FriendCreateRequest:
       type: object
+      required: [userHash]
       properties:
         userHash:
           type: string
@@ -3892,6 +3951,7 @@ components:
   schemas:
     FriendCreateRequest:
       type: object
+      required: [userHash]
       properties:
         userHash:
           type: string
