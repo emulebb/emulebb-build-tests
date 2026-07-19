@@ -1204,6 +1204,53 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_search_status_reason(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    Search:
+      type: object
+      unevaluatedProperties: false
+      required: [id, query, method, type, status, items]
+      properties:
+        statusReason:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="Search",
+            issue="search response schema must require statusReason",
+        ),
+        SchemaComponentDrift(
+            component="Search.properties.statusReason",
+            issue="search statusReason schema must be nullable string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_status_reason(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    Search:
+      type: object
+      unevaluatedProperties: false
+      required: [id, query, method, type, status, statusReason, items]
+      properties:
+        statusReason:
+          type: [string, "null"]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
     tmp_path: Path,
 ) -> None:

@@ -89,6 +89,7 @@ TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
 SHARED_FILE_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "release")
+SEARCH_COMPONENT = "Search"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
@@ -1194,6 +1195,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_shared_file_patch_schema_drift(drift, schemas)
     if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
         append_search_create_schema_drift(drift, schemas)
+    if SEARCH_COMPONENT in schemas:
+        append_search_response_schema_drift(drift, schemas)
     if SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT in schemas:
         append_search_result_download_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
@@ -1988,6 +1991,38 @@ def assert_search_unsigned_integer_schema(
             SchemaComponentDrift(
                 component=component,
                 issue=f"{label} maximum must be {maximum}",
+            )
+        )
+
+
+def append_search_response_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SEARCH_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_COMPONENT,
+                issue="missing search response schema component",
+            )
+        )
+        return
+    required = schema.get("required")
+    if not isinstance(required, list) or "statusReason" not in required:
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_COMPONENT,
+                issue="search response schema must require statusReason",
+            )
+        )
+    properties = schema.get("properties")
+    status_reason = properties.get("statusReason") if isinstance(properties, dict) else None
+    if not isinstance(status_reason, dict) or status_reason.get("type") != ["string", "null"]:
+        drift.append(
+            SchemaComponentDrift(
+                component="Search.properties.statusReason",
+                issue="search statusReason schema must be nullable string",
             )
         )
 
