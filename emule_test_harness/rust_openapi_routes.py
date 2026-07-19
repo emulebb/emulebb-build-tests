@@ -1867,11 +1867,25 @@ def append_url_import_schema_drift(
             )
         )
         return
+    assert_url_import_required_fields_schema(drift, schema)
     assert_url_import_text_schema(
         drift,
         "UrlImportRequest.properties.url",
         properties.get("url"),
     )
+
+
+def assert_url_import_required_fields_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    if schema.get("required") != ["url"]:
+        drift.append(
+            SchemaComponentDrift(
+                component=URL_IMPORT_REQUEST_COMPONENT,
+                issue="URL import request schema must require url",
+            )
+        )
 
 
 def assert_url_import_text_schema(
