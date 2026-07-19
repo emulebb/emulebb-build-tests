@@ -90,6 +90,7 @@ SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
 SHARED_FILE_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "release")
 SEARCH_COMPONENT = "Search"
+SEARCH_SESSION_COMPONENT = "SearchSession"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
@@ -1197,6 +1198,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_search_create_schema_drift(drift, schemas)
     if SEARCH_COMPONENT in schemas:
         append_search_response_schema_drift(drift, schemas)
+    if SEARCH_SESSION_COMPONENT in schemas:
+        append_search_session_schema_drift(drift, schemas)
     if SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT in schemas:
         append_search_result_download_schema_drift(drift, schemas)
     if URL_IMPORT_REQUEST_COMPONENT in schemas:
@@ -2008,12 +2011,42 @@ def append_search_response_schema_drift(
             )
         )
         return
+    assert_search_status_reason_schema(drift, SEARCH_COMPONENT, "search response", schema)
+
+
+def append_search_session_schema_drift(
+    drift: list[SchemaComponentDrift],
+    schemas: dict[str, object],
+) -> None:
+    schema = schemas.get(SEARCH_SESSION_COMPONENT)
+    if not isinstance(schema, dict):
+        drift.append(
+            SchemaComponentDrift(
+                component=SEARCH_SESSION_COMPONENT,
+                issue="missing search session schema component",
+            )
+        )
+        return
+    assert_search_status_reason_schema(
+        drift,
+        SEARCH_SESSION_COMPONENT,
+        "search session schema",
+        schema,
+    )
+
+
+def assert_search_status_reason_schema(
+    drift: list[SchemaComponentDrift],
+    component: str,
+    label: str,
+    schema: dict[str, object],
+) -> None:
     required = schema.get("required")
     if not isinstance(required, list) or "statusReason" not in required:
         drift.append(
             SchemaComponentDrift(
-                component=SEARCH_COMPONENT,
-                issue="search response schema must require statusReason",
+                component=component,
+                issue=f"{label} must require statusReason",
             )
         )
     properties = schema.get("properties")
@@ -2021,8 +2054,8 @@ def append_search_response_schema_drift(
     if not isinstance(status_reason, dict) or status_reason.get("type") != ["string", "null"]:
         drift.append(
             SchemaComponentDrift(
-                component="Search.properties.statusReason",
-                issue="search statusReason schema must be nullable string",
+                component=f"{component}.properties.statusReason",
+                issue=f"{label} statusReason must be nullable string",
             )
         )
 

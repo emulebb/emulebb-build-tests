@@ -1223,11 +1223,11 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
             component="Search",
-            issue="search response schema must require statusReason",
+            issue="search response must require statusReason",
         ),
         SchemaComponentDrift(
             component="Search.properties.statusReason",
-            issue="search statusReason schema must be nullable string",
+            issue="search response statusReason must be nullable string",
         ),
     )
 
@@ -1242,6 +1242,53 @@ components:
       type: object
       unevaluatedProperties: false
       required: [id, query, method, type, status, statusReason, items]
+      properties:
+        statusReason:
+          type: [string, "null"]
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_search_session_status_reason(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    SearchSession:
+      type: object
+      additionalProperties: false
+      required: [id, query, method, type, status, resultCount]
+      properties:
+        statusReason:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="SearchSession",
+            issue="search session schema must require statusReason",
+        ),
+        SchemaComponentDrift(
+            component="SearchSession.properties.statusReason",
+            issue="search session schema statusReason must be nullable string",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_search_session_status_reason(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    SearchSession:
+      type: object
+      additionalProperties: false
+      required: [id, query, method, type, status, statusReason, resultCount]
       properties:
         statusReason:
           type: [string, "null"]
