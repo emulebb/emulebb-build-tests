@@ -41,6 +41,7 @@ TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
 TRANSFER_PRIORITY_COMPONENT = "TransferPriority"
 TRANSFER_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "veryhigh")
 TRANSFER_PATCH_COMPONENT = "TransferPatch"
+TRANSFER_PATCH_MUTATION_FAMILIES = ("priority", "name", "categoryId", "categoryName")
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
@@ -1432,6 +1433,7 @@ def append_transfer_patch_schema_drift(
             )
         )
         return
+    assert_transfer_patch_mutation_family_schema(drift, schema)
     assert_transfer_rename_schema(drift, properties.get("name"))
     assert_priority_ref_schema(
         drift,
@@ -1449,6 +1451,69 @@ def append_transfer_patch_schema_drift(
         drift,
         "TransferPatch.properties.categoryName",
         properties.get("categoryName"),
+    )
+
+
+def assert_transfer_patch_mutation_family_schema(
+    drift: list[SchemaComponentDrift],
+    schema: dict[str, object],
+) -> None:
+    branches = schema.get("oneOf")
+    if not isinstance(branches, list) or len(branches) != len(TRANSFER_PATCH_MUTATION_FAMILIES):
+        drift.append(
+            SchemaComponentDrift(
+                component=TRANSFER_PATCH_COMPONENT,
+                issue="transfer patch schema must allow exactly one mutation family",
+            )
+        )
+        return
+    expected_choices = {
+        (
+            field,
+            tuple(sorted(other for other in TRANSFER_PATCH_MUTATION_FAMILIES if other != field)),
+        )
+        for field in TRANSFER_PATCH_MUTATION_FAMILIES
+    }
+    actual_choices: set[tuple[str, tuple[str, ...]]] = set()
+    for branch in branches:
+        if not isinstance(branch, dict):
+            break
+        required = branch.get("required")
+        not_schema = branch.get("not")
+        if (
+            not isinstance(required, list)
+            or len(required) != 1
+            or not isinstance(required[0], str)
+            or not isinstance(not_schema, dict)
+        ):
+            break
+        any_of = not_schema.get("anyOf")
+        if not isinstance(any_of, list):
+            break
+        excluded: list[str] = []
+        for exclusion in any_of:
+            if not isinstance(exclusion, dict):
+                break
+            exclusion_required = exclusion.get("required")
+            if (
+                not isinstance(exclusion_required, list)
+                or len(exclusion_required) != 1
+                or not isinstance(exclusion_required[0], str)
+            ):
+                break
+            excluded.append(exclusion_required[0])
+        else:
+            actual_choices.add((required[0], tuple(sorted(excluded))))
+            continue
+        break
+    else:
+        if actual_choices == expected_choices:
+            return
+    drift.append(
+        SchemaComponentDrift(
+            component=TRANSFER_PATCH_COMPONENT,
+            issue="transfer patch schema must allow exactly one mutation family",
+        )
     )
 
 

@@ -686,7 +686,29 @@ components:
       additionalProperties: false
       oneOf:
         - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
         - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       properties:
         priority:
           $ref: "#/components/schemas/TransferPriority"
@@ -735,6 +757,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -770,12 +817,164 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
+def test_openapi_schema_component_drift_requires_transfer_patch_mutation_family_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, veryhigh]
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryLabel]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          $ref: "#/components/schemas/TransferPriority"
+        categoryId:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="TransferPatch",
+            issue="transfer patch schema must allow exactly one mutation family",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_transfer_patch_mutation_family_schema(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        r"""
+components:
+  schemas:
+    TransferPriority:
+      type: string
+      enum: [auto, verylow, low, normal, high, veryhigh]
+    TransferPatch:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+        priority:
+          $ref: "#/components/schemas/TransferPriority"
+        categoryId:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+        categoryName:
+          type: string
+          minLength: 1
+          pattern: '\S'
 """,
     )
 
@@ -1696,6 +1895,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -1779,6 +2003,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -1978,6 +2227,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -2092,6 +2366,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -2144,6 +2443,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
@@ -2275,6 +2599,31 @@ components:
     TransferPatch:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [priority]
+          not:
+            anyOf:
+              - required: [name]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [name]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [categoryId]
+              - required: [categoryName]
+        - required: [categoryId]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryName]
+        - required: [categoryName]
+          not:
+            anyOf:
+              - required: [priority]
+              - required: [name]
+              - required: [categoryId]
       minProperties: 1
       properties:
         name:
