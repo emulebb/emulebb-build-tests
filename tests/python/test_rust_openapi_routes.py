@@ -4112,6 +4112,60 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
+def test_openapi_schema_component_drift_requires_diagnostic_full_memory_boolean(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    DiagnosticDumpRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmDump]
+      properties:
+        confirmDump:
+          type: boolean
+          enum: [true]
+        fullMemory:
+          type: string
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == (
+        SchemaComponentDrift(
+            component="DiagnosticDumpRequest.properties.fullMemory",
+            issue="diagnostic dump fullMemory type must be boolean",
+        ),
+    )
+
+
+def test_openapi_schema_component_drift_accepts_diagnostic_full_memory_boolean(
+    tmp_path: Path,
+) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+components:
+  schemas:
+    DiagnosticDumpRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmDump]
+      properties:
+        confirmDump:
+          type: boolean
+          enum: [true]
+        fullMemory:
+          type: boolean
+          default: false
+""",
+    )
+
+    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+
 def test_openapi_confirmation_contract_drift_requires_true_sentinels(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
