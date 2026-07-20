@@ -29,6 +29,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -2631,6 +2632,48 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
             "recursiveRootCount": recursive_count,
             "flatRootCount": len(existing_entries) - recursive_count,
         },
+        "rust": {
+            "roots": summarize_shared_directory_rows(roots),
+            "items": summarize_shared_directory_rows(items),
+            "hashingCount": response.get("hashingCount"),
+            "reload": response.get("reload"),
+        },
+    }
+
+
+def mutate_rust_shared_root(args: argparse.Namespace) -> dict[str, object]:
+    """Adds or removes one recursive Rust shared root through the live REST API."""
+
+    path = str(args.path)
+    if args.operation == "add":
+        response = request_json(
+            args.base_url,
+            "/shared-directories/roots",
+            api_key=args.api_key,
+            method="POST",
+            body={"path": path},
+            timeout_seconds=args.timeout_seconds,
+        )
+    elif args.operation == "remove":
+        response = request_json(
+            args.base_url,
+            f"/shared-directories/roots?path={quote(path, safe='')}",
+            api_key=args.api_key,
+            method="DELETE",
+            timeout_seconds=args.timeout_seconds,
+        )
+    else:
+        raise RuntimeError(f"unsupported shared-root operation: {args.operation}")
+
+    roots = response.get("roots")
+    items = response.get("items")
+    root_fingerprint = private_path_fingerprint(path)
+    root_fingerprints = set(shared_directory_fingerprints(roots))
+    return {
+        "operation": args.operation,
+        "applied": True,
+        "requestedRootFingerprint": root_fingerprint,
+        "requestedRootPresent": root_fingerprint in root_fingerprints,
         "rust": {
             "roots": summarize_shared_directory_rows(roots),
             "items": summarize_shared_directory_rows(items),
@@ -5304,6 +5347,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     apply_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     apply_roots_parser.set_defaults(func=apply_mfc_shared_roots)
+
+    add_root_parser = sub.add_parser(
+        "add-shared-root",
+        help="Add one recursive shared root to the live Rust profile.",
+    )
+    add_root_parser.add_argument("--path", type=Path, required=True)
+    add_root_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    add_root_parser.set_defaults(func=mutate_rust_shared_root, operation="add")
+
+    remove_root_parser = sub.add_parser(
+        "remove-shared-root",
+        help="Remove one shared root from the live Rust profile.",
+    )
+    remove_root_parser.add_argument("--path", type=Path, required=True)
+    remove_root_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    remove_root_parser.set_defaults(func=mutate_rust_shared_root, operation="remove")
 
     apply_rest_roots_parser = sub.add_parser(
         "apply-mfc-rest-shared-roots",
