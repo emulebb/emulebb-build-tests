@@ -2905,6 +2905,146 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def source_stat_record(
+    *,
+    row_id: int,
+    source_path: str,
+    db_file_size: int,
+    db_source_mtime_ms: int | None,
+    created_at_ms: int | None,
+    updated_at_ms: int | None,
+) -> dict[str, object]:
+    """Compares one persisted shared-file source identity with current stat data."""
+
+    record: dict[str, object] = {
+        "rowId": row_id,
+        "pathFingerprint": private_path_fingerprint(source_path),
+        "dbFileSize": db_file_size,
+        "dbSourceMtimeMs": db_source_mtime_ms,
+        "createdAtMs": created_at_ms,
+        "updatedAtMs": updated_at_ms,
+    }
+    try:
+        stat_result = os.stat(source_path)
+    except OSError as exc:
+        record.update(
+            {
+                "exists": False,
+                "statError": type(exc).__name__,
+                "sizeMatches": False,
+                "mtimeMatches": False,
+            }
+        )
+        return record
+
+    actual_size = int(stat_result.st_size)
+    actual_mtime_ms = int(stat_result.st_mtime_ns // 1_000_000)
+    record.update(
+        {
+            "exists": True,
+            "actualFileSize": actual_size,
+            "actualMtimeMs": actual_mtime_ms,
+            "sizeMatches": actual_size == db_file_size,
+            "mtimeMatches": db_source_mtime_ms == actual_mtime_ms,
+            "mtimeDeltaMs": None if db_source_mtime_ms is None else actual_mtime_ms - db_source_mtime_ms,
+        }
+    )
+    return record
+
+
+def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
+    """Compares persisted source size/mtime identities with current filesystem stats."""
+
+    if not args.metadata_db.is_file():
+        raise RuntimeError("--metadata-db does not exist")
+    since_ms = None
+    if args.since_utc:
+        since_text = args.since_utc.strip().replace("Z", "+00:00")
+        since_ms = int(datetime.fromisoformat(since_text).timestamp() * 1000)
+    connection = sqlite3.connect(f"file:{args.metadata_db}?mode=ro", uri=True)
+    try:
+        columns = sqlite_columns(connection, "shared_file_sources")
+        created_expr = "shared_file_sources.created_at_ms" if "created_at_ms" in columns else "NULL"
+        updated_expr = "shared_file_sources.updated_at_ms" if "updated_at_ms" in columns else "NULL"
+        rows = connection.execute(
+            f"""
+            SELECT shared_file_sources.rowid,
+                   local_paths.display_path,
+                   shared_file_sources.file_size,
+                   shared_file_sources.source_mtime_ms,
+                   {created_expr},
+                   {updated_expr}
+            FROM shared_file_sources
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            ORDER BY {updated_expr} DESC, shared_file_sources.rowid DESC
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    counters: Counter[str] = Counter()
+    newest_samples: list[dict[str, object]] = []
+    mismatch_samples: list[dict[str, object]] = []
+    null_mtime_samples: list[dict[str, object]] = []
+    path_counts: Counter[str] = Counter()
+
+    for row_id, source_path, db_file_size, db_source_mtime_ms, created_at_ms, updated_at_ms in rows:
+        source_key = normalized_windows_path_key(source_path)
+        path_counts[source_key] += 1
+        record = source_stat_record(
+            row_id=int(row_id),
+            source_path=str(source_path),
+            db_file_size=int(db_file_size),
+            db_source_mtime_ms=None if db_source_mtime_ms is None else int(db_source_mtime_ms),
+            created_at_ms=None if created_at_ms is None else int(created_at_ms),
+            updated_at_ms=None if updated_at_ms is None else int(updated_at_ms),
+        )
+        counters["rows"] += 1
+        if record.get("exists") is True:
+            counters["exists"] += 1
+        else:
+            counters["missing"] += 1
+        if since_ms is not None:
+            if created_at_ms is not None and int(created_at_ms) >= since_ms:
+                counters["createdSince"] += 1
+            if updated_at_ms is not None and int(updated_at_ms) >= since_ms:
+                counters["updatedSince"] += 1
+        if record.get("sizeMatches") is True:
+            counters["sizeMatches"] += 1
+        else:
+            counters["sizeMismatches"] += 1
+        if db_source_mtime_ms is None:
+            counters["nullSourceMtime"] += 1
+            if len(null_mtime_samples) < args.sample_limit:
+                null_mtime_samples.append(record)
+        elif record.get("mtimeMatches") is True:
+            counters["mtimeMatches"] += 1
+        else:
+            counters["mtimeMismatches"] += 1
+        if len(newest_samples) < args.sample_limit:
+            newest_samples.append(record)
+        if (
+            record.get("exists") is not True
+            or record.get("sizeMatches") is not True
+            or (db_source_mtime_ms is not None and record.get("mtimeMatches") is not True)
+        ) and len(mismatch_samples) < args.mismatch_limit:
+            mismatch_samples.append(record)
+
+    duplicate_source_paths = sum(1 for count in path_counts.values() if count > 1)
+    duplicate_source_rows = sum(count for count in path_counts.values() if count > 1)
+    return {
+        "metadataDbExists": True,
+        "metadataDb": str(args.metadata_db),
+        "sinceUtc": args.since_utc,
+        "counters": dict(counters),
+        "duplicateSourcePathCount": duplicate_source_paths,
+        "duplicateSourcePathRows": duplicate_source_rows,
+        "newestSamples": newest_samples,
+        "mismatchSamples": mismatch_samples,
+        "nullMtimeSamples": null_mtime_samples,
+    }
+
+
 def pid_exists(pid: int) -> bool:
     """Returns whether a process id is currently live."""
 
@@ -5215,6 +5355,19 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_summary_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
     metadata_summary_parser.add_argument("--root", action="append", type=Path, default=[])
     metadata_summary_parser.set_defaults(func=metadata_source_summary)
+
+    metadata_stat_parser = sub.add_parser(
+        "metadata-source-stat-sample",
+        help="Compare persisted source size/mtime identities with current filesystem stats.",
+    )
+    metadata_stat_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
+    metadata_stat_parser.add_argument("--sample-limit", type=int, default=8)
+    metadata_stat_parser.add_argument("--mismatch-limit", type=int, default=12)
+    metadata_stat_parser.add_argument(
+        "--since-utc",
+        help="Optional UTC timestamp, e.g. 2026-07-20T09:22:45Z, for created/updated row counters.",
+    )
+    metadata_stat_parser.set_defaults(func=metadata_source_stat_sample)
 
     stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
     stop_parser.add_argument("--pid", type=int, required=True)
