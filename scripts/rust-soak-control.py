@@ -2609,7 +2609,10 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
         extra_roots=[args.extra_root] if args.extra_root is not None else None,
     )
     existing_entries, skipped_inaccessible = existing_shared_roots(root_entries)
-    payload_roots = [normalize_shared_root_entry(root) for root in existing_entries]
+    payload_roots = [
+        {"path": shared_root_path(normalize_shared_root_entry(root))}
+        for root in existing_entries
+    ]
     response = request_json(
         args.base_url,
         "/shared-directories",
@@ -2806,7 +2809,10 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     )
     if not root_entries:
         raise RuntimeError("MFC REST returned no shared-directory entries")
-    payload_roots = [normalize_shared_root_entry(root) for root in root_entries]
+    payload_roots = [
+        {"path": shared_root_path(normalize_shared_root_entry(root))}
+        for root in root_entries
+    ]
     response = request_json(
         args.base_url,
         "/shared-directories",

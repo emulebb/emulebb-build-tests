@@ -64,7 +64,7 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
     def fake_request_json(_base_url, method, path, _api_key, body=None):
         calls.append((method, path, body))
         if path == "/api/v1/shared-directories":
-            return {"roots": [{"path": body["roots"][0]}], "items": []}
+            return {"roots": [body["roots"][0]], "items": []}
         if path == "/api/v1/shared-directories/operations/reload":
             return {"ok": True}
         if path == "/api/v1/shared-files":
@@ -90,7 +90,7 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
     assert calls[0] == (
         "PATCH",
         "/api/v1/shared-directories",
-        {"roots": [str(tmp_path / "shared-tree")], "confirmReplaceRoots": True},
+        {"roots": [{"path": str(tmp_path / "shared-tree")}], "confirmReplaceRoots": True},
     )
     assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)

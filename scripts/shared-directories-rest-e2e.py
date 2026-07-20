@@ -235,19 +235,12 @@ def read_persisted_path_list(path: Path) -> list[str]:
 
 
 def build_shared_directory_patch_payload(flat_roots: list[Path], recursive_roots: list[Path]) -> dict[str, object]:
-    """Builds the public PATCH payload for flat and recursive shared roots."""
+    """Builds the current Rust PATCH payload for recursive shared roots."""
 
     roots: list[object] = [
-        live_common.win_path(root, trailing_slash=True)
-        for root in flat_roots
+        {"path": live_common.win_path(root, trailing_slash=True)}
+        for root in flat_roots + recursive_roots
     ]
-    roots.extend(
-        {
-            "path": live_common.win_path(root, trailing_slash=True),
-            "recursive": True,
-        }
-        for root in recursive_roots
-    )
     return {"confirmReplaceRoots": True, "roots": roots}
 
 
@@ -867,21 +860,21 @@ def main() -> int:
         current_phase = set_phase(report, "invalid_patch_checks")
         missing_parent_path = live_common.win_path(artifacts_dir / "missing-parent" / "child", trailing_slash=True)
         checks["invalid_patch_blank_path"] = {
-            "payload": {"confirmReplaceRoots": True, "roots": ["   "]},
+            "payload": {"confirmReplaceRoots": True, "roots": [{"path": "   "}]},
             "response": patch_shared_directories_error(
                 base_url,
                 args.api_key,
-                {"confirmReplaceRoots": True, "roots": ["   "]},
+                {"confirmReplaceRoots": True, "roots": [{"path": "   "}]},
                 "path must not be empty",
             ),
         }
-        checks["invalid_patch_recursive_type"] = {
+        checks["invalid_patch_recursive_field"] = {
             "payload": {"confirmReplaceRoots": True, "roots": [{"path": flat_path, "recursive": "true"}]},
             "response": patch_shared_directories_error(
                 base_url,
                 args.api_key,
                 {"confirmReplaceRoots": True, "roots": [{"path": flat_path, "recursive": "true"}]},
-                "recursive must be a boolean",
+                "recursive",
             ),
         }
         checks["invalid_patch_missing_confirmation"] = {
@@ -904,7 +897,7 @@ def main() -> int:
         )
 
         current_phase = set_phase(report, "missing_parent_patch")
-        missing_parent_payload = {"confirmReplaceRoots": True, "roots": [missing_parent_path]}
+        missing_parent_payload = {"confirmReplaceRoots": True, "roots": [{"path": missing_parent_path}]}
         checks["patch_missing_parent"] = {
             "payload": missing_parent_payload,
             "response": patch_shared_directories(base_url, args.api_key, missing_parent_payload),
@@ -951,7 +944,7 @@ def main() -> int:
 
         current_phase = set_phase(report, "patch_flat_recursive")
         first_payload = build_shared_directory_patch_payload([fixtures["flat"], fixtures["long_unicode"]], [fixtures["recursive"]])
-        first_payload["roots"].append(exact_names_path)
+        first_payload["roots"].append({"path": exact_names_path})
         checks["patch_flat_recursive"] = {
             "payload": first_payload,
             "response": patch_shared_directories(base_url, args.api_key, first_payload),

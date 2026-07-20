@@ -174,7 +174,7 @@ def build_shared_directory_patch_payload(seed_dir: Path) -> dict[str, Any]:
     root = str(seed_dir)
     if not root.endswith(("\\", "/")):
         root += "\\"
-    return {"confirmReplaceRoots": True, "roots": [root]}
+    return {"confirmReplaceRoots": True, "roots": [{"path": root}]}
 
 
 def select_search_terms(terms: list[str], *, max_terms: int) -> list[str]:

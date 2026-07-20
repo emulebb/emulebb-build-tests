@@ -189,7 +189,7 @@ def publish_shared_tree(
         "/api/v1/shared-directories",
         api_key,
         {
-            "roots": [str(root)],
+            "roots": [{"path": str(root)}],
             "confirmReplaceRoots": True,
         },
     )
