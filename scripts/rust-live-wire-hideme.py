@@ -702,7 +702,7 @@ def share_directories(base_url: str, roots: list[object]) -> dict[str, Any]:
 
     if not roots:
         return {"shared": False, "reason": "no shared_directories.roots in inputs"}
-    normalized = [_normalize_shared_root_entry(root) for root in roots]
+    normalized = [{"path": _normalize_shared_root_entry(root)} for root in roots]
     body = {"confirmReplaceRoots": True, "roots": normalized}
     # The shared-directories PATCH triggers the large-library reload, which
     # transiently starves REST at startup (63k-file profile); REST recovers once the
