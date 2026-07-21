@@ -69,7 +69,7 @@ from emule_test_harness.vm_guest_profiles import (
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
 
 SCENARIO = "emulebb.flow.converged.live-wire.hideme.v1"
-OPERATOR_SERVER = "45.82.80.155:5687"
+OPERATOR_SERVER = "176.123.5.89:4725"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 # Rust listen ports. High enough to dodge ISP filtering of classic 4662/4672, but
 # BELOW the Windows dynamic/ephemeral range (49152-65535): Hyper-V/WSL reserve

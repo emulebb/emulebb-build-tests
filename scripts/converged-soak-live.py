@@ -899,7 +899,7 @@ def ensure_operator_and_kad(
     """Deterministically bring one client onto the operator eD2K server AND Kad.
 
     HARD REQUIREMENT: both clients must ALWAYS be on the single operator server
-    (``OPERATOR_SERVER`` = 45.82.80.155:5687) and on Kad for parity runs. The rust
+    (``OPERATOR_SERVER`` = 176.123.5.89:4725) and on Kad for parity runs. The rust
     config auto-connects its server but MFC is otherwise left serverless, so this
     explicitly + idempotently ensures both. Kad is started (no-op if running) and
     the operator server connect is retried on a server-friendly backoff (eD2K

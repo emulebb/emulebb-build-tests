@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.soak_launch import OPERATOR_SERVER
 
 REQUIRED_ENV_DIRS = ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT", "CARGO_TARGET_DIR")
 REQUIRED_ENV_VALUES = ("X_LOCAL_IP",)
@@ -119,6 +120,7 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         "rustApiKey": rust_api_key,
         "p2pBindInterface": "hide.me",
         "p2pPorts": {"ed2kTcp": 42662, "kadUdp": 42672},
+        "operatorServer": OPERATOR_SERVER,
         "sharedRootCount": len(inputs.video_roots),
         "bootstrapHashCount": len(inputs.bootstrap_transfer_hashes),
         "directBootstrapTransferCount": len(inputs.direct_bootstrap_transfers),
@@ -185,6 +187,8 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         "--lan-bind-addr",
         args.lan_bind_addr,
         "--no-mfc",
+        "--rust-server",
+        OPERATOR_SERVER,
         "--vpn-guard-live-config",
         str(default_vpn_guard_path()),
         "--vpn-guard-scenario",

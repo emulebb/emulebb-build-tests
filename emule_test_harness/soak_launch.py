@@ -30,7 +30,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 # Same lab wiring as the converged single-pass orchestrator so both campaigns are
 # like-for-like (operator server, high ports, REST api keys, server.met source).
-OPERATOR_SERVER = "45.82.80.155:5687"
+OPERATOR_SERVER = "176.123.5.89:4725"
 OPERATOR_SERVER_NAME = "operator-parity"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"

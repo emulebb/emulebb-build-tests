@@ -43,11 +43,11 @@ live_wire_inputs = rest_smoke.live_wire_inputs
 BOOTSTRAP_SEARCH_METHODS = ("server", "global", "automatic", "kad")
 FALLBACK_SEARCH_METHODS = ("server", "global", "kad", "automatic")
 LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
-# Operator-canonical server for ALL live tests: eMule Security (45.82.80.155:5687).
+# Operator-canonical server for ALL live tests: eMule Sunrise (176.123.5.89:4725).
 # Keep it the sole preferred entry so every live run connects here first (LowID is
 # acceptable). The full server.met is still fetched; other servers remain only as a
 # last-resort fallback if the canonical server is unreachable.
-PREFERRED_SERVER_ADDRESSES = ("45.82.80.155",)
+PREFERRED_SERVER_ADDRESSES = ("176.123.5.89",)
 DEFAULT_NATURAL_AUTO_BROWSE_TIMEOUT_SECONDS = 180.0
 DEFAULT_FALLBACK_AUTO_BROWSE_TIMEOUT_SECONDS = 300.0
 DEFAULT_DIRECT_BOOTSTRAP_SOURCE_TIMEOUT_SECONDS = 180.0

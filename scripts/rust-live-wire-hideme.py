@@ -48,7 +48,7 @@ from emule_test_harness.vm_guest_profiles import (
 )
 
 # Operator-fixed network inputs (public identifiers, not local paths).
-OPERATOR_SERVER = "45.82.80.155:5687"
+OPERATOR_SERVER = "176.123.5.89:4725"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 # High listen ports: avoid ISP filtering of the classic 4662/4672. Kept BELOW the
 # Windows dynamic/ephemeral range (49152-65535) on purpose: Hyper-V/WSL reserve
@@ -818,7 +818,7 @@ def run_pass(
         ) is not None
 
         # Gate on a server connection only; LowID is acceptable. The operator runs a
-        # single canonical server (eMule Security, 45.82.80.155:5687) and behind the
+        # single canonical server (eMule Sunrise, 176.123.5.89:4725) and behind the
         # hide.me tunnel an inbound TCP callback may be unreachable, so HighID is not
         # guaranteed. Require ed2kConnected; record HighID/LowID as evidence, not a gate
         # (search + source download work on LowID too).

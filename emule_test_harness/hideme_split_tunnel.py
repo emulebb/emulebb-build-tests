@@ -81,7 +81,7 @@ def ensure_whitelisted(exe_path: Path, *, name: str | None = None, settings_path
 # REST control plane which binds to the LAN X_LOCAL_IP (192.168.1.210). Without an
 # exclude, rust's REST reply to a LAN peer egresses the tunnel and the TCP handshake
 # never completes ("network unreachable"). Excluding the LAN keeps the control plane
-# on the LAN while eD2K/Kad (server 45.82.80.155 + peers) still tunnel. HARD RULE:
+# on the LAN while eD2K/Kad (server 176.123.5.89 + peers) still tunnel. HARD RULE:
 # P2P binds the hide.me tunnel; REST binds X_LOCAL_IP.
 CONTROL_PLANE_EXCLUDE_RANGES: tuple[str, ...] = ("192.168.1.0/24",)
 
