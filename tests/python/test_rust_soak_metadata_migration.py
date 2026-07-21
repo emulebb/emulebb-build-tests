@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from emule_test_harness import rust_metadata
-from emule_test_harness.rust_soak_metadata_migration import migrate_v15_to_v16
+from emule_test_harness.rust_soak_metadata_migration import migrate_to_current, migrate_v16_to_v17
 
 
 def workspace_root() -> Path:
@@ -54,26 +54,81 @@ def make_v15_db(path: Path) -> None:
         conn.commit()
 
 
-def test_migrates_v15_soak_metadata_to_exact_v16_shape(tmp_path: Path) -> None:
+def make_v16_db_with_old_priority_check(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    old_schema = rust_metadata._schema_sql(rust_repo()).replace(
+        "'auto', 'not-published', 'verylow', 'low', 'normal', 'high', 'release'",
+        "'auto', 'verylow', 'low', 'normal', 'high', 'release'",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_schema)
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 16, 0)",
+            (schema_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO known_files(
+                ed2k_hash, size_bytes, display_name, upload_priority,
+                first_seen_ms, last_seen_ms, updated_at_ms
+            )
+            VALUES (zeroblob(16), 1, 'sample.bin', 'normal', 0, 0, 0)
+            """
+        )
+        conn.commit()
+
+
+def assert_known_files_accepts_not_published(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO known_files(
+                ed2k_hash, size_bytes, display_name, upload_priority,
+                first_seen_ms, last_seen_ms, updated_at_ms
+            )
+            VALUES (X'11111111111111111111111111111111', 1, 'hidden.bin', 'not-published', 0, 0, 0)
+            """
+        )
+        conn.commit()
+
+
+def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
     db_path = tmp_path / "emulebb-rust-metadata.db"
     make_v15_db(db_path)
 
-    result = migrate_v15_to_v16(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
+    result = migrate_to_current(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
 
-    assert result["action"] == "migrated-v15-to-v16"
-    assert Path(str(result["backup"])).is_file()
+    assert result["action"] == "migrated-to-current"
+    assert [step["action"] for step in result["steps"]] == ["migrated-v15-to-v16", "migrated-v16-to-v17"]
+    assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 16
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 17
         columns = [row[1] for row in conn.execute("PRAGMA table_info(shared_directory_roots)")]
         assert "recursive" not in columns
         assert conn.execute("SELECT count(*) FROM shared_directory_roots").fetchone()[0] == 1
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert_known_files_accepts_not_published(db_path)
+
+
+def test_migrates_v16_known_files_priority_constraint_to_v17(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v16_db_with_old_priority_check(db_path)
+
+    result = migrate_v16_to_v17(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
+
+    assert result["action"] == "migrated-v16-to-v17"
+    assert Path(str(result["backup"])).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 17
+        assert conn.execute("SELECT count(*) FROM known_files").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert_known_files_accepts_not_published(db_path)
 
 
 def test_current_schema_is_noop(tmp_path: Path) -> None:
     db_path = tmp_path / "emulebb-rust-metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), db_path)
 
-    result = migrate_v15_to_v16(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
+    result = migrate_to_current(db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path)
 
     assert result["action"] == "noop-current"

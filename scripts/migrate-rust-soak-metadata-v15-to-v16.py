@@ -1,4 +1,4 @@
-"""Migrate the persisted Rust soak metadata DB from schema v15 to v16."""
+"""Migrate the persisted Rust soak metadata DB to the current Rust schema."""
 
 from __future__ import annotations
 

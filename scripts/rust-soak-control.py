@@ -2954,6 +2954,116 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, object]:
+    """Sets one source-root subset to high priority and suppresses the rest from publish."""
+
+    if not args.metadata_db.is_file():
+        raise RuntimeError("--metadata-db does not exist")
+    high_prefix = normalized_root_prefix(args.high_root)
+    now_ms = int(time.time() * 1000)
+    connection = sqlite3.connect(args.metadata_db)
+    try:
+        rows = connection.execute(
+            """
+            SELECT known_files.id,
+                   known_files.upload_priority,
+                   known_files.auto_upload_priority,
+                   local_paths.display_path
+            FROM known_files
+            LEFT JOIN shared_file_sources ON shared_file_sources.known_file_id = known_files.id
+            LEFT JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            WHERE known_files.completed != 0
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unshared_files
+                  WHERE unshared_files.known_file_id = known_files.id
+              )
+            ORDER BY known_files.id
+            """
+        ).fetchall()
+        target_by_id: dict[int, str] = {}
+        current_by_id: dict[int, tuple[str, int]] = {}
+        source_rows = 0
+        no_source_files: set[int] = set()
+        high_source_rows = 0
+        suppressed_source_rows = 0
+        for known_file_id, upload_priority, auto_upload_priority, source_path in rows:
+            known_file_id = int(known_file_id)
+            current_by_id[known_file_id] = (str(upload_priority), int(auto_upload_priority or 0))
+            target_by_id.setdefault(known_file_id, "not-published")
+            if source_path is None:
+                no_source_files.add(known_file_id)
+                continue
+            source_rows += 1
+            source_is_high = normalized_windows_path_key(source_path).startswith(high_prefix)
+            if source_is_high:
+                high_source_rows += 1
+                target_by_id[known_file_id] = "high"
+            else:
+                suppressed_source_rows += 1
+                target_by_id.setdefault(known_file_id, "not-published")
+
+        high_ids = [known_file_id for known_file_id, priority in target_by_id.items() if priority == "high"]
+        suppressed_ids = [
+            known_file_id for known_file_id, priority in target_by_id.items() if priority == "not-published"
+        ]
+        unchanged = sum(
+            1
+            for known_file_id, target_priority in target_by_id.items()
+            if current_by_id[known_file_id] == (target_priority, 0)
+        )
+
+        if not high_ids and not args.allow_empty_high_root:
+            raise RuntimeError("--high-root matched no shared source rows; refusing to suppress the whole catalog")
+
+        if not args.dry_run:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                for known_file_id in high_ids:
+                    connection.execute(
+                        """
+                        UPDATE known_files
+                        SET upload_priority = 'high',
+                            auto_upload_priority = 0,
+                            updated_at_ms = ?
+                        WHERE id = ?
+                        """,
+                        (now_ms, known_file_id),
+                    )
+                for known_file_id in suppressed_ids:
+                    connection.execute(
+                        """
+                        UPDATE known_files
+                        SET upload_priority = 'not-published',
+                            auto_upload_priority = 0,
+                            updated_at_ms = ?
+                        WHERE id = ?
+                        """,
+                        (now_ms, known_file_id),
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+    finally:
+        connection.close()
+
+    return {
+        "schema": "emulebb-build-tests.rust-shared-publish-priority-split.v1",
+        "metadataDb": str(args.metadata_db),
+        "highRootFingerprint": private_path_fingerprint(high_prefix),
+        "matchedSharedSourceRows": source_rows,
+        "noSourceSharedFiles": len(no_source_files),
+        "highPrioritySourceRows": high_source_rows,
+        "notPublishedSourceRows": suppressed_source_rows,
+        "matchedSharedFiles": len(target_by_id),
+        "highPriorityFiles": len(high_ids),
+        "notPublishedFiles": len(suppressed_ids),
+        "changedFiles": len(target_by_id) - unchanged,
+        "dryRun": args.dry_run,
+    }
+
+
 def source_stat_record(
     *,
     row_id: int,
@@ -5420,6 +5530,16 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_summary_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
     metadata_summary_parser.add_argument("--root", action="append", type=Path, default=[])
     metadata_summary_parser.set_defaults(func=metadata_source_summary)
+
+    priority_split_parser = sub.add_parser(
+        "set-shared-publish-priority-split",
+        help="Set one source-root subset high and all other shared files not-published.",
+    )
+    priority_split_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
+    priority_split_parser.add_argument("--high-root", type=Path, required=True)
+    priority_split_parser.add_argument("--allow-empty-high-root", action="store_true")
+    priority_split_parser.add_argument("--dry-run", action="store_true")
+    priority_split_parser.set_defaults(func=set_shared_publish_priority_split)
 
     metadata_stat_parser = sub.add_parser(
         "metadata-source-stat-sample",
