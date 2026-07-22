@@ -93,6 +93,66 @@ def diagnostics_rust_exe(output_root: Path) -> Path:
     return output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-diagnostics.exe"
 
 
+def profile_launch_client_script() -> str:
+    """Returns the persisted profile's regular-client launcher script."""
+
+    return '''#!/usr/bin/env python
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    workspace_root = os.environ.get("EMULEBB_WORKSPACE_ROOT", "").strip()
+    if not workspace_root:
+        raise SystemExit("EMULEBB_WORKSPACE_ROOT must be set in the environment")
+    repo_root = Path(workspace_root) / "repos" / "emulebb-build-tests"
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from emule_test_harness import rust_profile_client_launcher
+
+    profile_dir = Path(__file__).resolve().parent
+    return rust_profile_client_launcher.run(["--profile-dir", str(profile_dir), *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def disabled_profile_ui_script() -> str:
+    """Returns the persisted profile's disabled native UI launcher script."""
+
+    return '''#!/usr/bin/env python
+from __future__ import annotations
+
+
+def main() -> int:
+    print("The native Rust UI launcher is disabled. Use launch-client-here.py for the headless daemon.")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def install_profile_launchers(profile_dir: Path) -> dict[str, str]:
+    """Writes the persisted profile launch helper scripts."""
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    launch_client = profile_dir / "launch-client-here.py"
+    launch_ui = profile_dir / "launch-UI-here.py"
+    launch_client.write_text(profile_launch_client_script(), encoding="utf-8", newline="\n")
+    launch_ui.write_text(disabled_profile_ui_script(), encoding="utf-8", newline="\n")
+    return {
+        "launchClient": str(launch_client),
+        "launchUi": str(launch_ui),
+    }
+
+
 def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]) -> dict[str, Any]:
     """Builds the self-describing operator run profile without starting it."""
 
@@ -243,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout for the launcher's Rust REST readiness checks.",
     )
     parser.add_argument("--describe", action="store_true", help="Print effective paths and commands without launching.")
+    parser.add_argument("--install-launchers", action="store_true", help="Refresh launch-client-here.py and the disabled launch-UI-here.py in the persisted profile, then exit.")
     return parser
 
 
@@ -254,6 +315,18 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--rest-timeout-seconds must be greater than zero.")
 
     env = require_operator_environment()
+    if args.install_launchers:
+        profile = build_effective_profile(args, env)
+        profile_dir = profile.get("rustProfileDir")
+        if not profile_dir:
+            raise RuntimeError("live-wire inputs must define rust_profile.profile_dir to install launchers.")
+        result = {
+            "schema": "emulebb.rust-soak-profile.launchers.v1",
+            "profileDir": str(profile_dir),
+            "launchers": install_profile_launchers(Path(str(profile_dir))),
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
     if args.describe:
         print(json.dumps(build_effective_profile(args, env), indent=2, sort_keys=True))
         return 0
@@ -262,6 +335,10 @@ def main(argv: list[str] | None = None) -> int:
     args.lan_bind_addr = lan_bind_addr
 
     output_root = get_workspace_output_root()
+    profile = build_effective_profile(args, env)
+    profile_dir = profile.get("rustProfileDir")
+    if profile_dir:
+        install_profile_launchers(Path(str(profile_dir)))
     log_dir = output_root / "logs" / "soak-launch"
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -295,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         "seconds": args.seconds,
         "lanBindAddr": lan_bind_addr,
         "startedUtc": stamp,
-        "describe": build_effective_profile(args, env),
+        "describe": profile,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(manifest, indent=2, sort_keys=True))

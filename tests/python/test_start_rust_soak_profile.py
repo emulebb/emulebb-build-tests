@@ -153,6 +153,52 @@ def test_background_starter_describe_reports_effective_operator_contract(
     assert "stop-profile-launch" in result["stopCommand"]
 
 
+def test_profile_launcher_install_writes_regular_client_and_disabled_ui(tmp_path: Path) -> None:
+    module = load_start_soak_module()
+    profile_dir = tmp_path / "rust-runtime"
+
+    result = module.install_profile_launchers(profile_dir)
+
+    launch_client = profile_dir / "launch-client-here.py"
+    launch_ui = profile_dir / "launch-UI-here.py"
+    assert result == {"launchClient": str(launch_client), "launchUi": str(launch_ui)}
+    client_text = launch_client.read_text(encoding="utf-8")
+    ui_text = launch_ui.read_text(encoding="utf-8")
+    assert "rust_profile_client_launcher.run" in client_text
+    assert "--profile-dir" in client_text
+    assert "emulebb-rust-ui" not in client_text
+    assert "emulebb-rust-diagnostics" not in client_text
+    assert "native Rust UI launcher is disabled" in ui_text
+    assert "emulebb-rust-ui" not in ui_text
+
+
+def test_background_starter_install_launchers_uses_persisted_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_start_soak_module()
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    rust_profile = output_root / "soak" / "rust-runtime"
+    repo_root.mkdir()
+    rust_profile.mkdir(parents=True)
+    write_minimal_live_inputs(repo_root, rust_profile)
+    monkeypatch.setattr(module, "REPO_ROOT", repo_root)
+    set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
+
+    assert module.main(["--seconds", "3600", "--install-launchers"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schema"] == "emulebb.rust-soak-profile.launchers.v1"
+    assert result["profileDir"] == str(rust_profile)
+    assert Path(result["launchers"]["launchClient"]).is_file()
+    assert Path(result["launchers"]["launchUi"]).is_file()
+    assert "rust_profile_client_launcher.run" in Path(result["launchers"]["launchClient"]).read_text(
+        encoding="utf-8"
+    )
+
+
 def test_background_starter_describe_reports_diagnostics_and_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
