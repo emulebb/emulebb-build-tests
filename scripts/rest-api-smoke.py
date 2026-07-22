@@ -308,11 +308,28 @@ QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompat
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
 UNSAFE_OPENAPI_OPERATIONS = {
+    "bootstrapKad",
     "captureDiagnosticDump",
+    "clearLogs",
+    "connectServer",
     "connectServerAny",
+    "createServer",
+    "createServerMetUrlImport",
+    "deleteSearches",
+    "deleteServer",
+    "disconnectServers",
     "getEvents",
+    "patchServer",
+    "probeVpnGuard",
+    "recheckKadFirewall",
+    "refreshNat",
+    "reloadIpFilter",
+    "reloadSharedDirectories",
+    "replaceSharedDirectories",
     "triggerDiagnosticCrashTest",
     "shutdownApp",
+    "startKad",
+    "stopKad",
 }
 UNSAFE_BROAD_MUTATION_PATHS = (
     "/api/v1/app/shutdown",
@@ -1111,40 +1128,11 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "POST",
-        "path": "/api/v1/logs/operations/clear",
-        "json_body": {"confirmClearLogs": True},
-        "family": "logs",
-        "scenario": "safe_mutation",
-        "expected_statuses": (200,),
-    },
-    {
-        "method": "PATCH",
-        "path": "/api/v1/servers/192.0.2.254:4669",
-        "json_body": {"priority": "high"},
-        "family": "servers",
-        "scenario": "safe_mutation",
-    },
-    {
-        "method": "POST",
-        "path": "/api/v1/kad/operations/recheck-firewall",
-        "json_body": {},
-        "family": "kad",
-        "scenario": "safe_mutation",
-    },
-    {
-        "method": "POST",
         "path": "/api/v1/searches",
         "json_body": {"query": "", "method": "automatic", "type": ""},
         "family": "searches",
         "scenario": "safe_mutation",
         "expected_statuses": (400,),
-    },
-    {
-        "method": "DELETE",
-        "path": "/api/v1/searches/123",
-        "json_body": None,
-        "family": "searches",
-        "scenario": "safe_mutation",
     },
 )
 REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (

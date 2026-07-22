@@ -114,6 +114,38 @@ def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
     assert module.OPENAPI_TAG_FAMILIES["IpFilter"] == "ip-filter"
 
 
+def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    routes_by_operation = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+
+    for operation_id in {
+        "refreshNat",
+        "probeVpnGuard",
+        "reloadSharedDirectories",
+        "connectServerAny",
+        "disconnectServers",
+        "connectServer",
+        "startKad",
+        "stopKad",
+        "bootstrapKad",
+        "recheckKadFirewall",
+        "deleteSearches",
+        "reloadIpFilter",
+        "clearLogs",
+        "replaceSharedDirectories",
+    }:
+        assert routes_by_operation[operation_id]["safe"] is False
+        assert routes_by_operation[operation_id]["safety"] == "unsafe"
+
+
+def test_rust_openapi_transfer_schema_includes_delivery_fields() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    transfer_properties = module.load_openapi_document()["components"]["schemas"]["Transfer"]["properties"]
+
+    assert transfer_properties["deliveredPath"] == {"type": ["string", "null"]}
+    assert transfer_properties["inIncoming"] == {"type": "boolean"}
+
+
 def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]

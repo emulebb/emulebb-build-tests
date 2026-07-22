@@ -28,11 +28,26 @@
     "download_trigger_count": 1,
     "search_type": "any",
     "contract_route_count": 90,
-    "safe_contract_route_count": 87,
+    "safe_contract_route_count": 72,
     "unsafe_contract_operations": [
       "shutdownApp",
       "captureDiagnosticDump",
-      "triggerDiagnosticCrashTest"
+      "triggerDiagnosticCrashTest",
+      "replaceSharedDirectories",
+      "reloadSharedDirectories",
+      "createServer",
+      "connectServerAny",
+      "disconnectServers",
+      "createServerMetUrlImport",
+      "patchServer",
+      "deleteServer",
+      "connectServer",
+      "startKad",
+      "stopKad",
+      "bootstrapKad",
+      "recheckKadFirewall",
+      "deleteSearches",
+      "clearLogs"
     ],
     "contract_family_counts": {
       "app": 4,
@@ -71,20 +86,8 @@
         "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/0123456789abcdef0123456789abcdef/operations/browse"
       },
       {
-        "method": "PATCH",
-        "path": "/api/v1/servers/192.0.2.254:4669"
-      },
-      {
-        "method": "POST",
-        "path": "/api/v1/kad/operations/recheck-firewall"
-      },
-      {
         "method": "POST",
         "path": "/api/v1/searches"
-      },
-      {
-        "method": "DELETE",
-        "path": "/api/v1/searches/123"
       }
     ],
     "expected_error_stress_operations": [

@@ -2833,6 +2833,21 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert routes_by_operation["triggerDiagnosticCrashTest"]["safe"] is False
     assert routes_by_operation["triggerDiagnosticCrashTest"]["safety"] == "unsafe"
     assert routes_by_operation["triggerDiagnosticCrashTest"]["responseEnvelope"] == "OkAcceptedResponse"
+    for operation_id in {
+        "reloadSharedDirectories",
+        "connectServerAny",
+        "disconnectServers",
+        "connectServer",
+        "startKad",
+        "stopKad",
+        "bootstrapKad",
+        "recheckKadFirewall",
+        "deleteSearches",
+        "clearLogs",
+        "replaceSharedDirectories",
+    }:
+        assert routes_by_operation[operation_id]["safe"] is False
+        assert routes_by_operation[operation_id]["safety"] == "unsafe"
     assert all(len(route["successResponseRefs"]) == 1 for route in module.REST_CONTRACT_ROUTES)
     assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
 
@@ -3688,7 +3703,7 @@ def test_rest_stress_config_rejects_invalid_values() -> None:
         )
 
 
-def test_rest_stress_operations_include_safe_mutation_routes() -> None:
+def test_rest_stress_operations_include_only_live_safe_mutation_routes() -> None:
     module = load_rest_api_smoke_module()
 
     operations = module.build_rest_stress_operations("smoke")
@@ -3713,10 +3728,11 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert operations_by_pair[
         ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse")
     ]["json_body"] == {}
-    assert operations_by_pair[("POST", "/api/v1/logs/operations/clear")]["json_body"] == {"confirmClearLogs": True}
-    assert ("POST", "/api/v1/kad/operations/recheck-firewall") in method_path_pairs
     assert ("POST", "/api/v1/searches") in method_path_pairs
-    assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
+    assert ("POST", "/api/v1/logs/operations/clear") not in method_path_pairs
+    assert ("PATCH", "/api/v1/servers/192.0.2.254:4669") not in method_path_pairs
+    assert ("POST", "/api/v1/kad/operations/recheck-firewall") not in method_path_pairs
+    assert ("DELETE", "/api/v1/searches/123") not in method_path_pairs
 
 
 def test_shutdown_is_excluded_from_broad_stress_mutation_loops() -> None:
