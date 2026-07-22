@@ -4898,16 +4898,18 @@ def watch_findings(
     monitor: dict[str, object],
     mfc: dict[str, object] | None = None,
     diagnostics: dict[str, object] | None = None,
+    *,
+    monitor_required: bool = True,
 ) -> list[str]:
     """Returns compact operator-facing findings for one soak cadence check."""
 
     findings: list[str] = []
     latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
-    if monitor.get("monitorAlive") is False:
+    if monitor_required and monitor.get("monitorAlive") is False:
         findings.append("monitor-not-running")
-    if monitor.get("monitorStale") is True:
+    if monitor_required and monitor.get("monitorStale") is True:
         findings.append("monitor-stale")
-    if latest.get("mfcLogStale") is True:
+    if monitor_required and latest.get("mfcLogStale") is True:
         findings.append("mfc-upload-log-stale")
     if rust.get("sharedHashingActive") is True or int(rust.get("sharedHashingCount") or 0) > 0:
         findings.append("rust-hashing-active")
@@ -5114,6 +5116,7 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     """Runs one reusable long-soak cadence check and optional monitor repair."""
 
     rust = sample(args.base_url, args.api_key)
+    monitor_required = getattr(args, "monitor_required", True)
     mfc: dict[str, object] | None = None
     if args.mfc_base_url:
         try:
@@ -5121,9 +5124,14 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
         except Exception as error:
             mfc = {"error": f"{type(error).__name__}: {error}"}
     monitor_args = argparse.Namespace(output_dir=args.output_dir, stale_seconds=args.stale_seconds)
-    monitor = upload_monitor_sample(monitor_args)
-    action: dict[str, object] = {"monitorRestarted": False}
-    if args.restart_stale_monitor and (
+    monitor = upload_monitor_sample(monitor_args) if monitor_required else {
+        "monitorRequired": False,
+        "monitorAlive": None,
+        "monitorStale": None,
+        "latestRecord": None,
+    }
+    action: dict[str, object] = {"monitorRestarted": False, "monitorRequired": monitor_required}
+    if monitor_required and args.restart_stale_monitor and (
         monitor.get("monitorAlive") is False or monitor.get("monitorStale") is True
     ):
         restart_args = argparse.Namespace(
@@ -5154,7 +5162,7 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             )
         )
     vpn = optional_watch_vpn(args)
-    findings = watch_findings(rust, monitor, mfc, diagnostics)
+    findings = watch_findings(rust, monitor, mfc, diagnostics, monitor_required=monitor_required)
     monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     upload_demand = upload_demand_classification(
         rust,
@@ -5284,6 +5292,21 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
+def watch_sample_error_result(error: Exception) -> dict[str, object]:
+    """Returns a retained watch sample for transient polling failures."""
+
+    return {
+        "timestampUtc": datetime.now(UTC).isoformat(),
+        "findings": ["watch-sample-error"],
+        "recommendations": ["inspect-rust-p2p"],
+        "action": {"monitorRestarted": False},
+        "watchError": {
+            "type": type(error).__name__,
+            "message": str(error)[:256],
+        },
+    }
+
+
 def watch_loop(args: argparse.Namespace) -> dict[str, object]:
     """Runs repeated long-soak cadence checks and retains JSONL evidence."""
 
@@ -5292,7 +5315,10 @@ def watch_loop(args: argparse.Namespace) -> dict[str, object]:
     while args.max_samples <= 0 or sample_count < args.max_samples:
         if args.watch_stop_file.exists():
             break
-        last_result = watch_once(args)
+        try:
+            last_result = watch_once(args)
+        except Exception as error:
+            last_result = watch_sample_error_result(error)
         append_jsonl(args.watch_jsonl, last_result)
         write_watch_heartbeat(args.watch_heartbeat, last_result)
         sample_count += 1
@@ -5366,6 +5392,8 @@ def start_watch_loop(args: argparse.Namespace) -> dict[str, object]:
         command.extend(["--diagnostics-log-file", str(log_file)])
     command.extend(["--diagnostics-limit", str(args.diagnostics_limit)])
     command.extend(["--diagnostics-max-bytes", str(args.diagnostics_max_bytes)])
+    if not getattr(args, "monitor_required", True):
+        command.append("--no-monitor-required")
     if not args.restart_stale_monitor:
         command.append("--no-restart-stale-monitor")
 
@@ -5429,6 +5457,7 @@ def profile_watch_loop_args(args: argparse.Namespace) -> argparse.Namespace:
         interval_seconds=args.interval_seconds,
         mfc_log_stale_seconds=args.mfc_log_stale_seconds,
         restart_stale_monitor=args.restart_stale_monitor,
+        monitor_required=args.monitor_required,
         watch_interval_seconds=args.watch_interval_seconds,
         max_samples=args.max_samples,
         watch_jsonl=watch_paths["watchJsonl"],
@@ -6688,6 +6717,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
     watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
+    watch_parser.add_argument("--monitor-required", action=argparse.BooleanOptionalAction, default=True)
     watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
     watch_parser.add_argument(
@@ -6743,6 +6773,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_loop_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
     watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
+    watch_loop_parser.add_argument("--monitor-required", action=argparse.BooleanOptionalAction, default=True)
     watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_loop_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
     watch_loop_parser.add_argument(
@@ -6786,6 +6817,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_watch_loop_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     start_watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
     start_watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
+    start_watch_loop_parser.add_argument("--monitor-required", action=argparse.BooleanOptionalAction, default=True)
     start_watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     start_watch_loop_parser.add_argument(
         "--no-restart-stale-monitor",
@@ -6825,7 +6857,8 @@ def build_parser() -> argparse.ArgumentParser:
     start_profile_watch_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     start_profile_watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
     start_profile_watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
-    start_profile_watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
+    start_profile_watch_parser.add_argument("--monitor-required", action=argparse.BooleanOptionalAction, default=False)
+    start_profile_watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=False)
     start_profile_watch_parser.add_argument(
         "--no-restart-stale-monitor",
         action="store_false",

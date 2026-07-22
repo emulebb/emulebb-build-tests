@@ -969,6 +969,7 @@ def test_start_watch_loop_propagates_live_evidence_args(tmp_path: Path, monkeypa
             mfc_api_key="mfc-key",
             interval_seconds=300.0,
             mfc_log_stale_seconds=900.0,
+            monitor_required=True,
             restart_stale_monitor=True,
             watch_interval_seconds=300.0,
             max_samples=0,
@@ -1011,6 +1012,7 @@ def test_start_watch_loop_propagates_live_evidence_args(tmp_path: Path, monkeypa
     assert ["--diagnostics-max-bytes", "4194304"] == command[
         command.index("--diagnostics-max-bytes") : command.index("--diagnostics-max-bytes") + 2
     ]
+    assert "--no-monitor-required" not in command
 
 
 def test_start_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monkeypatch) -> None:
@@ -1043,6 +1045,7 @@ def test_start_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monke
             mfc_api_key="mfc-key",
             interval_seconds=300.0,
             mfc_log_stale_seconds=900.0,
+            monitor_required=False,
             restart_stale_monitor=True,
             watch_interval_seconds=300.0,
             max_samples=0,
@@ -1063,6 +1066,7 @@ def test_start_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monke
     assert captured[0].watch_heartbeat == profile_watch_dir / "rust-live-watch.heartbeat.txt"
     assert captured[0].watch_stop_file == profile_watch_dir / "rust-soak-watch.stop"
     assert captured[0].include_vpn_status is True
+    assert captured[0].monitor_required is False
 
 
 def test_stop_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monkeypatch) -> None:
@@ -3334,6 +3338,127 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert "diagnosticsFiles=1" in heartbeat_text
     assert "rustOfferObservedEntries=600" in heartbeat_text
     assert "rustOfferLatestCursor=600" in heartbeat_text
+
+
+def test_watch_once_rust_only_does_not_require_upload_monitor(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    heartbeat = tmp_path / "watch.heartbeat.txt"
+
+    monkeypatch.setattr(
+        control,
+        "sample",
+        lambda _base_url, _api_key: {
+            "activeUploads": 0,
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "ed2kPendingEntries": 0,
+            "ed2kPublishedEntries": 100,
+            "ed2kVisibilityPercent": 100.0,
+            "kadConnected": True,
+            "kadFirewalled": False,
+            "kadGateAllowed": True,
+            "kadGateBlockReason": "",
+            "sharedHashingActive": False,
+            "sharedHashingCount": 0,
+            "uploadSpeedKiBps": 0.0,
+            "waitingUploads": 0,
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "upload_monitor_sample",
+        lambda _args: {
+            "monitorAlive": False,
+            "monitorStale": True,
+            "latestRecord": None,
+        },
+    )
+    monkeypatch.setattr(control, "restart_upload_monitor", lambda _args: pytest.fail("monitor should not restart"))
+    monkeypatch.setattr(control, "optional_watch_diagnostics", lambda _args: None)
+    monkeypatch.setattr(control, "optional_watch_vpn", lambda _args: None)
+
+    result = control.watch_once(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            mfc_base_url=None,
+            mfc_api_key="mfc",
+            output_dir=tmp_path,
+            stale_seconds=900.0,
+            monitor_required=False,
+            restart_stale_monitor=True,
+            log_dir=tmp_path,
+            rust_pid=None,
+            rust_diag_log=None,
+            mfc_upload_log=None,
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+            append_jsonl=True,
+            watch_jsonl=jsonl,
+            watch_heartbeat=heartbeat,
+            diagnostics_log_dir=[],
+            diagnostics_log_file=[],
+            include_vpn_status=False,
+        )
+    )
+
+    assert result["monitor"]["monitorRequired"] is False
+    assert "monitor-not-running" not in result["findings"]
+    assert "monitor-stale" not in result["findings"]
+    assert result["recommendations"] == ["continue-soak"]
+    retained = control.latest_jsonl_record(jsonl)
+    assert retained is not None
+    assert retained["action"]["monitorRequired"] is False
+    heartbeat_text = heartbeat.read_text(encoding="utf-8")
+    assert "repair-upload-monitor" not in heartbeat_text
+
+
+def test_watch_loop_retains_error_sample_and_continues(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    heartbeat = tmp_path / "watch.heartbeat.txt"
+    stop_file = tmp_path / "watch.stop"
+    calls = iter(
+        [
+            TimeoutError("timed out"),
+            {
+                "timestampUtc": "2026-01-01T00:00:10+00:00",
+                "rust": {"ed2kConnected": True, "ed2kHighId": True, "kadConnected": True},
+                "monitor": {"monitorAlive": None, "monitorStale": None, "latestRecord": None},
+                "uploadDemand": {"classification": "continue-soak", "reason": "no-upload-parity-action"},
+                "findings": [],
+                "recommendations": ["continue-soak"],
+                "action": {"monitorRestarted": False},
+            },
+        ]
+    )
+
+    def fake_watch_once(_args: SimpleNamespace) -> dict[str, object]:
+        value = next(calls)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(control, "watch_once", fake_watch_once)
+    monkeypatch.setattr(control.time, "sleep", lambda _seconds: None)
+
+    result = control.watch_loop(
+        SimpleNamespace(
+            max_samples=2,
+            watch_stop_file=stop_file,
+            watch_jsonl=jsonl,
+            watch_heartbeat=heartbeat,
+            watch_interval_seconds=0.1,
+        )
+    )
+
+    records = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
+    assert result["samples"] == 2
+    assert records[0]["findings"] == ["watch-sample-error"]
+    assert records[0]["watchError"]["type"] == "TimeoutError"
+    assert records[1]["recommendations"] == ["continue-soak"]
+    assert "watch-sample-error" not in heartbeat.read_text(encoding="utf-8")
 
 
 def test_watch_once_brief_report_keeps_retained_evidence_full(tmp_path: Path, monkeypatch) -> None:
