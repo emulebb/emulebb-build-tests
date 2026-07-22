@@ -16,7 +16,14 @@ from typing import Any
 
 from . import goed2k, live_process_monitor, rust_client
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
-from .rust_local_ed2k import publish_shared_tree, request_json, wait_for_ed2k_connected, wait_for_rest_ready
+from .rust_local_ed2k import (
+    file_sha256,
+    publish_shared_tree,
+    request_json,
+    wait_for,
+    wait_for_ed2k_connected,
+    wait_for_rest_ready,
+)
 
 API_KEY = "rust-local-upload-soak-key"
 DEFAULT_DURATION_SECONDS = 300.0
@@ -95,7 +102,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--payload-mib", type=int, default=DEFAULT_PAYLOAD_MIB)
     parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS)
     parser.add_argument("--artifacts-dir", type=Path, default=None)
-    parser.add_argument("--rust-exe", type=Path, default=staged_rust_bin("emulebb-rust-diagnostics.exe"))
+    parser.add_argument("--rust-exe", type=Path, default=staged_rust_bin("emulebb-rust.exe"))
+    parser.add_argument("--start-paused-resume", action="store_true")
+    parser.add_argument("--require-completion", action="store_true")
+    parser.add_argument("--require-delivered-path", action="store_true")
     parser.add_argument("--ed2k-server-repo", type=Path)
     parser.add_argument("--ed2k-server-exe", type=Path)
     parser.add_argument("--api-key", default=API_KEY)
@@ -247,6 +257,76 @@ def safe_float(value: object) -> float:
         return 0.0
 
 
+def wait_for_transfer_state(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    *,
+    states: set[str],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until one transfer is visible in any expected state."""
+
+    def probe() -> dict[str, object] | None:
+        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
+        return transfer if str(transfer.get("state") or "") in states else None
+
+    return wait_for(
+        probe,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.5,
+        description=f"transfer {transfer_hash} state in {sorted(states)}",
+    )
+
+
+def verify_download_delivery(
+    final_transfer: dict[str, object],
+    payload: dict[str, object],
+    *,
+    require_completion: bool,
+    require_delivered_path: bool,
+) -> dict[str, object]:
+    """Builds and enforces the strict download/delivery checks requested by beta proof."""
+
+    expected_size = safe_int(payload.get("sizeBytes"))
+    expected_sha256 = str(payload.get("sha256") or "")
+    completed_bytes = safe_int(final_transfer.get("completedBytes"))
+    delivered_path_value = final_transfer.get("deliveredPath")
+    delivered_path = Path(str(delivered_path_value)) if delivered_path_value else None
+    result: dict[str, object] = {
+        "requireCompletion": require_completion,
+        "requireDeliveredPath": require_delivered_path,
+        "state": final_transfer.get("state"),
+        "completedBytes": completed_bytes,
+        "expectedSizeBytes": expected_size,
+        "deliveredPathPresent": delivered_path is not None,
+        "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
+        "ok": True,
+    }
+    if require_completion:
+        complete = final_transfer.get("state") == "completed" and completed_bytes == expected_size
+        result["completed"] = complete
+        if not complete:
+            result["ok"] = False
+            raise RuntimeError(
+                f"Rust local download did not complete: state={final_transfer.get('state')!r} "
+                f"completedBytes={completed_bytes} expected={expected_size}"
+            )
+    if require_delivered_path:
+        if delivered_path is None:
+            result["ok"] = False
+            raise RuntimeError("Rust local download completed without deliveredPath.")
+        if not delivered_path.is_file():
+            result["ok"] = False
+            raise RuntimeError(f"Rust local download deliveredPath does not exist: {delivered_path}")
+        result["deliveredFileSizeBytes"] = delivered_path.stat().st_size
+        result["deliveredSha256"] = file_sha256(delivered_path)
+        if delivered_path.stat().st_size != expected_size or result["deliveredSha256"] != expected_sha256:
+            result["ok"] = False
+            raise RuntimeError("Rust local download delivered file did not match the source payload.")
+    return result
+
+
 def run(argv: list[str] | None = None) -> int:
     """Runs one deterministic local Rust upload soak."""
 
@@ -275,6 +355,9 @@ def run(argv: list[str] | None = None) -> int:
         "durationSeconds": args.duration_seconds,
         "payloadMiB": args.payload_mib,
         "uploadLimitKiBps": args.upload_limit_kibps,
+        "startPausedResume": args.start_paused_resume,
+        "requireCompletion": args.require_completion,
+        "requireDeliveredPath": args.require_delivered_path,
         "rustExe": str(args.rust_exe),
         "network": {
             "lanBindAddr": lan,
@@ -394,9 +477,37 @@ def run(argv: list[str] | None = None) -> int:
             "POST",
             "/api/v1/transfers",
             args.api_key,
-            {"link": str(file_row["ed2kLink"]), "paused": False},
+            {"link": str(file_row["ed2kLink"]), "paused": bool(args.start_paused_resume)},
         )
         report["transferCreate"] = transfer
+        if args.start_paused_resume:
+            paused_transfer = wait_for_transfer_state(
+                leecher_base,
+                args.api_key,
+                file_hash,
+                states={"paused"},
+                timeout_seconds=20.0,
+            )
+            resume = request_json(
+                leecher_base,
+                "POST",
+                f"/api/v1/transfers/{file_hash}/operations/resume",
+                args.api_key,
+                {},
+            )
+            resumed_transfer = wait_for_transfer_state(
+                leecher_base,
+                args.api_key,
+                file_hash,
+                states={"downloading", "queued", "completed"},
+                timeout_seconds=20.0,
+            )
+            report["checks"]["pausedStartResume"] = {
+                "pausedState": paused_transfer.get("state"),
+                "resume": resume,
+                "resumedState": resumed_transfer.get("state"),
+                "ok": True,
+            }
         seeder_metrics = open_process_metrics(seeder_process, "seeder", artifacts_dir / "analysis", args.sample_interval_seconds)
         leecher_metrics = open_process_metrics(leecher_process, "leecher", artifacts_dir / "analysis", args.sample_interval_seconds)
         deadline = time.monotonic() + args.duration_seconds
@@ -453,6 +564,12 @@ def run(argv: list[str] | None = None) -> int:
         report["sampleCount"] = sample_count
         report["finalSeederStatus"] = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
         report["finalLeecherTransfer"] = request_json(leecher_base, "GET", f"/api/v1/transfers/{file_hash}", args.api_key)
+        report["checks"]["downloadDelivery"] = verify_download_delivery(
+            report["finalLeecherTransfer"],
+            payload,
+            require_completion=bool(args.require_completion),
+            require_delivered_path=bool(args.require_delivered_path),
+        )
         report["status"] = "passed"
         return 0
     except Exception as exc:

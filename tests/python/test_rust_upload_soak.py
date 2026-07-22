@@ -21,7 +21,7 @@ def configure_workspace_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 def stage_dummy_rust_tools(output_root: Path) -> Path:
     bin_dir = output_root / "tools" / "emulebb-rust" / "bin"
     bin_dir.mkdir(parents=True)
-    rust_exe = bin_dir / "emulebb-rust-diagnostics.exe"
+    rust_exe = bin_dir / "emulebb-rust.exe"
     rust_exe.write_bytes(b"rust")
     return rust_exe
 
@@ -99,3 +99,38 @@ def test_safe_counter_helpers_tolerate_missing_values() -> None:
     assert rust_upload_soak.safe_float(None) == 0.0
     assert rust_upload_soak.safe_float("1.5") == 1.5
     assert rust_upload_soak.safe_float("bad") == 0.0
+
+
+def test_verify_download_delivery_checks_completed_delivered_file(tmp_path: Path) -> None:
+    delivered = tmp_path / "incoming" / "payload.bin"
+    payload = rust_upload_soak.write_payload(delivered, 4096)
+
+    result = rust_upload_soak.verify_download_delivery(
+        {
+            "state": "completed",
+            "completedBytes": payload["sizeBytes"],
+            "deliveredPath": str(delivered),
+        },
+        payload,
+        require_completion=True,
+        require_delivered_path=True,
+    )
+
+    assert result["ok"] is True
+    assert result["completed"] is True
+    assert result["deliveredPathPresent"] is True
+    assert result["deliveredFileExists"] is True
+    assert result["deliveredFileSizeBytes"] == payload["sizeBytes"]
+    assert result["deliveredSha256"] == payload["sha256"]
+
+
+def test_verify_download_delivery_rejects_incomplete_transfer(tmp_path: Path) -> None:
+    payload = rust_upload_soak.write_payload(tmp_path / "payload.bin", 4096)
+
+    with pytest.raises(RuntimeError, match="did not complete"):
+        rust_upload_soak.verify_download_delivery(
+            {"state": "downloading", "completedBytes": 1024},
+            payload,
+            require_completion=True,
+            require_delivered_path=False,
+        )
