@@ -1698,6 +1698,22 @@ def text_fingerprint(value: object) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
+def emit_public_download_probe_event(args: argparse.Namespace, event: dict[str, object]) -> None:
+    """Appends one sanitized public download proof progress event when requested."""
+
+    progress_jsonl = getattr(args, "progress_jsonl", None)
+    if progress_jsonl is None:
+        return
+    progress_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "observedAt": round(time.time(), 3),
+        **event,
+    }
+    with progress_jsonl.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, sort_keys=True))
+        handle.write("\n")
+
+
 def has_unsafe_public_download_name_token(file_name: str) -> bool:
     """Returns true when a public result name is unsuitable for an automated proof download."""
 
@@ -1812,6 +1828,14 @@ def wait_for_public_search_candidate(
     observations: list[dict[str, object]] = []
     deadline = time.time() + args.search_timeout_seconds
     selected: dict[str, object] | None = None
+    emit_public_download_probe_event(
+        args,
+        {
+            "phase": "search-started",
+            "searchIdFingerprint": text_fingerprint(search_id),
+            "termFingerprint": text_fingerprint(term.strip().lower()),
+        },
+    )
     try:
         while time.time() <= deadline:
             payload = request_json(
@@ -1841,6 +1865,18 @@ def wait_for_public_search_candidate(
                     "safeCandidateFound": selected is not None,
                     "rejectionCounts": dict(sorted(rejection_counts.items())),
                 }
+            )
+            emit_public_download_probe_event(
+                args,
+                {
+                    "phase": "search-poll",
+                    "searchIdFingerprint": text_fingerprint(search_id),
+                    "termFingerprint": text_fingerprint(term.strip().lower()),
+                    "status": payload.get("status"),
+                    "resultCount": len(items),
+                    "safeCandidateFound": selected is not None,
+                    "rejectionCounts": dict(sorted(rejection_counts.items())),
+                },
             )
             if selected is not None:
                 break
@@ -1896,6 +1932,13 @@ def wait_for_transfer_progress(
                 "deliveredPathPresent": bool(transfer.get("deliveredPath")),
             }
         )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "transfer-progress-poll",
+                "transfer": sanitized_transfer_proof_row(transfer),
+            },
+        )
         if transfer.get("state") == "completed" or completed_bytes > initial_completed_bytes or sources > 0:
             break
         time.sleep(args.poll_seconds)
@@ -1936,6 +1979,13 @@ def wait_for_transfer_completion(args: argparse.Namespace, transfer_hash: str) -
                 "deliveredPathPresent": delivered_path is not None,
                 "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
             }
+        )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "transfer-completion-poll",
+                "transfer": sanitized_transfer_proof_row(transfer),
+            },
         )
         if transfer.get("state") == "completed":
             return {
@@ -1981,6 +2031,15 @@ def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
     assert isinstance(candidate, dict)
     search_id = str(selected["searchId"])
     transfer_hash = str(candidate["hash"])
+    emit_public_download_probe_event(
+        args,
+        {
+            "phase": "candidate-selected",
+            "searchIdFingerprint": text_fingerprint(search_id),
+            "termFingerprint": selected["termFingerprint"],
+            "candidate": sanitized_public_search_candidate(candidate),
+        },
+    )
     try:
         download = request_json(
             args.base_url,
@@ -1990,11 +2049,26 @@ def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
             body={"paused": True, "categoryId": 0},
             timeout_seconds=args.request_timeout_seconds,
         )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "download-triggered",
+                "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
+                "ok": download.get("ok", True),
+            },
+        )
         paused = request_json(
             args.base_url,
             f"/transfers/{quote(transfer_hash, safe='')}",
             api_key=args.api_key,
             timeout_seconds=args.request_timeout_seconds,
+        )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "paused-transfer",
+                "transfer": sanitized_transfer_proof_row(paused),
+            },
         )
         resume = request_json(
             args.base_url,
@@ -2003,6 +2077,15 @@ def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
             method="POST",
             body={},
             timeout_seconds=args.request_timeout_seconds,
+        )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "resume-triggered",
+                "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
+                "state": resume.get("state"),
+                "ok": resume.get("ok", True),
+            },
         )
         progress = wait_for_transfer_progress(
             args,
@@ -2013,6 +2096,15 @@ def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
             wait_for_transfer_completion(args, transfer_hash)
             if args.require_completion
             else {"ok": None, "skipped": True, "reason": "require-completion disabled"}
+        )
+        emit_public_download_probe_event(
+            args,
+            {
+                "phase": "completion-result",
+                "ok": completion.get("ok"),
+                "skipped": completion.get("skipped", False),
+                "reason": completion.get("reason"),
+            },
         )
     finally:
         if args.stop_search:
@@ -5866,6 +5958,17 @@ def build_parser() -> argparse.ArgumentParser:
     public_download_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
     public_download_parser.add_argument("--require-completion", action="store_true")
     public_download_parser.add_argument("--stop-search", action=argparse.BooleanOptionalAction, default=True)
+    public_download_parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=output_root() / "reports" / "rust-public-search-download-proof.latest.json",
+        help="Write the final sanitized proof report to this JSON path.",
+    )
+    public_download_parser.add_argument(
+        "--progress-jsonl",
+        type=Path,
+        help="Append sanitized long-run progress events to this JSONL path.",
+    )
     public_download_parser.set_defaults(func=public_search_download_proof)
 
     shared_summary_parser = sub.add_parser(
@@ -6469,7 +6572,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     result = args.func(args)
-    print(json.dumps(result, indent=2, sort_keys=True))
+    result_json = json.dumps(result, indent=2, sort_keys=True)
+    json_output = getattr(args, "json_output", None)
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(f"{result_json}\n", encoding="utf-8", newline="\n")
+    print(result_json)
     return 0
 
 

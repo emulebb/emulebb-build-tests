@@ -283,6 +283,7 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
             request_timeout_seconds=1.0,
             require_completion=False,
             stop_search=True,
+            progress_jsonl=tmp_path / "progress.jsonl",
         )
     )
 
@@ -305,6 +306,55 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
     assert "private search term" not in repr(result)
     assert "public-document.pdf" not in repr(result)
     assert "0123456789abcdef0123456789abcdef" not in repr(result)
+    progress_rows = [
+        json.loads(line)
+        for line in (tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["phase"] for row in progress_rows] == [
+        "search-started",
+        "search-poll",
+        "candidate-selected",
+        "download-triggered",
+        "paused-transfer",
+        "resume-triggered",
+        "transfer-progress-poll",
+        "completion-result",
+    ]
+    assert "private search term" not in repr(progress_rows)
+    assert "public-document.pdf" not in repr(progress_rows)
+    assert "0123456789abcdef0123456789abcdef" not in repr(progress_rows)
+
+
+def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "report.json"
+
+    monkeypatch.setattr(
+        control,
+        "public_search_download_proof",
+        lambda args: {
+            "ok": True,
+            "jsonOutput": str(args.json_output),
+            "termFingerprint": control.text_fingerprint(args.term),
+        },
+    )
+
+    assert control.main(
+        [
+            "public-search-download-proof",
+            "--term",
+            "private search term",
+            "--json-output",
+            str(report),
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["ok"] is True
+    assert report_payload["jsonOutput"] == str(report)
+    assert "private search term" not in report.read_text(encoding="utf-8")
 
 
 def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatch, tmp_path: Path) -> None:
