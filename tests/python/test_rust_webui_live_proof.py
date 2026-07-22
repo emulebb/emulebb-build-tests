@@ -106,8 +106,74 @@ def test_transfer_workflow_check_accepts_visible_download_progress() -> None:
     }
 
 
+def test_browser_performance_check_accepts_low_idle_main_thread_work() -> None:
+    before = rust_webui_live_proof.performance_metric_map(
+        {
+            "metrics": [
+                {"name": "TaskDuration", "value": 10.0},
+                {"name": "ScriptDuration", "value": 2.0},
+                {"name": "JSHeapUsedSize", "value": 1000},
+            ]
+        }
+    )
+    after = rust_webui_live_proof.performance_metric_map(
+        {
+            "metrics": [
+                {"name": "TaskDuration", "value": 10.5},
+                {"name": "ScriptDuration", "value": 2.1},
+                {"name": "JSHeapUsedSize", "value": 1200},
+            ]
+        }
+    )
+
+    check = rust_webui_live_proof.browser_performance_check(
+        before,
+        after,
+        elapsed_seconds=10.0,
+        max_main_thread_busy_ratio=0.25,
+    )
+
+    assert check == {
+        "ok": True,
+        "missing": [],
+        "elapsedSeconds": 10.0,
+        "maxMainThreadBusyRatio": 0.25,
+        "mainThreadBusyRatio": 0.05,
+        "durationDeltas": {
+            "TaskDuration": 0.5,
+            "ScriptDuration": 0.1,
+        },
+        "absoluteAfter": {"JSHeapUsedSize": 1200},
+    }
+
+
+def test_browser_performance_check_rejects_busy_idle_main_thread() -> None:
+    check = rust_webui_live_proof.browser_performance_check(
+        {"TaskDuration": 10.0},
+        {"TaskDuration": 14.0},
+        elapsed_seconds=10.0,
+        max_main_thread_busy_ratio=0.25,
+    )
+
+    assert check["ok"] is False
+    assert check["mainThreadBusyRatio"] == 0.4
+
+
+def test_browser_performance_check_requires_task_duration() -> None:
+    check = rust_webui_live_proof.browser_performance_check(
+        {},
+        {},
+        elapsed_seconds=10.0,
+        max_main_thread_busy_ratio=0.25,
+    )
+
+    assert check["ok"] is False
+    assert check["missing"] == ["TaskDuration"]
+
+
 def test_parser_defaults_to_persisted_rust_webui() -> None:
     args = rust_webui_live_proof.build_parser().parse_args([])
 
     assert args.api_key == "converged-soak"
+    assert args.max_main_thread_busy_ratio == 0.25
     assert str(args.report_path).endswith("reports\\rust-webui-live-proof\\rust-webui-live-proof.latest.json")

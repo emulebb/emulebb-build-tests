@@ -18,6 +18,7 @@ from .paths import get_workspace_output_root
 DEFAULT_API_KEY = "converged-soak"
 DEFAULT_STEADY_SECONDS = 18.0
 DEFAULT_TAB_WAIT_SECONDS = 1.5
+DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO = 0.25
 TAB_LABELS = (
     "Overview",
     "Transfers",
@@ -38,6 +39,17 @@ ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
 HASH_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
 FULL_PROGRESS_RE = re.compile(r"^100(?:\.0+)?%$")
 PERCENT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%$")
+PERFORMANCE_DURATION_METRICS = (
+    "TaskDuration",
+    "ScriptDuration",
+    "LayoutDuration",
+    "RecalcStyleDuration",
+)
+PERFORMANCE_ABSOLUTE_METRICS = (
+    "JSHeapUsedSize",
+    "Nodes",
+    "JSEventListeners",
+)
 
 
 class RequestRecorder:
@@ -144,6 +156,56 @@ def parse_progress_percent(value: str) -> float:
     return float(match.group("value"))
 
 
+def performance_metric_map(payload: dict[str, Any]) -> dict[str, float]:
+    """Converts a Chrome Performance.getMetrics payload to a name/value map."""
+
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, list):
+        return {}
+    result: dict[str, float] = {}
+    for row in metrics:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        value = row.get("value")
+        if isinstance(name, str) and isinstance(value, (int, float)):
+            result[name] = float(value)
+    return result
+
+
+def browser_performance_check(
+    before: dict[str, float],
+    after: dict[str, float],
+    *,
+    elapsed_seconds: float,
+    max_main_thread_busy_ratio: float,
+) -> dict[str, Any]:
+    """Checks idle WebUI main-thread work stays below the beta CPU budget."""
+
+    missing = [name for name in ("TaskDuration",) if name not in before or name not in after]
+    duration_deltas = {
+        name: round(max(0.0, after.get(name, 0.0) - before.get(name, 0.0)), 6)
+        for name in PERFORMANCE_DURATION_METRICS
+        if name in before and name in after
+    }
+    absolute_after = {
+        name: int(after[name])
+        for name in PERFORMANCE_ABSOLUTE_METRICS
+        if name in after
+    }
+    task_duration = duration_deltas.get("TaskDuration")
+    busy_ratio = None if task_duration is None or elapsed_seconds <= 0 else task_duration / elapsed_seconds
+    return {
+        "ok": not missing and busy_ratio is not None and busy_ratio <= max_main_thread_busy_ratio,
+        "missing": missing,
+        "elapsedSeconds": round(elapsed_seconds, 3),
+        "maxMainThreadBusyRatio": max_main_thread_busy_ratio,
+        "mainThreadBusyRatio": None if busy_ratio is None else round(busy_ratio, 4),
+        "durationDeltas": duration_deltas,
+        "absoluteAfter": absolute_after,
+    }
+
+
 def install_browser_diagnostics(page, diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Installs compact browser diagnostics collectors on a Playwright page."""
 
@@ -185,6 +247,7 @@ def run_webui_live_proof(
     steady_seconds: float,
     tab_wait_seconds: float,
     timeout_seconds: float,
+    max_main_thread_busy_ratio: float,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
 
@@ -200,6 +263,7 @@ def run_webui_live_proof(
         "baseUrl": base_url,
         "steadySeconds": steady_seconds,
         "tabWaitSeconds": tab_wait_seconds,
+        "maxMainThreadBusyRatio": max_main_thread_busy_ratio,
         "tabsExpected": list(TAB_LABELS),
         "checks": {},
     }
@@ -226,7 +290,24 @@ def run_webui_live_proof(
                 page.wait_for_timeout(1000)
 
                 recorder.reset_api()
+                cdp = page.context.new_cdp_session(page)
+                cdp.send("Performance.enable")
+                performance_before = performance_metric_map(cdp.send("Performance.getMetrics"))
+                performance_start = time.monotonic()
                 page.wait_for_timeout(int(steady_seconds * 1000))
+                performance_elapsed = time.monotonic() - performance_start
+                performance_after = performance_metric_map(cdp.send("Performance.getMetrics"))
+                cdp.detach()
+                performance_check = browser_performance_check(
+                    performance_before,
+                    performance_after,
+                    elapsed_seconds=performance_elapsed,
+                    max_main_thread_busy_ratio=max_main_thread_busy_ratio,
+                )
+                if not performance_check["ok"]:
+                    raise RuntimeError(f"Rust WebUI steady main-thread work is too high: {performance_check!r}")
+                report["checks"]["steadyBrowserPerformance"] = performance_check
+
                 steady_snapshot = recorder.snapshot()
                 steady_check = steady_request_load_check(steady_snapshot["apiCounts"])
                 if not steady_check["ok"]:
@@ -324,6 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steady-seconds", type=float, default=DEFAULT_STEADY_SECONDS)
     parser.add_argument("--tab-wait-seconds", type=float, default=DEFAULT_TAB_WAIT_SECONDS)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--max-main-thread-busy-ratio", type=float, default=DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO)
     return parser
 
 
@@ -338,6 +420,7 @@ def run(argv: list[str] | None = None) -> int:
         steady_seconds=float(args.steady_seconds),
         tab_wait_seconds=float(args.tab_wait_seconds),
         timeout_seconds=float(args.timeout_seconds),
+        max_main_thread_busy_ratio=float(args.max_main_thread_busy_ratio),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("status") == "passed" else 1
