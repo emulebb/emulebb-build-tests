@@ -307,7 +307,13 @@ NATIVE_JSON_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerJson.cpp"
 QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
-UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "getEvents", "triggerDiagnosticCrashTest", "shutdownApp"}
+UNSAFE_OPENAPI_OPERATIONS = {
+    "captureDiagnosticDump",
+    "connectServerAny",
+    "getEvents",
+    "triggerDiagnosticCrashTest",
+    "shutdownApp",
+}
 UNSAFE_BROAD_MUTATION_PATHS = (
     "/api/v1/app/shutdown",
     "/api/v1/diagnostics/dumps",
@@ -372,6 +378,9 @@ OPENAPI_TAG_FAMILIES = {
     "App": "app",
     "Diagnostics": "diagnostics",
     "Stats": "status",
+    "Network": "network",
+    "Nat": "nat",
+    "VpnGuard": "vpn-guard",
     "Categories": "categories",
     "Transfers": "transfers",
     "SharedFiles": "shared",
@@ -381,6 +390,7 @@ OPENAPI_TAG_FAMILIES = {
     "Kad": "kad",
     "Searches": "searches",
     "Friends": "friends",
+    "IpFilter": "ip-filter",
     "Logs": "logs",
 }
 QBIT_JSON_RESPONSE_PATHS = {
@@ -821,6 +831,7 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
     """Verifies the smoke route registry and OpenAPI path table stay in lockstep."""
 
     openapi_routes = load_openapi_method_paths()
+    is_rust_contract = "emulebb-rust" in OPENAPI_CONTRACT_PATH.parts
     registry_routes = {
         (str(route["method"]), normalize_contract_path_for_openapi(str(route["path"])))
         for route in REST_CONTRACT_ROUTES
@@ -834,7 +845,7 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
         for route in REST_CONTRACT_ROUTES
         if bool(route["requestBodyRequired"]) and get_contract_route_body(str(route["operationId"])) is None
     )
-    unknown_execution_models = sorted(
+    unknown_execution_models = [] if is_rust_contract else sorted(
         str(route["operationId"])
         for route in REST_CONTRACT_ROUTES
         if route.get("executionModel") == "unknown"

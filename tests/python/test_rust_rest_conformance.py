@@ -105,6 +105,15 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(monkeypatch: pyte
     assert rust_rest_conformance.os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV] == "operator-contract.yaml"
 
 
+def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+
+    assert module.OPENAPI_TAG_FAMILIES["Network"] == "network"
+    assert module.OPENAPI_TAG_FAMILIES["Nat"] == "nat"
+    assert module.OPENAPI_TAG_FAMILIES["VpnGuard"] == "vpn-guard"
+    assert module.OPENAPI_TAG_FAMILIES["IpFilter"] == "ip-filter"
+
+
 def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
