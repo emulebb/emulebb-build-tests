@@ -18,14 +18,12 @@ def configure_workspace_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     return workspace_root, output_root
 
 
-def stage_dummy_rust_tools(output_root: Path) -> tuple[Path, Path]:
+def stage_dummy_rust_tools(output_root: Path) -> Path:
     bin_dir = output_root / "tools" / "emulebb-rust" / "bin"
     bin_dir.mkdir(parents=True)
     rust_exe = bin_dir / "emulebb-rust-diagnostics.exe"
-    rust_ui_exe = bin_dir / "emulebb-rust-ui.exe"
     rust_exe.write_bytes(b"rust")
-    rust_ui_exe.write_bytes(b"ui")
-    return rust_exe, rust_ui_exe
+    return rust_exe
 
 
 def test_utc_run_id_uses_canonical_format() -> None:
@@ -36,13 +34,12 @@ def test_utc_run_id_uses_canonical_format() -> None:
 
 def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
-    rust_exe, rust_ui_exe = stage_dummy_rust_tools(output_root)
+    rust_exe = stage_dummy_rust_tools(output_root)
 
     args = rust_upload_soak.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
     rust_upload_soak.validate_args(args)
 
     assert args.rust_exe == rust_exe
-    assert args.rust_ui_exe == rust_ui_exe
     assert args.duration_seconds == rust_upload_soak.DEFAULT_DURATION_SECONDS
 
 

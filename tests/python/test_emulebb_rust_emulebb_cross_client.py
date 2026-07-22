@@ -100,22 +100,9 @@ def test_cross_client_fixture_names_are_unicode() -> None:
     assert not module.emulebb_to_rust_fixture_name().isascii()
 
 
-def test_cross_client_resolves_default_rust_ui_exe(monkeypatch, tmp_path: Path) -> None:
+def test_cross_client_validate_optional_soak_args_accepts_upload_limits() -> None:
     module = load_suite_module()
-    ui_exe = tmp_path / "emulebb-rust-ui.exe"
-    monkeypatch.setattr(module.rust_upload_soak, "staged_rust_bin", lambda name: tmp_path / name)
-
-    assert module.resolve_rust_ui_exe(None) == ui_exe.resolve()
-
-
-def test_cross_client_validate_ui_args_requires_existing_ui(tmp_path: Path) -> None:
-    module = load_suite_module()
-    ui_exe = tmp_path / "emulebb-rust-ui.exe"
-    ui_exe.write_text("", encoding="utf-8")
     args = SimpleNamespace(
-        attach_rust_ui=True,
-        rust_ui_exe=ui_exe,
-        ui_poll_interval_ms=1000,
         rust_upload_limit_kibps=64,
         emulebb_upload_limit_kibps=64,
     )
@@ -123,17 +110,14 @@ def test_cross_client_validate_ui_args_requires_existing_ui(tmp_path: Path) -> N
     module.validate_optional_soak_args(args)
 
 
-def test_cross_client_validate_ui_args_rejects_missing_ui(tmp_path: Path) -> None:
+def test_cross_client_validate_optional_soak_args_rejects_bad_upload_limit() -> None:
     module = load_suite_module()
     args = SimpleNamespace(
-        attach_rust_ui=True,
-        rust_ui_exe=tmp_path / "missing.exe",
-        ui_poll_interval_ms=1000,
-        rust_upload_limit_kibps=None,
+        rust_upload_limit_kibps=0,
         emulebb_upload_limit_kibps=None,
     )
 
-    with pytest.raises(ValueError, match="Rust UI executable"):
+    with pytest.raises(ValueError, match="rust-upload-limit-kibps"):
         module.validate_optional_soak_args(args)
 
 

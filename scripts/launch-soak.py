@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -171,8 +170,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Stop the soak after this many seconds with the same graceful teardown path as Ctrl-C.",
     )
-    parser.add_argument("--rust-ui", action="store_true", help="Launch the staged native Rust UI during the soak.")
-    parser.add_argument("--rust-ui-poll-interval-ms", type=int, default=5_000)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
@@ -368,7 +365,6 @@ class RustProcessMetrics:
 def graceful_teardown(
     *,
     rust_handles: dict | None,
-    rust_ui_handles: dict | None,
     mfc_handles: dict | None,
     live_common,
     rust_base: str,
@@ -401,19 +397,6 @@ def graceful_teardown(
                 mfc_handles["app"].kill()
             except Exception:  # noqa: BLE001
                 pass
-    if rust_ui_handles is not None and rust_ui_handles["process"].poll() is None:
-        log("rust UI: closing native window...")
-        try:
-            rust_ui_handles["closeResult"] = live_process_monitor.close_process_gracefully(
-                rust_ui_handles["process"],
-                rust_ui_handles["processHandle"],
-                timeout_seconds=15.0,
-            )
-        except Exception:  # noqa: BLE001
-            try:
-                rust_ui_handles["process"].kill()
-            except Exception:  # noqa: BLE001
-                pass
     watched = [
         proc
         for proc in (rust_handles["process"] if rust_handles is not None else None,)
@@ -434,67 +417,6 @@ def graceful_teardown(
             rust_handles["logHandle"].close()
         except Exception:  # noqa: BLE001
             pass
-    if rust_ui_handles is not None:
-        try:
-            live_process_monitor.close_handle(rust_ui_handles["processHandle"])
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            rust_ui_handles["logHandle"].close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def resolve_rust_ui_exe(output_root: Path) -> Path:
-    """Returns the staged native Rust UI executable."""
-
-    path = output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-ui.exe"
-    if not path.is_file():
-        raise RuntimeError(f"Staged emulebb-rust-ui executable was not found: {path}")
-    return path
-
-
-def launch_rust_ui(
-    *,
-    ui_exe: Path,
-    rust_base: str,
-    api_key: str,
-    poll_interval_ms: int,
-    report_dir: Path,
-) -> dict[str, object]:
-    """Launches the native Rust UI against the live soak daemon."""
-
-    if poll_interval_ms < 1_000:
-        raise RuntimeError("--rust-ui-poll-interval-ms must be at least 1000.")
-    output_path = report_dir / "analysis" / "rust-ui.out"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_handle = output_path.open("a", encoding="utf-8")
-    base_url = rust_base.rstrip("/") + "/api/v1"
-    process = subprocess.Popen(
-        [
-            str(ui_exe),
-            "--base-url",
-            base_url,
-            "--api-key",
-            api_key,
-            "--poll-interval-ms",
-            str(poll_interval_ms),
-        ],
-        cwd=ui_exe.parent,
-        stdout=output_handle,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    handle = live_process_monitor.open_process(process.pid)
-    log(f"rust native UI up - pid {process.pid}, REST {base_url}")
-    return {
-        "process": process,
-        "processHandle": handle,
-        "logHandle": output_handle,
-        "outputPath": str(output_path),
-        "baseUrl": base_url,
-    }
-
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
@@ -528,7 +450,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.rust_regular
         else clw.resolve_rust_diagnostics_exe(output_root)
     )
-    rust_ui_exe = resolve_rust_ui_exe(output_root) if args.rust_ui else None
     mfc_exe = None
     if not args.no_mfc:
         mfc_exe = clw.resolve_mfc_diagnostics_exe(
@@ -604,14 +525,12 @@ def main(argv: list[str] | None = None) -> int:
     timeouts = {"rest": args.rest_timeout_seconds, "connect": args.connect_timeout_seconds}
 
     rust_handles: dict | None = None
-    rust_ui_handles: dict | None = None
     mfc_handles: dict | None = None
     rust_base = ""
     profile_tools: cpu_profile.CpuProfileTools | None = None
     profile_paths: cpu_profile.CpuProfilePaths | None = None
     profile_report: dict[str, object] | None = None
     process_metrics: RustProcessMetrics | None = None
-    ui_process_metrics: RustProcessMetrics | None = None
     status = "stopped"
     failure: dict[str, object] | None = None
     try:
@@ -644,21 +563,6 @@ def main(argv: list[str] | None = None) -> int:
                 interval_seconds=args.process_sample_interval,
                 label="rust",
             )
-        if rust_ui_exe is not None:
-            rust_ui_handles = launch_rust_ui(
-                ui_exe=rust_ui_exe,
-                rust_base=rust_base,
-                api_key=RUST_API_KEY,
-                poll_interval_ms=args.rust_ui_poll_interval_ms,
-                report_dir=run_paths.report_dir,
-            )
-            if args.cpu_profile or args.process_metrics:
-                ui_process_metrics = RustProcessMetrics(
-                    process=rust_ui_handles["process"],
-                    report_dir=run_paths.report_dir,
-                    interval_seconds=args.process_sample_interval,
-                    label="rust-ui",
-                )
 
         mfc_base = ""
         if not args.no_mfc:
@@ -697,7 +601,6 @@ def main(argv: list[str] | None = None) -> int:
                 status = "rust-exited"
                 break
             row = process_metrics.maybe_sample() if process_metrics is not None else None
-            ui_row = ui_process_metrics.maybe_sample() if ui_process_metrics is not None else None
             if row is not None and time.monotonic() - last_metrics_log >= 30.0:
                 log(
                     "rust metrics: "
@@ -705,13 +608,6 @@ def main(argv: list[str] | None = None) -> int:
                     f"private={row['private_mb']}MiB ws={row['working_set_mb']}MiB "
                     f"handles={row['handles']}"
                 )
-                if ui_row is not None:
-                    log(
-                        "rust UI metrics: "
-                        f"cpu_one_core={ui_row['process_pct_one_core']}% "
-                        f"private={ui_row['private_mb']}MiB ws={ui_row['working_set_mb']}MiB "
-                        f"handles={ui_row['handles']}"
-                    )
                 last_metrics_log = time.monotonic()
             if profile_deadline is not None and time.monotonic() >= profile_deadline:
                 log("CPU profile window complete - stopping.")
@@ -738,25 +634,17 @@ def main(argv: list[str] | None = None) -> int:
             paths=profile_paths,
             report=profile_report,
             rust_exe=rust_exe,
-            extra_process_images=[rust_ui_exe.name] if rust_ui_exe is not None else None,
             include_stack=args.cpu_profile_stack,
             stack_min_hits=args.cpu_profile_stack_min_hits,
         )
         process_metrics_summary = None
-        ui_process_metrics_summary = None
         if process_metrics is not None:
             try:
                 process_metrics_summary = process_metrics.write_summary()
             finally:
                 process_metrics.close()
-        if ui_process_metrics is not None:
-            try:
-                ui_process_metrics_summary = ui_process_metrics.write_summary()
-            finally:
-                ui_process_metrics.close()
         graceful_teardown(
             rust_handles=rust_handles,
-            rust_ui_handles=rust_ui_handles,
             mfc_handles=mfc_handles,
             live_common=mods["live_common"],
             rust_base=rust_base,
@@ -770,19 +658,12 @@ def main(argv: list[str] | None = None) -> int:
             "rustExe": str(rust_exe),
             "rustServer": args.rust_server,
             "rustFallbackServers": list(args.rust_fallback_server),
-            "rustUi": {
-                "enabled": bool(args.rust_ui),
-                "exe": str(rust_ui_exe) if rust_ui_exe is not None else None,
-                "pid": rust_ui_handles["process"].pid if rust_ui_handles is not None else None,
-                "outputPath": rust_ui_handles.get("outputPath") if rust_ui_handles is not None else None,
-            },
             "durationSeconds": args.duration_seconds,
             "reuseRustSharedProfile": bool(args.reuse_rust_shared_profile),
             "error": failure,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,
             "processMetrics": process_metrics_summary,
-            "rustUiProcessMetrics": ui_process_metrics_summary,
         },
     )
     log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))

@@ -1,4 +1,4 @@
-"""Deterministic local Rust upload soak with diagnostics and native UI."""
+"""Deterministic local Rust upload soak with daemon diagnostics."""
 
 from __future__ import annotations
 
@@ -96,11 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS)
     parser.add_argument("--artifacts-dir", type=Path, default=None)
     parser.add_argument("--rust-exe", type=Path, default=staged_rust_bin("emulebb-rust-diagnostics.exe"))
-    parser.add_argument("--rust-ui-exe", type=Path, default=staged_rust_bin("emulebb-rust-ui.exe"))
     parser.add_argument("--ed2k-server-repo", type=Path)
     parser.add_argument("--ed2k-server-exe", type=Path)
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--ui-poll-interval-ms", type=int, default=1000)
     return parser
 
 
@@ -117,12 +115,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--payload-mib must be greater than zero.")
     if args.upload_limit_kibps <= 0:
         raise ValueError("--upload-limit-kibps must be greater than zero.")
-    if args.ui_poll_interval_ms < 1000:
-        raise ValueError("--ui-poll-interval-ms must be at least 1000.")
     if not args.rust_exe.is_file():
         raise ValueError(f"Rust diagnostics executable was not found: {args.rust_exe}")
-    if not args.rust_ui_exe.is_file():
-        raise ValueError(f"Rust UI executable was not found: {args.rust_ui_exe}")
 
 
 def write_payload(path: Path, size_bytes: int) -> dict[str, object]:
@@ -223,29 +217,6 @@ def start_rust(
     return process, handle
 
 
-def launch_rust_ui(*, ui_exe: Path, base_url: str, api_key: str, poll_interval_ms: int, output_path: Path) -> tuple[subprocess.Popen, object]:
-    """Launches the native Rust UI against one local soak daemon."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = output_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(
-        [
-            str(ui_exe),
-            "--base-url",
-            base_url.rstrip("/") + "/api/v1",
-            "--api-key",
-            api_key,
-            "--poll-interval-ms",
-            str(poll_interval_ms),
-        ],
-        cwd=ui_exe.parent,
-        stdout=handle,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    return process, handle
-
-
 def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, object]:
     """Applies the Rust core upload cap for a deterministic slow upload soak."""
 
@@ -305,7 +276,6 @@ def run(argv: list[str] | None = None) -> int:
         "payloadMiB": args.payload_mib,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "rustExe": str(args.rust_exe),
-        "rustUiExe": str(args.rust_ui_exe),
         "network": {
             "lanBindAddr": lan,
             "serverPort": server_port,
@@ -321,13 +291,10 @@ def run(argv: list[str] | None = None) -> int:
     server_process = None
     seeder_process = None
     leecher_process = None
-    ui_process = None
     seeder_log = None
     leecher_log = None
-    ui_log = None
     seeder_metrics = None
     leecher_metrics = None
-    ui_metrics = None
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -430,16 +397,8 @@ def run(argv: list[str] | None = None) -> int:
             {"link": str(file_row["ed2kLink"]), "paused": False},
         )
         report["transferCreate"] = transfer
-        ui_process, ui_log = launch_rust_ui(
-            ui_exe=args.rust_ui_exe,
-            base_url=seeder_base,
-            api_key=args.api_key,
-            poll_interval_ms=args.ui_poll_interval_ms,
-            output_path=artifacts_dir / "logs" / "rust-ui.out",
-        )
         seeder_metrics = open_process_metrics(seeder_process, "seeder", artifacts_dir / "analysis", args.sample_interval_seconds)
         leecher_metrics = open_process_metrics(leecher_process, "leecher", artifacts_dir / "analysis", args.sample_interval_seconds)
-        ui_metrics = open_process_metrics(ui_process, "rust-ui", artifacts_dir / "analysis", args.sample_interval_seconds)
         deadline = time.monotonic() + args.duration_seconds
         sample_count = 0
         max_active_uploads = 0
@@ -452,8 +411,6 @@ def run(argv: list[str] | None = None) -> int:
                     raise RuntimeError(f"seeder exited early with code {seeder_process.returncode}")
                 if leecher_process.poll() is not None:
                     raise RuntimeError(f"leecher exited early with code {leecher_process.returncode}")
-                if ui_process.poll() is not None:
-                    raise RuntimeError(f"rust UI exited early with code {ui_process.returncode}")
                 seeder_status = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
                 leecher_transfer = request_json(leecher_base, "GET", f"/api/v1/transfers/{file_hash}", args.api_key)
                 seeder_uploads = request_json(seeder_base, "GET", "/api/v1/uploads", args.api_key)
@@ -476,7 +433,6 @@ def run(argv: list[str] | None = None) -> int:
                     "processMetrics": {
                         "seeder": sample_process_metrics(seeder_metrics, args.sample_interval_seconds),
                         "leecher": sample_process_metrics(leecher_metrics, args.sample_interval_seconds),
-                        "rustUi": sample_process_metrics(ui_metrics, args.sample_interval_seconds),
                     },
                 }
                 samples.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
@@ -507,11 +463,10 @@ def run(argv: list[str] | None = None) -> int:
         report["processMetrics"] = {
             "seeder": close_process_metrics(seeder_metrics),
             "leecher": close_process_metrics(leecher_metrics),
-            "rustUi": close_process_metrics(ui_metrics),
         }
-        for proc in (ui_process, leecher_process, seeder_process):
+        for proc in (leecher_process, seeder_process):
             rust_client.stop_process_tree(proc)
-        for handle in (ui_log, leecher_log, seeder_log):
+        for handle in (leecher_log, seeder_log):
             if handle is not None:
                 handle.close()
         if server_process is not None:
