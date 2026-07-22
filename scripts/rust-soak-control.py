@@ -1802,6 +1802,82 @@ def sanitized_transfer_proof_row(transfer: dict[str, object]) -> dict[str, objec
     }
 
 
+def sanitized_transfer_source_row(source: dict[str, object]) -> dict[str, object]:
+    """Returns report-safe source state for one transfer peer."""
+
+    return {
+        "clientIdFingerprint": text_fingerprint(source.get("clientId")),
+        "userHashFingerprint": text_fingerprint(source.get("userHash")),
+        "userNameFingerprint": text_fingerprint(source.get("userName")),
+        "clientSoftware": source.get("clientSoftware"),
+        "downloadState": source.get("downloadState"),
+        "downloadSpeedKiBps": source.get("downloadSpeedKiBps"),
+        "availableParts": source.get("availableParts"),
+        "partCount": source.get("partCount"),
+        "lowId": source.get("lowId"),
+        "queueRank": source.get("queueRank"),
+        "viewSharedFiles": source.get("viewSharedFiles"),
+        "sharedFilesRequestPending": source.get("sharedFilesRequestPending"),
+        "addressPresent": bool(source.get("address")),
+        "serverPresent": bool(source.get("serverIp") or source.get("serverPort")),
+    }
+
+
+def public_transfer_debug_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Prints sanitized transfer/source state for a transfer hash fingerprint."""
+
+    offset = 0
+    matched: dict[str, object] | None = None
+    scanned = 0
+    while offset <= args.max_offset:
+        payload = request_json(
+            args.base_url,
+            f"/transfers?limit={args.page_limit}&offset={offset}",
+            api_key=args.api_key,
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        scanned += len(items)
+        for item in items:
+            if isinstance(item, dict) and text_fingerprint(item.get("hash")) == args.hash_fingerprint:
+                matched = item
+                break
+        if matched is not None or len(items) < args.page_limit:
+            break
+        offset += args.page_limit
+    if matched is None:
+        return {
+            "ok": False,
+            "reason": "transfer-not-found",
+            "hashFingerprint": args.hash_fingerprint,
+            "scannedTransfers": scanned,
+        }
+
+    transfer_hash = str(matched.get("hash"))
+    details = request_json(
+        args.base_url,
+        f"/transfers/{quote(transfer_hash, safe='')}/details",
+        api_key=args.api_key,
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    sources = details.get("sources") if isinstance(details.get("sources"), list) else []
+    source_rows = [
+        sanitized_transfer_source_row(source)
+        for source in sources
+        if isinstance(source, dict)
+    ]
+    state_counts = Counter(str(row.get("downloadState") or "") for row in source_rows)
+    return {
+        "ok": True,
+        "hashFingerprint": args.hash_fingerprint,
+        "transfer": sanitized_transfer_proof_row(matched),
+        "sourceCount": len(source_rows),
+        "sourceStateCounts": dict(sorted(state_counts.items())),
+        "sourceSamples": source_rows[: args.source_sample_limit],
+        "scannedTransfers": scanned,
+    }
+
+
 def wait_for_public_search_candidate(
     args: argparse.Namespace,
     term: str,
@@ -5974,6 +6050,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append sanitized long-run progress events to this JSONL path.",
     )
     public_download_parser.set_defaults(func=public_search_download_proof)
+
+    transfer_debug_parser = sub.add_parser(
+        "public-transfer-debug-summary",
+        help="Print sanitized transfer/source diagnostics for one transfer hash fingerprint.",
+    )
+    transfer_debug_parser.add_argument("--hash-fingerprint", required=True)
+    transfer_debug_parser.add_argument("--page-limit", type=int, default=1000)
+    transfer_debug_parser.add_argument("--max-offset", type=int, default=50000)
+    transfer_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
+    transfer_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    transfer_debug_parser.set_defaults(func=public_transfer_debug_summary)
 
     shared_summary_parser = sub.add_parser(
         "shared-summary",

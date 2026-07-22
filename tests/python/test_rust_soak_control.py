@@ -359,6 +359,82 @@ def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Pa
     assert "private search term" not in report.read_text(encoding="utf-8")
 
 
+def test_public_transfer_debug_summary_sanitizes_transfer_and_sources(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    private_hash = "0123456789abcdef0123456789abcdef"
+    private_name = "public-document.pdf"
+    private_path = r"C:\Private\transfers\public-document.pdf"
+    private_client = "198.51.100.9:4662"
+    calls: list[str] = []
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        calls.append(path)
+        if path == "/transfers?limit=2&offset=0":
+            return {
+                "items": [
+                    {"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "other.bin"},
+                    {
+                        "hash": private_hash,
+                        "name": private_name,
+                        "path": private_path,
+                        "state": "downloading",
+                        "sizeBytes": 1024,
+                        "completedBytes": 0,
+                        "sources": 1,
+                        "sourcesTransferring": 0,
+                    },
+                ]
+            }
+        if path == f"/transfers/{private_hash}/details":
+            return {
+                "transfer": {},
+                "parts": [],
+                "sources": [
+                    {
+                        "clientId": private_client,
+                        "userHash": "00112233445566778899aabbccddeeff",
+                        "userName": "Private Peer",
+                        "clientSoftware": "eMule",
+                        "downloadState": "queued",
+                        "downloadSpeedKiBps": 0.0,
+                        "availableParts": 1,
+                        "partCount": 1,
+                        "address": private_client,
+                        "serverIp": "203.0.113.9",
+                        "serverPort": 4661,
+                        "lowId": False,
+                        "queueRank": 42,
+                    }
+                ],
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+
+    result = control.public_transfer_debug_summary(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            hash_fingerprint=control.text_fingerprint(private_hash),
+            page_limit=2,
+            max_offset=10,
+            source_sample_limit=5,
+            request_timeout_seconds=1.0,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["sourceStateCounts"] == {"queued": 1}
+    assert result["sourceSamples"][0]["clientSoftware"] == "eMule"
+    assert result["sourceSamples"][0]["addressPresent"] is True
+    assert calls == ["/transfers?limit=2&offset=0", f"/transfers/{private_hash}/details"]
+    assert private_hash not in repr(result)
+    assert private_name not in repr(result)
+    assert private_path not in repr(result)
+    assert private_client not in repr(result)
+    assert "Private Peer" not in repr(result)
+
+
 def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatch, tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     calls: list[str] = []
