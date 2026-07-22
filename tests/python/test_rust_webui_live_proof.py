@@ -52,6 +52,60 @@ def test_steady_request_load_rejects_stale_bundle_secondary_polling() -> None:
     }
 
 
+def test_transfer_workflow_check_requires_completed_full_progress_row() -> None:
+    check = rust_webui_live_proof.transfer_workflow_check_from_cells(
+        [
+            {"state": "downloading", "progress": "38.3%"},
+            {"state": "completed", "progress": "100.0%"},
+        ],
+        False,
+    )
+
+    assert check == {
+        "ok": True,
+        "rowCount": 2,
+        "activeProgressRowCount": 1,
+        "completedRowCount": 1,
+        "completedFullProgressRowCount": 1,
+        "emptyVisible": False,
+    }
+
+
+def test_transfer_workflow_check_rejects_fraction_rendered_as_percent() -> None:
+    check = rust_webui_live_proof.transfer_workflow_check_from_cells(
+        [{"state": "completed", "progress": "1.0%"}],
+        False,
+    )
+
+    assert check == {
+        "ok": False,
+        "rowCount": 1,
+        "activeProgressRowCount": 0,
+        "completedRowCount": 1,
+        "completedFullProgressRowCount": 0,
+        "emptyVisible": False,
+    }
+
+
+def test_transfer_workflow_check_accepts_visible_download_progress() -> None:
+    check = rust_webui_live_proof.transfer_workflow_check_from_cells(
+        [
+            {"state": "downloading", "progress": "0.0%"},
+            {"state": "downloading", "progress": "94.9%"},
+        ],
+        False,
+    )
+
+    assert check == {
+        "ok": True,
+        "rowCount": 2,
+        "activeProgressRowCount": 1,
+        "completedRowCount": 0,
+        "completedFullProgressRowCount": 0,
+        "emptyVisible": False,
+    }
+
+
 def test_parser_defaults_to_persisted_rust_webui() -> None:
     args = rust_webui_live_proof.build_parser().parse_args([])
 

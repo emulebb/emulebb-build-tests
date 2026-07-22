@@ -36,6 +36,8 @@ TAB_LABELS = (
 )
 ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
 HASH_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
+FULL_PROGRESS_RE = re.compile(r"^100(?:\.0+)?%$")
+PERCENT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%$")
 
 
 class RequestRecorder:
@@ -106,6 +108,40 @@ def steady_request_load_check(api_counts: dict[str, int]) -> dict[str, Any]:
         "ok": not repeated_secondary,
         "repeatedSecondaryEndpoints": repeated_secondary,
     }
+
+
+def transfer_workflow_check_from_cells(rows: list[dict[str, str]], empty_visible: bool) -> dict[str, Any]:
+    """Checks the transfer table exposes public download progress without retaining file identity."""
+
+    completed = [row for row in rows if row.get("state", "").strip().lower() == "completed"]
+    completed_full = [
+        row
+        for row in completed
+        if FULL_PROGRESS_RE.match(row.get("progress", "").strip())
+    ]
+    active_progress = [
+        row
+        for row in rows
+        if row.get("state", "").strip().lower() == "downloading"
+        and 0.0 < parse_progress_percent(row.get("progress", "")) < 100.0
+    ]
+    return {
+        "ok": bool(rows) and (bool(completed_full) or bool(active_progress)),
+        "rowCount": len(rows),
+        "activeProgressRowCount": len(active_progress),
+        "completedRowCount": len(completed),
+        "completedFullProgressRowCount": len(completed_full),
+        "emptyVisible": empty_visible,
+    }
+
+
+def parse_progress_percent(value: str) -> float:
+    """Parses a rendered transfer progress percentage, returning -1 on mismatch."""
+
+    match = PERCENT_RE.match(value.strip())
+    if not match:
+        return -1.0
+    return float(match.group("value"))
 
 
 def install_browser_diagnostics(page, diagnostics: dict[str, list[dict[str, Any]]]) -> None:
@@ -201,7 +237,7 @@ def run_webui_live_proof(
                 recorder.reset_api()
                 for label in TAB_LABELS:
                     before = recorder.total_api_requests
-                    page.get_by_role("button", name=label).click(timeout=int(timeout_seconds * 1000))
+                    page.get_by_role("button", name=label, exact=True).click(timeout=int(timeout_seconds * 1000))
                     page.wait_for_timeout(int(tab_wait_seconds * 1000))
                     visited_tabs.append(
                         {
@@ -214,6 +250,43 @@ def run_webui_live_proof(
                     "api": recorder.snapshot(),
                     "ok": [row["label"] for row in visited_tabs] == list(TAB_LABELS),
                 }
+
+                page.get_by_role("button", name="Transfers", exact=True).click(timeout=int(timeout_seconds * 1000))
+                page.wait_for_timeout(int(tab_wait_seconds * 1000))
+                transfer_dom = page.evaluate(
+                    """() => {
+                        const panels = Array.from(document.querySelectorAll('section.panel'));
+                        const panel = panels.find((candidate) =>
+                            candidate.querySelector('h2')?.textContent?.trim() === 'Transfers'
+                        );
+                        if (!panel) {
+                            return { rows: [], emptyVisible: false };
+                        }
+                        const rows = Array.from(panel.querySelectorAll('tbody tr'))
+                            .map((row) => {
+                                const cells = Array.from(row.querySelectorAll('td'));
+                                return {
+                                    state: cells[1]?.textContent?.trim() || '',
+                                    progress: cells[2]?.textContent?.trim() || ''
+                                };
+                            })
+                            .filter((row) => row.state || row.progress);
+                        return {
+                            rows,
+                            emptyVisible: panel.textContent?.includes('No transfers.') || false
+                        };
+                    }"""
+                )
+                transfer_workflow = transfer_workflow_check_from_cells(
+                    transfer_dom.get("rows", []),
+                    bool(transfer_dom.get("emptyVisible")),
+                )
+                if not transfer_workflow["ok"]:
+                    raise RuntimeError(
+                        "Rust WebUI transfer workflow did not show completed delivery or active download "
+                        f"progress: {transfer_workflow!r}"
+                    )
+                report["checks"]["transferWorkflow"] = transfer_workflow
 
                 metrics = page.evaluate(
                     """() => ({
