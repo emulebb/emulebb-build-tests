@@ -1728,6 +1728,7 @@ def public_search_candidate_safety_reason(
     result_row: object,
     *,
     min_sources: int,
+    min_complete_sources: int = 0,
     max_size_bytes: int,
 ) -> str | None:
     """Returns None when a public search result is safe enough to trigger as a paused download."""
@@ -1738,6 +1739,7 @@ def public_search_candidate_safety_reason(
     file_type = str(result_row.get("fileType") or "").strip().lower()
     size_bytes = result_row.get("sizeBytes", result_row.get("size"))
     sources = result_row.get("sources")
+    complete_sources = result_row.get("completeSources")
     if not file_name:
         return "missing-name"
     if file_name.lower().endswith(PUBLIC_DOWNLOAD_UNSAFE_SUFFIXES):
@@ -1754,6 +1756,13 @@ def public_search_candidate_safety_reason(
         return "too-large"
     if not isinstance(sources, int) or isinstance(sources, bool) or sources < min_sources:
         return "weak-sources"
+    if min_complete_sources > 0 and complete_sources is not None:
+        if (
+            not isinstance(complete_sources, int)
+            or isinstance(complete_sources, bool)
+            or complete_sources < min_complete_sources
+        ):
+            return "weak-complete-sources"
     return None
 
 
@@ -1926,6 +1935,7 @@ def wait_for_public_search_candidate(
                 reason = public_search_candidate_safety_reason(
                     item,
                     min_sources=args.min_sources,
+                    min_complete_sources=args.min_complete_sources,
                     max_size_bytes=args.max_size_bytes,
                 )
                 if reason is None:
@@ -6030,6 +6040,12 @@ def build_parser() -> argparse.ArgumentParser:
     public_download_parser.add_argument("--max-terms", type=int, default=4)
     public_download_parser.add_argument("--result-limit", type=int, default=50)
     public_download_parser.add_argument("--min-sources", type=int, default=2)
+    public_download_parser.add_argument(
+        "--min-complete-sources",
+        type=int,
+        default=1,
+        help="Minimum complete-source count when the public search result exposes completeSources.",
+    )
     public_download_parser.add_argument("--max-size-bytes", type=int, default=8 * 1024 * 1024)
     public_download_parser.add_argument("--search-timeout-seconds", type=float, default=90.0)
     public_download_parser.add_argument("--progress-timeout-seconds", type=float, default=300.0)

@@ -197,6 +197,15 @@ def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
     assert control.public_search_candidate_safety_reason({**safe, "hash": "ABCDEF0123456789ABCDEF0123456789"}, min_sources=2, max_size_bytes=2048) == "bad-hash"
     assert control.public_search_candidate_safety_reason({**safe, "sizeBytes": 4096}, min_sources=2, max_size_bytes=2048) == "too-large"
     assert control.public_search_candidate_safety_reason({**safe, "sources": 1}, min_sources=2, max_size_bytes=2048) == "weak-sources"
+    assert (
+        control.public_search_candidate_safety_reason(
+            {**safe, "completeSources": 0},
+            min_sources=2,
+            min_complete_sources=1,
+            max_size_bytes=2048,
+        )
+        == "weak-complete-sources"
+    )
 
 
 def test_public_search_download_proof_triggers_paused_resume_without_leaking_private_values(monkeypatch, tmp_path: Path) -> None:
@@ -275,6 +284,7 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
             max_terms=4,
             result_limit=50,
             min_sources=2,
+            min_complete_sources=1,
             max_size_bytes=8 * 1024 * 1024,
             search_timeout_seconds=1.0,
             progress_timeout_seconds=1.0,
@@ -461,6 +471,7 @@ def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatc
             search_method="automatic",
             search_type="doc",
             min_sources=2,
+            min_complete_sources=1,
             max_size_bytes=8 * 1024 * 1024,
             result_limit=50,
             search_timeout_seconds=60.0,
