@@ -2460,6 +2460,189 @@ def rust_early_connect_proof(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+REGULAR_LOG_CATEGORY_PATTERNS: dict[str, tuple[str, ...]] = {
+    "startup": ("startup", "daemon started", "rest listening"),
+    "vpnHttpProbe": ("http public ipv4",),
+    "vpnStunProbe": ("stun",),
+    "ed2k": ("ed2k", "server", "highid", "high id", "lowid", "low id"),
+    "kad": ("kad", "kademlia"),
+    "publish": ("publish", "published", "offer", "shared-file"),
+    "upload": ("upload", "uploads", "upload slot", "granting upload"),
+    "download": ("download", "transfer"),
+}
+
+
+DEFAULT_REGULAR_LOG_REQUIRED_CATEGORIES = (
+    "vpnHttpProbe",
+    "vpnStunProbe",
+    "ed2k",
+    "kad",
+    "publish",
+    "upload",
+    "download",
+)
+
+
+def log_items(payload: dict[str, object]) -> list[dict[str, object]]:
+    """Extracts the Rust REST log item list from either collection shape."""
+
+    items = payload.get("items")
+    if isinstance(items, list):
+        return [item for item in items if isinstance(item, dict)]
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return log_items(data)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def classify_regular_log_entry(entry: dict[str, object]) -> set[str]:
+    """Classifies one regular log entry without retaining the raw log text."""
+
+    text = f"{entry.get('level', '')} {entry.get('message', '')}".casefold()
+    categories: set[str] = set()
+    for category, patterns in REGULAR_LOG_CATEGORY_PATTERNS.items():
+        if any(pattern in text for pattern in patterns):
+            categories.add(category)
+    return categories
+
+
+def regular_log_category_summary(logs: list[dict[str, object]]) -> dict[str, object]:
+    """Returns category counts and time bounds without raw log messages."""
+
+    category_counts = {name: 0 for name in REGULAR_LOG_CATEGORY_PATTERNS}
+    level_counts: Counter[str] = Counter()
+    timestamps: list[int] = []
+    debug_count = 0
+    for entry in logs:
+        level = str(entry.get("level") or "unknown").casefold()
+        level_counts[level] += 1
+        if entry.get("debug") is True:
+            debug_count += 1
+        timestamp = safe_int(entry.get("timestamp"))
+        if timestamp is not None:
+            timestamps.append(timestamp)
+        for category in classify_regular_log_entry(entry):
+            category_counts[category] += 1
+    return {
+        "logCount": len(logs),
+        "categoryCounts": category_counts,
+        "levelCounts": dict(sorted(level_counts.items())),
+        "debugCount": debug_count,
+        "oldestTimestamp": min(timestamps) if timestamps else None,
+        "newestTimestamp": max(timestamps) if timestamps else None,
+    }
+
+
+def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[str, object]) -> dict[str, object]:
+    """Builds non-log proof fields that help diagnose rotated regular logs."""
+
+    known_uploaded = safe_int(metadata.get("knownUploadedBytes")) or 0
+    upload_accepts = safe_int(metadata.get("knownUploadAccepts")) or 0
+    upload_requests = safe_int(metadata.get("knownUploadRequests")) or 0
+    known_completed = safe_int(metadata.get("knownFilesCompleted")) or 0
+    transfers_total = safe_int(metadata.get("transfersTotal")) or 0
+    return {
+        "ed2kConnected": sample_row.get("ed2kConnected") is True,
+        "ed2kHighId": sample_row.get("ed2kHighId") is True,
+        "kadConnected": sample_row.get("kadConnected") is True,
+        "ed2kPublishedEntries": sample_row.get("ed2kPublishedEntries"),
+        "ed2kPendingEntries": sample_row.get("ed2kPendingEntries"),
+        "kadSourcePublishedTotal": sample_row.get("kadSourcePublishedTotal"),
+        "uploadSpeedKiBps": sample_row.get("uploadSpeedKiBps"),
+        "activeUploads": sample_row.get("activeUploads"),
+        "waitingUploads": sample_row.get("waitingUploads"),
+        "knownUploadedBytes": known_uploaded,
+        "knownUploadAccepts": upload_accepts,
+        "knownUploadRequests": upload_requests,
+        "knownFilesCompleted": known_completed,
+        "transfersTotal": transfers_total,
+        "hasUploadHistory": known_uploaded > 0 or upload_accepts > 0 or upload_requests > 0,
+        "hasDownloadHistory": known_completed > 0 or transfers_total > 0,
+    }
+
+
+def regular_log_missing_categories(
+    category_counts: dict[str, object],
+    required_categories: list[str],
+    evidence: dict[str, object],
+) -> list[str]:
+    """Returns required log categories still missing after status/metadata fallback."""
+
+    missing: list[str] = []
+    for category in required_categories:
+        if int(category_counts.get(category) or 0) > 0:
+            continue
+        if category == "upload" and evidence.get("hasUploadHistory") is True:
+            continue
+        if category == "download" and evidence.get("hasDownloadHistory") is True:
+            continue
+        if category == "ed2k" and evidence.get("ed2kConnected") is True:
+            continue
+        if category == "kad" and evidence.get("kadConnected") is True:
+            continue
+        missing.append(category)
+    return missing
+
+
+def rust_regular_log_proof(args: argparse.Namespace) -> dict[str, object]:
+    """Proves regular-daemon logs expose useful beta diagnostics."""
+
+    logs_payload = request_json(
+        args.base_url,
+        f"/logs?limit={args.limit}",
+        api_key=args.api_key,
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    logs = log_items(logs_payload)
+    category_summary = regular_log_category_summary(logs)
+    sample_row = sanitize_status(
+        request_json(
+            args.base_url,
+            "/status",
+            api_key=args.api_key,
+            timeout_seconds=args.request_timeout_seconds,
+        )
+    )
+    if args.metadata_db is not None:
+        metadata_db = args.metadata_db
+    else:
+        profile_dir = args.profile_dir or live_wire_rust_profile_dir(args.inputs)
+        metadata_db = profile_dir / RUST_PROFILE_METADATA_FILE
+    metadata_raw = rust_metadata_counts(metadata_db)
+    metadata = {
+        key: value
+        for key, value in metadata_raw.items()
+        if key != "metadataDb"
+    }
+    if "metadataDb" in metadata_raw:
+        metadata["metadataDbFingerprint"] = private_path_fingerprint(metadata_raw["metadataDb"])
+    evidence = regular_log_status_evidence(sample_row, metadata)
+    required_categories = list(args.require_category or DEFAULT_REGULAR_LOG_REQUIRED_CATEGORIES)
+    missing = regular_log_missing_categories(
+        category_summary["categoryCounts"],  # type: ignore[arg-type]
+        required_categories,
+        evidence,
+    )
+    missing_checks = list(missing)
+    if args.require_high_id and evidence.get("ed2kHighId") is not True:
+        missing_checks.append("ed2kHighId")
+    ok = not missing_checks and category_summary["logCount"] > 0
+    return {
+        "ok": ok,
+        "schema": "emulebb.rust-regular-log-proof.v1",
+        "baseUrlFingerprint": text_fingerprint(args.base_url),
+        "limit": args.limit,
+        "requiredCategories": required_categories,
+        "missing": missing_checks,
+        "logs": category_summary,
+        "sample": sample_row,
+        "metadata": metadata,
+        "evidence": evidence,
+    }
+
+
 def safe_int(value: object) -> int | None:
     """Converts JSON-ish values to int when possible."""
 
@@ -6283,6 +6466,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the final sanitized early-connect proof report to this JSON path.",
     )
     early_connect_parser.set_defaults(func=rust_early_connect_proof)
+
+    regular_log_parser = sub.add_parser(
+        "regular-log-proof",
+        help="Prove regular Rust daemon logs expose beta-useful diagnostics without raw log retention.",
+    )
+    regular_log_parser.add_argument("--inputs", type=Path, default=default_live_wire_inputs())
+    regular_log_parser.add_argument("--limit", type=int, default=1000)
+    regular_log_parser.add_argument("--request-timeout-seconds", type=float, default=8.0)
+    regular_log_parser.add_argument("--profile-dir", type=Path)
+    regular_log_parser.add_argument("--metadata-db", type=Path)
+    regular_log_parser.add_argument(
+        "--require-category",
+        action="append",
+        choices=tuple(REGULAR_LOG_CATEGORY_PATTERNS.keys()),
+        help="Required diagnostic category; may be repeated. Defaults to beta categories.",
+    )
+    regular_log_parser.add_argument("--require-high-id", action=argparse.BooleanOptionalAction, default=True)
+    regular_log_parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=output_root() / "reports" / "rust-regular-log-proof" / "rust-regular-log-proof.latest.json",
+        help="Write the final sanitized regular-log proof report to this JSON path.",
+    )
+    regular_log_parser.set_defaults(func=rust_regular_log_proof)
 
     public_download_parser = sub.add_parser(
         "public-search-download-proof",

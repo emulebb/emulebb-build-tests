@@ -1940,6 +1940,170 @@ def test_early_connect_cli_fails_when_report_is_not_ok(
     assert report_payload["reason"] == "early-connect-timeout"
 
 
+def test_regular_log_proof_classifies_logs_and_keeps_report_sanitized(monkeypatch, tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    private_profile = tmp_path / "Private Profile"
+    private_db = private_profile / "emulebb-rust-metadata.db"
+    private_log_message = (
+        r"VPN Guard HTTP public IPv4 probe started from C:\Users\Operator\profile "
+        "hash=0123456789abcdef0123456789abcdef"
+    )
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        if path == "/status":
+            return {
+                "stats": {
+                    "uploadSpeedKiBps": 0.0,
+                    "activeUploads": 0,
+                    "waitingUploads": 0,
+                },
+                "servers": {
+                    "connected": True,
+                    "lowId": False,
+                },
+                "kad": {
+                    "connected": True,
+                },
+                "runtimeDiagnostics": {
+                    "ed2kPublish": {
+                        "publishedEntries": 50,
+                        "pendingEntries": 10,
+                    },
+                    "kadPublish": {
+                        "sourcePublishedTotal": 3,
+                    },
+                },
+            }
+        assert path == "/logs?limit=1000"
+        return {
+            "items": [
+                {"timestamp": 10, "level": "info", "message": private_log_message, "debug": False},
+                {"timestamp": 11, "level": "info", "message": "VPN Guard STUN probe succeeded", "debug": False},
+                {"timestamp": 12, "level": "info", "message": "ED2K server connected with HighID", "debug": False},
+                {"timestamp": 13, "level": "info", "message": "Kad connected and publishing", "debug": False},
+                {"timestamp": 14, "level": "info", "message": "shared-file publish batch complete", "debug": False},
+            ]
+        }
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        control,
+        "rust_metadata_counts",
+        lambda metadata_db: {
+            "metadataDb": str(metadata_db),
+            "metadataDbExists": True,
+            "knownUploadedBytes": 4096,
+            "knownUploadAccepts": 2,
+            "knownUploadRequests": 2,
+            "knownFilesCompleted": 7,
+            "transfersTotal": 9,
+        },
+    )
+
+    result = control.rust_regular_log_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            limit=1000,
+            request_timeout_seconds=2.0,
+            inputs=tmp_path / "inputs.json",
+            profile_dir=private_profile,
+            metadata_db=private_db,
+            require_category=None,
+            require_high_id=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["logs"]["categoryCounts"]["vpnHttpProbe"] == 1
+    assert result["logs"]["categoryCounts"]["vpnStunProbe"] == 1
+    assert result["logs"]["categoryCounts"]["ed2k"] == 1
+    assert result["logs"]["categoryCounts"]["kad"] == 1
+    assert result["logs"]["categoryCounts"]["publish"] >= 1
+    assert result["evidence"]["hasUploadHistory"] is True
+    assert result["evidence"]["hasDownloadHistory"] is True
+    rendered = repr(result)
+    assert "Operator" not in rendered
+    assert "Private Profile" not in rendered
+    assert "0123456789abcdef0123456789abcdef" not in rendered
+
+
+def test_regular_log_proof_fails_when_required_category_missing(monkeypatch, tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+
+    monkeypatch.setattr(
+        control,
+        "request_json",
+        lambda _base_url, path, **_kwargs: {
+            "stats": {},
+            "servers": {"connected": True, "lowId": False},
+            "kad": {"connected": False},
+            "runtimeDiagnostics": {},
+        }
+        if path == "/status"
+        else {
+            "items": [
+                {"timestamp": 10, "level": "info", "message": "ED2K server connected", "debug": False},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "rust_metadata_counts",
+        lambda _metadata_db: {
+            "metadataDb": str(tmp_path / "profile" / "emulebb-rust-metadata.db"),
+            "metadataDbExists": True,
+            "knownUploadedBytes": 0,
+            "knownUploadAccepts": 0,
+            "knownUploadRequests": 0,
+            "knownFilesCompleted": 0,
+            "transfersTotal": 0,
+        },
+    )
+
+    result = control.rust_regular_log_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            limit=10,
+            request_timeout_seconds=2.0,
+            inputs=tmp_path / "inputs.json",
+            profile_dir=tmp_path / "profile",
+            metadata_db=None,
+            require_category=["vpnStunProbe", "kad", "upload"],
+            require_high_id=True,
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["missing"] == ["vpnStunProbe", "kad", "upload"]
+
+
+def test_regular_log_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "reports" / "regular-log.json"
+
+    monkeypatch.setattr(
+        control,
+        "rust_regular_log_proof",
+        lambda args: {
+            "ok": True,
+            "jsonOutput": str(args.json_output),
+            "limit": args.limit,
+            "requireHighId": args.require_high_id,
+        },
+    )
+
+    assert control.main(["regular-log-proof", "--json-output", str(report)]) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["ok"] is True
+    assert report_payload["limit"] == 1000
+    assert report_payload["requireHighId"] is True
+
+
 def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     rust_logs = tmp_path / "rust"
