@@ -2294,6 +2294,172 @@ def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
     return {"steps": steps, "sample": final_sample or sample(args.base_url, args.api_key)}
 
 
+def sanitized_p2p_start_result(result: dict[str, object] | None) -> dict[str, object] | None:
+    """Keeps start-operation proof fields without retaining raw REST payloads."""
+
+    if result is None:
+        return None
+    steps: list[dict[str, object]] = []
+    raw_steps = result.get("steps")
+    if isinstance(raw_steps, list):
+        for raw_step in raw_steps:
+            if not isinstance(raw_step, dict):
+                continue
+            step: dict[str, object] = {
+                "ok": raw_step.get("ok") is True,
+                "method": raw_step.get("method"),
+                "path": raw_step.get("path"),
+            }
+            if raw_step.get("status") is not None:
+                step["status"] = raw_step.get("status")
+            if raw_step.get("reason") is not None:
+                step["reason"] = raw_step.get("reason")
+            data = raw_step.get("data")
+            if isinstance(data, dict):
+                if raw_step.get("path") == "/kad/operations/start":
+                    step["kad"] = {
+                        "connected": data.get("connected"),
+                        "running": data.get("running"),
+                        "contactCount": data.get("contactCount"),
+                        "firewallState": data.get("firewallState"),
+                        "blockedByVpnGuard": data.get("blockedByVpnGuard"),
+                    }
+                elif raw_step.get("path") == "/servers/operations/connect":
+                    step["ed2k"] = {
+                        "connected": data.get("connected"),
+                        "connecting": data.get("connecting"),
+                        "ed2kIdState": data.get("ed2kIdState"),
+                        "serverCount": data.get("serverCount"),
+                    }
+            steps.append(step)
+    sanitized: dict[str, object] = {"steps": steps}
+    result_sample = result.get("sample")
+    if isinstance(result_sample, dict):
+        sanitized["sample"] = result_sample
+    return sanitized
+
+
+def early_connect_state(
+    status: dict[str, object],
+    *,
+    require_high_id: bool = True,
+    require_kad: bool = True,
+) -> dict[str, object]:
+    """Summarizes whether a sanitized Rust sample satisfies early P2P readiness."""
+
+    checks = {
+        "ed2kConnected": status.get("ed2kConnected") is True,
+        "ed2kHighId": (status.get("ed2kHighId") is True) if require_high_id else True,
+        "kadConnected": (status.get("kadConnected") is True) if require_kad else True,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "checks": checks,
+    }
+
+
+def rust_early_connect_proof(args: argparse.Namespace) -> dict[str, object]:
+    """Proves the persisted Rust profile reaches P2P-ready state early."""
+
+    started = time.time()
+    observations: list[dict[str, object]] = []
+    start_sample = sample(args.base_url, args.api_key)
+    start_state = early_connect_state(
+        start_sample,
+        require_high_id=args.require_high_id,
+        require_kad=args.require_kad,
+    )
+    observations.append(
+        {
+            "elapsedSeconds": 0.0,
+            "phase": "start-sample",
+            "state": start_state,
+            "sample": start_sample,
+        }
+    )
+
+    p2p_start: dict[str, object] | None = None
+    if args.request_start:
+        raw_p2p_start = rust_p2p_start(
+            argparse.Namespace(
+                base_url=args.base_url,
+                api_key=args.api_key,
+                timeout_seconds=args.request_timeout_seconds,
+                ensure_preferences=args.ensure_preferences,
+                start_kad=args.start_kad,
+            )
+        )
+        p2p_start = sanitized_p2p_start_result(raw_p2p_start)
+        start_result_sample = p2p_start.get("sample")
+        if isinstance(start_result_sample, dict):
+            observations.append(
+                {
+                    "elapsedSeconds": round(time.time() - started, 3),
+                    "phase": "p2p-start-result",
+                    "state": early_connect_state(
+                        start_result_sample,
+                        require_high_id=args.require_high_id,
+                        require_kad=args.require_kad,
+                    ),
+                    "sample": start_result_sample,
+                }
+            )
+
+    deadline = started + args.timeout_seconds
+    latest_sample = observations[-1]["sample"] if observations else start_sample
+    latest_state = observations[-1]["state"] if observations else start_state
+    while True:
+        current_sample = sample(args.base_url, args.api_key)
+        current_state = early_connect_state(
+            current_sample,
+            require_high_id=args.require_high_id,
+            require_kad=args.require_kad,
+        )
+        observations.append(
+            {
+                "elapsedSeconds": round(time.time() - started, 3),
+                "phase": "poll",
+                "state": current_state,
+                "sample": current_sample,
+            }
+        )
+        latest_sample = current_sample
+        latest_state = current_state
+        if current_state["ok"]:
+            return {
+                "ok": True,
+                "elapsedSeconds": round(time.time() - started, 3),
+                "timeoutSeconds": args.timeout_seconds,
+                "requestStart": args.request_start,
+                "requireHighId": args.require_high_id,
+                "requireKad": args.require_kad,
+                "startSample": start_sample,
+                "p2pStart": p2p_start,
+                "observations": observations,
+                "sample": latest_sample,
+            }
+        if time.time() >= deadline:
+            break
+        time.sleep(min(max(args.poll_seconds, 0.1), max(0.0, deadline - time.time())))
+
+    return {
+        "ok": False,
+        "reason": "early-connect-timeout",
+        "elapsedSeconds": round(time.time() - started, 3),
+        "timeoutSeconds": args.timeout_seconds,
+        "requestStart": args.request_start,
+        "requireHighId": args.require_high_id,
+        "requireKad": args.require_kad,
+        "missing": latest_state.get("missing", []),
+        "startSample": start_sample,
+        "p2pStart": p2p_start,
+        "observations": observations,
+        "sample": latest_sample,
+    }
+
+
 def safe_int(value: object) -> int | None:
     """Converts JSON-ish values to int when possible."""
 
@@ -6014,6 +6180,26 @@ def build_parser() -> argparse.ArgumentParser:
     rust_p2p_parser.add_argument("--ensure-preferences", action=argparse.BooleanOptionalAction, default=True)
     rust_p2p_parser.add_argument("--start-kad", action=argparse.BooleanOptionalAction, default=True)
     rust_p2p_parser.set_defaults(func=rust_p2p_start)
+
+    early_connect_parser = sub.add_parser(
+        "early-connect-proof",
+        help="Prove the regular persisted Rust profile connects to ED2K/Kad early.",
+    )
+    early_connect_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    early_connect_parser.add_argument("--poll-seconds", type=float, default=2.0)
+    early_connect_parser.add_argument("--request-timeout-seconds", type=float, default=8.0)
+    early_connect_parser.add_argument("--request-start", action=argparse.BooleanOptionalAction, default=True)
+    early_connect_parser.add_argument("--ensure-preferences", action=argparse.BooleanOptionalAction, default=True)
+    early_connect_parser.add_argument("--start-kad", action=argparse.BooleanOptionalAction, default=True)
+    early_connect_parser.add_argument("--require-high-id", action=argparse.BooleanOptionalAction, default=True)
+    early_connect_parser.add_argument("--require-kad", action=argparse.BooleanOptionalAction, default=True)
+    early_connect_parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=output_root() / "reports" / "rust-early-connect-proof" / "rust-early-connect-proof.latest.json",
+        help="Write the final sanitized early-connect proof report to this JSON path.",
+    )
+    early_connect_parser.set_defaults(func=rust_early_connect_proof)
 
     public_download_parser = sub.add_parser(
         "public-search-download-proof",

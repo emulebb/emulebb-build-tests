@@ -1710,6 +1710,155 @@ def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> No
     ]
 
 
+def test_rust_early_connect_proof_requests_start_and_waits_for_highid(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    samples = iter(
+        [
+            {"ed2kConnected": False, "ed2kHighId": False, "kadConnected": False},
+            {"ed2kConnected": True, "ed2kHighId": True, "kadConnected": True},
+        ]
+    )
+    p2p_args: list[SimpleNamespace] = []
+
+    def fake_sample(_base_url: str, _api_key: str) -> dict[str, object]:
+        return next(samples)
+
+    def fake_p2p_start(args: SimpleNamespace) -> dict[str, object]:
+        p2p_args.append(args)
+        return {
+            "steps": [
+                {
+                    "ok": True,
+                    "method": "PATCH",
+                    "path": "/app/settings",
+                    "data": {"daemon": {"incomingDir": r"C:\Private\incoming"}},
+                },
+                {
+                    "ok": True,
+                    "method": "POST",
+                    "path": "/kad/operations/start",
+                    "data": {
+                        "connected": True,
+                        "contactCount": 42,
+                        "network": {"vpnGuard": {"publicIp": "198.51.100.10"}},
+                    },
+                },
+            ],
+            "sample": {"ed2kConnected": True, "ed2kHighId": False, "kadConnected": True},
+        }
+
+    monkeypatch.setattr(control, "sample", fake_sample)
+    monkeypatch.setattr(control, "rust_p2p_start", fake_p2p_start)
+
+    result = control.rust_early_connect_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            timeout_seconds=5.0,
+            poll_seconds=0.1,
+            request_timeout_seconds=2.0,
+            request_start=True,
+            ensure_preferences=True,
+            start_kad=True,
+            require_high_id=True,
+            require_kad=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert p2p_args[0].timeout_seconds == 2.0
+    assert p2p_args[0].ensure_preferences is True
+    assert p2p_args[0].start_kad is True
+    assert result["sample"]["ed2kConnected"] is True
+    assert result["sample"]["ed2kHighId"] is True
+    assert result["sample"]["kadConnected"] is True
+    assert [row["phase"] for row in result["observations"]] == [
+        "start-sample",
+        "p2p-start-result",
+        "poll",
+    ]
+    rendered = repr(result["p2pStart"])
+    assert "C:\\Private" not in rendered
+    assert "198.51.100.10" not in rendered
+
+
+def test_rust_early_connect_proof_times_out_with_missing_checks(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    disconnected = {"ed2kConnected": False, "ed2kHighId": False, "kadConnected": False}
+    monkeypatch.setattr(control, "sample", lambda _base_url, _api_key: dict(disconnected))
+
+    result = control.rust_early_connect_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            timeout_seconds=0.0,
+            poll_seconds=0.1,
+            request_timeout_seconds=2.0,
+            request_start=False,
+            ensure_preferences=True,
+            start_kad=True,
+            require_high_id=True,
+            require_kad=True,
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "early-connect-timeout"
+    assert result["missing"] == ["ed2kConnected", "ed2kHighId", "kadConnected"]
+
+
+def test_early_connect_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "reports" / "early.json"
+
+    monkeypatch.setattr(
+        control,
+        "rust_early_connect_proof",
+        lambda args: {
+            "ok": True,
+            "jsonOutput": str(args.json_output),
+            "timeoutSeconds": args.timeout_seconds,
+            "requireHighId": args.require_high_id,
+            "requireKad": args.require_kad,
+        },
+    )
+
+    assert control.main(["early-connect-proof", "--json-output", str(report)]) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["ok"] is True
+    assert report_payload["timeoutSeconds"] == 120.0
+    assert report_payload["requireHighId"] is True
+    assert report_payload["requireKad"] is True
+
+
+def test_early_connect_cli_fails_when_report_is_not_ok(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "early.json"
+
+    monkeypatch.setattr(
+        control,
+        "rust_early_connect_proof",
+        lambda args: {
+            "ok": False,
+            "reason": "early-connect-timeout",
+            "jsonOutput": str(args.json_output),
+        },
+    )
+
+    assert control.main(["early-connect-proof", "--json-output", str(report)]) == 1
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["ok"] is False
+    assert report_payload["reason"] == "early-connect-timeout"
+
+
 def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     rust_logs = tmp_path / "rust"
