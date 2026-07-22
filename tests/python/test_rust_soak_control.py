@@ -601,6 +601,39 @@ def test_public_transfer_debug_summary_sanitizes_transfer_and_sources(monkeypatc
     assert "Private Peer" not in repr(result)
 
 
+def test_public_transfer_debug_summary_cli_writes_json_output(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "transfer-debug.json"
+
+    monkeypatch.setattr(
+        control,
+        "public_transfer_debug_summary",
+        lambda args: {
+            "ok": True,
+            "hashFingerprint": args.hash_fingerprint,
+            "jsonOutput": str(args.json_output),
+        },
+    )
+
+    assert control.main(
+        [
+            "public-transfer-debug-summary",
+            "--hash-fingerprint",
+            "abcdef0123456789",
+            "--json-output",
+            str(report),
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["hashFingerprint"] == "abcdef0123456789"
+    assert report_payload["jsonOutput"] == str(report)
+
+
 def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatch, tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     calls: list[str] = []

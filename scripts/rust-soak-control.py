@@ -6607,6 +6607,11 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_debug_parser.add_argument("--max-offset", type=int, default=50000)
     transfer_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
     transfer_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    transfer_debug_parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Write the sanitized transfer/source diagnostics to this JSON path.",
+    )
     transfer_debug_parser.set_defaults(func=public_transfer_debug_summary)
 
     shared_summary_parser = sub.add_parser(
