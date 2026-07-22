@@ -215,6 +215,7 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
     delivered.write_bytes(b"ok")
     calls: list[tuple[str, str, object]] = []
     stop_calls: list[str] = []
+    transfer_reads = 0
 
     def fake_terms(_inputs: Path, group: str) -> tuple[str, ...]:
         assert group == "documents"
@@ -224,6 +225,7 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
         return {"ed2kConnected": True, "kadConnected": True}
 
     def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
+        nonlocal transfer_reads
         calls.append((str(kwargs.get("method") or "GET"), path, kwargs.get("body")))
         if path == "/searches":
             return {"id": "search-1"}
@@ -247,15 +249,17 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
         if path.endswith("/operations/resume"):
             return {"ok": True, "hash": "0123456789abcdef0123456789abcdef", "state": "downloading"}
         if path == "/transfers/0123456789abcdef0123456789abcdef":
+            transfer_reads += 1
+            completed_bytes = 0 if transfer_reads == 1 else 128
             return {
                 "hash": "0123456789abcdef0123456789abcdef",
                 "name": "public-document.pdf",
                 "state": "downloading",
                 "sizeBytes": 1024,
-                "completedBytes": 128,
+                "completedBytes": completed_bytes,
                 "sources": 3,
                 "sourcesTransferring": 1,
-                "progress": 0.125,
+                "progress": completed_bytes / 1024,
                 "deliveredPath": str(delivered),
             }
         raise AssertionError(path)
@@ -333,6 +337,133 @@ def test_public_search_download_proof_triggers_paused_resume_without_leaking_pri
     assert "private search term" not in repr(progress_rows)
     assert "public-document.pdf" not in repr(progress_rows)
     assert "0123456789abcdef0123456789abcdef" not in repr(progress_rows)
+
+
+def test_public_search_download_proof_retries_when_sources_do_not_move_bytes(monkeypatch, tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    first_hash = "11111111111111111111111111111111"
+    second_hash = "22222222222222222222222222222222"
+    calls: list[tuple[str, str, object]] = []
+    stop_calls: list[str] = []
+    transfer_reads: dict[str, int] = {first_hash: 0, second_hash: 0}
+
+    def fake_terms(_inputs: Path, group: str) -> tuple[str, ...]:
+        assert group == "documents"
+        return ("private search term",)
+
+    def fake_sample(_base_url: str, _api_key: str) -> dict[str, object]:
+        return {"ed2kConnected": True, "kadConnected": True}
+
+    def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
+        calls.append((str(kwargs.get("method") or "GET"), path, kwargs.get("body")))
+        if path == "/searches":
+            return {"id": "search-1"}
+        if path.startswith("/searches/search-1?"):
+            return {
+                "status": "running",
+                "items": [
+                    {
+                        "hash": first_hash,
+                        "name": "public-first.pdf",
+                        "sizeBytes": 1024,
+                        "fileType": "Doc",
+                        "sources": 4,
+                        "completeSources": 2,
+                    },
+                    {
+                        "hash": second_hash,
+                        "name": "public-second.pdf",
+                        "sizeBytes": 1024,
+                        "fileType": "Doc",
+                        "sources": 3,
+                        "completeSources": 1,
+                    },
+                ],
+            }
+        if path.endswith("/operations/download"):
+            return {"ok": True}
+        if path == f"/transfers/{first_hash}/operations/resume":
+            return {"ok": True, "hash": first_hash, "state": "downloading"}
+        if path == f"/transfers/{second_hash}/operations/resume":
+            return {"ok": True, "hash": second_hash, "state": "downloading"}
+        if path == f"/transfers/{first_hash}":
+            transfer_reads[first_hash] += 1
+            return {
+                "hash": first_hash,
+                "name": "public-first.pdf",
+                "state": "downloading",
+                "sizeBytes": 1024,
+                "completedBytes": 0,
+                "sources": 4,
+                "sourcesTransferring": 0,
+                "progress": 0.0,
+            }
+        if path == f"/transfers/{second_hash}":
+            transfer_reads[second_hash] += 1
+            completed_bytes = 0 if transfer_reads[second_hash] == 1 else 256
+            return {
+                "hash": second_hash,
+                "name": "public-second.pdf",
+                "state": "downloading",
+                "sizeBytes": 1024,
+                "completedBytes": completed_bytes,
+                "sources": 3,
+                "sourcesTransferring": 1,
+                "progress": completed_bytes / 1024,
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(control, "public_search_terms_from_inputs", fake_terms)
+    monkeypatch.setattr(control, "sample", fake_sample)
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        control,
+        "request_json_attempt",
+        lambda _base_url, path, **kwargs: (
+            stop_calls.append(path)
+            or {"ok": True, "path": path, "method": kwargs.get("method", "GET")}
+        ),
+    )
+
+    result = control.public_search_download_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            inputs=tmp_path / "inputs.json",
+            term=None,
+            term_group="documents",
+            search_method="automatic",
+            search_type="doc",
+            max_terms=1,
+            max_download_candidates=2,
+            result_limit=50,
+            min_sources=2,
+            min_complete_sources=1,
+            max_size_bytes=8 * 1024 * 1024,
+            search_timeout_seconds=1.0,
+            progress_timeout_seconds=0.01,
+            completion_timeout_seconds=1.0,
+            poll_seconds=0.01,
+            request_timeout_seconds=1.0,
+            require_completion=False,
+            stop_search=True,
+            progress_jsonl=tmp_path / "progress.jsonl",
+        )
+    )
+
+    assert result["ok"] is True
+    assert len(result["downloadAttempts"]) == 1
+    assert result["downloadAttempts"][0]["progress"]["ok"] is False
+    assert result["downloadAttempts"][0]["progress"]["sourcesObserved"] is True
+    assert result["downloadAttempts"][0]["progress"]["byteProgressObserved"] is False
+    assert result["progress"]["byteProgressObserved"] is True
+    assert stop_calls == ["/searches/search-1"]
+    assert ("POST", f"/searches/search-1/results/{first_hash}/operations/download", {"paused": True, "categoryId": 0}) in calls
+    assert ("POST", f"/searches/search-1/results/{second_hash}/operations/download", {"paused": True, "categoryId": 0}) in calls
+    assert first_hash not in repr(result)
+    assert second_hash not in repr(result)
+    assert "public-first.pdf" not in repr(result)
+    assert "public-second.pdf" not in repr(result)
 
 
 def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
