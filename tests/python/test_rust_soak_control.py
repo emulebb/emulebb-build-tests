@@ -180,6 +180,193 @@ def test_shared_summary_requires_mfc_for_deep_compare_after_timeout(monkeypatch)
         )
 
 
+def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        if path == "/shared-directories":
+            return {
+                "hashingCount": 4,
+                "roots": [{"path": r"C:\Share", "accessible": True, "shareable": True}],
+                "items": [{"path": r"C:\Share", "accessible": True, "shareable": True}],
+                "reloadProgress": {
+                    "phase": "hashing",
+                    "running": True,
+                    "pending": False,
+                    "plannedHashCount": 5,
+                    "hashedCount": 1,
+                    "failedHashCount": 0,
+                    "reusedCount": 10,
+                },
+            }
+        return {"items": [], "total": 42}
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    summary = control.summarize_shared_directories("http://192.0.2.10:4731/api/v1", "rust", "rust")
+
+    assert summary["hashingCount"] == 4
+    assert summary["sharedFilesTotal"] == 42
+    assert summary["reload"] == {
+        "phase": "hashing",
+        "running": True,
+        "pending": False,
+        "scannedCount": None,
+        "plannedHashCount": 5,
+        "hashedCount": 1,
+        "failedHashCount": 0,
+        "reusedCount": 10,
+        "skippedIntakeCount": None,
+        "prunedCount": None,
+        "staleHashCount": None,
+    }
+
+
+def test_sanitize_status_reads_shared_directory_reload_progress() -> None:
+    control = _load_rust_soak_control()
+
+    sample = control.sanitize_status(
+        {
+            "runtimeDiagnostics": {
+                "sharedDirectoryReloadProgress": {
+                    "phase": "queued",
+                    "scannedCount": 100,
+                    "plannedHashCount": 5,
+                    "reusedCount": 95,
+                }
+            }
+        }
+    )
+
+    assert sample["sharedReloadPhase"] == "queued"
+    assert sample["sharedReloadScannedCount"] == 100
+    assert sample["sharedReloadPlannedHashCount"] == 5
+    assert sample["sharedReloadReusedCount"] == 95
+
+
+def test_shared_library_settled_check_requires_no_hashing_or_reload() -> None:
+    control = _load_rust_soak_control()
+
+    check = control.shared_library_settled_check(
+        {
+            "sharedFilesTotal": 100,
+            "roots": {"count": 2},
+            "items": {"count": 2},
+            "hashingCount": 12,
+            "reload": {"running": True, "pending": False, "phase": "hashing"},
+        },
+        min_root_count=1,
+        min_shared_files=1,
+    )
+
+    assert check["ok"] is False
+    assert check["missing"] == ["hashingComplete", "reloadNotRunning"]
+    assert check["rootCount"] == 2
+    assert check["sharedFilesTotal"] == 100
+
+
+def test_shared_library_settled_check_accepts_stable_shared_counts() -> None:
+    control = _load_rust_soak_control()
+
+    check = control.shared_library_settled_check(
+        {
+            "sharedFilesTotal": 100,
+            "roots": {"count": 2},
+            "items": {"count": 2},
+            "hashingCount": 0,
+            "reload": {"running": False, "pending": False, "phase": "idle", "failedHashCount": 0},
+        },
+        min_root_count=1,
+        min_shared_files=1,
+    )
+
+    assert check["ok"] is True
+    assert check["missing"] == []
+
+
+def test_shared_reload_settled_proof_waits_for_consecutive_stable_samples(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    samples = iter(
+        [
+            {
+                "sharedFilesTotal": 100,
+                "roots": {"count": 2},
+                "items": {"count": 2},
+                "hashingCount": 1,
+                "reload": {"running": True, "pending": False, "phase": "hashing"},
+            },
+            {
+                "sharedFilesTotal": 100,
+                "roots": {"count": 2},
+                "items": {"count": 2},
+                "hashingCount": 0,
+                "reload": {"running": False, "pending": False, "phase": "idle"},
+            },
+            {
+                "sharedFilesTotal": 100,
+                "roots": {"count": 2},
+                "items": {"count": 2},
+                "hashingCount": 0,
+                "reload": {"running": False, "pending": False, "phase": "idle"},
+            },
+        ]
+    )
+
+    monkeypatch.setattr(control, "summarize_shared_directories", lambda *args, **kwargs: next(samples))
+    result = control.rust_shared_reload_settled_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            timeout_seconds=10.0,
+            poll_seconds=0.0,
+            request_timeout_seconds=1.0,
+            stable_samples=2,
+            min_root_count=1,
+            min_shared_files=1,
+            fingerprint_sample_limit=20,
+            max_observations=20,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["stability"] == {"ok": True, "sampleCount": 2, "deltas": {}}
+    assert result["sample"]["hashingCount"] == 0
+    assert "192.0.2.10" not in repr(result)
+
+
+def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+
+    monkeypatch.setattr(
+        control,
+        "summarize_shared_directories",
+        lambda *args, **kwargs: {
+            "sharedFilesTotal": 100,
+            "roots": {"count": 2},
+            "items": {"count": 2},
+            "hashingCount": 12,
+            "reload": {"running": True, "pending": False, "phase": "hashing"},
+        },
+    )
+    result = control.rust_shared_reload_settled_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            timeout_seconds=0.0,
+            poll_seconds=0.0,
+            request_timeout_seconds=1.0,
+            stable_samples=2,
+            min_root_count=1,
+            min_shared_files=1,
+            fingerprint_sample_limit=20,
+            max_observations=20,
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["sample"]["missing"] == ["hashingComplete", "reloadNotRunning"]
+    assert "192.0.2.10" not in repr(result)
+
+
 def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
     control = _load_rust_soak_control()
     safe = {

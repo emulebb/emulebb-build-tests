@@ -2730,7 +2730,13 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
     runtime = status.get("runtimeDiagnostics") if isinstance(status.get("runtimeDiagnostics"), dict) else {}
     ed2k_publish = runtime.get("ed2kPublish") if isinstance(runtime.get("ed2kPublish"), dict) else {}
     kad_publish = runtime.get("kadPublish") if isinstance(runtime.get("kadPublish"), dict) else {}
-    shared_reload = runtime.get("sharedReload") if isinstance(runtime.get("sharedReload"), dict) else {}
+    shared_reload = (
+        runtime.get("sharedDirectoryReloadProgress")
+        if isinstance(runtime.get("sharedDirectoryReloadProgress"), dict)
+        else runtime.get("sharedReload")
+        if isinstance(runtime.get("sharedReload"), dict)
+        else {}
+    )
     ed2k_published = ed2k_publish.get("publishedEntries")
     ed2k_pending = ed2k_publish.get("pendingEntries")
     sanitized = {
@@ -2914,11 +2920,12 @@ def summarize_shared_directories(
     *,
     include_fingerprints: bool = False,
     sample_limit: int = 20,
+    timeout_seconds: float = 120.0,
 ) -> dict[str, object]:
     """Returns sanitized shared-directory and shared-file totals for one client."""
 
-    directories = request_json(base_url, "/shared-directories", api_key=api_key)
-    files = request_json(base_url, "/shared-files?offset=0&limit=1", api_key=api_key)
+    directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
+    files = request_json(base_url, "/shared-files?offset=0&limit=1", api_key=api_key, timeout_seconds=timeout_seconds)
     root_fingerprints = shared_directory_fingerprints(directories.get("roots"))
     item_fingerprints = shared_directory_fingerprints(directories.get("items"))
     roots = summarize_shared_directory_rows(
@@ -2931,7 +2938,13 @@ def summarize_shared_directories(
         include_fingerprints=include_fingerprints,
         sample_limit=sample_limit,
     )
-    reload_diag = directories.get("reload") if isinstance(directories.get("reload"), dict) else {}
+    reload_diag = (
+        directories.get("reloadProgress")
+        if isinstance(directories.get("reloadProgress"), dict)
+        else directories.get("reload")
+        if isinstance(directories.get("reload"), dict)
+        else {}
+    )
     total = files.get("total")
     root_set = set(root_fingerprints)
     item_set = set(item_fingerprints)
@@ -2957,6 +2970,8 @@ def summarize_shared_directories(
             "pending": reload_diag.get("pending"),
             "scannedCount": reload_diag.get("scannedCount"),
             "plannedHashCount": reload_diag.get("plannedHashCount"),
+            "hashedCount": reload_diag.get("hashedCount"),
+            "failedHashCount": reload_diag.get("failedHashCount"),
             "reusedCount": reload_diag.get("reusedCount"),
             "skippedIntakeCount": reload_diag.get("skippedIntakeCount"),
             "prunedCount": reload_diag.get("prunedCount"),
@@ -2991,6 +3006,145 @@ def compare_shared_summaries(rust: dict[str, object], mfc: dict[str, object] | N
         if rust_total is None or mfc_total is None
         else rust_total - mfc_total,
     }
+
+
+def shared_library_settled_check(
+    summary: dict[str, object],
+    *,
+    min_root_count: int,
+    min_shared_files: int,
+) -> dict[str, object]:
+    """Returns whether one sanitized shared-library sample is settled enough for restart proof."""
+
+    roots = summary.get("roots") if isinstance(summary.get("roots"), dict) else {}
+    items = summary.get("items") if isinstance(summary.get("items"), dict) else {}
+    reload_diag = summary.get("reload") if isinstance(summary.get("reload"), dict) else {}
+    shared_files_total = safe_int(summary.get("sharedFilesTotal"))
+    root_count = safe_int(roots.get("count")) or 0
+    item_count = safe_int(items.get("count")) or 0
+    hashing_count = safe_int(summary.get("hashingCount")) or 0
+    missing: list[str] = []
+    if root_count < min_root_count:
+        missing.append("minRootCount")
+    if item_count < min_root_count:
+        missing.append("minItemCount")
+    if shared_files_total is None or shared_files_total < min_shared_files:
+        missing.append("minSharedFiles")
+    if hashing_count != 0:
+        missing.append("hashingComplete")
+    if reload_diag.get("running") is True:
+        missing.append("reloadNotRunning")
+    if reload_diag.get("pending") is True:
+        missing.append("reloadNotPending")
+    if safe_int(reload_diag.get("failedHashCount")) not in (None, 0):
+        missing.append("noFailedHashes")
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "rootCount": root_count,
+        "itemCount": item_count,
+        "sharedFilesTotal": shared_files_total,
+        "hashingCount": hashing_count,
+        "reloadRunning": reload_diag.get("running"),
+        "reloadPending": reload_diag.get("pending"),
+        "reloadPhase": reload_diag.get("phase"),
+        "plannedHashCount": reload_diag.get("plannedHashCount"),
+        "hashedCount": reload_diag.get("hashedCount"),
+        "failedHashCount": reload_diag.get("failedHashCount"),
+        "reusedCount": reload_diag.get("reusedCount"),
+    }
+
+
+def shared_library_stability_check(checks: list[dict[str, object]]) -> dict[str, object]:
+    """Returns whether settled shared-library samples stayed numerically stable."""
+
+    if len(checks) < 2:
+        return {"ok": True, "sampleCount": len(checks)}
+    keys = ("rootCount", "itemCount", "sharedFilesTotal", "hashingCount")
+    first = checks[0]
+    deltas = {
+        key: {
+            "first": first.get(key),
+            "last": checks[-1].get(key),
+        }
+        for key in keys
+        if first.get(key) != checks[-1].get(key)
+    }
+    return {
+        "ok": not deltas,
+        "sampleCount": len(checks),
+        "deltas": deltas,
+    }
+
+
+def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, object]:
+    """Waits for a sanitized Rust shared-library sample to be stable and reload-free."""
+
+    observations: list[dict[str, object]] = []
+    settled_checks: list[dict[str, object]] = []
+    started = time.monotonic()
+    deadline = started + args.timeout_seconds
+    while True:
+        elapsed = round(time.monotonic() - started, 3)
+        try:
+            summary = summarize_shared_directories(
+                args.base_url,
+                args.api_key,
+                "rust",
+                include_fingerprints=False,
+                sample_limit=args.fingerprint_sample_limit,
+                timeout_seconds=args.request_timeout_seconds,
+            )
+            check = shared_library_settled_check(
+                summary,
+                min_root_count=args.min_root_count,
+                min_shared_files=args.min_shared_files,
+            )
+        except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
+            check = {
+                "ok": False,
+                "missing": ["sampleUnavailable"],
+                "error": exc.__class__.__name__,
+            }
+        observations.append({"elapsedSeconds": elapsed, "check": check})
+        if check["ok"]:
+            settled_checks.append(check)
+            if len(settled_checks) >= args.stable_samples:
+                stability = shared_library_stability_check(settled_checks[-args.stable_samples :])
+                if stability["ok"]:
+                    return {
+                        "ok": True,
+                        "schema": "emulebb.rust-shared-reload-settled-proof.v1",
+                        "baseUrlFingerprint": text_fingerprint(args.base_url),
+                        "elapsedSeconds": round(time.monotonic() - started, 3),
+                        "stableSamplesRequired": args.stable_samples,
+                        "pollSeconds": args.poll_seconds,
+                        "requestTimeoutSeconds": args.request_timeout_seconds,
+                        "minRootCount": args.min_root_count,
+                        "minSharedFiles": args.min_shared_files,
+                        "observations": observations[-args.max_observations :],
+                        "stability": stability,
+                        "sample": check,
+                    }
+        else:
+            settled_checks = []
+        if time.monotonic() >= deadline:
+            stability = shared_library_stability_check(settled_checks[-args.stable_samples :])
+            return {
+                "ok": False,
+                "schema": "emulebb.rust-shared-reload-settled-proof.v1",
+                "baseUrlFingerprint": text_fingerprint(args.base_url),
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+                "stableSamplesRequired": args.stable_samples,
+                "pollSeconds": args.poll_seconds,
+                "requestTimeoutSeconds": args.request_timeout_seconds,
+                "minRootCount": args.min_root_count,
+                "minSharedFiles": args.min_shared_files,
+                "observations": observations[-args.max_observations :],
+                "stability": stability,
+                "sample": check,
+            }
+        time.sleep(args.poll_seconds)
 
 
 def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: int) -> dict[str, object]:
@@ -3497,6 +3651,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
         "rust",
         include_fingerprints=True,
         sample_limit=args.fingerprint_sample_limit,
+        timeout_seconds=args.shared_file_timeout_seconds,
     )
     mfc = None
     if args.mfc_base_url:
@@ -3507,6 +3662,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
                 "mfc",
                 include_fingerprints=True,
                 sample_limit=args.fingerprint_sample_limit,
+                timeout_seconds=args.shared_file_timeout_seconds,
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
             mfc = unavailable_shared_endpoint_summary("mfc", exc)
@@ -6654,6 +6810,29 @@ def build_parser() -> argparse.ArgumentParser:
     shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
     shared_summary_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
     shared_summary_parser.set_defaults(func=shared_summary)
+
+    shared_settled_parser = sub.add_parser(
+        "shared-reload-settled-proof",
+        help="Wait for Rust shared-library reload/hash work to settle before clean restart proof.",
+    )
+    shared_settled_parser.add_argument("--timeout-seconds", type=float, default=3600.0)
+    shared_settled_parser.add_argument("--poll-seconds", type=float, default=30.0)
+    shared_settled_parser.add_argument("--request-timeout-seconds", type=float, default=120.0)
+    shared_settled_parser.add_argument("--stable-samples", type=int, default=3)
+    shared_settled_parser.add_argument("--min-root-count", type=int, default=1)
+    shared_settled_parser.add_argument("--min-shared-files", type=int, default=1)
+    shared_settled_parser.add_argument("--fingerprint-sample-limit", type=int, default=20)
+    shared_settled_parser.add_argument("--max-observations", type=int, default=20)
+    shared_settled_parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=output_root()
+        / "reports"
+        / "rust-shared-reload-settled-proof"
+        / "rust-shared-reload-settled-proof.latest.json",
+        help="Write the final sanitized shared-reload settled proof report to this JSON path.",
+    )
+    shared_settled_parser.set_defaults(func=rust_shared_reload_settled_proof)
 
     apply_roots_parser = sub.add_parser(
         "apply-mfc-shared-roots",
