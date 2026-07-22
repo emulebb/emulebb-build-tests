@@ -1348,7 +1348,7 @@ def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> No
         return {"ok": True}
 
     monkeypatch.setattr(control, "request_json", fake_request_json)
-    monkeypatch.setattr(control, "sample", lambda _base_url, _api_key: {"ed2kConnected": True})
+    monkeypatch.setattr(control, "sample", lambda _base_url, _api_key: {"ed2kConnected": True, "kadConnected": True})
 
     result = control.rust_p2p_start(
         SimpleNamespace(
@@ -1360,20 +1360,22 @@ def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> No
         )
     )
 
-    assert result["sample"] == {"ed2kConnected": True}
+    assert result["sample"] == {"ed2kConnected": True, "kadConnected": True}
     assert calls == [
         (
             "PATCH",
-            "/app/preferences",
+            "/app/settings",
             {
-                "autoConnect": True,
-                "reconnect": True,
-                "networkKademlia": True,
-                "networkEd2k": True,
+                "core": {
+                    "autoConnect": True,
+                    "reconnect": True,
+                    "networkKademlia": True,
+                    "networkEd2k": True,
+                },
             },
         ),
-        ("POST", "/servers/operations/connect", {}),
         ("POST", "/kad/operations/start", {}),
+        ("POST", "/servers/operations/connect", {}),
     ]
 
 

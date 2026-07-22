@@ -1651,40 +1651,54 @@ def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
         steps.append(
             request_json_attempt(
                 args.base_url,
-                "/app/preferences",
+                "/app/settings",
                 api_key=args.api_key,
                 method="PATCH",
                 body={
-                    "autoConnect": True,
-                    "reconnect": True,
-                    "networkKademlia": True,
-                    "networkEd2k": True,
+                    "core": {
+                        "autoConnect": True,
+                        "reconnect": True,
+                        "networkKademlia": True,
+                        "networkEd2k": True,
+                    },
                 },
                 timeout_seconds=args.timeout_seconds,
             )
         )
-    steps.append(
-        request_json_attempt(
-            args.base_url,
-            "/servers/operations/connect",
-            api_key=args.api_key,
-            method="POST",
-            body={},
-            timeout_seconds=args.timeout_seconds,
-        )
-    )
-    if args.start_kad:
+
+    deadline = time.time() + args.timeout_seconds
+    final_sample: dict[str, object] | None = None
+    while True:
+        if args.start_kad:
+            steps.append(
+                request_json_attempt(
+                    args.base_url,
+                    "/kad/operations/start",
+                    api_key=args.api_key,
+                    method="POST",
+                    body={},
+                    timeout_seconds=args.timeout_seconds,
+                )
+            )
         steps.append(
             request_json_attempt(
                 args.base_url,
-                "/kad/operations/start",
+                "/servers/operations/connect",
                 api_key=args.api_key,
                 method="POST",
                 body={},
                 timeout_seconds=args.timeout_seconds,
             )
         )
-    return {"steps": steps, "sample": sample(args.base_url, args.api_key)}
+        final_sample = sample(args.base_url, args.api_key)
+        ed2k_connected = final_sample.get("ed2kConnected") is True
+        kad_connected = final_sample.get("kadConnected") is True
+        if ed2k_connected and (kad_connected or not args.start_kad):
+            break
+        if time.time() >= deadline:
+            break
+        time.sleep(min(5.0, max(0.5, deadline - time.time())))
+    return {"steps": steps, "sample": final_sample or sample(args.base_url, args.api_key)}
 
 
 def safe_int(value: object) -> int | None:
