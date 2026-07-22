@@ -5410,6 +5410,60 @@ def stop_watch_loop(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def profile_watch_loop_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Builds watch-loop arguments for the persisted Rust profile paths."""
+
+    watch_paths = default_profile_launch_watch_paths()
+    watch_dir = watch_paths["watchPidFile"].parent
+    return argparse.Namespace(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        output_dir=watch_dir,
+        stale_seconds=args.stale_seconds,
+        log_dir=args.log_dir,
+        rust_pid=args.rust_pid,
+        rust_diag_log=args.rust_diag_log,
+        mfc_upload_log=args.mfc_upload_log,
+        mfc_base_url=args.mfc_base_url,
+        mfc_api_key=args.mfc_api_key,
+        interval_seconds=args.interval_seconds,
+        mfc_log_stale_seconds=args.mfc_log_stale_seconds,
+        restart_stale_monitor=args.restart_stale_monitor,
+        watch_interval_seconds=args.watch_interval_seconds,
+        max_samples=args.max_samples,
+        watch_jsonl=watch_paths["watchJsonl"],
+        watch_heartbeat=watch_paths["watchHeartbeat"],
+        watch_stop_file=watch_paths["watchStopFile"],
+        include_vpn_status=args.include_vpn_status,
+        check_vpn_adapter=args.check_vpn_adapter,
+        vpn_exe=args.vpn_exe,
+        vpn_settings_path=args.vpn_settings_path,
+        diagnostics_log_dir=args.diagnostics_log_dir,
+        diagnostics_log_file=args.diagnostics_log_file,
+        diagnostics_limit=args.diagnostics_limit,
+        diagnostics_max_bytes=args.diagnostics_max_bytes,
+    )
+
+
+def start_profile_watch_loop(args: argparse.Namespace) -> dict[str, object]:
+    """Starts the retained watch loop using the persisted Rust profile paths."""
+
+    return start_watch_loop(profile_watch_loop_args(args))
+
+
+def stop_profile_watch_loop(args: argparse.Namespace) -> dict[str, object]:
+    """Stops the retained watch loop using the persisted Rust profile paths."""
+
+    watch_paths = default_profile_launch_watch_paths()
+    return stop_watch_loop(
+        argparse.Namespace(
+            watch_pid_file=watch_paths["watchPidFile"],
+            watch_stop_file=watch_paths["watchStopFile"],
+            terminate=args.terminate,
+        )
+    )
+
+
 def latest_jsonl_record(path: Path) -> dict[str, object] | None:
     """Returns the last JSONL record from a retained evidence file."""
 
@@ -6758,6 +6812,30 @@ def build_parser() -> argparse.ArgumentParser:
     add_watch_evidence_args(start_watch_loop_parser)
     start_watch_loop_parser.set_defaults(func=start_watch_loop)
 
+    start_profile_watch_parser = sub.add_parser(
+        "start-profile-watch",
+        help="Start detached repeated checks using the persisted Rust profile watch paths.",
+    )
+    start_profile_watch_parser.add_argument("--stale-seconds", type=float, default=900.0)
+    start_profile_watch_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
+    start_profile_watch_parser.add_argument("--rust-pid", type=int)
+    start_profile_watch_parser.add_argument("--rust-diag-log", type=Path)
+    start_profile_watch_parser.add_argument("--mfc-upload-log", type=Path)
+    start_profile_watch_parser.add_argument("--mfc-base-url", default=None)
+    start_profile_watch_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
+    start_profile_watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    start_profile_watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
+    start_profile_watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
+    start_profile_watch_parser.add_argument(
+        "--no-restart-stale-monitor",
+        action="store_false",
+        dest="restart_stale_monitor",
+    )
+    start_profile_watch_parser.add_argument("--watch-interval-seconds", type=float, default=300.0)
+    start_profile_watch_parser.add_argument("--max-samples", type=int, default=0)
+    add_watch_evidence_args(start_profile_watch_parser)
+    start_profile_watch_parser.set_defaults(func=start_profile_watch_loop)
+
     stop_watch_loop_parser = sub.add_parser("stop-watch-loop", help="Request the detached soak watch loop to stop.")
     stop_watch_loop_parser.add_argument(
         "--watch-pid-file",
@@ -6771,6 +6849,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stop_watch_loop_parser.add_argument("--terminate", action="store_true")
     stop_watch_loop_parser.set_defaults(func=stop_watch_loop)
+
+    stop_profile_watch_parser = sub.add_parser(
+        "stop-profile-watch",
+        help="Request the detached persisted Rust profile watch loop to stop.",
+    )
+    stop_profile_watch_parser.add_argument("--terminate", action="store_true")
+    stop_profile_watch_parser.set_defaults(func=stop_profile_watch_loop)
 
     watch_status_parser = sub.add_parser("watch-status", help="Print detached soak watch loop health.")
     watch_status_parser.add_argument(

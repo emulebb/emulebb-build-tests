@@ -1013,6 +1013,83 @@ def test_start_watch_loop_propagates_live_evidence_args(tmp_path: Path, monkeypa
     ]
 
 
+def test_start_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_watch_dir = tmp_path / "rust-runtime" / "live-watch"
+    captured: list[SimpleNamespace] = []
+
+    monkeypatch.setattr(
+        control,
+        "default_profile_launch_watch_paths",
+        lambda: {
+            "watchPidFile": profile_watch_dir / "rust-soak-watch.pid",
+            "watchJsonl": profile_watch_dir / "rust-live-watch.jsonl",
+            "watchHeartbeat": profile_watch_dir / "rust-live-watch.heartbeat.txt",
+            "watchStopFile": profile_watch_dir / "rust-soak-watch.stop",
+        },
+    )
+    monkeypatch.setattr(control, "start_watch_loop", lambda args: captured.append(args) or {"watchPid": 2468})
+
+    result = control.start_profile_watch_loop(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust-key",
+            stale_seconds=900.0,
+            log_dir=tmp_path / "packet-dump",
+            rust_pid=None,
+            rust_diag_log=None,
+            mfc_upload_log=None,
+            mfc_base_url=None,
+            mfc_api_key="mfc-key",
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+            restart_stale_monitor=True,
+            watch_interval_seconds=300.0,
+            max_samples=0,
+            include_vpn_status=True,
+            check_vpn_adapter=False,
+            vpn_settings_path=None,
+            vpn_exe=[],
+            diagnostics_log_dir=[],
+            diagnostics_log_file=[],
+            diagnostics_limit=8,
+            diagnostics_max_bytes=262_144,
+        )
+    )
+
+    assert result["watchPid"] == 2468
+    assert captured[0].output_dir == profile_watch_dir
+    assert captured[0].watch_jsonl == profile_watch_dir / "rust-live-watch.jsonl"
+    assert captured[0].watch_heartbeat == profile_watch_dir / "rust-live-watch.heartbeat.txt"
+    assert captured[0].watch_stop_file == profile_watch_dir / "rust-soak-watch.stop"
+    assert captured[0].include_vpn_status is True
+
+
+def test_stop_profile_watch_loop_uses_profile_watch_paths(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_watch_dir = tmp_path / "rust-runtime" / "live-watch"
+    captured: list[SimpleNamespace] = []
+
+    monkeypatch.setattr(
+        control,
+        "default_profile_launch_watch_paths",
+        lambda: {
+            "watchPidFile": profile_watch_dir / "rust-soak-watch.pid",
+            "watchJsonl": profile_watch_dir / "rust-live-watch.jsonl",
+            "watchHeartbeat": profile_watch_dir / "rust-live-watch.heartbeat.txt",
+            "watchStopFile": profile_watch_dir / "rust-soak-watch.stop",
+        },
+    )
+    monkeypatch.setattr(control, "stop_watch_loop", lambda args: captured.append(args) or {"stopRequested": True})
+
+    result = control.stop_profile_watch_loop(SimpleNamespace(terminate=True))
+
+    assert result["stopRequested"] is True
+    assert captured[0].watch_pid_file == profile_watch_dir / "rust-soak-watch.pid"
+    assert captured[0].watch_stop_file == profile_watch_dir / "rust-soak-watch.stop"
+    assert captured[0].terminate is True
+
+
 def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"
