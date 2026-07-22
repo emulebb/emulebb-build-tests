@@ -180,6 +180,173 @@ def test_shared_summary_requires_mfc_for_deep_compare_after_timeout(monkeypatch)
         )
 
 
+def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
+    control = _load_rust_soak_control()
+    safe = {
+        "hash": "0123456789abcdef0123456789abcdef",
+        "name": "public-document.pdf",
+        "sizeBytes": 1024,
+        "fileType": "Doc",
+        "sources": 2,
+    }
+
+    assert control.public_search_candidate_safety_reason(safe, min_sources=2, max_size_bytes=2048) is None
+    assert control.public_search_candidate_safety_reason({**safe, "name": "setup.exe"}, min_sources=2, max_size_bytes=2048) == "unsafe-suffix"
+    assert control.public_search_candidate_safety_reason({**safe, "fileType": "Pro"}, min_sources=2, max_size_bytes=2048) == "unsafe-type"
+    assert control.public_search_candidate_safety_reason({**safe, "name": "linux keygen doc.pdf"}, min_sources=2, max_size_bytes=2048) == "unsafe-name-token"
+    assert control.public_search_candidate_safety_reason({**safe, "hash": "ABCDEF0123456789ABCDEF0123456789"}, min_sources=2, max_size_bytes=2048) == "bad-hash"
+    assert control.public_search_candidate_safety_reason({**safe, "sizeBytes": 4096}, min_sources=2, max_size_bytes=2048) == "too-large"
+    assert control.public_search_candidate_safety_reason({**safe, "sources": 1}, min_sources=2, max_size_bytes=2048) == "weak-sources"
+
+
+def test_public_search_download_proof_triggers_paused_resume_without_leaking_private_values(monkeypatch, tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    delivered = tmp_path / "incoming" / "public-document.pdf"
+    delivered.parent.mkdir()
+    delivered.write_bytes(b"ok")
+    calls: list[tuple[str, str, object]] = []
+    stop_calls: list[str] = []
+
+    def fake_terms(_inputs: Path, group: str) -> tuple[str, ...]:
+        assert group == "documents"
+        return ("private search term",)
+
+    def fake_sample(_base_url: str, _api_key: str) -> dict[str, object]:
+        return {"ed2kConnected": True, "kadConnected": True}
+
+    def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
+        calls.append((str(kwargs.get("method") or "GET"), path, kwargs.get("body")))
+        if path == "/searches":
+            return {"id": "search-1"}
+        if path.startswith("/searches/search-1?"):
+            return {
+                "status": "running",
+                "items": [
+                    {
+                        "hash": "0123456789abcdef0123456789abcdef",
+                        "name": "public-document.pdf",
+                        "sizeBytes": 1024,
+                        "fileType": "Doc",
+                        "sources": 3,
+                        "completeSources": 1,
+                        "knownType": "unknown",
+                    }
+                ],
+            }
+        if path.endswith("/operations/download"):
+            return {"ok": True, "hash": "0123456789abcdef0123456789abcdef"}
+        if path.endswith("/operations/resume"):
+            return {"ok": True, "hash": "0123456789abcdef0123456789abcdef", "state": "downloading"}
+        if path == "/transfers/0123456789abcdef0123456789abcdef":
+            return {
+                "hash": "0123456789abcdef0123456789abcdef",
+                "name": "public-document.pdf",
+                "state": "downloading",
+                "sizeBytes": 1024,
+                "completedBytes": 128,
+                "sources": 3,
+                "sourcesTransferring": 1,
+                "progress": 0.125,
+                "deliveredPath": str(delivered),
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(control, "public_search_terms_from_inputs", fake_terms)
+    monkeypatch.setattr(control, "sample", fake_sample)
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        control,
+        "request_json_attempt",
+        lambda _base_url, path, **kwargs: (
+            stop_calls.append(path)
+            or {"ok": True, "path": path, "method": kwargs.get("method", "GET")}
+        ),
+    )
+
+    result = control.public_search_download_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            inputs=tmp_path / "inputs.json",
+            term=None,
+            term_group="documents",
+            search_method="automatic",
+            search_type="doc",
+            max_terms=4,
+            result_limit=50,
+            min_sources=2,
+            max_size_bytes=8 * 1024 * 1024,
+            search_timeout_seconds=1.0,
+            progress_timeout_seconds=1.0,
+            completion_timeout_seconds=1.0,
+            poll_seconds=0.01,
+            request_timeout_seconds=1.0,
+            require_completion=False,
+            stop_search=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls[0] == (
+        "POST",
+        "/searches",
+        {
+            "query": "private search term",
+            "method": "automatic",
+            "type": "doc",
+            "maxSizeBytes": 8 * 1024 * 1024,
+            "minAvailability": 2,
+        },
+    )
+    assert ("POST", "/searches/search-1/results/0123456789abcdef0123456789abcdef/operations/download", {"paused": True, "categoryId": 0}) in calls
+    assert ("POST", "/transfers/0123456789abcdef0123456789abcdef/operations/resume", {}) in calls
+    assert stop_calls == ["/searches/search-1"]
+    assert calls.index(("POST", "/searches/search-1/results/0123456789abcdef0123456789abcdef/operations/download", {"paused": True, "categoryId": 0})) < calls.index(("POST", "/transfers/0123456789abcdef0123456789abcdef/operations/resume", {}))
+    assert "private search term" not in repr(result)
+    assert "public-document.pdf" not in repr(result)
+    assert "0123456789abcdef0123456789abcdef" not in repr(result)
+
+
+def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatch, tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    calls: list[str] = []
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        calls.append(path)
+        if path == "/searches":
+            return {"id": "search-1"}
+        if path.startswith("/searches/search-1?"):
+            return {"status": "complete", "items": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        control,
+        "request_json_attempt",
+        lambda _base_url, path, **kwargs: {"ok": True, "path": path, "method": kwargs.get("method", "GET")},
+    )
+
+    result = control.wait_for_public_search_candidate(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            search_method="automatic",
+            search_type="doc",
+            min_sources=2,
+            max_size_bytes=8 * 1024 * 1024,
+            result_limit=50,
+            search_timeout_seconds=60.0,
+            poll_seconds=0.01,
+            request_timeout_seconds=1.0,
+            stop_search=True,
+        ),
+        "private search term",
+    )
+
+    assert result["candidate"] is None
+    assert calls == ["/searches", "/searches/search-1?limit=50&includeEvidence=false"]
+
+
 def test_private_path_fingerprint_normalizes_windows_verbatim_prefix() -> None:
     control = _load_rust_soak_control()
 

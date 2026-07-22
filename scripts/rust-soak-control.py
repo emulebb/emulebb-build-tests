@@ -74,6 +74,47 @@ from emule_test_harness.windows_processes import (
 
 ED2K_OFFER_BATCH_SIZE = 200
 ED2K_OFFER_INTERVAL_SECONDS = 60
+PUBLIC_DOWNLOAD_UNSAFE_SUFFIXES = (
+    ".7z",
+    ".ace",
+    ".avi",
+    ".bat",
+    ".bz2",
+    ".cmd",
+    ".com",
+    ".exe",
+    ".gz",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".msi",
+    ".ps1",
+    ".rar",
+    ".scr",
+    ".tar",
+    ".vbs",
+    ".wmv",
+    ".xz",
+    ".zip",
+)
+PUBLIC_DOWNLOAD_UNSAFE_NAME_TOKENS = (
+    "adult",
+    "amateur",
+    "erotic",
+    "fetish",
+    "keygen",
+    "naked",
+    "nude",
+    "nuda",
+    "porn",
+    "porno",
+    "sex",
+    "sexy",
+    "xxx",
+)
 MFC_CLIENT_PROCESS_NAMES = {
     "emule.exe",
     "emulebb.exe",
@@ -1641,6 +1682,380 @@ def request_json_attempt(
             "method": method,
             "error": type(exc.reason).__name__ if hasattr(exc, "reason") else type(exc).__name__,
         }
+
+
+def lowercase_md4_hash(value: object) -> bool:
+    """Returns true for the strict lowercase 32-hex REST hash shape."""
+
+    if not isinstance(value, str) or len(value) != 32:
+        return False
+    return all(("0" <= ch <= "9") or ("a" <= ch <= "f") for ch in value)
+
+
+def text_fingerprint(value: object) -> str:
+    """Returns a stable short fingerprint for private operator text."""
+
+    return hashlib.sha256(str(value or "").encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def has_unsafe_public_download_name_token(file_name: str) -> bool:
+    """Returns true when a public result name is unsuitable for an automated proof download."""
+
+    normalized = f" {file_name.lower()} "
+    separators = "'\"`~!@#$%^&*()[]{};:,.<>?/\\|_-+="
+    for separator in separators:
+        normalized = normalized.replace(separator, " ")
+    return any(f" {token} " in normalized for token in PUBLIC_DOWNLOAD_UNSAFE_NAME_TOKENS)
+
+
+def public_search_candidate_safety_reason(
+    result_row: object,
+    *,
+    min_sources: int,
+    max_size_bytes: int,
+) -> str | None:
+    """Returns None when a public search result is safe enough to trigger as a paused download."""
+
+    if not isinstance(result_row, dict):
+        return "not-object"
+    file_name = str(result_row.get("name") or "").strip()
+    file_type = str(result_row.get("fileType") or "").strip().lower()
+    size_bytes = result_row.get("sizeBytes", result_row.get("size"))
+    sources = result_row.get("sources")
+    if not file_name:
+        return "missing-name"
+    if file_name.lower().endswith(PUBLIC_DOWNLOAD_UNSAFE_SUFFIXES):
+        return "unsafe-suffix"
+    if file_type in {"arc", "archive", "program", "pro", "video"}:
+        return "unsafe-type"
+    if has_unsafe_public_download_name_token(file_name):
+        return "unsafe-name-token"
+    if not lowercase_md4_hash(result_row.get("hash")):
+        return "bad-hash"
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
+        return "bad-size"
+    if size_bytes > max_size_bytes:
+        return "too-large"
+    if not isinstance(sources, int) or isinstance(sources, bool) or sources < min_sources:
+        return "weak-sources"
+    return None
+
+
+def sanitized_public_search_candidate(result_row: dict[str, object]) -> dict[str, object]:
+    """Returns report-safe metadata for one selected public search result."""
+
+    return {
+        "hashFingerprint": text_fingerprint(result_row.get("hash")),
+        "nameFingerprint": text_fingerprint(result_row.get("name")),
+        "namePresent": bool(str(result_row.get("name") or "").strip()),
+        "sizeBytes": result_row.get("sizeBytes", result_row.get("size")),
+        "fileType": result_row.get("fileType"),
+        "sources": result_row.get("sources"),
+        "completeSources": result_row.get("completeSources"),
+        "knownType": result_row.get("knownType"),
+    }
+
+
+def public_search_terms_from_inputs(inputs_path: Path, group: str) -> tuple[str, ...]:
+    """Loads one operator-owned search term group from the ignored live-wire inputs file."""
+
+    inputs = load_live_wire_inputs(inputs_path)
+    if group == "documents":
+        return inputs.document_terms
+    if group == "generic_open":
+        return inputs.generic_open_terms
+    raise RuntimeError(f"unsupported public search term group: {group}")
+
+
+def sanitized_transfer_proof_row(transfer: dict[str, object]) -> dict[str, object]:
+    """Returns report-safe transfer state for public proof output."""
+
+    delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
+    return {
+        "hashFingerprint": text_fingerprint(transfer.get("hash")),
+        "nameFingerprint": text_fingerprint(transfer.get("name")),
+        "state": transfer.get("state"),
+        "sizeBytes": transfer.get("sizeBytes"),
+        "completedBytes": transfer.get("completedBytes"),
+        "progress": transfer.get("progress"),
+        "sources": transfer.get("sources"),
+        "sourcesTransferring": transfer.get("sourcesTransferring"),
+        "deliveredPathPresent": delivered_path is not None,
+        "deliveredPathFingerprint": private_path_fingerprint(str(delivered_path)) if delivered_path is not None else None,
+        "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
+    }
+
+
+def wait_for_public_search_candidate(
+    args: argparse.Namespace,
+    term: str,
+) -> dict[str, object]:
+    """Starts one public search and returns a safe candidate row when found."""
+
+    search = request_json(
+        args.base_url,
+        "/searches",
+        api_key=args.api_key,
+        method="POST",
+        body={
+            "query": term,
+            "method": args.search_method,
+            "type": args.search_type,
+            "maxSizeBytes": args.max_size_bytes,
+            "minAvailability": args.min_sources,
+        },
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    search_id = str(search.get("id") or "")
+    if not search_id:
+        raise RuntimeError("Rust search response did not include an id.")
+    observations: list[dict[str, object]] = []
+    deadline = time.time() + args.search_timeout_seconds
+    selected: dict[str, object] | None = None
+    try:
+        while time.time() <= deadline:
+            payload = request_json(
+                args.base_url,
+                f"/searches/{quote(search_id, safe='')}?limit={args.result_limit}&includeEvidence=false",
+                api_key=args.api_key,
+                timeout_seconds=args.request_timeout_seconds,
+            )
+            items = payload.get("items") if isinstance(payload.get("items"), list) else []
+            rejection_counts: Counter[str] = Counter()
+            for item in items:
+                reason = public_search_candidate_safety_reason(
+                    item,
+                    min_sources=args.min_sources,
+                    max_size_bytes=args.max_size_bytes,
+                )
+                if reason is None:
+                    assert isinstance(item, dict)
+                    selected = item
+                    break
+                rejection_counts[reason] += 1
+            observations.append(
+                {
+                    "observedAt": round(time.time(), 3),
+                    "status": payload.get("status"),
+                    "resultCount": len(items),
+                    "safeCandidateFound": selected is not None,
+                    "rejectionCounts": dict(sorted(rejection_counts.items())),
+                }
+            )
+            if selected is not None:
+                break
+            if payload.get("status") == "complete":
+                break
+            time.sleep(args.poll_seconds)
+    finally:
+        if args.stop_search and selected is None:
+            request_json_attempt(
+                args.base_url,
+                f"/searches/{quote(search_id, safe='')}",
+                api_key=args.api_key,
+                method="DELETE",
+                timeout_seconds=args.request_timeout_seconds,
+            )
+    return {
+        "searchId": search_id,
+        "termFingerprint": text_fingerprint(term.strip().lower()),
+        "candidate": selected,
+        "observations": observations[-20:],
+    }
+
+
+def wait_for_transfer_progress(
+    args: argparse.Namespace,
+    transfer_hash: str,
+    *,
+    initial_completed_bytes: int,
+) -> dict[str, object]:
+    """Waits until a triggered transfer moves bytes, has sources, or completes."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.time() + args.progress_timeout_seconds
+    latest: dict[str, object] | None = None
+    while time.time() <= deadline:
+        transfer = request_json(
+            args.base_url,
+            f"/transfers/{quote(transfer_hash, safe='')}",
+            api_key=args.api_key,
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        latest = transfer
+        completed_bytes = safe_int(transfer.get("completedBytes")) or 0
+        sources = safe_int(transfer.get("sources")) or 0
+        observations.append(
+            {
+                "observedAt": round(time.time(), 3),
+                "state": transfer.get("state"),
+                "completedBytes": completed_bytes,
+                "progress": transfer.get("progress"),
+                "sources": sources,
+                "sourcesTransferring": transfer.get("sourcesTransferring"),
+                "deliveredPathPresent": bool(transfer.get("deliveredPath")),
+            }
+        )
+        if transfer.get("state") == "completed" or completed_bytes > initial_completed_bytes or sources > 0:
+            break
+        time.sleep(args.poll_seconds)
+    if latest is None:
+        raise RuntimeError("transfer progress probe did not run")
+    return {
+        "ok": latest.get("state") == "completed"
+        or (safe_int(latest.get("completedBytes")) or 0) > initial_completed_bytes
+        or (safe_int(latest.get("sources")) or 0) > 0,
+        "observations": observations[-30:],
+        "latest": latest,
+    }
+
+
+def wait_for_transfer_completion(args: argparse.Namespace, transfer_hash: str) -> dict[str, object]:
+    """Waits for a public proof transfer to complete and verifies delivered-file presence."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.time() + args.completion_timeout_seconds
+    latest: dict[str, object] | None = None
+    while time.time() <= deadline:
+        transfer = request_json(
+            args.base_url,
+            f"/transfers/{quote(transfer_hash, safe='')}",
+            api_key=args.api_key,
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        latest = transfer
+        delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
+        observations.append(
+            {
+                "observedAt": round(time.time(), 3),
+                "state": transfer.get("state"),
+                "completedBytes": safe_int(transfer.get("completedBytes")) or 0,
+                "progress": transfer.get("progress"),
+                "sources": transfer.get("sources"),
+                "sourcesTransferring": transfer.get("sourcesTransferring"),
+                "deliveredPathPresent": delivered_path is not None,
+                "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
+            }
+        )
+        if transfer.get("state") == "completed":
+            return {
+                "ok": delivered_path is not None and delivered_path.is_file(),
+                "observations": observations[-30:],
+                "final": sanitized_transfer_proof_row(transfer),
+            }
+        time.sleep(args.poll_seconds)
+    return {
+        "ok": False,
+        "reason": "completion-timeout",
+        "observations": observations[-30:],
+        "final": sanitized_transfer_proof_row(latest or {}),
+    }
+
+
+def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
+    """Runs a bounded safe public search-to-download proof against the persisted Rust profile."""
+
+    start_sample = sample(args.base_url, args.api_key)
+    if start_sample.get("ed2kConnected") is not True and start_sample.get("kadConnected") is not True:
+        raise RuntimeError("Rust must be connected to ED2K or Kad before public search/download proof.")
+    terms = [args.term] if args.term else list(public_search_terms_from_inputs(args.inputs, args.term_group))
+    attempts: list[dict[str, object]] = []
+    selected: dict[str, object] | None = None
+    for term in terms[: args.max_terms]:
+        attempt = wait_for_public_search_candidate(args, term)
+        candidate = attempt.pop("candidate")
+        attempt["candidateFound"] = isinstance(candidate, dict)
+        attempts.append(attempt)
+        if isinstance(candidate, dict):
+            selected = {**attempt, "candidate": candidate}
+            break
+    if selected is None:
+        return {
+            "ok": False,
+            "reason": "no-safe-public-candidate",
+            "startSample": start_sample,
+            "attempts": attempts,
+        }
+
+    candidate = selected["candidate"]
+    assert isinstance(candidate, dict)
+    search_id = str(selected["searchId"])
+    transfer_hash = str(candidate["hash"])
+    try:
+        download = request_json(
+            args.base_url,
+            f"/searches/{quote(search_id, safe='')}/results/{quote(transfer_hash, safe='')}/operations/download",
+            api_key=args.api_key,
+            method="POST",
+            body={"paused": True, "categoryId": 0},
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        paused = request_json(
+            args.base_url,
+            f"/transfers/{quote(transfer_hash, safe='')}",
+            api_key=args.api_key,
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        resume = request_json(
+            args.base_url,
+            f"/transfers/{quote(transfer_hash, safe='')}/operations/resume",
+            api_key=args.api_key,
+            method="POST",
+            body={},
+            timeout_seconds=args.request_timeout_seconds,
+        )
+        progress = wait_for_transfer_progress(
+            args,
+            transfer_hash,
+            initial_completed_bytes=safe_int(paused.get("completedBytes")) or 0,
+        )
+        completion = (
+            wait_for_transfer_completion(args, transfer_hash)
+            if args.require_completion
+            else {"ok": None, "skipped": True, "reason": "require-completion disabled"}
+        )
+    finally:
+        if args.stop_search:
+            request_json_attempt(
+                args.base_url,
+                f"/searches/{quote(search_id, safe='')}",
+                api_key=args.api_key,
+                method="DELETE",
+                timeout_seconds=args.request_timeout_seconds,
+            )
+    ok = bool(download.get("ok", True)) and bool(progress.get("ok")) and (
+        bool(completion.get("ok")) if args.require_completion else True
+    )
+    return {
+        "ok": ok,
+        "requireCompletion": args.require_completion,
+        "termGroup": args.term_group,
+        "selected": {
+            "searchIdFingerprint": text_fingerprint(search_id),
+            "termFingerprint": selected["termFingerprint"],
+            "candidate": sanitized_public_search_candidate(candidate),
+            "observations": selected["observations"],
+        },
+        "download": {
+            "ok": download.get("ok", True),
+            "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
+        },
+        "pausedTransfer": sanitized_transfer_proof_row(paused),
+        "resume": {
+            "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
+            "state": resume.get("state"),
+            "ok": resume.get("ok", True),
+        },
+        "progress": {
+            "ok": progress.get("ok"),
+            "observations": progress.get("observations"),
+            "latest": sanitized_transfer_proof_row(progress.get("latest") if isinstance(progress.get("latest"), dict) else {}),
+        },
+        "completion": completion,
+        "startSample": start_sample,
+        "endSample": sample(args.base_url, args.api_key),
+        "attempts": attempts,
+    }
 
 
 def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
@@ -5421,6 +5836,37 @@ def build_parser() -> argparse.ArgumentParser:
     rust_p2p_parser.add_argument("--ensure-preferences", action=argparse.BooleanOptionalAction, default=True)
     rust_p2p_parser.add_argument("--start-kad", action=argparse.BooleanOptionalAction, default=True)
     rust_p2p_parser.set_defaults(func=rust_p2p_start)
+
+    public_download_parser = sub.add_parser(
+        "public-search-download-proof",
+        help="Run a sanitized safe public search-to-download proof against the persisted Rust profile.",
+    )
+    public_download_parser.add_argument("--inputs", type=Path, default=default_live_wire_inputs())
+    public_download_parser.add_argument("--term")
+    public_download_parser.add_argument(
+        "--term-group",
+        choices=("documents", "generic_open"),
+        default="documents",
+        help="Ignored live-wire input term group to try when --term is not supplied.",
+    )
+    public_download_parser.add_argument(
+        "--search-method",
+        choices=("automatic", "server", "global", "kad"),
+        default="automatic",
+    )
+    public_download_parser.add_argument("--search-type", default="doc")
+    public_download_parser.add_argument("--max-terms", type=int, default=4)
+    public_download_parser.add_argument("--result-limit", type=int, default=50)
+    public_download_parser.add_argument("--min-sources", type=int, default=2)
+    public_download_parser.add_argument("--max-size-bytes", type=int, default=8 * 1024 * 1024)
+    public_download_parser.add_argument("--search-timeout-seconds", type=float, default=90.0)
+    public_download_parser.add_argument("--progress-timeout-seconds", type=float, default=300.0)
+    public_download_parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
+    public_download_parser.add_argument("--poll-seconds", type=float, default=3.0)
+    public_download_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    public_download_parser.add_argument("--require-completion", action="store_true")
+    public_download_parser.add_argument("--stop-search", action=argparse.BooleanOptionalAction, default=True)
+    public_download_parser.set_defaults(func=public_search_download_proof)
 
     shared_summary_parser = sub.add_parser(
         "shared-summary",
