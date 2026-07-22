@@ -369,6 +369,31 @@ def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Pa
     assert "private search term" not in report.read_text(encoding="utf-8")
 
 
+def test_public_search_download_cli_fails_when_report_is_not_ok(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    control = _load_rust_soak_control()
+    report = tmp_path / "report.json"
+
+    monkeypatch.setattr(
+        control,
+        "public_search_download_proof",
+        lambda args: {
+            "ok": False,
+            "reason": "no-safe-public-candidate",
+            "jsonOutput": str(args.json_output),
+        },
+    )
+
+    assert control.main(["public-search-download-proof", "--json-output", str(report)]) == 1
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert stdout_payload == report_payload
+    assert report_payload["ok"] is False
+    assert report_payload["reason"] == "no-safe-public-candidate"
+
+
 def test_public_transfer_debug_summary_sanitizes_transfer_and_sources(monkeypatch) -> None:
     control = _load_rust_soak_control()
     private_hash = "0123456789abcdef0123456789abcdef"

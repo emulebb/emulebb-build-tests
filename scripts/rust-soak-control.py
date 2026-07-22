@@ -6685,6 +6685,8 @@ def main(argv: list[str] | None = None) -> int:
         json_output.parent.mkdir(parents=True, exist_ok=True)
         json_output.write_text(f"{result_json}\n", encoding="utf-8", newline="\n")
     print(result_json)
+    if isinstance(result, dict) and result.get("ok") is False:
+        return 1
     return 0
 
 
