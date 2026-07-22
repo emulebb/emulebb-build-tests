@@ -16,7 +16,7 @@ from typing import Any
 
 from . import goed2k, live_process_monitor, rust_client
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
-from .rust_local_ed2k import request_json, wait_for_ed2k_connected, wait_for_rest_ready
+from .rust_local_ed2k import publish_shared_tree, request_json, wait_for_ed2k_connected, wait_for_rest_ready
 
 API_KEY = "rust-local-upload-soak-key"
 DEFAULT_DURATION_SECONDS = 300.0
@@ -316,6 +316,7 @@ def run(argv: list[str] | None = None) -> int:
             "leecherEd2kPort": leecher_ed2k_port,
         },
         "samplesPath": str(samples_path),
+        "checks": {},
     }
     server_process = None
     seeder_process = None
@@ -401,14 +402,16 @@ def run(argv: list[str] | None = None) -> int:
         request_json(leecher_base, "POST", "/api/v1/servers/operations/connect", args.api_key)
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
-        share = request_json(
+        share = publish_shared_tree(
             seeder_base,
-            "POST",
-            "/api/v1/shared-files",
             args.api_key,
-            {"path": str(Path(payload["path"]))},
+            root=Path(payload["path"]).parent,
+            file_name=Path(payload["path"]).name,
+            timeout_seconds=60.0,
         )
-        file_row = share["file"] if isinstance(share.get("file"), dict) else share
+        report["checks"]["seederSharedTreePublish"] = share
+        shared_files = share.get("sharedFiles") if isinstance(share.get("sharedFiles"), dict) else {}
+        file_row = shared_files.get("matched") if isinstance(shared_files.get("matched"), dict) else share
         file_hash = str(file_row["hash"]).lower()
         goed2k.wait_for_server_file_endpoint(
             ed2k_server.admin_base_url,

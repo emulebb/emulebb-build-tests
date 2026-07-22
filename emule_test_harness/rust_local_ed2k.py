@@ -180,6 +180,7 @@ def publish_shared_tree(
     *,
     root: Path,
     file_name: str,
+    timeout_seconds: float = 60.0,
 ) -> dict[str, object]:
     """Configures one current Rust shared-directory root and returns the matched file row."""
 
@@ -199,14 +200,36 @@ def publish_shared_tree(
         "/api/v1/shared-directories/operations/reload",
         api_key,
     )
-    shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-    shared_file = require_shared_file_item(shared_files, file_name)
+    observations: list[dict[str, object]] = []
+
+    def resolve_shared_file() -> tuple[dict[str, object], dict[str, object]] | None:
+        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+        items = shared_files.get("items")
+        observations.append(
+            {
+                "count": len(items) if isinstance(items, list) else None,
+                "total": shared_files.get("total"),
+                "observedAt": round(time.time(), 3),
+            }
+        )
+        try:
+            return shared_files, require_shared_file_item(shared_files, file_name)
+        except RuntimeError:
+            return None
+
+    shared_files, shared_file = wait_for(
+        resolve_shared_file,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=1.0,
+        description=f"Rust shared file {file_name}",
+    )
     return {
         "directories": directories,
         "reload": reload_result,
         "sharedFiles": {
             "count": len(shared_files.get("items", [])) if isinstance(shared_files.get("items"), list) else 0,
             "matched": shared_file,
+            "observations": observations[-20:],
         },
     }
 
