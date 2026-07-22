@@ -367,6 +367,121 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
     assert "192.0.2.10" not in repr(result)
 
 
+def test_publish_visibility_check_requires_ed2k_and_kad_maturity() -> None:
+    control = _load_rust_soak_control()
+
+    check = control.publish_visibility_check(
+        {
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "ed2kVisibilityPercent": 12.0,
+            "ed2kPendingEntries": 44000,
+            "kadConnected": True,
+            "kadGateAllowed": True,
+            "kadKeywordPublishedTotal": 10,
+            "kadSourcePublishedTotal": 2,
+        },
+        min_ed2k_visibility_percent=95.0,
+        max_ed2k_pending_entries=None,
+        min_kad_keyword_published_total=1,
+        min_kad_source_published_total=1,
+    )
+
+    assert check["ok"] is False
+    assert check["missing"] == ["ed2kVisibilityMature"]
+    assert check["ed2kVisibilityPercent"] == 12.0
+
+
+def test_publish_visibility_check_accepts_mature_publish_counters() -> None:
+    control = _load_rust_soak_control()
+
+    check = control.publish_visibility_check(
+        {
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "ed2kVisibilityPercent": 100.0,
+            "ed2kPendingEntries": 0,
+            "kadConnected": True,
+            "kadGateAllowed": True,
+            "kadKeywordPublishedTotal": 10,
+            "kadSourcePublishedTotal": 2,
+        },
+        min_ed2k_visibility_percent=95.0,
+        max_ed2k_pending_entries=0,
+        min_kad_keyword_published_total=1,
+        min_kad_source_published_total=1,
+    )
+
+    assert check["ok"] is True
+    assert check["missing"] == []
+
+
+def test_publish_visibility_proof_waits_for_consecutive_mature_samples(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    samples = iter(
+        [
+            {
+                "servers": {"connected": True, "lowId": False},
+                "kad": {"connected": True},
+                "runtimeDiagnostics": {
+                    "ed2kPublish": {"publishedEntries": 10, "pendingEntries": 90},
+                    "kadPublish": {
+                        "gateAllowed": True,
+                        "keywordPublishedTotal": 4,
+                        "sourcePublishedTotal": 2,
+                    },
+                },
+            },
+            {
+                "servers": {"connected": True, "lowId": False},
+                "kad": {"connected": True},
+                "runtimeDiagnostics": {
+                    "ed2kPublish": {"publishedEntries": 100, "pendingEntries": 0},
+                    "kadPublish": {
+                        "gateAllowed": True,
+                        "keywordPublishedTotal": 4,
+                        "sourcePublishedTotal": 2,
+                    },
+                },
+            },
+            {
+                "servers": {"connected": True, "lowId": False},
+                "kad": {"connected": True},
+                "runtimeDiagnostics": {
+                    "ed2kPublish": {"publishedEntries": 100, "pendingEntries": 0},
+                    "kadPublish": {
+                        "gateAllowed": True,
+                        "keywordPublishedTotal": 4,
+                        "sourcePublishedTotal": 2,
+                    },
+                },
+            },
+        ]
+    )
+
+    monkeypatch.setattr(control, "request_json", lambda *args, **kwargs: next(samples))
+    result = control.rust_publish_visibility_proof(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            timeout_seconds=10.0,
+            poll_seconds=0.0,
+            request_timeout_seconds=1.0,
+            stable_samples=2,
+            min_ed2k_visibility_percent=95.0,
+            max_ed2k_pending_entries=0,
+            min_kad_keyword_published_total=1,
+            min_kad_source_published_total=1,
+            max_observations=20,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["sample"]["ed2kVisibilityPercent"] == 100.0
+    assert result["sample"]["kadSourcePublishedTotal"] == 2
+    assert "192.0.2.10" not in repr(result)
+
+
 def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
     control = _load_rust_soak_control()
     safe = {

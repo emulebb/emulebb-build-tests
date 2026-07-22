@@ -2806,6 +2806,132 @@ def sample(base_url: str, api_key: str) -> dict[str, object]:
     return sanitize_status(request_json(base_url, "/status", api_key=api_key))
 
 
+def publish_visibility_check(
+    status_sample: dict[str, object],
+    *,
+    min_ed2k_visibility_percent: float,
+    max_ed2k_pending_entries: int | None,
+    min_kad_keyword_published_total: int,
+    min_kad_source_published_total: int,
+) -> dict[str, object]:
+    """Returns whether sanitized ED2K/Kad publish visibility is mature enough."""
+
+    ed2k_visibility = safe_float(status_sample.get("ed2kVisibilityPercent"))
+    ed2k_pending = safe_int(status_sample.get("ed2kPendingEntries"))
+    kad_keyword_total = safe_int(status_sample.get("kadKeywordPublishedTotal")) or 0
+    kad_source_total = safe_int(status_sample.get("kadSourcePublishedTotal")) or 0
+    missing: list[str] = []
+    if status_sample.get("ed2kConnected") is not True:
+        missing.append("ed2kConnected")
+    if status_sample.get("ed2kHighId") is not True:
+        missing.append("ed2kHighId")
+    if ed2k_visibility is None or ed2k_visibility < min_ed2k_visibility_percent:
+        missing.append("ed2kVisibilityMature")
+    if max_ed2k_pending_entries is not None and (ed2k_pending is None or ed2k_pending > max_ed2k_pending_entries):
+        missing.append("ed2kPendingWithinLimit")
+    if status_sample.get("kadConnected") is not True:
+        missing.append("kadConnected")
+    if status_sample.get("kadGateAllowed") is not True:
+        missing.append("kadGateAllowed")
+    if kad_keyword_total < min_kad_keyword_published_total:
+        missing.append("kadKeywordPublished")
+    if kad_source_total < min_kad_source_published_total:
+        missing.append("kadSourcePublished")
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "ed2kConnected": status_sample.get("ed2kConnected"),
+        "ed2kHighId": status_sample.get("ed2kHighId"),
+        "ed2kVisibilityPercent": ed2k_visibility,
+        "ed2kPendingEntries": ed2k_pending,
+        "ed2kPublishedEntries": status_sample.get("ed2kPublishedEntries"),
+        "ed2kVisibilityEtaSeconds": status_sample.get("ed2kVisibilityEtaSeconds"),
+        "kadConnected": status_sample.get("kadConnected"),
+        "kadGateAllowed": status_sample.get("kadGateAllowed"),
+        "kadGateBlockReason": status_sample.get("kadGateBlockReason"),
+        "kadPublishPhase": status_sample.get("kadPublishPhase"),
+        "kadKeywordPublishedTotal": kad_keyword_total,
+        "kadSourcePublishedTotal": kad_source_total,
+        "kadKeywordAckedContactsTotal": status_sample.get("kadKeywordAckedContactsTotal"),
+        "kadSourceAckedContactsTotal": status_sample.get("kadSourceAckedContactsTotal"),
+    }
+
+
+def rust_publish_visibility_proof(args: argparse.Namespace) -> dict[str, object]:
+    """Waits for ED2K/Kad publish visibility to satisfy beta search/publish evidence."""
+
+    observations: list[dict[str, object]] = []
+    passed_checks: list[dict[str, object]] = []
+    started = time.monotonic()
+    deadline = started + args.timeout_seconds
+    while True:
+        elapsed = round(time.monotonic() - started, 3)
+        try:
+            status_sample = sanitize_status(
+                request_json(
+                    args.base_url,
+                    "/status",
+                    api_key=args.api_key,
+                    timeout_seconds=args.request_timeout_seconds,
+                )
+            )
+            check = publish_visibility_check(
+                status_sample,
+                min_ed2k_visibility_percent=args.min_ed2k_visibility_percent,
+                max_ed2k_pending_entries=args.max_ed2k_pending_entries,
+                min_kad_keyword_published_total=args.min_kad_keyword_published_total,
+                min_kad_source_published_total=args.min_kad_source_published_total,
+            )
+        except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
+            check = {
+                "ok": False,
+                "missing": ["sampleUnavailable"],
+                "error": exc.__class__.__name__,
+            }
+        observations.append({"elapsedSeconds": elapsed, "check": check})
+        if check["ok"]:
+            passed_checks.append(check)
+            if len(passed_checks) >= args.stable_samples:
+                return {
+                    "ok": True,
+                    "schema": "emulebb.rust-publish-visibility-proof.v1",
+                    "baseUrlFingerprint": text_fingerprint(args.base_url),
+                    "elapsedSeconds": round(time.monotonic() - started, 3),
+                    "stableSamplesRequired": args.stable_samples,
+                    "pollSeconds": args.poll_seconds,
+                    "requestTimeoutSeconds": args.request_timeout_seconds,
+                    "thresholds": {
+                        "minEd2kVisibilityPercent": args.min_ed2k_visibility_percent,
+                        "maxEd2kPendingEntries": args.max_ed2k_pending_entries,
+                        "minKadKeywordPublishedTotal": args.min_kad_keyword_published_total,
+                        "minKadSourcePublishedTotal": args.min_kad_source_published_total,
+                    },
+                    "observations": observations[-args.max_observations :],
+                    "sample": check,
+                }
+        else:
+            passed_checks = []
+        if time.monotonic() >= deadline:
+            return {
+                "ok": False,
+                "schema": "emulebb.rust-publish-visibility-proof.v1",
+                "baseUrlFingerprint": text_fingerprint(args.base_url),
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+                "stableSamplesRequired": args.stable_samples,
+                "pollSeconds": args.poll_seconds,
+                "requestTimeoutSeconds": args.request_timeout_seconds,
+                "thresholds": {
+                    "minEd2kVisibilityPercent": args.min_ed2k_visibility_percent,
+                    "maxEd2kPendingEntries": args.max_ed2k_pending_entries,
+                    "minKadKeywordPublishedTotal": args.min_kad_keyword_published_total,
+                    "minKadSourcePublishedTotal": args.min_kad_source_published_total,
+                },
+                "observations": observations[-args.max_observations :],
+                "sample": check,
+            }
+        time.sleep(args.poll_seconds)
+
+
 def normalize_private_path(value: object) -> str:
     """Returns a comparable path string that is never emitted directly."""
 
@@ -6671,6 +6797,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the final sanitized early-connect proof report to this JSON path.",
     )
     early_connect_parser.set_defaults(func=rust_early_connect_proof)
+
+    publish_visibility_parser = sub.add_parser(
+        "publish-visibility-proof",
+        help="Prove ED2K/Kad publish visibility has matured on the persisted Rust profile.",
+    )
+    publish_visibility_parser.add_argument("--timeout-seconds", type=float, default=3600.0)
+    publish_visibility_parser.add_argument("--poll-seconds", type=float, default=30.0)
+    publish_visibility_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    publish_visibility_parser.add_argument("--stable-samples", type=int, default=2)
+    publish_visibility_parser.add_argument("--min-ed2k-visibility-percent", type=float, default=95.0)
+    publish_visibility_parser.add_argument("--max-ed2k-pending-entries", type=int)
+    publish_visibility_parser.add_argument("--min-kad-keyword-published-total", type=int, default=1)
+    publish_visibility_parser.add_argument("--min-kad-source-published-total", type=int, default=1)
+    publish_visibility_parser.add_argument("--max-observations", type=int, default=20)
+    publish_visibility_parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=output_root()
+        / "reports"
+        / "rust-publish-visibility-proof"
+        / "rust-publish-visibility-proof.latest.json",
+        help="Write the final sanitized publish-visibility proof report to this JSON path.",
+    )
+    publish_visibility_parser.set_defaults(func=rust_publish_visibility_proof)
 
     regular_log_parser = sub.add_parser(
         "regular-log-proof",
