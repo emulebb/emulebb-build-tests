@@ -158,6 +158,22 @@ emulebb-rust.exe (5740),     120000,       1.90,            emulebb-rust.exe!tok
     ]
 
 
+def test_parse_xperf_profile_detail_extracts_rust_diagnostics_symbols() -> None:
+    text = """
+emulebb-rust-diagnostics.exe (5740),     260000,       4.20,            emulebb_rust_diagnostics.exe!emulebb_core::rest::snapshot::build
+emulebb-rust-diagnostics.exe (5740),     120000,       1.90,            emulebb-rust-diagnostics.exe!tokio::runtime::scheduler::multi_thread::worker::Context::run
+"""
+
+    summary = cpu_profile.parse_xperf_profile_detail(text, process_image="emulebb-rust-diagnostics.exe")
+
+    assert summary["available"] is True
+    assert summary["app_row_count"] == 2
+    assert [row["function"] for row in summary["top_app_functions"]] == [
+        "emulebb-rust-diagnostics!emulebb_core::rest::snapshot::build",
+        "emulebb-rust-diagnostics!tokio::runtime::scheduler::multi_thread::worker::Context::run",
+    ]
+
+
 def test_parse_xperf_profile_detail_extracts_rust_ui_symbols() -> None:
     text = """
 emulebb-rust-ui.exe (5740),     260000,       4.20,            emulebb_rust_ui.exe!emulebb_rust_ui::worker::worker_loop
