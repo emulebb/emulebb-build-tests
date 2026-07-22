@@ -335,6 +335,7 @@ def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Pa
         lambda args: {
             "ok": True,
             "jsonOutput": str(args.json_output),
+            "searchType": args.search_type,
             "termFingerprint": control.text_fingerprint(args.term),
         },
     )
@@ -354,6 +355,7 @@ def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Pa
     assert stdout_payload == report_payload
     assert report_payload["ok"] is True
     assert report_payload["jsonOutput"] == str(report)
+    assert report_payload["searchType"] == ""
     assert "private search term" not in report.read_text(encoding="utf-8")
 
 

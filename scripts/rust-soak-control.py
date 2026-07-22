@@ -5946,7 +5946,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("automatic", "server", "global", "kad"),
         default="automatic",
     )
-    public_download_parser.add_argument("--search-type", default="doc")
+    public_download_parser.add_argument(
+        "--search-type",
+        default="",
+        help="Rust search type filter; empty means Any and is still constrained by the proof safety filter.",
+    )
     public_download_parser.add_argument("--max-terms", type=int, default=4)
     public_download_parser.add_argument("--result-limit", type=int, default=50)
     public_download_parser.add_argument("--min-sources", type=int, default=2)
