@@ -254,6 +254,14 @@ def test_rust_protocol_cases_reuse_shared_goed2k_launcher() -> None:
     assert "goed2k.build_server_config(" not in script_text
 
 
+def test_rust_protocol_cases_materialize_run_specific_profile_seed() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "rust_emulebb.materialize_local_profile_seed(" in script_text
+    assert "harness-seed-config" in script_text
+
+
 def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     module = load_suite_module()
     case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-no-server-udp-compressible"]

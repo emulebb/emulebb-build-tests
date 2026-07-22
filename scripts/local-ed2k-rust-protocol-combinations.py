@@ -551,9 +551,21 @@ def run_protocol_case(
             "unicode_name": True,
         }
 
+        current_phase = "materialize_harness_profile_seed"
+        harness_seed_dir = rust_emulebb.materialize_local_profile_seed(
+            profile_seed_dir,
+            case_dir / "harness-seed-config",
+            server_address=p2p_address,
+            server_port=ports["ed2k_tcp"],
+            server_name="emulebb-local-e2e",
+        )
+        report["checks"]["harness_profile_seed"] = {
+            "serverMet": str(harness_seed_dir / "server.met"),
+        }
+
         current_phase = "prepare_harness_profile"
         harness = live_common.prepare_scenario_profile(
-            profile_seed_dir,
+            harness_seed_dir,
             case_dir,
             [live_common.win_path(shared_dir, trailing_slash=True)],
             CLIENT_HARNESS.profile_id,
