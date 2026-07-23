@@ -81,6 +81,32 @@ class StopRequested(Exception):
     """Raised when the operator asks the foreground run to stop."""
 
 
+class RestError(RuntimeError):
+    """Raised for one REST error response with parsed envelope metadata."""
+
+    def __init__(self, method: str, path: str, status: int, body_text: str) -> None:
+        self.method = method
+        self.path = path
+        self.status = status
+        self.body_text = body_text
+        self.error_code: str | None = None
+        self.error_message: str | None = None
+        try:
+            payload = json.loads(body_text) if body_text else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                code = error.get("code")
+                message = error.get("message")
+                self.error_code = str(code) if code is not None else None
+                self.error_message = str(message) if message is not None else None
+        detail = self.error_message or redact_response_text(body_text)
+        code_text = f" {self.error_code}" if self.error_code else ""
+        super().__init__(f"REST {method} {path} failed with HTTP {status}{code_text}: {detail}")
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     """Resolved non-secret runtime configuration."""
@@ -666,7 +692,7 @@ def request_json(
             return data
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"REST {method} {path} failed with HTTP {exc.code}: {redact_response_text(text)}") from exc
+        raise RestError(method, path, int(exc.code), text) from exc
 
 
 def redact_response_text(value: str, limit: int = 500) -> str:
@@ -695,10 +721,18 @@ def rest_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def list_categories(base_url: str, api_key: str) -> list[dict[str, Any]]:
+def list_categories(base_url: str, api_key: str, *, busy_timeout_seconds: float = 0.0) -> list[dict[str, Any]]:
     """Reads current eMuleBB download categories."""
 
-    return rest_items(retry_request(base_url, "GET", "categories", api_key=api_key))
+    return rest_items(
+        retry_request(
+            base_url,
+            "GET",
+            "categories",
+            api_key=api_key,
+            busy_timeout_seconds=busy_timeout_seconds,
+        )
+    )
 
 
 def category_name_for_run(config: RuntimeConfig, args: argparse.Namespace) -> str | None:
@@ -729,7 +763,7 @@ def ensure_category_path(config: RuntimeConfig, api_key: str, args: argparse.Nam
     if category_name is None:
         return None
 
-    categories = list_categories(config.base_url, api_key)
+    categories = list_categories(config.base_url, api_key, busy_timeout_seconds=args.rest_busy_timeout_seconds)
     category = find_category(categories, category_name)
     target_key = normalized_windows_path_key(config.target_root)
     if category is None:
@@ -742,6 +776,7 @@ def ensure_category_path(config: RuntimeConfig, api_key: str, args: argparse.Nam
                 "categories",
                 api_key=api_key,
                 body={"name": category_name, "path": str(config.target_root)},
+                busy_timeout_seconds=args.rest_busy_timeout_seconds,
             )
             log(f"created category {category_name!r} for target root")
         elif args.ensure_category_path:
@@ -766,6 +801,7 @@ def ensure_category_path(config: RuntimeConfig, api_key: str, args: argparse.Nam
             f"categories/{category_id}",
             api_key=api_key,
             body={"path": str(config.target_root)},
+            busy_timeout_seconds=args.rest_busy_timeout_seconds,
         )
         log(f"updated category {category_name!r} to target root")
     elif args.ensure_category_path:
@@ -782,18 +818,35 @@ def retry_request(
     body: dict[str, object] | None = None,
     attempts: int = 4,
     delay_seconds: float = 1.0,
+    busy_timeout_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """Retries transient local REST failures."""
 
     last_error: Exception | None = None
-    for attempt in range(1, attempts + 1):
+    busy_deadline = time.monotonic() + busy_timeout_seconds
+    busy_logged = False
+    attempt = 1
+    while attempt <= attempts:
         try:
             return request_json(base_url, method, path, api_key=api_key, body=body)
+        except RestError as exc:
+            last_error = exc
+            if exc.status == 503 and exc.error_code == "SERVICE_BUSY" and time.monotonic() < busy_deadline:
+                if not busy_logged:
+                    log(f"REST busy for {method} {path}: {exc.error_message or 'service busy'}")
+                    busy_logged = True
+                time.sleep(max(delay_seconds, 5.0))
+                continue
+            if attempt == attempts:
+                break
+            time.sleep(delay_seconds * attempt)
+            attempt += 1
         except (OSError, TimeoutError, urllib.error.URLError, RuntimeError) as exc:
             last_error = exc
             if attempt == attempts:
                 break
             time.sleep(delay_seconds * attempt)
+            attempt += 1
     assert last_error is not None
     raise last_error
 
@@ -805,14 +858,27 @@ def preflight_rest(config: RuntimeConfig, api_key: str) -> None:
     retry_request(config.base_url, "GET", "status", api_key=api_key)
 
 
-def paged_items(base_url: str, path: str, *, api_key: str, limit: int = 500) -> list[dict[str, Any]]:
+def paged_items(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    limit: int = 500,
+    busy_timeout_seconds: float = 0.0,
+) -> list[dict[str, Any]]:
     """Reads paginated REST collection items."""
 
     offset = 0
     items: list[dict[str, Any]] = []
     while True:
         separator = "&" if "?" in path else "?"
-        payload = retry_request(base_url, "GET", f"{path}{separator}offset={offset}&limit={limit}", api_key=api_key)
+        payload = retry_request(
+            base_url,
+            "GET",
+            f"{path}{separator}offset={offset}&limit={limit}",
+            api_key=api_key,
+            busy_timeout_seconds=busy_timeout_seconds,
+        )
         batch = rest_items(payload)
         items.extend(batch)
         data = rest_data(payload)
@@ -823,13 +889,13 @@ def paged_items(base_url: str, path: str, *, api_key: str, limit: int = 500) -> 
     return items
 
 
-def existing_rest_keys(base_url: str, api_key: str) -> tuple[set[str], set[str]]:
+def existing_rest_keys(base_url: str, api_key: str, *, busy_timeout_seconds: float) -> tuple[set[str], set[str]]:
     """Returns normalized names and hashes already known to the REST client."""
 
     names: set[str] = set()
     hashes: set[str] = set()
     for path in ("transfers", "shared-files"):
-        for item in paged_items(base_url, path, api_key=api_key):
+        for item in paged_items(base_url, path, api_key=api_key, busy_timeout_seconds=busy_timeout_seconds):
             item_hash = str(item.get("hash") or "").strip().casefold()
             if item_hash:
                 hashes.add(item_hash)
@@ -1005,13 +1071,20 @@ def poll_search_results(
     timeout_seconds: float,
     poll_seconds: float,
     limit: int,
+    busy_timeout_seconds: float,
 ) -> list[dict[str, Any]]:
     """Polls one search until it accumulates visible results or times out."""
 
     deadline = time.monotonic() + timeout_seconds
     best_results: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
-        payload = retry_request(base_url, "GET", f"searches/{search_id}?offset=0&limit={limit}", api_key=api_key)
+        payload = retry_request(
+            base_url,
+            "GET",
+            f"searches/{search_id}?offset=0&limit={limit}",
+            api_key=api_key,
+            busy_timeout_seconds=busy_timeout_seconds,
+        )
         results = rest_items(payload)
         if len(results) > len(best_results):
             best_results = results
@@ -1046,6 +1119,7 @@ def add_download(
     transfer_hash: str,
     *,
     body: dict[str, object] | None,
+    busy_timeout_seconds: float,
 ) -> None:
     """Adds one search result to the download queue."""
 
@@ -1055,16 +1129,25 @@ def add_download(
         f"searches/{urllib.parse.quote(search_id)}/results/{transfer_hash}/operations/download",
         api_key=api_key,
         body=body,
+        busy_timeout_seconds=busy_timeout_seconds,
     )
 
 
-def rename_transfer(base_url: str, api_key: str, transfer_hash: str, safe_name: str) -> bool:
+def rename_transfer(base_url: str, api_key: str, transfer_hash: str, safe_name: str, *, busy_timeout_seconds: float) -> bool:
     """Renames one queued transfer to the normalized MP3 filename."""
 
     body = {"name": safe_name}
     for _ in range(5):
         try:
-            retry_request(base_url, "PATCH", f"transfers/{transfer_hash}", api_key=api_key, body=body, attempts=2)
+            retry_request(
+                base_url,
+                "PATCH",
+                f"transfers/{transfer_hash}",
+                api_key=api_key,
+                body=body,
+                attempts=2,
+                busy_timeout_seconds=busy_timeout_seconds,
+            )
             return True
         except Exception:
             time.sleep(1.0)
@@ -1139,7 +1222,14 @@ def process_one_item(
 
     search_id: str | None = None
     try:
-        search_response = retry_request(config.base_url, "POST", "searches", api_key=api_key, body=search_create_body(query_text, args))
+        search_response = retry_request(
+            config.base_url,
+            "POST",
+            "searches",
+            api_key=api_key,
+            body=search_create_body(query_text, args),
+            busy_timeout_seconds=args.rest_busy_timeout_seconds,
+        )
         search_id = response_search_id(search_response)
         results = poll_search_results(
             config.base_url,
@@ -1148,6 +1238,7 @@ def process_one_item(
             timeout_seconds=args.search_timeout_seconds,
             poll_seconds=args.search_poll_seconds,
             limit=args.search_limit,
+            busy_timeout_seconds=args.rest_busy_timeout_seconds,
         )
         candidate = choose_candidate(
             results,
@@ -1164,8 +1255,11 @@ def process_one_item(
                 if max(int_value(result.get("sources")), int_value(result.get("completeSources"))) >= args.min_sources
             )
             status = "no_sources" if with_sources == 0 else "no_match"
+            if args.dry_run:
+                status = "pending"
             update_item(conn, query_key, status, reason=f"visible_results={len(results)} source_backed_results={with_sources}")
-            log(f"{status}: line {item['line_number']} visible={len(results)} source_backed={with_sources}")
+            prefix = "dry-run " if args.dry_run else ""
+            log(f"{prefix}{status}: line {item['line_number']} visible={len(results)} source_backed={with_sources}")
             return False
 
         transfer_hash = str(candidate.result.get("hash") or "").strip().casefold()
@@ -1194,7 +1288,7 @@ def process_one_item(
                 f"sources={candidate.source_count} complete={candidate.complete_source_count} "
                 f"name={candidate.safe_name!r}"
             )
-            return False
+            return True
 
         add_download(
             config.base_url,
@@ -1202,6 +1296,7 @@ def process_one_item(
             search_id,
             transfer_hash,
             body=download_body(config, args.paused),
+            busy_timeout_seconds=args.rest_busy_timeout_seconds,
         )
         update_item(conn, query_key, "added", reason="download added through search result route")
         mark_transfer_hash(conn, transfer_hash=transfer_hash, query_key=query_key, status="added", name=candidate.safe_name)
@@ -1213,7 +1308,13 @@ def process_one_item(
         )
 
         if args.rename_transfers:
-            if rename_transfer(config.base_url, api_key, transfer_hash, candidate.safe_name):
+            if rename_transfer(
+                config.base_url,
+                api_key,
+                transfer_hash,
+                candidate.safe_name,
+                busy_timeout_seconds=args.rest_busy_timeout_seconds,
+            ):
                 update_item(conn, query_key, "renamed", reason="download added and renamed")
                 mark_transfer_hash(conn, transfer_hash=transfer_hash, query_key=query_key, status="renamed", name=candidate.safe_name)
                 log(f"renamed hash={transfer_hash} to {candidate.safe_name!r}")
@@ -1243,7 +1344,12 @@ def watch_transfers(config: RuntimeConfig, api_key: str, conn: sqlite3.Connectio
     log("watching transfers; press Ctrl+C to stop")
     while True:
         try:
-            transfers = paged_items(config.base_url, "transfers", api_key=api_key)
+            transfers = paged_items(
+                config.base_url,
+                "transfers",
+                api_key=api_key,
+                busy_timeout_seconds=interval_seconds,
+            )
             active = sum(1 for item in transfers if str(item.get("state") or "") in {"downloading", "queued", "paused"})
             completed = sum(1 for item in transfers if str(item.get("state") or "") == "completed")
             total_sources = sum(int_value(item.get("sources")) for item in transfers)
@@ -1277,6 +1383,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--delete-searches", action=argparse.BooleanOptionalAction, default=True, help="Delete each search session after processing.")
     parser.add_argument("--retry-no-match", action="store_true", help="Retry rows previously marked no_match/no_sources/ambiguous.")
     parser.add_argument("--watch", action="store_true", help="Keep polling transfer summaries after queue processing.")
+    parser.add_argument("--max-items", type=int, default=0, help="Stop after processing this many eligible playlist rows; 0 means no explicit cap.")
     parser.add_argument("--max-new-downloads", type=int, default=0, help="Stop after adding this many new downloads; 0 means no explicit cap.")
     parser.add_argument("--min-sources", type=int, default=DEFAULT_MIN_SOURCES, help="Minimum sources or complete sources required.")
     parser.add_argument("--min-name-score", type=float, default=DEFAULT_MIN_NAME_SCORE, help="Minimum normalized name similarity from 0.0 to 1.0.")
@@ -1287,6 +1394,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--search-poll-seconds", type=float, default=DEFAULT_SEARCH_POLL_SECONDS)
     parser.add_argument("--search-limit", type=int, default=DEFAULT_SEARCH_LIMIT)
     parser.add_argument("--progress-interval-seconds", type=float, default=DEFAULT_PROGRESS_INTERVAL_SECONDS)
+    parser.add_argument("--rest-busy-timeout-seconds", type=float, default=900.0, help="How long to wait for SERVICE_BUSY REST responses before failing.")
     return parser.parse_args(argv)
 
 
@@ -1311,7 +1419,11 @@ def main(argv: list[str]) -> int:
     log(f"loaded playlist_rows={len(rows)} existing_mp3={len(existing_local)} skipped_local={skipped_local}")
 
     preflight_rest(config, api_key)
-    rest_names, rest_hashes = existing_rest_keys(config.base_url, api_key)
+    rest_names, rest_hashes = existing_rest_keys(
+        config.base_url,
+        api_key,
+        busy_timeout_seconds=args.rest_busy_timeout_seconds,
+    )
     skipped_rest = mark_existing_rest(conn, rest_names)
     refresh_seen = refresh_completed_from_rest(conn, rest_names, rest_hashes)
     log(f"rest_seen_names={len(rest_names)} rest_seen_hashes={len(rest_hashes)} skipped_rest={skipped_rest} refreshed_seen={refresh_seen}")
@@ -1331,19 +1443,23 @@ def main(argv: list[str]) -> int:
         conn.close()
         return 0
 
-    added_count = 0
+    selected_or_added_count = 0
     last_progress = time.monotonic()
     try:
         known_names = set(existing_local) | rest_names
         known_hashes = set(rest_hashes)
+        processed_count = 0
         for item in pending_items(conn, retry_no_match=args.retry_no_match):
-            if args.max_new_downloads and added_count >= args.max_new_downloads:
+            if args.max_items and processed_count >= args.max_items:
+                log(f"stopping because max_items={args.max_items} was reached")
+                break
+            if args.max_new_downloads and selected_or_added_count >= args.max_new_downloads:
                 log(f"stopping because max_new_downloads={args.max_new_downloads} was reached")
                 break
             if time.monotonic() - last_progress >= args.progress_interval_seconds:
                 print_summary(conn)
                 last_progress = time.monotonic()
-            added = process_one_item(
+            selected_or_added = process_one_item(
                 conn,
                 config,
                 api_key,
@@ -1352,10 +1468,14 @@ def main(argv: list[str]) -> int:
                 existing_names=known_names,
                 existing_hashes=known_hashes,
             )
-            if added:
-                added_count += 1
+            if selected_or_added:
+                selected_or_added_count += 1
+            processed_count += 1
         print_summary(conn)
-        log(f"queue processing finished added={added_count} dry_run={args.dry_run}")
+        log(
+            "queue processing finished "
+            f"processed={processed_count} selected_or_added={selected_or_added_count} dry_run={args.dry_run}"
+        )
         if args.watch:
             watch_transfers(config, api_key, conn, interval_seconds=args.progress_interval_seconds)
     except (KeyboardInterrupt, StopRequested):
@@ -1368,4 +1488,8 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except RuntimeError as exc:
+        log(f"failed: {redact_response_text(str(exc), limit=1000)}")
+        raise SystemExit(1) from None
