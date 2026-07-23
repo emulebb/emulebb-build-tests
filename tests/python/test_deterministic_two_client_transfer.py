@@ -500,6 +500,7 @@ def test_deterministic_transfer_reuses_shared_goed2k_launcher() -> None:
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert "goed2k.launch_ed2k_server(" in script_text
+    assert "ed2k_address=p2p_address" in script_text
     assert "goed2k.start_ed2k_server(" not in script_text
     assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
 
