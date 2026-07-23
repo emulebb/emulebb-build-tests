@@ -30,10 +30,12 @@ DEFAULT_SEARCH_TIMEOUT_SECONDS = 75.0
 DEFAULT_SEARCH_POLL_SECONDS = 5.0
 DEFAULT_SEARCH_LIMIT = 100
 DEFAULT_MIN_SOURCES = 1
-DEFAULT_MIN_NAME_SCORE = 0.45
+DEFAULT_MIN_NAME_SCORE = 0.30
 DEFAULT_MIN_SIZE_MB = 0.25
 DEFAULT_MAX_SIZE_MB = 512.0
 DEFAULT_PROGRESS_INTERVAL_SECONDS = 15.0
+DEFAULT_SEARCH_QUERY_TOKEN_COUNT = 4
+DEFAULT_SEARCH_QUERY_MAX_CHARS = 80
 INVALID_WINDOWS_FILENAME_CHARS = '<>:"/\\|?*'
 RESERVED_WINDOWS_NAMES = {
     "CON",
@@ -74,6 +76,7 @@ NOISE_TOKENS = {
     "cbr",
     "vbr",
     "kbps",
+    "www",
 }
 
 
@@ -473,6 +476,18 @@ def normalize_query(value: str) -> str:
         if len(parts) > 2:
             text = parts[2]
     return normalize_text(text)
+
+
+def build_search_query(query_key: str, *, token_count: int, max_chars: int) -> str:
+    """Builds a compact Kad search phrase instead of sending the full filename."""
+
+    tokens = query_key.split()
+    if token_count > 0:
+        tokens = tokens[:token_count]
+    query = " ".join(tokens).strip()
+    if max_chars > 0 and len(query) > max_chars:
+        query = query[:max_chars].rsplit(" ", 1)[0].strip() or query[:max_chars].strip()
+    return query or query_key[:160]
 
 
 def strip_mp3_suffix(name: str) -> str:
@@ -1218,7 +1233,12 @@ def process_one_item(
     query_key = str(item["query_key"])
     query_text = str(item["query_text"])
     update_item(conn, query_key, "searching", attempts=int(item["attempts"]) + 1)
-    log(f"searching line {item['line_number']} ({query_key[:80]})")
+    search_query = build_search_query(
+        query_key,
+        token_count=args.search_query_token_count,
+        max_chars=args.search_query_max_chars,
+    )
+    log(f"searching line {item['line_number']} query={search_query!r} method={args.search_method} type=audio")
 
     search_id: str | None = None
     try:
@@ -1227,7 +1247,7 @@ def process_one_item(
             "POST",
             "searches",
             api_key=api_key,
-            body=search_create_body(query_text, args),
+            body=search_create_body(search_query, args),
             busy_timeout_seconds=args.rest_busy_timeout_seconds,
         )
         search_id = response_search_id(search_response)
@@ -1389,7 +1409,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--min-name-score", type=float, default=DEFAULT_MIN_NAME_SCORE, help="Minimum normalized name similarity from 0.0 to 1.0.")
     parser.add_argument("--min-size-mb", type=float, default=DEFAULT_MIN_SIZE_MB, help="Minimum MP3 candidate size.")
     parser.add_argument("--max-size-mb", type=float, default=DEFAULT_MAX_SIZE_MB, help="Maximum MP3 candidate size; 0 disables the cap.")
-    parser.add_argument("--search-method", choices=("automatic", "server", "global", "kad"), default="automatic")
+    parser.add_argument("--search-method", choices=("automatic", "server", "global", "kad"), default="kad")
+    parser.add_argument("--search-query-token-count", type=int, default=DEFAULT_SEARCH_QUERY_TOKEN_COUNT, help="Maximum normalized tokens sent to each REST search; 0 uses all tokens.")
+    parser.add_argument("--search-query-max-chars", type=int, default=DEFAULT_SEARCH_QUERY_MAX_CHARS, help="Maximum characters sent to each REST search; 0 disables the cap.")
     parser.add_argument("--search-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
     parser.add_argument("--search-poll-seconds", type=float, default=DEFAULT_SEARCH_POLL_SECONDS)
     parser.add_argument("--search-limit", type=int, default=DEFAULT_SEARCH_LIMIT)
