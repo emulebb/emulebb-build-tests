@@ -276,8 +276,8 @@ def response_payload(result: dict[str, object], expected_status: int) -> object:
     return result.get("json")
 
 
-def shared_file_rows_from_result(result: dict[str, object]) -> list[object]:
-    """Extracts shared-file rows from either a raw array or paged envelope."""
+def rows_from_result(result: dict[str, object]) -> list[object]:
+    """Extracts REST rows from either a raw array or paged envelope."""
 
     payload = response_payload(result, 200)
     if isinstance(payload, dict) and isinstance(payload.get("items"), list):
@@ -393,7 +393,7 @@ def wait_for_emule_shared_file_link(
             request_timeout_seconds=10.0,
         )
         try:
-            rows = shared_file_rows_from_result(rows_result)
+            rows = rows_from_result(rows_result)
         except Exception as exc:
             observations.append(
                 {
@@ -785,7 +785,7 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
         api_key=api_key,
         timeout_seconds=timeout_seconds,
     )
-    server_rows = rest_smoke.require_json_array(servers_result, 200)
+    server_rows = rows_from_result(servers_result)
     matching_rows = [
         row
         for row in server_rows

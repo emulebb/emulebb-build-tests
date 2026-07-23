@@ -1083,15 +1083,10 @@ def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
     def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
         calls.append((method, path))
         if path == "/api/v1/servers":
-            return {"status": 200, "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}
+            return {"status": 200, "json": {"items": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}}
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_array",
-        lambda result, _status: list(result["json"]),
-    )
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
     monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
     monkeypatch.setattr(
@@ -1129,7 +1124,6 @@ def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch)
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, _status: list(result["json"]))
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
     monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
     monkeypatch.setattr(module.rest_smoke, "wait_for_server_connected", lambda *_args, **_kwargs: {"connected": True})
