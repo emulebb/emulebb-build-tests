@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser = argparse.ArgumentParser(description=__doc__, epilog=epilog)
     parser.add_argument("--seconds", type=int, default=3600, help="CPU profile/run window; minimum 3600.")
-    parser.add_argument("--lan-bind-addr", default="", help="REST LAN bind address; defaults to inherited X_LOCAL_IP.")
+    parser.add_argument("--lan-bind-addr", required=True, help="REST LAN bind address; pass inherited X_LOCAL_IP.")
     parser.add_argument(
         "--single-server",
         action="store_true",

@@ -1715,11 +1715,12 @@ def test_automatic_cycle_does_not_schedule_probe_existing_hash(
 
 def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
     runner = _load_soak_runner()
+    address, port = runner.OPERATOR_SERVER.rsplit(":", 1)
 
     result = runner.checkpoint_operator_reconnect(
         "http://client",
         "key",
-        {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687},
+        {"connected": True, "serverAddress": address, "serverPort": int(port)},
     )
 
     assert result == {"attempted": False, "reason": "already_connected"}
@@ -1727,15 +1728,16 @@ def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
 
 def test_operator_connected_requires_configured_server() -> None:
     runner = _load_soak_runner()
+    address, port = runner.OPERATOR_SERVER.rsplit(":", 1)
 
     assert runner.operator_connected(
-        {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687}
+        {"connected": True, "serverAddress": address, "serverPort": int(port)}
     )
     assert not runner.operator_connected(
         {"connected": True, "serverAddress": "198.51.100.2", "serverPort": 5687}
     )
     assert not runner.operator_connected(
-        {"connected": False, "serverAddress": "45.82.80.155", "serverPort": 5687}
+        {"connected": False, "serverAddress": address, "serverPort": int(port)}
     )
     assert runner.operator_connected(
         {"connected": True, "serverAddress": "198.51.100.2", "serverPort": 4661},
@@ -1745,7 +1747,8 @@ def test_operator_connected_requires_configured_server() -> None:
 
 def test_connectivity_gate_requires_both_clients_on_operator() -> None:
     runner = _load_soak_runner()
-    connected = {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687}
+    address, port = runner.OPERATOR_SERVER.rsplit(":", 1)
+    connected = {"connected": True, "serverAddress": address, "serverPort": int(port)}
     disconnected = {"connected": False}
 
     assert runner.connectivity_gate(connected, connected)["ok"] is True

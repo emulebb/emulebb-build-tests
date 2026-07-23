@@ -41,6 +41,7 @@ def test_build_server_config_omits_trace_path_when_disabled(tmp_path: Path) -> N
         catalog_path=tmp_path / "catalog.json",
         token="token",
         admin_address="192.0.2.10",
+        ed2k_address="192.0.2.10",
     )
 
     assert config["packet_trace"] is False

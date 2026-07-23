@@ -129,8 +129,8 @@ def test_build_shared_directory_patch_payload_appends_trailing_separator(tmp_pat
     assert payload["confirmReplaceRoots"] is True
     assert len(payload["roots"]) == 1
     root = payload["roots"][0]
-    assert root.endswith(("\\", "/"))
-    assert str(tmp_path) in root
+    assert root["path"].endswith(("\\", "/"))
+    assert str(tmp_path) in root["path"]
 
 
 def test_build_shared_directory_patch_payload_does_not_double_separator() -> None:
@@ -140,7 +140,7 @@ def test_build_shared_directory_patch_payload_does_not_double_separator() -> Non
             return "C:\\share\\seed\\"
 
     payload = clw.build_shared_directory_patch_payload(_FakeDir())  # type: ignore[arg-type]
-    assert payload["roots"][0] == "C:\\share\\seed\\"
+    assert payload["roots"][0] == {"path": "C:\\share\\seed\\"}
 
 
 def test_converged_runner_requires_same_vpn_bind_ip() -> None:

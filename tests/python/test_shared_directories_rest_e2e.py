@@ -27,10 +27,11 @@ def test_build_shared_directory_patch_payload_uses_recursive_objects(tmp_path: P
     assert payload == {
         "confirmReplaceRoots": True,
         "roots": [
-            module.live_common.win_path(flat, trailing_slash=True),
+            {
+                "path": module.live_common.win_path(flat, trailing_slash=True),
+            },
             {
                 "path": module.live_common.win_path(recursive, trailing_slash=True),
-                "recursive": True,
             },
         ]
     }
@@ -157,7 +158,9 @@ def test_assert_shared_file_ed2k_link_validates_hash_size_and_name(monkeypatch) 
         return {
             "status": 200,
             "content_type": "application/json",
-            "headers": {},
+            "headers": {
+                module.rest_api_smoke.REST_CONTRACT_VERSION_HEADER: module.rest_api_smoke.REST_CONTRACT_VERSION
+            },
             "body_text": "{}",
             "json": data,
             "raw_json": {"data": data, "meta": {"apiVersion": "v1"}},

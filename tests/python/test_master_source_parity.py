@@ -2225,9 +2225,9 @@ def _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_pac
     # The retired per-family schema name must be gone (fully converged).
     assert "ed2k_server_packet_v1" not in log_source
 
-    # Server uses flow="server", client uses flow="client".
+    # Server uses flow="server", accepted client-to-client sockets use flow="listener".
     assert 'PacketDiagnosticsLogEd2kPacket(_T("server")' in log_source
-    assert 'PacketDiagnosticsLogEd2kPacket(_T("client")' in log_source
+    assert 'PacketDiagnosticsLogEd2kPacket(_T("listener")' in log_source
 
 
 def _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_sites_are_guarded() -> None:
@@ -2291,8 +2291,7 @@ def _check_part_file_source__part_file_flush_retires_written_buffers_before_sizi
 def _check_part_file_source__part_file_shutdown_flush_wait_allows_broadband_write_drain() -> None:
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
 
-    assert "constexpr DWORD kShutdownFlushWaitMs = 15000;" in source
-    assert "skips .part.met saves and forces costly" in source
+    assert "constexpr DWORD kShutdownFlushWaitMs = SEC2MS(180);" in source
     assert source.count("kShutdownFlushWaitMs") == 3
 
 
@@ -2352,11 +2351,12 @@ def _check_part_file_source__part_file_load_does_not_use_file_status_after_get_s
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("if (!isnewstyle) { // not for importing") : source.index("if (m_tUtcLastModified != fdate)")]
 
-    assert "CFileStatus filestatus = {};" in block
-    assert "bool bHavePartFileStatus = false;" in block
-    assert "bHavePartFileStatus = true;" in block
+    assert "WIN32_FILE_ATTRIBUTE_DATA fileAttributes = {};" in block
+    assert "const bool bHavePartFileStatus =" in block
+    assert "LongPathSeams::GetFileAttributesEx(GetFilePath(), GetFileExInfoStandard, &fileAttributes)" in block
+    assert "&& (fileAttributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;" in block
     assert "DebugLogWarning(_T(\"Failed to get file date of \\\"%s\\\" while loading part file \\\"%s\\\"%s\")" in block
-    assert "time_t fdate = bHavePartFileStatus ? (time_t)filestatus.m_mtime.GetTime() : (time_t)-1;" in block
+    assert "time_t fdate = bHavePartFileStatus ? (time_t)FileTimeToUnixTime(fileAttributes.ftLastWriteTime) : (time_t)-1;" in block
     assert "filestatus.m_szFullName" not in block
 
 

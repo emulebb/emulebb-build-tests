@@ -128,7 +128,7 @@ def test_background_starter_describe_reports_effective_operator_contract(
     monkeypatch.setattr(module, "REPO_ROOT", repo_root)
     set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
 
-    assert module.main(["--seconds", "3600", "--describe"]) == 0
+    assert module.main(["--seconds", "3600", "--lan-bind-addr", "192.0.2.10", "--describe"]) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["mode"] == "rust-regular-live-profile"
@@ -187,7 +187,7 @@ def test_background_starter_install_launchers_uses_persisted_profile(
     monkeypatch.setattr(module, "REPO_ROOT", repo_root)
     set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
 
-    assert module.main(["--seconds", "3600", "--install-launchers"]) == 0
+    assert module.main(["--seconds", "3600", "--lan-bind-addr", "192.0.2.10", "--install-launchers"]) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["schema"] == "emulebb.rust-soak-profile.launchers.v1"
@@ -218,6 +218,8 @@ def test_background_starter_describe_reports_diagnostics_and_fallback(
         [
             "--seconds",
             "3600",
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--describe",
             "--diagnostics",
             "--rust-fallback-server",
@@ -248,7 +250,9 @@ def test_background_starter_describe_reports_custom_rest_timeout(
     monkeypatch.setattr(module, "REPO_ROOT", repo_root)
     set_operator_env(monkeypatch, tmp_path / "workspace", output_root)
 
-    assert module.main(["--seconds", "3600", "--describe", "--rest-timeout-seconds", "300"]) == 0
+    assert module.main(
+        ["--seconds", "3600", "--lan-bind-addr", "192.0.2.10", "--describe", "--rest-timeout-seconds", "300"]
+    ) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["restTimeoutSeconds"] == 300.0
@@ -272,4 +276,4 @@ def test_background_starter_requires_inherited_cargo_target_dir(
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     with pytest.raises(RuntimeError, match="CARGO_TARGET_DIR must already point"):
-        module.main(["--seconds", "3600", "--describe"])
+        module.main(["--seconds", "3600", "--lan-bind-addr", "192.0.2.10", "--describe"])

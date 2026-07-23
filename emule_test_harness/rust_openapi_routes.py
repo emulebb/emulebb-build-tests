@@ -88,7 +88,15 @@ TRANSFER_PATCH_MUTATION_FAMILIES = ("priority", "name", "categoryId", "categoryN
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
-SHARED_FILE_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "release")
+SHARED_FILE_PRIORITY_VALUES = (
+    "auto",
+    "not-published",
+    "verylow",
+    "low",
+    "normal",
+    "high",
+    "release",
+)
 SEARCH_COMPONENT = "Search"
 SEARCH_SESSION_COMPONENT = "SearchSession"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"

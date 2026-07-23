@@ -1459,7 +1459,7 @@ components:
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -3313,7 +3313,7 @@ components:
         ),
         SchemaComponentDrift(
             component="SharedFilePriority",
-            issue="shared file priority enum must be auto, verylow, low, normal, high, release",
+            issue="shared file priority enum must be auto, not-published, verylow, low, normal, high, release",
         ),
         SchemaComponentDrift(
             component="TransferPatch.properties.priority",
@@ -3379,7 +3379,7 @@ components:
           pattern: '\S'
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -3453,7 +3453,7 @@ components:
   schemas:
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -3488,7 +3488,7 @@ components:
   schemas:
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -3526,7 +3526,7 @@ components:
   schemas:
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
@@ -3559,7 +3559,7 @@ components:
   schemas:
     SharedFilePriority:
       type: string
-      enum: [auto, verylow, low, normal, high, release]
+      enum: [auto, not-published, verylow, low, normal, high, release]
     SharedFilePatch:
       type: object
       additionalProperties: false
