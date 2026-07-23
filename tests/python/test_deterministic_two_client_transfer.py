@@ -581,6 +581,69 @@ def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -
     assert result["hash"] == fixture_hash
 
 
+def test_wait_for_emule_shared_file_link_accepts_link_variants(monkeypatch) -> None:
+    module = load_suite_module()
+    fixture_hash = "0123456789abcdef0123456789abcdef"
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 200, "json": {}})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_array",
+        lambda _result, _status: [{"name": "fixture.bin", "hash": fixture_hash}],
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_object",
+        lambda _result, _status: {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]},
+    )
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    result = module.wait_for_emule_shared_file_link(
+        "http://127.0.0.1:4711",
+        "secret",
+        file_name="fixture.bin",
+        timeout_seconds=1.0,
+    )
+
+    assert result["link"] == f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"
+
+
+def test_wait_for_emule_shared_file_link_falls_back_to_published_row(monkeypatch) -> None:
+    module = load_suite_module()
+    fixture_hash = "0123456789abcdef0123456789abcdef"
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 404, "body_text": "missing"})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_array",
+        lambda _result, _status: [
+            {
+                "name": "fixture.bin",
+                "hash": fixture_hash.upper(),
+                "publishedEd2k": True,
+                "sizeBytes": 123,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_object",
+        lambda _result, _status: (_ for _ in ()).throw(AssertionError("missing link route")),
+    )
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    result = module.wait_for_emule_shared_file_link(
+        "http://127.0.0.1:4711",
+        "secret",
+        file_name="fixture.bin",
+        timeout_seconds=1.0,
+    )
+
+    assert result["link"] == f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"
+    assert result["observations"][-1]["link_source"] == "shared_file_row"
+
+
 def test_wait_for_emule_shared_file_link_reports_list_failures(monkeypatch) -> None:
     module = load_suite_module()
 

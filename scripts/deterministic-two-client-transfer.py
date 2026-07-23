@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -236,6 +237,34 @@ def parse_ed2k_file_link(link: str) -> dict[str, object]:
     return {"name": name, "size": size, "hash": file_hash}
 
 
+def extract_ed2k_link(body: dict[str, object]) -> str | None:
+    """Returns the first eD2K file link from accepted REST response shapes."""
+
+    for key in ("link", "ed2kLink"):
+        value = body.get(key)
+        if isinstance(value, str) and value.startswith("ed2k://|file|"):
+            return value
+    for key in ("links", "ed2kLinks"):
+        value = body.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.startswith("ed2k://|file|"):
+                    return item
+    return None
+
+
+def shared_file_row_ed2k_link(row: dict[str, object], *, file_name: str, file_hash: str) -> str | None:
+    """Builds an eD2K link from a published shared-file row when the route cannot."""
+
+    if row.get("publishedEd2k") is False:
+        return None
+    size = row.get("sizeBytes", row.get("size"))
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        return None
+    quoted_name = urllib.parse.quote(file_name, safe="")
+    return f"ed2k://|file|{quoted_name}|{size}|{file_hash}|/"
+
+
 def write_fixture_file(path: Path, size_bytes: int, *, seed: int = 0xED2B2026) -> str:
     """Writes deterministic low-compressibility bytes and returns the SHA-256 proof hash."""
 
@@ -357,9 +386,29 @@ def wait_for_emule_shared_file_link(
                 api_key=api_key,
                 request_timeout_seconds=10.0,
             )
-            body = rest_smoke.require_json_object(link_result, 200)
-            link = body.get("link")
-            if isinstance(link, str) and link.startswith("ed2k://|file|"):
+            link_observation: dict[str, object] = {
+                "count": len(rows),
+                "hash": normalized_hash,
+                "observed_at": round(time.time(), 3),
+            }
+            try:
+                body = rest_smoke.require_json_object(link_result, 200)
+                link = extract_ed2k_link(body)
+                if link is None:
+                    link_observation["link_error"] = "missing_ed2k_link"
+                    link_observation["link_body"] = body
+                else:
+                    link_observation["link_source"] = "route"
+            except Exception as exc:
+                link = None
+                link_observation["link_error"] = type(exc).__name__
+                link_observation["link_result"] = rest_smoke.compact_http_result(link_result)
+            if link is None:
+                link = shared_file_row_ed2k_link(row, file_name=file_name, file_hash=normalized_hash)
+                if link is not None:
+                    link_observation["link_source"] = "shared_file_row"
+            observations.append(link_observation)
+            if link is not None:
                 return {
                     "file": dict(row),
                     "hash": normalized_hash,
