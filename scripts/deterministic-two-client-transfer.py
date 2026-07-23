@@ -265,6 +265,37 @@ def shared_file_row_ed2k_link(row: dict[str, object], *, file_name: str, file_ha
     return f"ed2k://|file|{quoted_name}|{size}|{file_hash}|/"
 
 
+def response_payload(result: dict[str, object], expected_status: int) -> object:
+    """Returns a REST payload without requiring harness-wide smoke assertions."""
+
+    if int(result.get("status", 0)) != expected_status:
+        raise AssertionError(rest_smoke.compact_http_result(result))
+    raw = result.get("raw_json")
+    if isinstance(raw, dict) and "data" in raw and "meta" in raw:
+        return raw["data"]
+    return result.get("json")
+
+
+def shared_file_rows_from_result(result: dict[str, object]) -> list[object]:
+    """Extracts shared-file rows from either a raw array or paged envelope."""
+
+    payload = response_payload(result, 200)
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return list(payload["items"])
+    if isinstance(payload, list):
+        return list(payload)
+    raise AssertionError(rest_smoke.compact_http_result(result))
+
+
+def ed2k_link_body_from_result(result: dict[str, object]) -> dict[str, object]:
+    """Extracts an eD2K link route object from a successful REST response."""
+
+    payload = response_payload(result, 200)
+    if isinstance(payload, dict):
+        return payload
+    raise AssertionError(rest_smoke.compact_http_result(result))
+
+
 def write_fixture_file(path: Path, size_bytes: int, *, seed: int = 0xED2B2026) -> str:
     """Writes deterministic low-compressibility bytes and returns the SHA-256 proof hash."""
 
@@ -362,7 +393,7 @@ def wait_for_emule_shared_file_link(
             request_timeout_seconds=10.0,
         )
         try:
-            rows = rest_smoke.require_json_array(rows_result, 200)
+            rows = shared_file_rows_from_result(rows_result)
         except Exception as exc:
             observations.append(
                 {
@@ -392,7 +423,7 @@ def wait_for_emule_shared_file_link(
                 "observed_at": round(time.time(), 3),
             }
             try:
-                body = rest_smoke.require_json_object(link_result, 200)
+                body = ed2k_link_body_from_result(link_result)
                 link = extract_ed2k_link(body)
                 if link is None:
                     link_observation["link_error"] = "missing_ed2k_link"

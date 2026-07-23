@@ -554,19 +554,11 @@ def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -
 
     def fake_http_request(_base_url, path, **_kwargs):
         calls.append(path)
-        return {"status": 200, "json": {}}
+        if path == "/api/v1/shared-files?offset=0&limit=100":
+            return {"status": 200, "json": {"items": [{"name": "fixture.bin", "hash": fixture_hash.upper()}]}}
+        return {"status": 200, "json": {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_array",
-        lambda _result, _status: [{"name": "fixture.bin", "hash": fixture_hash.upper()}],
-    )
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_object",
-        lambda _result, _status: {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"},
-    )
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
 
     result = module.wait_for_emule_shared_file_link(
@@ -585,17 +577,12 @@ def test_wait_for_emule_shared_file_link_accepts_link_variants(monkeypatch) -> N
     module = load_suite_module()
     fixture_hash = "0123456789abcdef0123456789abcdef"
 
-    monkeypatch.setattr(module.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 200, "json": {}})
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_array",
-        lambda _result, _status: [{"name": "fixture.bin", "hash": fixture_hash}],
-    )
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_object",
-        lambda _result, _status: {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]},
-    )
+    def fake_http_request(_base_url, path, **_kwargs):
+        if path == "/api/v1/shared-files?offset=0&limit=100":
+            return {"status": 200, "json": [{"name": "fixture.bin", "hash": fixture_hash}]}
+        return {"status": 200, "json": {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
 
     result = module.wait_for_emule_shared_file_link(
@@ -612,24 +599,27 @@ def test_wait_for_emule_shared_file_link_falls_back_to_published_row(monkeypatch
     module = load_suite_module()
     fixture_hash = "0123456789abcdef0123456789abcdef"
 
-    monkeypatch.setattr(module.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 404, "body_text": "missing"})
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_array",
-        lambda _result, _status: [
-            {
-                "name": "fixture.bin",
-                "hash": fixture_hash.upper(),
-                "publishedEd2k": True,
-                "sizeBytes": 123,
+    def fake_http_request(_base_url, path, **_kwargs):
+        if path == "/api/v1/shared-files?offset=0&limit=100":
+            return {
+                "status": 200,
+                "raw_json": {
+                    "data": {
+                        "items": [
+                            {
+                                "name": "fixture.bin",
+                                "hash": fixture_hash.upper(),
+                                "publishedEd2k": True,
+                                "sizeBytes": 123,
+                            }
+                        ]
+                    },
+                    "meta": {"apiVersion": "v1"},
+                },
             }
-        ],
-    )
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "require_json_object",
-        lambda _result, _status: (_ for _ in ()).throw(AssertionError("missing link route")),
-    )
+        return {"status": 404, "body_text": "missing"}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
 
