@@ -68,6 +68,44 @@ def test_nat_backend_order_requires_attempts() -> None:
         module.assert_upnp_backend_order([{"message": "eMuleBB 0.7.3 x64 ready"}])
 
 
+def test_wait_for_server_connected_timeout_reports_observations(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": {
+                "connected": False,
+                "connecting": True,
+                "currentServer": None,
+                "lowId": None,
+                "serverCount": 1,
+            },
+            "raw_json": {
+                "data": {
+                    "connected": False,
+                    "connecting": True,
+                    "currentServer": None,
+                    "lowId": None,
+                    "serverCount": 1,
+                },
+                "meta": {"apiVersion": "v1"},
+            },
+        },
+    )
+
+    def fail_wait(predicate, **_kwargs):
+        predicate()
+        raise RuntimeError("Timed out waiting for server connected state.")
+
+    monkeypatch.setattr(module, "wait_for", fail_wait)
+
+    with pytest.raises(RuntimeError, match="Observations: .*'connecting': True"):
+        module.wait_for_server_connected("http://127.0.0.1:4711", "key", 1.0)
+
+
 def test_nat_backend_order_reports_missing_bind_interface_as_live_network_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
 

@@ -5981,6 +5981,13 @@ def wait_for_server_activity(base_url: str, api_key: str, timeout_seconds: float
     def resolve():
         result = http_request(base_url, "/api/v1/status", api_key=api_key)
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
+            observations.append(
+                {
+                    "error": "unexpected_status_response",
+                    "status": int(result.get("status", 0)),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
             return None
         payload = get_server_status_payload(require_json_object(result, 200))
         snapshot = compact_server_status(payload)
@@ -6033,7 +6040,10 @@ def wait_for_server_connected(
             }
         return None
 
-    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description="server connected state")
+    try:
+        return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description="server connected state")
+    except RuntimeError as exc:
+        raise RuntimeError(f"Timed out waiting for server connected state. Observations: {observations[-30:]!r}") from exc
 
 
 def observe_server_connect_attempt(

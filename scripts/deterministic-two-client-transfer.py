@@ -196,10 +196,11 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
 
 
 def write_server_met(path: Path, *, address: str, port: int, name: str) -> None:
-    """Writes a minimal eMule-compatible `server.met` containing one dynamic-IP server."""
+    """Writes a minimal eMule-compatible `server.met` containing one local server."""
 
     if not 0 < port <= 65535:
         raise ValueError("Server port must be in the range 1..65535.")
+    ip_bytes = ipaddress.IPv4Address(address).packed
     path.parent.mkdir(parents=True, exist_ok=True)
     tags = [
         build_old_ed2k_string_tag(ST_SERVERNAME, name),
@@ -208,7 +209,8 @@ def write_server_met(path: Path, *, address: str, port: int, name: str) -> None:
     ]
     payload = bytearray()
     payload.extend(struct.pack("<BI", SERVER_MET_HEADER, 1))
-    payload.extend(struct.pack("<IHI", 0, port, len(tags)))
+    payload.extend(ip_bytes)
+    payload.extend(struct.pack("<HI", port, len(tags)))
     for tag in tags:
         payload.extend(tag)
     path.write_bytes(bytes(payload))

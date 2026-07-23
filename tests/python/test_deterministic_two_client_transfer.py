@@ -311,7 +311,7 @@ def test_resolve_lan_p2p_bind_address_honors_explicit_address(monkeypatch) -> No
     ) == "192.0.2.44"
 
 
-def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> None:
+def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
 
@@ -319,8 +319,8 @@ def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> No
 
     data = server_met.read_bytes()
     assert data[:5] == struct.pack("<BI", module.SERVER_MET_HEADER, 1)
-    ip, port, tag_count = struct.unpack("<IHI", data[5:15])
-    assert ip == 0
+    assert data[5:9] == bytes([10, 44, 55, 66])
+    port, tag_count = struct.unpack("<HI", data[9:15])
     assert port == 4711
     assert tag_count == 3
     assert b"local-ed2k" in data
