@@ -771,6 +771,7 @@ def test_public_search_download_proof_retries_when_sources_do_not_move_bytes(mon
 def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "report.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,
@@ -807,6 +808,7 @@ def test_public_search_download_cli_fails_when_report_is_not_ok(
 ) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "report.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,
@@ -908,6 +910,7 @@ def test_public_transfer_debug_summary_cli_writes_json_output(
 ) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "transfer-debug.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,
@@ -2357,6 +2360,7 @@ def test_rust_early_connect_proof_times_out_with_missing_checks(monkeypatch) -> 
 def test_early_connect_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "reports" / "early.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,
@@ -2386,6 +2390,7 @@ def test_early_connect_cli_fails_when_report_is_not_ok(
 ) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "early.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,
@@ -2548,6 +2553,7 @@ def test_regular_log_proof_fails_when_required_category_missing(monkeypatch, tmp
 def test_regular_log_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     control = _load_rust_soak_control()
     report = tmp_path / "reports" / "regular-log.json"
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     monkeypatch.setattr(
         control,

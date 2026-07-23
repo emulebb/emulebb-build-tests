@@ -32,6 +32,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: emulebb/emulebb
+          ref: main
           path: workspaces/workspace/app/emulebb-main
 
       - name: Checkout tooling docs
@@ -71,8 +72,11 @@ jobs:
         shell: pwsh
         run: |
           $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $env:EMULEBB_WORKSPACE_ROOT '..\emulebb-output'))
+          $cargoTargetDir = [System.IO.Path]::GetFullPath((Join-Path $outputRoot 'builds\rust\target'))
           New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path $cargoTargetDir | Out-Null
           "EMULEBB_WORKSPACE_OUTPUT_ROOT=$outputRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_TARGET_DIR=$cargoTargetDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install harness dependencies
         working-directory: repos/emulebb-build-tests

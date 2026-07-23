@@ -170,6 +170,8 @@ def test_all_reusable_campaign_local_modes_plan_declared_local_suites(tmp_path: 
             scenario.local_profile,
             "--test-network",
             scenario.local_test_network,
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--admin-volume-fixtures",
             "--plan-only",
             "--godzilla-stage",
