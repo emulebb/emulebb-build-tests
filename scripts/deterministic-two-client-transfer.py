@@ -821,11 +821,11 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
     if int(connect_result.get("status", 0)) != 200:
         raise RuntimeError(f"Connecting local ED2K server failed: {rest_smoke.compact_http_result(connect_result)!r}")
     rest_smoke.require_json_object(connect_result, 200)
-    connected = rest_smoke.wait_for_server_connected(
+    connected = wait_for_emule_server_connected(
         base_url,
         api_key,
-        timeout_seconds,
         expected_server=server,
+        timeout_seconds=timeout_seconds,
     )
     return {
         "server": server,
@@ -834,6 +834,74 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
         "connect": rest_smoke.compact_http_result(connect_result),
         "connected": connected,
     }
+
+
+def wait_for_emule_server_connected(
+    base_url: str,
+    api_key: str,
+    *,
+    expected_server: dict[str, object],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for the deterministic ED2K server while preserving poll observations."""
+
+    observations: list[dict[str, object]] = []
+    expected_address = str(expected_server.get("address") or "").lower()
+    expected_port = int(expected_server.get("port") or 0)
+
+    def resolve():
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/status",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        try:
+            payload = response_payload(result, 200)
+        except Exception as exc:
+            observations.append(
+                {
+                    "error": type(exc).__name__,
+                    "result": rest_smoke.compact_http_result(result),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            return None
+        if not isinstance(payload, dict):
+            observations.append(
+                {
+                    "error": "non_object_payload",
+                    "result": rest_smoke.compact_http_result(result),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            return None
+
+        status_payload = rest_smoke.get_server_status_payload(payload)
+        snapshot = rest_smoke.compact_server_status(status_payload)
+        snapshot["observed_at"] = round(time.time(), 3)
+        observations.append(snapshot)
+
+        current_server = status_payload.get("currentServer")
+        matches_expected = False
+        if isinstance(current_server, dict):
+            matches_expected = (
+                str(current_server.get("address") or "").lower() == expected_address
+                and int(current_server.get("port") or 0) == expected_port
+            )
+        if status_payload.get("connected") and matches_expected:
+            return {
+                "status": rest_smoke.compact_http_result(result),
+                "observations": observations[-30:],
+            }
+        return None
+
+    try:
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, "deterministic ED2K server connected state")
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Timed out waiting for deterministic ED2K server connection. Observations: {observations[-30:]!r}"
+        ) from exc
 
 
 def add_transfer(base_url: str, api_key: str, link: str, transfer_hash: str) -> dict[str, object]:

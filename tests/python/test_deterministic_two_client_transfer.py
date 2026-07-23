@@ -559,7 +559,10 @@ def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -
         return {"status": 200, "json": {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    def fake_wait_for(resolve, *_args):
+        return resolve() or resolve()
+
+    monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
 
     result = module.wait_for_emule_shared_file_link(
         "http://127.0.0.1:4711",
@@ -583,7 +586,10 @@ def test_wait_for_emule_shared_file_link_accepts_link_variants(monkeypatch) -> N
         return {"status": 200, "json": {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    def fake_wait_for(resolve, *_args):
+        return resolve() or resolve()
+
+    monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
 
     result = module.wait_for_emule_shared_file_link(
         "http://127.0.0.1:4711",
@@ -1084,16 +1090,20 @@ def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
         calls.append((method, path))
         if path == "/api/v1/servers":
             return {"status": 200, "json": {"items": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}}
+        if path == "/api/v1/status":
+            return {
+                "status": 200,
+                "json": {
+                    "connected": True,
+                    "currentServer": {"address": "10.1.2.3", "port": 4661, "name": "local"},
+                },
+            }
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
     monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(
-        module.rest_smoke,
-        "wait_for_server_connected",
-        lambda *_args, **_kwargs: {"connected": True},
-    )
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
 
     result = module.add_and_connect_server(
         "http://127.0.0.1:4711",
@@ -1121,12 +1131,23 @@ def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch)
             raise ConnectionAbortedError(10053, "socket aborted")
         if path == "/api/v1/servers":
             return {"status": 200, "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}
+        if path == "/api/v1/status":
+            return {
+                "status": 200,
+                "json": {
+                    "connected": True,
+                    "currentServer": {"address": "10.1.2.3", "port": 4661, "name": "local"},
+                },
+            }
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
     monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(module.rest_smoke, "wait_for_server_connected", lambda *_args, **_kwargs: {"connected": True})
+    def fake_wait_for(resolve, *_args):
+        return resolve() or resolve()
+
+    monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
 
     result = module.add_and_connect_server(
         "http://127.0.0.1:4711",
