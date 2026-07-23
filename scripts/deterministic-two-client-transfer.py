@@ -326,8 +326,23 @@ def wait_for_emule_shared_file_link(
     observations: list[dict[str, object]] = []
 
     def resolve():
-        rows_result = rest_smoke.http_request(base_url, SHARED_FILES_ROUTE, api_key=api_key, request_timeout_seconds=10.0)
-        rows = rest_smoke.require_json_array(rows_result, 200)
+        rows_result = rest_smoke.http_request(
+            base_url,
+            f"{SHARED_FILES_ROUTE}?offset=0&limit=100",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        try:
+            rows = rest_smoke.require_json_array(rows_result, 200)
+        except Exception as exc:
+            observations.append(
+                {
+                    "error": type(exc).__name__,
+                    "result": rest_smoke.compact_http_result(rows_result),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            raise
         observations.append({"count": len(rows), "observed_at": round(time.time(), 3)})
         for row in rows:
             if not isinstance(row, dict) or row.get("name") != file_name:

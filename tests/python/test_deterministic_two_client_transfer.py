@@ -547,6 +547,69 @@ def test_parse_exported_ed2k_file_link() -> None:
     }
 
 
+def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[str] = []
+    fixture_hash = "0123456789abcdef0123456789abcdef"
+
+    def fake_http_request(_base_url, path, **_kwargs):
+        calls.append(path)
+        return {"status": 200, "json": {}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_array",
+        lambda _result, _status: [{"name": "fixture.bin", "hash": fixture_hash.upper()}],
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_object",
+        lambda _result, _status: {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"},
+    )
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    result = module.wait_for_emule_shared_file_link(
+        "http://127.0.0.1:4711",
+        "secret",
+        file_name="fixture.bin",
+        timeout_seconds=1.0,
+    )
+
+    assert calls[0] == "/api/v1/shared-files?offset=0&limit=100"
+    assert calls[1] == f"/api/v1/shared-files/{fixture_hash}/ed2k-link"
+    assert result["hash"] == fixture_hash
+
+
+def test_wait_for_emule_shared_file_link_reports_list_failures(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "http_request",
+        lambda *_args, **_kwargs: {"status": 503, "body_text": "not ready"},
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_array",
+        lambda _result, _status: (_ for _ in ()).throw(AssertionError("not an array")),
+    )
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        module.wait_for_emule_shared_file_link(
+            "http://127.0.0.1:4711",
+            "secret",
+            file_name="fixture.bin",
+            timeout_seconds=1.0,
+        )
+
+    message = str(exc_info.value)
+    assert "Timed out waiting for eMuleBB shared link" in message
+    assert "'status': 503" in message
+
+
 def test_write_fixture_file_is_deterministic(tmp_path: Path) -> None:
     module = load_suite_module()
     first = tmp_path / "first.bin"
