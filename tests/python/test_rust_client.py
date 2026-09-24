@@ -222,7 +222,7 @@ def test_write_rust_profile_supports_interface_only_binding(tmp_path: Path) -> N
     assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
 
 
-def test_write_rust_profile_supports_direct_wildcard_binding(tmp_path: Path) -> None:
+def test_write_rust_profile_supports_direct_resolved_binding(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
     rust_client.write_rust_profile(
@@ -231,7 +231,7 @@ def test_write_rust_profile_supports_direct_wildcard_binding(tmp_path: Path) -> 
         rest_addr="127.0.0.1",
         rest_port=4731,
         api_key="key",
-        p2p_bind_ip="0.0.0.0",
+        p2p_bind_ip="172.30.0.2",
         ed2k_port=41662,
         kad_port=41672,
         server_endpoint="192.0.2.20:4661",
@@ -239,7 +239,7 @@ def test_write_rust_profile_supports_direct_wildcard_binding(tmp_path: Path) -> 
         nat_enabled=False,
     )
 
-    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "0.0.0.0"
+    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "172.30.0.2"
     assert setting_value(profile_dir, "nat", "enabled") is False
     assert setting_value(profile_dir, "vpn.guard", "enabled") is False
 

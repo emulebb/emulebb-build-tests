@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +57,18 @@ def require_environment() -> tuple[Path, Path]:
     return workspace_root, output_root
 
 
+def resolve_direct_bind_ip() -> str:
+    """Return the IPv4 address selected by the host route to the ED2K server."""
+
+    host, _, raw_port = OPERATOR_SERVER.rpartition(":")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((host, int(raw_port)))
+        address = str(probe.getsockname()[0])
+    if not address or address == "0.0.0.0" or address.startswith("127."):
+        raise RuntimeError("direct route did not resolve to a non-loopback IPv4 address.")
+    return address
+
+
 def load_safe_transfer(inputs_path: Path) -> dict[str, Any]:
     payload = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
     rows = payload.get("auto_browse", {}).get("direct_bootstrap_transfers", [])
@@ -92,9 +106,25 @@ def kad_status(base_url: str) -> dict[str, Any]:
 def webui_ready(base_url: str) -> bool:
     try:
         with urllib.request.urlopen(f"{base_url}/", timeout=5.0) as response:
-            return response.status == 200 and b"<div id=\"root\"></div>" in response.read()
+            return response.status == 200 and b'<div id="app"></div>' in response.read()
     except OSError:
         return False
+
+
+def post_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-API-Key": API_KEY},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"POST {path} returned HTTP {error.code}: {detail}") from error
+    return payload if isinstance(payload, dict) else {}
 
 
 def add_allowlisted_transfer(base_url: str, row: dict[str, Any]) -> None:
@@ -151,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"staged Linux daemon is missing: {executable}")
     safe_transfer = load_safe_transfer(Path(args.inputs).resolve())
     bootstrap_nodes = fetch_bootstrap_endpoints(DEFAULT_NODES_DAT_URL, limit=args.bootstrap_limit)
+    direct_bind_ip = resolve_direct_bind_ip()
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_root = output_root / "reports" / "rust-linux-direct-smoke" / run_id
@@ -165,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         rest_addr=REST_ADDR,
         rest_port=REST_PORT,
         api_key=API_KEY,
-        p2p_bind_ip="0.0.0.0",
+        p2p_bind_ip=direct_bind_ip,
         ed2k_port=ED2K_PORT,
         kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,
@@ -195,17 +226,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         wait_until("Rust REST ready", 60.0, lambda: status(base_url) or None)
         report["webuiReady"] = webui_ready(base_url)
-        retry_http_json("kad start", 2, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
         retry_http_json(
-            "server connect",
+            "enable networks",
             2,
             base_url,
-            f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
+            "/api/v1/app/settings",
             api_key=API_KEY,
-            method="POST",
-            body={},
-            timeout_seconds=20.0,
+            method="PATCH",
+            body={"core": {"networkEd2k": True, "networkKademlia": True, "autoConnect": False, "reconnect": False}},
         )
+        retry_http_json("kad start", 2, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
+        post_json(base_url, "/api/v1/servers/operations/connect", {})
         def connected_stats() -> dict[str, Any] | None:
             current = status(base_url)
             return current if current.get("ed2kConnected") else None
