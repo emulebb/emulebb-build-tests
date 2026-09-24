@@ -267,6 +267,17 @@ def main(argv: list[str] | None = None) -> int:
             report["transfer"] = snapshot
         if args.observe_seconds > 0:
             time.sleep(args.observe_seconds)
+        final_stats = status(base_url)
+        final_kad = kad_status(base_url)
+        report["ed2k"] = {
+            "connected": bool(final_stats.get("ed2kConnected")),
+            "highId": bool(final_stats.get("ed2kHighId")),
+        }
+        report["kad"] = {
+            "running": bool(final_kad.get("running")),
+            "connected": bool(final_kad.get("connected")),
+            "contactCount": int(final_kad.get("contactCount") or 0),
+        }
         report["status"] = "passed" if (
             report["webuiReady"] and report["ed2k"]["connected"] and report["kad"]["running"] and report["kad"]["contactCount"] > 0
         ) else "failed"
