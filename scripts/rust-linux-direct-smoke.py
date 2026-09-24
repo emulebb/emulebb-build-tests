@@ -165,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         rest_addr=REST_ADDR,
         rest_port=REST_PORT,
         api_key=API_KEY,
+        p2p_bind_ip="0.0.0.0",
         ed2k_port=ED2K_PORT,
         kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,

@@ -222,7 +222,7 @@ def test_write_rust_profile_supports_interface_only_binding(tmp_path: Path) -> N
     assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
 
 
-def test_write_rust_profile_supports_direct_network_binding(tmp_path: Path) -> None:
+def test_write_rust_profile_supports_direct_wildcard_binding(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
     rust_client.write_rust_profile(
@@ -231,6 +231,7 @@ def test_write_rust_profile_supports_direct_network_binding(tmp_path: Path) -> N
         rest_addr="127.0.0.1",
         rest_port=4731,
         api_key="key",
+        p2p_bind_ip="0.0.0.0",
         ed2k_port=41662,
         kad_port=41672,
         server_endpoint="192.0.2.20:4661",
@@ -238,11 +239,7 @@ def test_write_rust_profile_supports_direct_network_binding(tmp_path: Path) -> N
         nat_enabled=False,
     )
 
-    with sqlite3.connect(metadata_path(profile_dir)) as conn:
-        daemon_rows = conn.execute(
-            "SELECT key FROM settings WHERE section = 'daemon' AND key IN ('p2pBindIp', 'p2pBindInterface')"
-        ).fetchall()
-    assert daemon_rows == []
+    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "0.0.0.0"
     assert setting_value(profile_dir, "nat", "enabled") is False
     assert setting_value(profile_dir, "vpn.guard", "enabled") is False
 
