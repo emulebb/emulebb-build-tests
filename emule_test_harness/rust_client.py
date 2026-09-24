@@ -108,8 +108,8 @@ def write_rust_profile(
 
     ed2k_settings: dict[str, object] = {}
     if server_endpoint is not None:
-        if (p2p_bind_ip is None and p2p_bind_interface is None) or ed2k_port is None or kad_port is None:
-            raise ValueError("ED2K Rust profiles require p2p_bind_ip and/or p2p_bind_interface, ed2k_port, and kad_port.")
+        if ed2k_port is None or kad_port is None:
+            raise ValueError("ED2K Rust profiles require ed2k_port and kad_port.")
     if server_entry is not None:
         if server_endpoint is None:
             raise ValueError("ED2K Rust serverEntry requires server_endpoint.")
