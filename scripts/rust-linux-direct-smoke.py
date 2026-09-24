@@ -40,6 +40,7 @@ REST_ADDR = "127.0.0.1"
 REST_PORT = 4731
 ED2K_PORT = 41662
 KAD_PORT = 41672
+CONNECT_COOLDOWN_SECONDS = 300.0
 
 
 def require_environment() -> tuple[Path, Path]:
@@ -67,6 +68,20 @@ def resolve_direct_bind_ip() -> str:
     if not address or address == "0.0.0.0" or address.startswith("127."):
         raise RuntimeError("direct route did not resolve to a non-loopback IPv4 address.")
     return address
+
+
+def enforce_connect_cooldown(marker: Path) -> None:
+    """Keep public ED2K login attempts at least five minutes apart."""
+
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        last_attempt = float(marker.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        last_attempt = 0.0
+    wait_seconds = CONNECT_COOLDOWN_SECONDS - (time.time() - last_attempt)
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+    marker.write_text(str(time.time()), encoding="ascii", newline="\n")
 
 
 def load_safe_transfer(inputs_path: Path) -> dict[str, Any]:
@@ -236,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             body={"core": {"networkEd2k": True, "networkKademlia": True, "autoConnect": False, "reconnect": False}},
         )
         retry_http_json("kad start", 2, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
+        enforce_connect_cooldown(output_root / "live-wire" / ".last-server-connect")
         post_json(base_url, "/api/v1/servers/operations/connect", {})
         def connected_stats() -> dict[str, Any] | None:
             current = status(base_url)
