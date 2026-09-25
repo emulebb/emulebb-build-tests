@@ -466,6 +466,15 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info.get("name") or ""))
 
 
+def completed_incoming_path(incoming_dir: Path, link_info: dict[str, object]) -> Path:
+    """Resolve the on-disk name, not the URL-escaped link field."""
+
+    name = decoded_ed2k_link_name(link_info)
+    if not name or Path(name).name != name:
+        raise ValueError("eD2K link name is not a safe local filename")
+    return incoming_dir / name
+
+
 def write_rust_shared_tree_fixture(root: Path, size_bytes: int) -> dict[str, object]:
     """Writes a throw-away recursive shared tree fixture for Rust upload proof."""
 
@@ -915,7 +924,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.server_connect_timeout_seconds,
         )
         report["checks"]["emulebb_transfer_add"] = dtt.add_transfer(emulebb_base_url, args.api_key, link, transfer_hash)
-        completed_path = Path(emulebb["incoming_dir"]) / str(link_info["name"])
+        completed_path = completed_incoming_path(Path(emulebb["incoming_dir"]), link_info)
         report["checks"]["emulebb_completed_file"] = dtt.wait_for_completed_file(
             completed_path,
             expected_size=int(link_info["size"]),

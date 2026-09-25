@@ -206,6 +206,18 @@ def test_decoded_ed2k_link_name_handles_url_escaped_unicode() -> None:
     assert name == "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin"
 
 
+def test_completed_incoming_path_uses_decoded_unicode_name(tmp_path: Path) -> None:
+    module = load_suite_module()
+
+    path = module.completed_incoming_path(
+        tmp_path, {"name": "emulebb-rust-shared-tree-Unicode-%C3%A9-%E6%BC%A2.bin"}
+    )
+
+    assert path == tmp_path / "emulebb-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
+    with pytest.raises(ValueError, match="safe local filename"):
+        module.completed_incoming_path(tmp_path, {"name": "..%2Fescape.bin"})
+
+
 def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> None:
     module = load_suite_module()
     shared_tree_name = "emulebb-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
