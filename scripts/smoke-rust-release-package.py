@@ -85,7 +85,9 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
             assets = re.findall(r'(?:src|href)="(\.\/assets\/[^\"]+)"', html)
             if not assets or not all(_request(base_url + "/" + asset.removeprefix("./")) for asset in assets):
                 raise RuntimeError("packaged WebUI assets are missing")
-            if not isinstance(status, dict) or "ed2kConnected" not in status:
+            data = status.get("data", status) if isinstance(status, dict) else None
+            stats = data.get("stats") if isinstance(data, dict) else None
+            if not isinstance(stats, dict) or "ed2kConnected" not in stats:
                 raise RuntimeError("packaged REST status is invalid")
             if not (profile / "emulebb-rust-metadata.db").exists():
                 raise RuntimeError("packaged daemon did not create its profile database")
