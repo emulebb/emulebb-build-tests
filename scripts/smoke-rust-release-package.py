@@ -100,6 +100,9 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+            if os.name == "nt":
+                # The Windows loader can briefly retain the just-stopped EXE.
+                time.sleep(1)
 
 
 def _smoke_windows(asset: Path, temp_root: Path) -> dict[str, object]:
