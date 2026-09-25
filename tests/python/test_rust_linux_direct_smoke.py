@@ -129,6 +129,23 @@ def test_beta_completed_probe_requires_delivered_verified_bytes(tmp_path: Path) 
         module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"})
 
 
+def test_beta_completed_probe_accepts_sanitized_delivery_name(tmp_path: Path) -> None:
+    module = load_module()
+    delivered = tmp_path / "Linux Guide.pdf"
+    delivered.write_bytes(b"safe fixture\n")
+    row = {
+        "name": "[Linux] Guide.pdf",
+        "hash": "a" * 32,
+        "suffix": ".pdf",
+        "size": delivered.stat().st_size,
+        "sha256": module.sha256_file(delivered),
+    }
+    probe = {"hash": row["hash"], "completedBytes": row["size"]}
+
+    assert module.verified_delivered_path(tmp_path, row) == delivered
+    assert module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"}) == {"pdf": True}
+
+
 def test_packet_dump_monitor_counts_only_complete_fresh_records(tmp_path: Path) -> None:
     module = load_module()
     process = SimpleNamespace(poll=lambda: None)

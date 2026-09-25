@@ -163,11 +163,8 @@ def verify_completed_probe_types(
         snapshot = snapshots.get(str(row["hash"]).lower(), {})
         if int(snapshot.get("completedBytes") or 0) != int(row["size"]):
             continue
-        delivered = incoming_dir / str(row["name"])
-        if not delivered.is_file() or delivered.stat().st_size != int(row["size"]):
-            raise RuntimeError(f"Completed allowlisted .{suffix} probe was not delivered intact.")
-        if sha256_file(delivered) != str(row["sha256"]):
-            raise RuntimeError(f"Completed allowlisted .{suffix} probe failed SHA-256 verification.")
+        if verified_delivered_path(incoming_dir, row) is None:
+            raise RuntimeError(f"Completed allowlisted .{suffix} probe was not delivered with its expected size/SHA-256.")
         completed[suffix] = True
     return completed
 
@@ -180,6 +177,20 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def verified_delivered_path(incoming_dir: Path, row: dict[str, Any]) -> Path | None:
+    """Find exact delivered bytes even when the client sanitizes the link name."""
+
+    preferred = incoming_dir / str(row["name"])
+    candidates = [preferred]
+    candidates.extend(path for path in incoming_dir.iterdir() if path != preferred)
+    for path in candidates:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size"]):
+            continue
+        if sha256_file(path) == str(row["sha256"]):
+            return path
+    return None
 
 
 def wsl_path(path: Path, distribution: str | None) -> str:
@@ -352,8 +363,10 @@ def completed_transfer_evidence(
             return {"hash": row["hash"], "suffix": row["suffix"], "status": "inconclusive", "reason": "no_source"}
         raise RuntimeError(f"Timed out waiting for allowlisted {row['suffix']} transfer completion: {snapshot}")
 
-    completed_path = incoming_dir / str(row["name"])
-    wait_until("completed transfer delivery", 30.0, lambda: completed_path if completed_path.is_file() else None)
+    completed_path = wait_until(
+        "completed transfer delivery", 30.0,
+        lambda: verified_delivered_path(incoming_dir, row),
+    )
     actual_size = completed_path.stat().st_size
     actual_sha256 = sha256_file(completed_path)
     if actual_size != int(row["size"]) or actual_sha256 != str(row["sha256"]):
@@ -366,6 +379,7 @@ def completed_transfer_evidence(
         "sources": snapshot.get("sources"),
         "sizeVerified": True,
         "sha256Verified": True,
+        "deliveredName": completed_path.name,
         "status": "passed",
     }
 
