@@ -97,6 +97,38 @@ def test_sha256_file_hashes_completed_payload(tmp_path: Path) -> None:
     assert module.sha256_file(payload) == "aec7add6c399ba7576af4cf2a888838cf159bd90876b431f3de1ba3e032efd90"
 
 
+def test_beta_probe_selection_reserves_required_iso_and_pdf() -> None:
+    module = load_module()
+    rows = [
+        {"hash": str(index) * 32, "suffix": ".pdf"} for index in range(1, 5)
+    ] + [{"hash": "a" * 32, "suffix": ".iso"}]
+
+    selected = module.select_probe_rows(rows, 3, {"pdf", "iso"})
+
+    assert {row["suffix"] for row in selected} == {".pdf", ".iso"}
+    assert len(selected) == 3
+
+
+def test_beta_completed_probe_requires_delivered_verified_bytes(tmp_path: Path) -> None:
+    module = load_module()
+    payload = b"safe fixture\n"
+    delivered = tmp_path / "linux-manual.pdf"
+    delivered.write_bytes(payload)
+    row = {
+        "name": delivered.name,
+        "hash": "a" * 32,
+        "suffix": ".pdf",
+        "size": len(payload),
+        "sha256": module.sha256_file(delivered),
+    }
+    probe = {"hash": row["hash"], "completedBytes": len(payload)}
+
+    assert module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"}) == {"pdf": True}
+    delivered.write_bytes(b"bad  fixture\n")
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"})
+
+
 def test_packet_dump_monitor_counts_only_complete_fresh_records(tmp_path: Path) -> None:
     module = load_module()
     process = SimpleNamespace(poll=lambda: None)

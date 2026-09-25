@@ -126,6 +126,52 @@ def load_safe_transfers(inputs_path: Path, required_suffixes: set[str] | None = 
     return sorted(transfers, key=lambda row: (row["suffix"] != ".pdf", str(row["name"]).lower()))
 
 
+def select_probe_rows(rows: list[dict[str, Any]], count: int, required_types: set[str]) -> list[dict[str, Any]]:
+    """Prioritize one candidate of each required type before filling a bounded probe set."""
+
+    if not count:
+        return []
+    if count < len(required_types):
+        raise RuntimeError("--probe-count is smaller than the number of required completed types.")
+    selected: list[dict[str, Any]] = []
+    for suffix in sorted(required_types):
+        selected.append(next(row for row in rows if row["suffix"] == f".{suffix}"))
+    selected_hashes = {str(row["hash"]) for row in selected}
+    for row in rows:
+        if len(selected) >= count:
+            break
+        if str(row["hash"]) not in selected_hashes:
+            selected.append(row)
+            selected_hashes.add(str(row["hash"]))
+    return selected
+
+
+def verify_completed_probe_types(
+    probes: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    incoming_dir: Path,
+    required_types: set[str],
+) -> dict[str, bool]:
+    """Checks downloaded bytes and SHA-256 for each required safe file type."""
+
+    snapshots = {str(probe["hash"]).lower(): probe for probe in probes}
+    completed = {suffix: False for suffix in required_types}
+    for row in rows:
+        suffix = str(row["suffix"]).lstrip(".")
+        if suffix not in required_types:
+            continue
+        snapshot = snapshots.get(str(row["hash"]).lower(), {})
+        if int(snapshot.get("completedBytes") or 0) != int(row["size"]):
+            continue
+        delivered = incoming_dir / str(row["name"])
+        if not delivered.is_file() or delivered.stat().st_size != int(row["size"]):
+            raise RuntimeError(f"Completed allowlisted .{suffix} probe was not delivered intact.")
+        if sha256_file(delivered) != str(row["sha256"]):
+            raise RuntimeError(f"Completed allowlisted .{suffix} probe failed SHA-256 verification.")
+        completed[suffix] = True
+    return completed
+
+
 def sha256_file(path: Path) -> str:
     """Returns the SHA-256 digest of one completed allowlisted download."""
 
@@ -205,6 +251,12 @@ def run_in_wsl(args: argparse.Namespace) -> int:
         command.append("--enable-upnp")
     if args.complete_transfers:
         command.append("--complete-transfers")
+    if args.require_diagnostics:
+        command.append("--require-diagnostics")
+    if args.require_stock_bytes:
+        command.append("--require-stock-bytes")
+    for suffix in args.require_completed_type:
+        command.extend(["--require-completed-type", suffix])
     for suffix in args.require_transfer_type:
         command.extend(["--require-transfer-type", suffix])
     return subprocess.run(command, check=False).returncode
@@ -409,6 +461,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe-count", type=int, default=0, help="Queue up to 50 allowlisted transfers for bounded source/byte observation.")
     parser.add_argument("--transfer-timeout-seconds", type=float, default=3600.0, help="Completion timeout for each allowlisted transfer.")
     parser.add_argument("--require-transfer-type", action="append", default=[], choices=("iso", "pdf"))
+    parser.add_argument("--require-completed-type", action="append", default=[], choices=("iso", "pdf"),
+                        help="Require a SHA-256-verified completed probe of this type.")
+    parser.add_argument("--require-stock-bytes", action="store_true", help="Require accepted bytes from a stock-identifying live peer.")
+    parser.add_argument("--require-diagnostics", action="store_true", help="Use the diagnostics binary and require its packet dumps.")
     parser.add_argument("--enable-upnp", action="store_true", help="Require live UPnP discovery and TCP/UDP mappings.")
     parser.add_argument("--wsl-distribution")
     parser.add_argument("--native-windows", action="store_true", help="Use the staged Windows diagnostics daemon and direct host route instead of WSL.")
@@ -428,13 +484,21 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("timeouts must be non-negative and connection/transfer timeouts must be positive.")
     if not 0 <= args.probe_count <= 50 or (args.probe_count and args.complete_transfers):
         raise RuntimeError("--probe-count must be 0..50 and cannot be combined with --complete-transfers.")
+    if args.require_completed_type and not args.probe_count:
+        raise RuntimeError("--require-completed-type requires --probe-count.")
+    if args.require_stock_bytes and not (args.require_diagnostics or args.native_windows):
+        raise RuntimeError("--require-stock-bytes requires diagnostics.")
     workspace_root, output_root = require_environment()
     rust_repo = workspace_root / "repos" / "emulebb-rust"
-    executable_name = "emulebb-rust-diagnostics.exe" if args.native_windows else "emulebb-rust"
+    diagnostics_required = args.native_windows or args.require_diagnostics
+    executable_name = ("emulebb-rust-diagnostics" if diagnostics_required else "emulebb-rust") + (".exe" if args.native_windows else "")
     executable = output_root / "tools" / "emulebb-rust" / "bin" / executable_name
     if not executable.is_file():
         raise RuntimeError(f"staged daemon is missing: {executable}")
-    safe_transfers = load_safe_transfers(Path(args.inputs).resolve(), set(args.require_transfer_type))
+    safe_transfers = load_safe_transfers(
+        Path(args.inputs).resolve(), set(args.require_transfer_type) | set(args.require_completed_type)
+    )
+    probe_rows = select_probe_rows(safe_transfers, args.probe_count, set(args.require_completed_type))
     direct_bind_ip = resolve_direct_bind_ip()
     rest_addr = REST_ADDR
     if args.native_windows:
@@ -471,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
     base_url = f"http://{rest_addr}:{REST_PORT}"
     daemon_log = run_root / "daemon.log"
     diagnostic_dir = run_root / "diagnostics"
-    if args.native_windows:
+    if diagnostics_required:
         diagnostic_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
         "schema": "emulebb.rust-direct-smoke.v3",
@@ -480,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
         "vpnGuard": "off",
         "upnp": {"requested": args.enable_upnp},
         "restLoopback": not args.native_windows,
-        "diagnosticsRequired": args.native_windows,
+        "diagnosticsRequired": diagnostics_required,
         "sharedRootCount": 0,
         "bootstrap": {"mode": "product-first-run"},
         "safeTransfers": [
@@ -497,10 +561,10 @@ def main(argv: list[str] | None = None) -> int:
         }
     handle = daemon_log.open("w", encoding="utf-8", newline="\n")
     launch_env = os.environ.copy()
-    if args.native_windows:
+    if diagnostics_required:
         launch_env["EMULEBB_RUST_LOG_DIR"] = str(diagnostic_dir)
     process = rust_client.spawn_rust_daemon(executable, profile_dir, output_handle=handle, env=launch_env)
-    monitor = PacketDumpMonitor(diagnostic_dir, process) if args.native_windows else None
+    monitor = PacketDumpMonitor(diagnostic_dir, process) if diagnostics_required else None
     try:
         wait_until("Rust REST ready", 60.0, lambda: status(base_url) or None)
         report["webuiReady"] = webui_ready(base_url)
@@ -559,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
             "contactCount": int(kad.get("contactCount") or 0),
         }
         if args.probe_count:
-            for row in safe_transfers[:args.probe_count]:
+            for row in probe_rows:
                 add_allowlisted_transfer(base_url, row)
         if args.complete_transfers:
             report["transfers"] = []
@@ -579,8 +643,12 @@ def main(argv: list[str] | None = None) -> int:
             report["probes"] = [
                 {"hash": row["hash"], "suffix": row["suffix"],
                  **transfer_snapshot(base_url, str(row["hash"]))}
-                for row in safe_transfers[:args.probe_count]
+                for row in probe_rows
             ]
+        if args.require_completed_type:
+            report["completedTypes"] = verify_completed_probe_types(
+                report["probes"], probe_rows, incoming_dir, set(args.require_completed_type)
+            )
         final_stats = status(base_url)
         final_kad = kad_status(base_url)
         if args.enable_upnp:
@@ -620,6 +688,10 @@ def main(argv: list[str] | None = None) -> int:
             any(int(row.get("completedBytes") or 0) > 0 for row in report["probes"])
             or int(report.get("diagnostics", {}).get("acceptedPayloadBytes") or 0) > 0
         ):
+            report["status"] = "inconclusive"
+        elif args.require_completed_type and not all(report["completedTypes"].values()):
+            report["status"] = "inconclusive"
+        elif args.require_stock_bytes and int(report.get("diagnostics", {}).get("stockIdentifiedAcceptedBytes") or 0) <= 0:
             report["status"] = "inconclusive"
         else:
             report["status"] = "passed"
