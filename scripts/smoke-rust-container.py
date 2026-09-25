@@ -25,7 +25,10 @@ def main() -> int:
     if not args.archive.is_file():
         raise RuntimeError(f"OCI archive is missing: {args.archive}")
 
-    docker("load", "--input", str(args.archive))
+    loaded = docker("load", "--input", str(args.archive), check=False)
+    if loaded.returncode:
+        raise RuntimeError("Docker could not load the OCI candidate: "
+                           + loaded.stderr[-2000:] + loaded.stdout[-2000:])
     container = f"emulebb-rust-image-smoke-{os.getpid()}"
     docker(
         "run", "--detach", "--rm", "--name", container, "--network", "bridge",
