@@ -477,6 +477,14 @@ mirroring `wire_dump.rs` (OnceLock writer, `EMULEBB_RUST_LOG_DIR`). Emit points:
   `source_swapped` with `swapReason:"nnp"` + `swapTargetFileHash` from
   `swap_target_for_peer`.
 
+Rust's diagnostic-only `sched/download_source_software` records the software
+string advertised in a peer HELLO, keyed by `fileHash` and `peer`.
+`sched/download_payload_accepted` records a positive `bytes` count at the
+accepted-block boundary with the same keys and the latest advertised
+`clientSoftware` (possibly null). These Rust-only events let live tests
+distinguish actual peer payload from mere source discovery; the software label
+remains a peer claim, not independently verified binary provenance.
+
 ### D3 — master emitter (verification-tooling, behind existing `#ifdef`s)
 
 Add a shared `diag_event_v1` writer alongside `WriteDiagnosticsJsonEvent`
