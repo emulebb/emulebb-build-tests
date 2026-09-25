@@ -146,6 +146,49 @@ def test_beta_completed_probe_accepts_sanitized_delivery_name(tmp_path: Path) ->
     assert module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"}) == {"pdf": True}
 
 
+def test_delivery_audit_preserves_failed_campaign_report(tmp_path: Path) -> None:
+    module = load_module()
+    output_root = tmp_path / "output"
+    run_id = "20260925T000000Z"
+    lane = "rust-linux-direct-smoke"
+    run_dir = output_root / "reports" / lane / run_id
+    incoming = output_root / "profiles" / lane / run_id / "incoming"
+    run_dir.mkdir(parents=True)
+    incoming.mkdir(parents=True)
+    delivered = incoming / "Linux Guide.pdf"
+    delivered.write_bytes(b"safe fixture\n")
+    source = transfer("[Linux] Guide.pdf", "a" * 32)
+    source["size"] = delivered.stat().st_size
+    source["sha256"] = module.sha256_file(delivered)
+    inputs = tmp_path / "inputs.json"
+    write_inputs(inputs, [source])
+    campaign = {
+        "runId": run_id,
+        "status": "failed",
+        "error": "RuntimeError: Completed allowlisted .pdf probe was not delivered intact.",
+        "safeTransfers": [{**source, "suffix": ".pdf"}],
+        "probes": [{"hash": source["hash"], "completedBytes": source["size"]}],
+    }
+    del campaign["safeTransfers"][0]["name"]
+    report_path = run_dir / "report.json"
+    original = json.dumps(campaign)
+    report_path.write_text(original, encoding="utf-8")
+
+    audit = module.audit_existing_delivery(run_dir, inputs, {"pdf"}, output_root)
+
+    assert audit["status"] == "passed"
+    assert audit["sourceReportStatus"] == "failed"
+    assert len(audit["verifiedCompleted"]) == 1
+    assert report_path.read_text(encoding="utf-8") == original
+    assert json.loads((run_dir / "delivery-audit.json").read_text(encoding="utf-8"))["status"] == "passed"
+
+
+def test_delivery_audit_requires_an_explicit_type(tmp_path: Path) -> None:
+    module = load_module()
+    with pytest.raises(RuntimeError, match="at least one"):
+        module.audit_existing_delivery(tmp_path, tmp_path / "inputs.json", set(), tmp_path)
+
+
 def test_packet_dump_monitor_counts_only_complete_fresh_records(tmp_path: Path) -> None:
     module = load_module()
     process = SimpleNamespace(poll=lambda: None)

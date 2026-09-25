@@ -193,6 +193,55 @@ def verified_delivered_path(incoming_dir: Path, row: dict[str, Any]) -> Path | N
     return None
 
 
+def audit_existing_delivery(run_dir: Path, inputs_path: Path, required_types: set[str], output_root: Path) -> dict[str, Any]:
+    """Independently verifies retained completed probes without changing a live run."""
+
+    if not required_types:
+        raise RuntimeError("delivery audit requires at least one --require-completed-type.")
+    run_dir = run_dir.resolve(strict=True)
+    reports_root = (output_root / "reports").resolve(strict=True)
+    if not run_dir.is_relative_to(reports_root) or run_dir.parent.name not in {
+        "rust-windows-direct-smoke", "rust-linux-direct-smoke"
+    }:
+        raise RuntimeError("delivery audit run must be under a direct-smoke reports lane.")
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    if report.get("runId") != run_dir.name or not isinstance(report.get("probes"), list):
+        raise RuntimeError("delivery audit needs a matching completed campaign report with probes.")
+    rows = load_safe_transfers(inputs_path, required_types)
+    fingerprints = [
+        {"hash": row["hash"], "size": row["size"], "sha256": row["sha256"], "suffix": row["suffix"]}
+        for row in rows
+    ]
+    if fingerprints != report.get("safeTransfers"):
+        raise RuntimeError("delivery audit allowlist differs from the campaign allowlist.")
+    incoming_dir = output_root / "profiles" / run_dir.parent.name / run_dir.name / "incoming"
+    completed_types = verify_completed_probe_types(report["probes"], rows, incoming_dir, required_types)
+    verified = []
+    snapshots = {str(probe.get("hash", "")).lower(): probe for probe in report["probes"]}
+    for row in rows:
+        snapshot = snapshots.get(str(row["hash"]).lower(), {})
+        if int(snapshot.get("completedBytes") or 0) != int(row["size"]):
+            continue
+        delivered = verified_delivered_path(incoming_dir, row)
+        if delivered is None:
+            raise RuntimeError("completed allowlisted probe has no size/SHA-256-matching delivered file.")
+        verified.append({"hash": row["hash"], "suffix": row["suffix"], "size": row["size"]})
+    audit = {
+        "schema": "emulebb.rust-direct-delivery-audit.v1",
+        "runId": run_dir.name,
+        "sourceReportStatus": report.get("status"),
+        "sourceReportError": report.get("error"),
+        "requiredTypes": sorted(required_types),
+        "completedTypes": completed_types,
+        "verifiedCompleted": verified,
+        "status": "passed" if all(completed_types.values()) else "inconclusive",
+    }
+    (run_dir / "delivery-audit.json").write_text(
+        json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return audit
+
+
 def wsl_path(path: Path, distribution: str | None) -> str:
     """Translates an existing Windows path through the selected WSL distribution."""
 
@@ -469,6 +518,7 @@ class PacketDumpMonitor:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inputs", default=str(REPO_ROOT / "live-wire-inputs.local.json"))
+    parser.add_argument("--audit-existing-run", type=Path, help="Audit retained delivered probes; never alter the campaign verdict.")
     parser.add_argument("--connect-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--observe-seconds", type=float, default=60.0)
     parser.add_argument("--complete-transfers", action="store_true", help="Download and verify every exact allowlisted transfer.")
@@ -490,6 +540,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.audit_existing_run:
+        _, output_root = require_environment()
+        audit = audit_existing_delivery(
+            args.audit_existing_run, Path(args.inputs).resolve(), set(args.require_completed_type), output_root
+        )
+        print(json.dumps(audit, sort_keys=True))
+        return 0 if audit["status"] == "passed" else 2
     if os.name == "nt" and not args.wsl_child and not args.native_windows:
         return run_in_wsl(args)
     if args.native_windows and (os.name != "nt" or args.wsl_child or not args.enable_upnp):
