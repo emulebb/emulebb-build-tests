@@ -248,6 +248,7 @@ def run_webui_live_proof(
     tab_wait_seconds: float,
     timeout_seconds: float,
     max_main_thread_busy_ratio: float,
+    navigation_only: bool = False,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
 
@@ -264,6 +265,7 @@ def run_webui_live_proof(
         "steadySeconds": steady_seconds,
         "tabWaitSeconds": tab_wait_seconds,
         "maxMainThreadBusyRatio": max_main_thread_busy_ratio,
+        "navigationOnly": navigation_only,
         "tabsExpected": list(TAB_LABELS),
         "checks": {},
     }
@@ -362,7 +364,8 @@ def run_webui_live_proof(
                     transfer_dom.get("rows", []),
                     bool(transfer_dom.get("emptyVisible")),
                 )
-                if not transfer_workflow["ok"]:
+                transfer_workflow["required"] = not navigation_only
+                if not transfer_workflow["ok"] and not navigation_only:
                     raise RuntimeError(
                         "Rust WebUI transfer workflow did not show completed delivery or active download "
                         f"progress: {transfer_workflow!r}"
@@ -406,6 +409,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tab-wait-seconds", type=float, default=DEFAULT_TAB_WAIT_SECONDS)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument("--max-main-thread-busy-ratio", type=float, default=DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO)
+    parser.add_argument("--navigation-only", action="store_true",
+                        help="Visit every panel and check browser health without requiring active transfer progress.")
     return parser
 
 
@@ -421,6 +426,7 @@ def run(argv: list[str] | None = None) -> int:
         tab_wait_seconds=float(args.tab_wait_seconds),
         timeout_seconds=float(args.timeout_seconds),
         max_main_thread_busy_ratio=float(args.max_main_thread_busy_ratio),
+        navigation_only=bool(args.navigation_only),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("status") == "passed" else 1
