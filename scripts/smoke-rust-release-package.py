@@ -45,7 +45,8 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
     help_result = subprocess.run(
         [str(binary), "--help"], capture_output=True, text=True, timeout=20, check=True
     )
-    if "--profile" not in help_result.stdout or "--rest-bind-addr" not in help_result.stdout:
+    required_options = ("--profile", "--rest-bind-addr", "--p2p-bind-interface")
+    if any(option not in help_result.stdout for option in required_options):
         raise RuntimeError("packaged daemon CLI is missing beta options")
 
     profile = temp_root / "profile"
