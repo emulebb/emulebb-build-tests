@@ -58,6 +58,20 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert metadata_path(profile_dir).is_file()
 
 
+def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir, rust_repo=rust_repo(), rest_addr="192.0.2.10", rest_port=4711,
+        api_key="key", local_only_discovery=True,
+    )
+
+    nodes = (profile_dir / "nodes.dat").read_bytes()
+    assert len(nodes) == 12
+    assert nodes != b""
+    assert setting_value(profile_dir, "core", "networkKademlia") is False
+
+
 def test_write_rust_profile_supports_incoming_dir(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 

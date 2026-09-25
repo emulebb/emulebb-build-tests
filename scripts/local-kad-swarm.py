@@ -40,7 +40,9 @@ API_KEY = "local-kad-swarm-key"
 DEFAULT_CLIENT_COUNT = 3
 DEFAULT_MIN_CONTACTS_PER_CLIENT = 1
 KAD_BOOTSTRAP_THROTTLE_SECONDS = 11.0
-KADEMLIA_CONTACT_VERSION = 8
+# Fixture identities are synthetic; version 5 starts with plaintext Kad2 so
+# peers can exchange their real node IDs before v6+ NodeID-mode obfuscation.
+KADEMLIA_CONTACT_VERSION = 5
 KAD_STATE_FILES = (
     "nodes.dat",
     "nodes.dat.bak",
@@ -156,9 +158,29 @@ def remove_kad_state_files(config_dir: Path) -> list[str]:
 
 
 def stored_nodes_dat_ip(address: str) -> int:
-    """Returns the little-endian IPv4 integer shape used by `nodes.dat`."""
+    """Returns the host-order IPv4 integer written by eMule's WriteUInt32."""
 
-    return int.from_bytes(ipaddress.IPv4Address(address).packed, "little")
+    return int.from_bytes(ipaddress.IPv4Address(address).packed, "big")
+
+
+def validate_local_nodes_dat(path: Path, *, peer_address: str, expected_udp_ports: set[int]) -> dict[str, object]:
+    """Refuses to launch a local Kad fixture with nonlocal or unexpected contacts."""
+
+    data = path.read_bytes()
+    if len(data) < 12:
+        raise ValueError("Local nodes.dat fixture is truncated.")
+    magic, version, count = struct.unpack_from("<III", data)
+    if (magic, version) != (0, 2) or count != len(expected_udp_ports) or len(data) != 12 + count * 34:
+        raise ValueError("Local nodes.dat fixture has an unexpected header or contact count.")
+    seen_ports: set[int] = set()
+    for index in range(count):
+        stored_ip, udp_port = struct.unpack_from("<IH", data, 12 + index * 34 + 16)
+        if stored_ip != stored_nodes_dat_ip(peer_address) or udp_port not in expected_udp_ports:
+            raise ValueError("Local nodes.dat fixture contains a nonlocal or unexpected contact.")
+        seen_ports.add(udp_port)
+    if seen_ports != expected_udp_ports:
+        raise ValueError("Local nodes.dat fixture is missing an expected contact.")
+    return {"validated": True, "contact_count": count}
 
 
 def deterministic_kad_node_id(index: int) -> bytes:
@@ -169,7 +191,8 @@ def deterministic_kad_node_id(index: int) -> bytes:
     return bytes([index]) + bytes((index * 37 + offset) % 256 for offset in range(1, 16))
 
 
-def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSpec], peer_address: str) -> dict[str, object]:
+def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSpec], peer_address: str,
+                    contact_version: int = KADEMLIA_CONTACT_VERSION) -> dict[str, object]:
     """Writes a deterministic v2 `nodes.dat` containing local peer contacts."""
 
     contacts = [peer for peer in peers if peer.profile_id != owner.profile_id]
@@ -187,7 +210,7 @@ def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSp
                     stored_ip,
                     peer.udp_port,
                     peer.tcp_port,
-                    KADEMLIA_CONTACT_VERSION,
+                    contact_version,
                     0,
                     0,
                     1,

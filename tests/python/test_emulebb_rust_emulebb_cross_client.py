@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +88,82 @@ def test_cross_client_disables_rust_kad_by_default() -> None:
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.rust_kad_enabled is False
+
+
+def test_local_kad_diagnostics_audit_rejects_nonlocal_contacts(tmp_path: Path) -> None:
+    module = load_suite_module()
+    rust_dir = tmp_path / "rust"
+    mfc_dir = tmp_path / "mfc"
+    rust_dir.mkdir()
+    mfc_dir.mkdir()
+    packet = rust_dir / "emulebb-rust-kad-udp-dump-test.jsonl"
+    contact = mfc_dir / "emulebb-diagnostics-kad.log"
+    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "10.1.2.3:4000"}) + "\n", encoding="utf-8")
+    contact.write_text(json.dumps({"contact": {"address": "10.1.2.3"}}) + "\n", encoding="utf-8")
+    assert module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3") == {
+        "rustPackets": 1, "mfcContacts": 1,
+    }
+
+    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "8.8.8.8:4000"}) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="nonlocal peer"):
+        module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3")
+    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "10.1.2.3:4000"}) + "\n", encoding="utf-8")
+    contact.write_text(json.dumps({"contact": {"address": "8.8.8.8"}}) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="nonlocal contact"):
+        module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3")
+
+
+def test_local_kad_exchange_requires_decoded_two_way_bootstrap(tmp_path: Path) -> None:
+    module = load_suite_module()
+    dump = tmp_path / "emulebb-rust-kad-udp-dump-test.jsonl"
+    pairs = [
+        ("send", "KADEMLIA2_BOOTSTRAP_REQ"),
+        ("recv", "KADEMLIA2_BOOTSTRAP_REQ"),
+        ("send", "KADEMLIA2_BOOTSTRAP_RES"),
+    ]
+    dump.write_text("".join(json.dumps({"schema": "udp_packet_v1", "direction": direction,
+                                        "opcode_name": opcode}) + "\n" for direction, opcode in pairs), encoding="utf-8")
+    assert module.local_kad_exchange_evidence(tmp_path) is None
+    with dump.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"schema": "udp_packet_v1", "direction": "recv",
+                                 "opcode_name": "KADEMLIA2_BOOTSTRAP_RES"}) + "\n")
+    assert module.local_kad_exchange_evidence(tmp_path) == {
+        f"{direction}:{opcode}": 1 for direction, opcode in pairs + [("recv", "KADEMLIA2_BOOTSTRAP_RES")]
+    }
+
+
+def test_cross_client_shared_root_uses_current_object_contract(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls = []
+    monkeypatch.setattr(module, "request_json", lambda *args, **kwargs: calls.append((args, kwargs)) or {})
+    monkeypatch.setattr(module, "wait_for_rust_shared_file", lambda *_args, **_kwargs: {"name": "fixture.bin"})
+
+    module.publish_rust_shared_tree(
+        "http://192.0.2.10:4711", "key", root=tmp_path, file_name="fixture.bin", timeout_seconds=1.0,
+    )
+
+    assert calls[0][0][4]["roots"] == [{"path": str(tmp_path)}]
+
+
+def test_cross_client_diagnostics_require_both_peer_dumps(tmp_path: Path) -> None:
+    module = load_suite_module()
+    rust = tmp_path / "rust"
+    mfc = tmp_path / "mfc"
+    rust.mkdir()
+    mfc.mkdir()
+
+    with pytest.raises(RuntimeError, match="rust diagnostics"):
+        module.require_diagnostics(rust, mfc, kad_required=False)
+
+
+def test_cross_client_rejects_mfc_secure_ident_failure(tmp_path: Path) -> None:
+    module = load_suite_module()
+    log = tmp_path / "emulebb-verbose.log"
+    log.write_text("Connected to local peer\n", encoding="utf-8")
+    assert module.require_mfc_secure_ident_clean(log) == {"failureLines": 0}
+    log.write_text("Error: Unknown exception in CClientCreditsList::VerifyIdent\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="rejected Rust secure identification"):
+        module.require_mfc_secure_ident_clean(log)
 
 
 def test_cross_client_fixture_names_are_unicode() -> None:
@@ -275,7 +352,7 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
     def fake_request_json(_base_url, method, path, _api_key, body=None):
         calls.append((method, path, body))
         if path == "/api/v1/shared-directories":
-            return {"roots": [{"path": body["roots"][0]}], "items": []}
+                return {"roots": body["roots"], "items": []}
         if path == "/api/v1/shared-directories/operations/reload":
             return {"ok": True}
         if path == "/api/v1/shared-files":
@@ -304,7 +381,7 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
     assert calls[0] == (
         "PATCH",
         "/api/v1/shared-directories",
-        {"roots": [str(tmp_path / "shared-tree")], "confirmReplaceRoots": True},
+        {"roots": [{"path": str(tmp_path / "shared-tree")}], "confirmReplaceRoots": True},
     )
     assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)

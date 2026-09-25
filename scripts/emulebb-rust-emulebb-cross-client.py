@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -16,9 +17,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness import diag_event_diff, packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
+from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 
@@ -26,6 +30,7 @@ from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_
 harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
 live_common = load_script_module("emule_live_profile_common", "emule-live-profile-common.py")
 dtt = load_script_module("deterministic_two_client_transfer", "deterministic-two-client-transfer.py")
+local_kad = load_script_module("local_kad_swarm_for_rust_mfc", "local-kad-swarm.py")
 
 SUITE_NAME = "emulebb-rust-emulebb-cross-client"
 API_KEY = "emulebb-rust-emulebb-cross-client-key"
@@ -47,8 +52,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument(
         "--diagnostics", action="store_true",
-        help="Capture converged packet dumps on both clients for upload-path parity: build/run rust "
-        "with the packet-diagnostics feature + EMULEBB_RUST_LOG_DIR, and use the MFC diagnostics exe "
+        help="Capture converged packet dumps on both clients for upload-path parity: run the staged Rust "
+        "diagnostics exe with EMULEBB_RUST_LOG_DIR, and use the MFC diagnostics exe "
         "(pass --app-exe pointing at emulebb-diagnostics.exe).",
     )
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
@@ -60,6 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--kad-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--rust-upload-limit-kibps", type=int)
@@ -67,7 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--rust-kad-enabled",
         action="store_true",
-        help="Enable Rust Kad during this cross-client run. The default keeps local cross-client evidence ED2K-only.",
+        help="Prove local Rust/MFC Kad bootstrap and contacts alongside the ED2K transfer; default is ED2K-only.",
     )
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -76,6 +82,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def validate_optional_soak_args(args: argparse.Namespace) -> None:
     """Rejects invalid optional cross-client soak arguments."""
+
+    if getattr(args, "rust_kad_enabled", False) and not getattr(args, "diagnostics", False):
+        raise ValueError("Local Kad proof requires --diagnostics for decoded exchange evidence.")
 
     for name in ("rust_upload_limit_kibps", "emulebb_upload_limit_kibps"):
         value = getattr(args, name)
@@ -104,6 +113,117 @@ def request_json(base_url: str, method: str, path: str, api_key: str, body: dict
     if int(result.get("status", 0)) != 200:
         raise RuntimeError(f"REST request failed: {method} {path} {dtt.rest_smoke.compact_http_result(result)!r}")
     return dtt.rest_smoke.require_json_object(result, 200)
+
+
+def kad_request(base_url: str, method: str, path: str, api_key: str,
+                body: dict[str, object] | None = None) -> dict[str, object]:
+    """Read a Kad operation's data envelope despite route-specific header drift."""
+
+    result = dtt.rest_smoke.http_request(
+        base_url, path, method=method, api_key=api_key, json_body=body, request_timeout_seconds=30.0,
+    )
+    raw = result.get("raw_json")
+    if int(result.get("status", 0)) != 200 or not isinstance(raw, dict):
+        raise RuntimeError(f"Kad REST request failed: {method} {path}")
+    data = raw.get("data")
+    meta = raw.get("meta")
+    if not isinstance(data, dict) or not isinstance(meta, dict) or meta.get("apiVersion") != "v1":
+        raise RuntimeError(f"Kad REST response lost its data envelope: {method} {path}")
+    return data
+
+
+def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) -> dict[str, object]:
+    """Reject silent diagnostics builds and keep only compact capture counts."""
+
+    counts: dict[str, object] = {}
+    for side, directory in (("rust", rust_dir), ("emule", mfc_dir)):
+        packet = converged_live_wire.find_packet_trace(directory, side=side)
+        diag = converged_live_wire.find_diag_trace(directory, side=side)
+        if packet is None or diag is None:
+            raise RuntimeError(f"{side} diagnostics did not produce packet and event dumps")
+        packet_count = len(packet_trace_diff.load_trace(packet))
+        diag_count = len(diag_event_diff.load_trace(diag))
+        if packet_count == 0 or diag_count == 0:
+            raise RuntimeError(f"{side} diagnostics packet/event dumps contain no valid records")
+        counts[side] = {"packetRecords": packet_count, "eventRecords": diag_count}
+    counts["mfcSecureIdent"] = require_mfc_secure_ident_clean(mfc_dir / "emulebb-verbose.log")
+    if kad_required:
+        kad_files = list(rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
+        kad_count = sum(
+            1 for path in kad_files for line in path.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip() and json.loads(line).get("schema") == "udp_packet_v1"
+        )
+        if kad_count == 0:
+            raise RuntimeError("Rust Kad diagnostics did not capture UDP packets")
+        counts["rustKadUdpPackets"] = kad_count
+    return counts
+
+
+def require_mfc_secure_ident_clean(log_path: Path) -> dict[str, int]:
+    """Reject MFC-side RSA decoder or signature failures seen in the peer run."""
+    if not log_path.is_file():
+        raise RuntimeError("MFC secure-ident verbose log is missing")
+    content = log_path.read_text(encoding="utf-8", errors="replace")
+    failures = content.count("Unknown exception in CClientCreditsList::VerifyIdent") + content.count(
+        "failed the secure identification"
+    )
+    if failures:
+        raise RuntimeError(f"MFC rejected Rust secure identification {failures} time(s)")
+    return {"failureLines": 0}
+
+
+def audit_local_kad_diagnostics(rust_dir: Path, mfc_dir: Path, *, expected_ip: str) -> dict[str, int]:
+    """Fail a local-only run as soon as Kad sees a nonlocal peer/contact."""
+
+    counts = {"rustPackets": 0, "mfcContacts": 0}
+    for path in rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"):
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:  # a final line may still be in flight
+                continue
+            if row.get("schema") != "udp_packet_v1":
+                continue
+            counts["rustPackets"] += 1
+            peer = str(row.get("peer") or "")
+            if peer.rsplit(":", 1)[0] != expected_ip:
+                raise RuntimeError("Local Kad isolation failed: Rust packet reached a nonlocal peer.")
+    for path in mfc_dir.glob("emulebb-diagnostics-kad.log"):
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            contact = row.get("contact")
+            if not isinstance(contact, dict) or not contact.get("address"):
+                continue
+            counts["mfcContacts"] += 1
+            if contact["address"] != expected_ip:
+                raise RuntimeError("Local Kad isolation failed: MFC learned a nonlocal contact.")
+    return counts
+
+
+def local_kad_exchange_evidence(rust_dir: Path) -> dict[str, int] | None:
+    """Require decoded two-way Kad bootstrap, not contact-count-only readiness."""
+
+    required = {
+        "send:KADEMLIA2_BOOTSTRAP_REQ",
+        "recv:KADEMLIA2_BOOTSTRAP_RES",
+        "recv:KADEMLIA2_BOOTSTRAP_REQ",
+        "send:KADEMLIA2_BOOTSTRAP_RES",
+    }
+    counts: dict[str, int] = {}
+    for path in rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"):
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("schema") != "udp_packet_v1":
+                continue
+            key = f"{row.get('direction')}:{row.get('opcode_name')}"
+            counts[key] = counts.get(key, 0) + 1
+    return {key: counts[key] for key in sorted(required)} if required.issubset(counts) else None
 
 
 def wait_for_rust_rest(
@@ -461,7 +581,7 @@ def publish_rust_shared_tree(
         "/api/v1/shared-directories",
         api_key,
         {
-            "roots": [str(root)],
+            "roots": [{"path": str(root)}],
             "confirmReplaceRoots": True,
         },
     )
@@ -575,8 +695,16 @@ def main(argv: list[str] | None = None) -> int:
         used_ports = set(ports.values())
         rust_rest_port = choose_extra_port(args.lan_bind_addr, used_ports)
         rust_ed2k_port = choose_extra_port(args.lan_bind_addr, used_ports)
-        rust_kad_port = choose_extra_port(args.lan_bind_addr, used_ports)
+        rust_kad_port = choose_extra_port(args.lan_bind_addr, used_ports, udp=True)
         server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
+        mfc_spec = local_kad.KadClientSpec(
+            index=1, profile_id=CLIENT_EMULEBB.profile_id, nick=CLIENT_EMULEBB.nick,
+            tcp_port=ports["client1_tcp"], udp_port=ports["client1_udp"], rest_port=ports["client1_rest"],
+        )
+        rust_spec = local_kad.KadClientSpec(
+            index=2, profile_id=CLIENT_RUST.profile_id, nick=CLIENT_RUST.nick,
+            tcp_port=rust_ed2k_port, udp_port=rust_kad_port, rest_port=rust_rest_port,
+        )
         report["network"] = {
             "lan_bind_addr": args.lan_bind_addr,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
@@ -633,14 +761,30 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_port=rust_ed2k_port,
             kad_port=rust_kad_port,
             server_endpoint=server_endpoint,
+            # nodes.dat is the sole local bootstrap source. A parallel text
+            # endpoint defaults to v9 and can re-enable NodeID encryption
+            # against the synthetic fixture ID before the real ID is learned.
+            kad_bootstrap_nodes=None,
+            kad_bootstrap_min_routing_contacts=1 if args.rust_kad_enabled else 10,
         )
         rust_metadata.replace_settings_section(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             "core",
             {"networkKademlia": bool(args.rust_kad_enabled)},
         )
+        report["checks"]["rust_local_nodes_fixture"] = local_kad.write_nodes_dat(
+            rust_profile / "nodes.dat", owner=rust_spec, peers=[mfc_spec, rust_spec], peer_address=p2p_address,
+        )
+        report["checks"]["rust_local_nodes_preflight"] = local_kad.validate_local_nodes_dat(
+            rust_profile / "nodes.dat", peer_address=p2p_address, expected_udp_ports={mfc_spec.udp_port},
+        )
         current_phase = "launch_rust"
-        rust_features: str | None = None
+        os.environ["RUST_LOG"] = "info,emulebb_core=debug,emulebb_kad_net=debug,emulebb_kad_dht=debug"
+        output_root = get_workspace_output_root()
+        rust_exe = (
+            converged_live_wire.resolve_rust_diagnostics_exe(output_root)
+            if args.diagnostics else converged_live_wire.resolve_rust_regular_exe(output_root)
+        )
         if args.diagnostics:
             # Capture both clients' converged packet dumps for upload-path parity:
             # rust writes ed2k_packet_v1 / Kad udp_packet_v1 when EMULEBB_RUST_LOG_DIR
@@ -650,10 +794,9 @@ def main(argv: list[str] | None = None) -> int:
             rust_packet_dir = paths.source_artifacts_dir / "rust-packet-dump"
             rust_packet_dir.mkdir(parents=True, exist_ok=True)
             os.environ["EMULEBB_RUST_LOG_DIR"] = str(rust_packet_dir)
-            rust_features = "packet-diagnostics"
             report["rust_packet_dump_dir"] = str(rust_packet_dir)
-        rust_process = rust_client.start_rust_client(
-            rust_repo, rust_profile, paths.source_artifacts_dir / "rust.out", features=rust_features
+        rust_process = rust_client.start_rust_client_executable(
+            rust_exe, rust_profile, paths.source_artifacts_dir / "rust.out"
         )
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = wait_for_rust_rest(
@@ -714,12 +857,56 @@ def main(argv: list[str] | None = None) -> int:
                 (("MaxUpload", str(args.emulebb_upload_limit_kibps)),),
             )
         dtt.write_server_met(Path(emulebb["config_dir"]) / "server.met", address=p2p_address, port=ports["ed2k_tcp"], name="emulebb-local-e2e")
+        if args.rust_kad_enabled:
+            live_common.apply_emule_preferences(
+                Path(emulebb["config_dir"]), (("NetworkKademlia", "1"), ("DebugClientKadUDP", "1")),
+            )
+        report["checks"]["mfc_local_nodes_fixture"] = local_kad.write_nodes_dat(
+            Path(emulebb["config_dir"]) / "nodes.dat",
+            owner=mfc_spec, peers=[mfc_spec, rust_spec], peer_address=p2p_address,
+        )
+        report["checks"]["mfc_local_nodes_preflight"] = local_kad.validate_local_nodes_dat(
+            Path(emulebb["config_dir"]) / "nodes.dat",
+            peer_address=p2p_address, expected_udp_ports={rust_spec.udp_port},
+        )
         current_phase = "launch_emulebb"
         emulebb_app = live_common.launch_app(paths.app_exe, Path(emulebb["profile_base"]), minimized_to_tray=True)
         emulebb_base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["emulebb_rest_ready"] = dtt.rest_smoke.compact_http_result(
             dtt.rest_smoke.wait_for_rest_ready(emulebb_base_url, args.api_key, args.rest_ready_timeout_seconds)
         )
+        if args.rust_kad_enabled:
+            report["checks"]["mfc_kad_start"] = kad_request(
+                emulebb_base_url, "POST", "/api/v1/kad/operations/start", args.api_key, {}
+            )
+            report["checks"]["rust_kad_start"] = kad_request(
+                rust_base_url, "POST", "/api/v1/kad/operations/start", args.api_key, {}
+            )
+            report["checks"]["mfc_to_rust_kad_bootstrap"] = kad_request(
+                emulebb_base_url, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
+                {"address": p2p_address, "port": rust_kad_port},
+            )
+            report["checks"]["rust_to_mfc_kad_bootstrap"] = kad_request(
+                rust_base_url, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
+                {"address": p2p_address, "port": ports["client1_udp"]},
+            )
+
+            def local_kad_ready() -> dict[str, object] | None:
+                if args.diagnostics:
+                    report["checks"]["local_kad_isolation"] = audit_local_kad_diagnostics(
+                        rust_packet_dir, Path(emulebb["profile_base"]) / "logs", expected_ip=p2p_address,
+                    )
+                mfc = kad_request(emulebb_base_url, "GET", "/api/v1/kad", args.api_key)
+                rust = kad_request(rust_base_url, "GET", "/api/v1/kad", args.api_key)
+                exchange = local_kad_exchange_evidence(rust_packet_dir) if args.diagnostics else None
+                if exchange and all(bool(row.get("connected")) and int(row.get("contactCount") or 0) > 0 for row in (mfc, rust)):
+                    return {"mfc": local_kad.compact_local_kad_status(mfc),
+                            "rust": local_kad.compact_local_kad_status(rust), "exchange": exchange}
+                return None
+
+            report["checks"]["local_kad_ready"] = live_common.wait_for(
+                local_kad_ready, args.kad_connect_timeout_seconds, 2.0, "Rust/MFC local Kad connectivity"
+            )
         report["checks"]["emulebb_server_connect"] = dtt.add_and_connect_server(
             emulebb_base_url,
             args.api_key,
@@ -813,6 +1000,10 @@ def main(argv: list[str] | None = None) -> int:
             require_aich_hashset=True,
         )
         report["checks"]["rust_emulebb_cross_client_requirements"] = require_cross_client_requirements(report)
+        if args.diagnostics:
+            report["checks"]["diagnostics_capture"] = require_diagnostics(
+                rust_packet_dir, Path(emulebb["profile_base"]) / "logs", kad_required=args.rust_kad_enabled,
+            )
         report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0

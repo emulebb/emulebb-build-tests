@@ -192,12 +192,28 @@ def test_write_nodes_dat_preseeds_local_peer_contacts(tmp_path: Path) -> None:
     assert first_contact[:16] == module.deterministic_kad_node_id(2)
     stored_ip, udp_port, tcp_port, version, udp_key, udp_key_ip, verified = struct.unpack("<IHHBIIB", first_contact[16:])
     assert stored_ip == module.stored_nodes_dat_ip("10.1.2.3")
+    assert first_contact[16:20] == bytes((3, 2, 1, 10))
+    assert module.validate_local_nodes_dat(
+        path, peer_address="10.1.2.3", expected_udp_ports={4902, 4903},
+    ) == {"validated": True, "contact_count": 2}
     assert udp_port == 4902
     assert tcp_port == 4802
     assert version == module.KADEMLIA_CONTACT_VERSION
     assert udp_key == 0
     assert udp_key_ip == 0
     assert verified == 1
+
+
+def test_local_nodes_dat_preflight_rejects_reversed_or_external_address(tmp_path: Path) -> None:
+    module = load_suite_module()
+    specs = module.build_client_specs(2, [(4701, 4801, 4901), (4702, 4802, 4902)])
+    path = tmp_path / "nodes.dat"
+    module.write_nodes_dat(path, owner=specs[0], peers=specs, peer_address="10.1.2.3")
+
+    with pytest.raises(ValueError, match="nonlocal or unexpected"):
+        module.validate_local_nodes_dat(path, peer_address="10.1.2.4", expected_udp_ports={4902})
+    with pytest.raises(ValueError, match="nonlocal or unexpected"):
+        module.validate_local_nodes_dat(path, peer_address="10.1.2.3", expected_udp_ports={4903})
 
 
 def test_nodes_dat_fixture_modes_cover_stale_and_truncated(tmp_path: Path) -> None:

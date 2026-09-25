@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import struct
 import subprocess
 from pathlib import Path
 
@@ -65,6 +66,7 @@ def write_rust_profile(
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
     initial_shared_directory_reload: bool | None = None,
+    local_only_discovery: bool = False,
 ) -> None:
     """Writes a minimal eMuleBB Rust profile for local harness runs.
 
@@ -75,10 +77,18 @@ def write_rust_profile(
     """
 
     profile_dir.mkdir(parents=True, exist_ok=True)
+    if local_only_discovery:
+        # WHY: first-run discovery imports public nodes.dat when this file is
+        # absent. Local-only harnesses must never silently bootstrap public Kad.
+        (profile_dir / "nodes.dat").write_bytes(struct.pack("<III", 0, 2, 0))
     settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(rust_repo, metadata_path)
+    if local_only_discovery:
+        # An empty nodes.dat suppresses first-run URL import, but the DHT still
+        # has built-in public fallback contacts. ED2K-only lanes disable Kad.
+        rust_metadata.replace_settings_section(metadata_path, "core", {"networkKademlia": False})
 
     lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
     settings_path.write_text("\n".join(lines), encoding="utf-8")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -15,8 +16,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
@@ -54,6 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument("--diagnostics", action="store_true", help="Use the staged Rust diagnostics executable and capture packet dumps.")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
@@ -705,9 +709,19 @@ def run_protocol_case(
             server_endpoint=server_endpoint,
             server_entry=entry,
             obfuscation_enabled=case.client_crypt_supported,
+            local_only_discovery=True,
         )
         report["checks"]["rust_server_entry"] = entry
-        rust_process = rust_client.start_rust_client(rust_repo, rust_profile, case_dir / "rust.out")
+        rust_exe = (
+            converged_live_wire.resolve_rust_diagnostics_exe(get_workspace_output_root())
+            if args.diagnostics else converged_live_wire.resolve_rust_regular_exe(get_workspace_output_root())
+        )
+        if args.diagnostics:
+            packet_dir = case_dir / "rust-packet-dump"
+            packet_dir.mkdir(parents=True, exist_ok=True)
+            os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
+            report["rust_packet_dump_dir"] = str(packet_dir)
+        rust_process = rust_client.start_rust_client_executable(rust_exe, rust_profile, case_dir / "rust.out")
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = rust_emulebb.wait_for_rust_rest(
             rust_base_url,
