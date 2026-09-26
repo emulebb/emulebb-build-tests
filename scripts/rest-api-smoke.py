@@ -37,6 +37,10 @@ from emule_test_harness.live_seed_sources import (
     refresh_seed_files,
 )
 
+RUST_CONTRACT_ONLY = "emulebb-rust" in Path(
+    os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH", "")
+).parts
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -52,16 +56,32 @@ def load_local_module(module_name: str, filename: str):
 
 
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
-close_app_cleanly = live_common.close_app_cleanly
-launch_app = live_common.launch_app
-patch_ini_value = live_common.patch_ini_value
-prepare_profile_base = live_common.prepare_profile_base
-upsert_ini_section_value = live_common.upsert_ini_section_value
-wait_for = live_common.wait_for
-wait_for_main_window = live_common.wait_for_main_window
-WebServerProfileSpec = live_common.WebServerProfileSpec
-write_json = live_common.write_json
+if RUST_CONTRACT_ONLY:
+    # Rust live conformance reuses the canonical route registry and HTTP
+    # validators, but it neither launches nor automates the Windows MFC client.
+    # Keeping that contract-only import path free of pywin32 also makes the
+    # registry usable by Linux hosted CI.
+    live_common = None
+    close_app_cleanly = None
+    launch_app = None
+    patch_ini_value = None
+    prepare_profile_base = None
+    upsert_ini_section_value = None
+    wait_for = None
+    wait_for_main_window = None
+    WebServerProfileSpec = None
+    write_json = None
+else:
+    live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
+    close_app_cleanly = live_common.close_app_cleanly
+    launch_app = live_common.launch_app
+    patch_ini_value = live_common.patch_ini_value
+    prepare_profile_base = live_common.prepare_profile_base
+    upsert_ini_section_value = live_common.upsert_ini_section_value
+    wait_for = live_common.wait_for
+    wait_for_main_window = live_common.wait_for_main_window
+    WebServerProfileSpec = live_common.WebServerProfileSpec
+    write_json = live_common.write_json
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -72,21 +92,26 @@ STILL_ACTIVE = 259
 GR_GDIOBJECTS = 0
 GR_USEROBJECTS = 1
 
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-kernel32.OpenProcess.restype = ctypes.c_void_p
-kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-kernel32.CloseHandle.restype = ctypes.c_int
-kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
-kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-kernel32.GetProcessHandleCount.restype = ctypes.c_int
-kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-kernel32.GetExitCodeProcess.restype = ctypes.c_int
-psapi = ctypes.WinDLL("psapi", use_last_error=True)
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-user32.GetGuiResources.restype = ctypes.c_uint32
+if RUST_CONTRACT_ONLY:
+    kernel32 = None
+    psapi = None
+    user32 = None
+else:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.GetProcessHandleCount.restype = ctypes.c_int
+    kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.GetExitCodeProcess.restype = ctypes.c_int
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    user32.GetGuiResources.restype = ctypes.c_uint32
 
 
 class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
@@ -121,18 +146,18 @@ class THREADENTRY32(ctypes.Structure):
     ]
 
 
-kernel32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
-kernel32.Thread32First.restype = ctypes.c_int
-kernel32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
-kernel32.Thread32Next.restype = ctypes.c_int
+if not RUST_CONTRACT_ONLY:
+    kernel32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
+    kernel32.Thread32First.restype = ctypes.c_int
+    kernel32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
+    kernel32.Thread32Next.restype = ctypes.c_int
 
-
-psapi.GetProcessMemoryInfo.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
-    ctypes.c_uint32,
-]
-psapi.GetProcessMemoryInfo.restype = ctypes.c_int
+    psapi.GetProcessMemoryInfo.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+        ctypes.c_uint32,
+    ]
+    psapi.GetProcessMemoryInfo.restype = ctypes.c_int
 
 DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT = 1
 DEFAULT_TORZNAB_LIVE_SEARCH_TIMEOUT_SECONDS = 60.0
@@ -809,7 +834,11 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
     """Builds the live REST completeness route list from the OpenAPI contract."""
 
     routes: list[dict[str, object]] = []
-    execution_models = load_native_route_execution_models()
+    execution_models = (
+        {}
+        if "emulebb-rust" in openapi_path.parts
+        else load_native_route_execution_models()
+    )
     for operation in load_openapi_operations(openapi_path):
         tag = operation["tag"]
         family = OPENAPI_TAG_FAMILIES.get(tag)
@@ -1027,7 +1056,9 @@ def build_adapter_contract_routes() -> tuple[dict[str, object], ...]:
     return tuple(routes)
 
 
-ADAPTER_CONTRACT_ROUTES: tuple[dict[str, object], ...] = build_adapter_contract_routes()
+ADAPTER_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
+    () if "emulebb-rust" in OPENAPI_CONTRACT_PATH.parts else build_adapter_contract_routes()
+)
 
 
 def normalize_adapter_contract_path(path: str) -> str:

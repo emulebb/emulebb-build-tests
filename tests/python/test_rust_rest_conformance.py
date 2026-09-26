@@ -125,6 +125,9 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(
 def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
 
+    assert module.RUST_CONTRACT_ONLY is True
+    assert module.live_common is None
+    assert module.kernel32 is None
     assert module.OPENAPI_TAG_FAMILIES["Network"] == "network"
     assert module.OPENAPI_TAG_FAMILIES["Nat"] == "nat"
     assert module.OPENAPI_TAG_FAMILIES["VpnGuard"] == "vpn-guard"
