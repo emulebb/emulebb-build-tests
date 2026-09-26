@@ -177,6 +177,7 @@ def test_parser_defaults_to_persisted_rust_webui() -> None:
     assert args.api_key == "converged-soak"
     assert args.max_main_thread_busy_ratio == 0.25
     assert args.navigation_only is False
+    assert args.verify_stale_key_recovery is False
     assert str(args.report_path).endswith("reports\\rust-webui-live-proof\\rust-webui-live-proof.latest.json")
 
 
@@ -184,3 +185,9 @@ def test_parser_can_limit_live_proof_to_navigation() -> None:
     args = rust_webui_live_proof.build_parser().parse_args(["--navigation-only"])
 
     assert args.navigation_only is True
+
+
+def test_parser_can_verify_stale_key_recovery() -> None:
+    args = rust_webui_live_proof.build_parser().parse_args(["--verify-stale-key-recovery"])
+
+    assert args.verify_stale_key_recovery is True

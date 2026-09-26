@@ -249,6 +249,7 @@ def run_webui_live_proof(
     timeout_seconds: float,
     max_main_thread_busy_ratio: float,
     navigation_only: bool = False,
+    verify_stale_key_recovery: bool = False,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
 
@@ -266,6 +267,7 @@ def run_webui_live_proof(
         "tabWaitSeconds": tab_wait_seconds,
         "maxMainThreadBusyRatio": max_main_thread_busy_ratio,
         "navigationOnly": navigation_only,
+        "verifyStaleKeyRecovery": verify_stale_key_recovery,
         "tabsExpected": list(TAB_LABELS),
         "checks": {},
     }
@@ -284,10 +286,56 @@ def run_webui_live_proof(
             install_browser_diagnostics(page, diagnostics)
             page.on("request", lambda request: recorder.record_url(request.url))
             try:
+                initial_api_key = "stale-package-proof-key" if verify_stale_key_recovery else api_key
                 page.add_init_script(
-                    f"localStorage.setItem('emulebb.webui.apiKey', {json.dumps(api_key)});"
+                    f"localStorage.setItem('emulebb.webui.apiKey', {json.dumps(initial_api_key)});"
                 )
                 page.goto(base_url, wait_until="domcontentloaded", timeout=int(timeout_seconds * 1000))
+                if verify_stale_key_recovery:
+                    page.get_by_role("heading", name="Connect to the local daemon").wait_for(
+                        timeout=int(timeout_seconds * 1000)
+                    )
+                    if page.get_by_role("button", name="Overview", exact=True).count() != 0:
+                        raise RuntimeError("Rust WebUI exposed protected navigation for a stale API key")
+                    page.get_by_placeholder("X-API-Key").fill(api_key)
+                    page.get_by_role("button", name="Connect", exact=True).click(
+                        timeout=int(timeout_seconds * 1000)
+                    )
+                    page.get_by_text("API key verified", exact=True).wait_for(
+                        timeout=int(timeout_seconds * 1000)
+                    )
+                    stored_api_key = page.evaluate(
+                        "() => localStorage.getItem('emulebb.webui.apiKey')"
+                    )
+                    if stored_api_key != api_key:
+                        raise RuntimeError("Rust WebUI did not persist the verified API key")
+                    expected_auth_paths = {"/api/v1/app", "/api/v1/capabilities"}
+                    auth_console_errors = list(diagnostics["console_errors"])
+                    unexpected_auth_errors = [
+                        error
+                        for error in auth_console_errors
+                        if "401 (Unauthorized)" not in str(error.get("text", ""))
+                        or urlparse(str(error.get("location", {}).get("url", ""))).path
+                        not in expected_auth_paths
+                    ]
+                    if (
+                        not auth_console_errors
+                        or unexpected_auth_errors
+                        or diagnostics["page_errors"]
+                        or diagnostics["request_failures"]
+                    ):
+                        raise RuntimeError(
+                            "Rust WebUI stale-key gate produced unexpected browser diagnostics: "
+                            f"{diagnostics!r}"
+                        )
+                    report["checks"]["staleApiKeyRecovery"] = {
+                        "ok": True,
+                        "protectedNavigationHidden": True,
+                        "verifiedKeyPersisted": True,
+                        "expectedUnauthorizedResponses": len(auth_console_errors),
+                    }
+                    for entries in diagnostics.values():
+                        entries.clear()
                 page.get_by_role("navigation", name="Primary views").wait_for(timeout=int(timeout_seconds * 1000))
                 page.wait_for_timeout(1000)
 
@@ -411,6 +459,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-main-thread-busy-ratio", type=float, default=DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO)
     parser.add_argument("--navigation-only", action="store_true",
                         help="Visit every panel and check browser health without requiring active transfer progress.")
+    parser.add_argument(
+        "--verify-stale-key-recovery",
+        action="store_true",
+        help="Start with an invalid stored key and prove the authentication gate recovers without a reload.",
+    )
     return parser
 
 
@@ -427,6 +480,7 @@ def run(argv: list[str] | None = None) -> int:
         timeout_seconds=float(args.timeout_seconds),
         max_main_thread_busy_ratio=float(args.max_main_thread_busy_ratio),
         navigation_only=bool(args.navigation_only),
+        verify_stale_key_recovery=bool(args.verify_stale_key_recovery),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("status") == "passed" else 1

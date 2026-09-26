@@ -21,6 +21,12 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.rust_webui_live_proof import run_webui_live_proof
+
 API_KEY = "native-package-smoke"
 WEBUI_TITLE = "eMuleBB WebUI"
 PANEL_ROUTES = {
@@ -66,7 +72,13 @@ def _request(
         return response.read()
 
 
-def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, object]:
+def _smoke_binary(
+    binary: Path,
+    webui: Path,
+    temp_root: Path,
+    *,
+    render_webui: bool,
+) -> dict[str, object]:
     if not binary.is_file() or not (webui / "index.html").is_file():
         raise RuntimeError("package is missing its daemon or embedded WebUI")
     help_result = subprocess.run(
@@ -122,6 +134,21 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
                 if not isinstance(response, dict):
                     raise RuntimeError(f"{panel} panel REST backend returned non-object JSON")
                 panel_routes[panel] = path
+            rendered_webui = None
+            if render_webui:
+                rendered_webui = run_webui_live_proof(
+                    base_url=base_url,
+                    api_key=API_KEY,
+                    report_path=temp_root / "rendered-webui-proof.json",
+                    steady_seconds=3.0,
+                    tab_wait_seconds=0.25,
+                    timeout_seconds=30.0,
+                    max_main_thread_busy_ratio=0.25,
+                    navigation_only=True,
+                    verify_stale_key_recovery=True,
+                )
+                if rendered_webui.get("status") != "passed":
+                    raise RuntimeError(f"packaged rendered WebUI proof failed: {rendered_webui!r}")
             if not (profile / "emulebb-rust-metadata.db").exists():
                 raise RuntimeError("packaged daemon did not create its profile database")
             json.loads(
@@ -143,6 +170,7 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
                 "gracefulShutdown": True,
                 "sharedRoots": 0,
                 "profile": "fresh",
+                "renderedWebui": rendered_webui,
             }
         finally:
             if process.poll() is None:
@@ -157,23 +185,25 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
                 time.sleep(1)
 
 
-def _smoke_windows(asset: Path, temp_root: Path) -> dict[str, object]:
+def _smoke_windows(asset: Path, temp_root: Path, *, render_webui: bool) -> dict[str, object]:
     with zipfile.ZipFile(asset) as archive:
         archive.extractall(temp_root / "unpacked")
     root = temp_root / "unpacked" / "emulebb-rust"
-    return _smoke_binary(root / "emulebb-rust.exe", root / "webui", temp_root)
+    return _smoke_binary(
+        root / "emulebb-rust.exe", root / "webui", temp_root, render_webui=render_webui
+    )
 
 
-def _smoke_linux_deb(asset: Path, temp_root: Path) -> dict[str, object]:
+def _smoke_linux_deb(asset: Path, temp_root: Path, *, render_webui: bool) -> dict[str, object]:
     extracted = temp_root / "deb"
     subprocess.run(["dpkg-deb", "-x", str(asset), str(extracted)], check=True, timeout=30)
     root = extracted / "usr" / "lib" / "emulebb-rust"
     if not (extracted / "usr" / "bin" / "emulebb-rust-launch").is_file():
         raise RuntimeError("DEB is missing its browser launcher")
-    return _smoke_binary(root / "emulebb-rust", root / "webui", temp_root)
+    return _smoke_binary(root / "emulebb-rust", root / "webui", temp_root, render_webui=render_webui)
 
 
-def _smoke_linux_appimage(asset: Path, temp_root: Path) -> dict[str, object]:
+def _smoke_linux_appimage(asset: Path, temp_root: Path, *, render_webui: bool) -> dict[str, object]:
     extracted = temp_root / "appimage"
     extracted.mkdir()
     subprocess.run([str(asset), "--appimage-extract"], cwd=extracted, check=True, timeout=60,
@@ -182,10 +212,12 @@ def _smoke_linux_appimage(asset: Path, temp_root: Path) -> dict[str, object]:
     if not (root / "AppRun").is_file():
         raise RuntimeError("AppImage is missing AppRun")
     package = root / "usr" / "lib" / "emulebb-rust"
-    return _smoke_binary(package / "emulebb-rust", package / "webui", temp_root)
+    return _smoke_binary(
+        package / "emulebb-rust", package / "webui", temp_root, render_webui=render_webui
+    )
 
 
-def _smoke_macos(asset: Path, temp_root: Path) -> dict[str, object]:
+def _smoke_macos(asset: Path, temp_root: Path, *, render_webui: bool) -> dict[str, object]:
     mount = temp_root / "mounted"
     mount.mkdir()
     subprocess.run(["hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount),
@@ -194,7 +226,9 @@ def _smoke_macos(asset: Path, temp_root: Path) -> dict[str, object]:
         root = mount / "eMuleBB Rust.app" / "Contents" / "MacOS"
         if not (root / "launch").is_file():
             raise RuntimeError("DMG app is missing its browser launcher")
-        return _smoke_binary(root / "emulebb-rust", root / "webui", temp_root)
+        return _smoke_binary(
+            root / "emulebb-rust", root / "webui", temp_root, render_webui=render_webui
+        )
     finally:
         subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=60,
                        stdout=subprocess.DEVNULL)
@@ -206,6 +240,11 @@ def main() -> int:
     parser.add_argument("--release-version", required=True)
     parser.add_argument("--target-os", required=True, choices=("windows", "linux", "macos"))
     parser.add_argument("--platform", required=True, choices=("x64", "ARM64"))
+    parser.add_argument(
+        "--render-webui",
+        action="store_true",
+        help="Render the packaged WebUI in Chromium and prove stale-key recovery plus all primary views.",
+    )
     args = parser.parse_args()
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
@@ -226,7 +265,7 @@ def main() -> int:
                 raise RuntimeError(f"native package is missing: {asset}")
             child = temp_root / str(len(reports))
             child.mkdir()
-            reports.append({"asset": name, **smoke(asset, child)})
+            reports.append({"asset": name, **smoke(asset, child, render_webui=args.render_webui)})
     print(json.dumps({"schema": "emulebb.rust.package-smoke/1", "platform": f"{args.target_os}-{arch}",
                       "results": reports}, sort_keys=True))
     return 0
