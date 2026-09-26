@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import urllib.parse
 
 import pytest
 
@@ -128,6 +129,30 @@ def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
     assert module.OPENAPI_TAG_FAMILIES["Nat"] == "nat"
     assert module.OPENAPI_TAG_FAMILIES["VpnGuard"] == "vpn-guard"
     assert module.OPENAPI_TAG_FAMILIES["IpFilter"] == "ip-filter"
+
+
+def test_rust_openapi_shared_root_routes_use_controlled_external_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_root = tmp_path / "contract-shared-root"
+    monkeypatch.setenv("EMULEBB_REST_CONTRACT_SHARED_ROOT", str(shared_root))
+    module = rust_rest_conformance.load_rest_smoke_module()
+    routes_by_operation = {
+        route["operationId"]: route for route in module.REST_CONTRACT_ROUTES
+    }
+
+    assert routes_by_operation["addSharedDirectoryRoot"]["path"] == (
+        "/api/v1/shared-directories/roots"
+    )
+    assert routes_by_operation["removeSharedDirectoryRoot"]["path"] == (
+        "/api/v1/shared-directories/roots?"
+        + urllib.parse.urlencode({"path": str(shared_root.resolve())})
+    )
+    assert module.get_contract_route_body("addSharedDirectoryRoot") == {
+        "path": str(shared_root.resolve())
+    }
+    assert shared_root.is_dir()
 
 
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:

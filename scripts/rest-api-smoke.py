@@ -282,6 +282,7 @@ REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
     + "-linux-iso-library-Ω-例.mkv"
 )
+REST_CONTRACT_SHARED_ROOT_ENV = "EMULEBB_REST_CONTRACT_SHARED_ROOT"
 OPENAPI_CONTRACT_PATH = Path(
     os.environ.get(
         "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
@@ -782,9 +783,26 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
         path += "?limit=7"
     elif operation_id == "listLogs":
         path += "?limit=9"
+    elif operation_id == "removeSharedDirectoryRoot":
+        path += "?" + urllib.parse.urlencode({"path": str(contract_shared_root_path())})
     elif operation_id in {"deleteTransferFiles", "deleteSharedFileContent", "deleteSearches"}:
         path += "?confirm=true"
     return path
+
+
+def contract_shared_root_path() -> Path:
+    """Returns the controlled external directory used by shared-root contract routes."""
+
+    configured = os.environ.get(REST_CONTRACT_SHARED_ROOT_ENV, "").strip()
+    if configured:
+        return Path(configured).resolve()
+    output_root = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT", "").strip()
+    if not output_root:
+        raise RuntimeError(
+            f"{REST_CONTRACT_SHARED_ROOT_ENV} or EMULEBB_WORKSPACE_OUTPUT_ROOT is required "
+            "for shared-root contract routes."
+        )
+    return (Path(output_root) / "artifacts" / "rest-contract-shared-root").resolve()
 
 
 def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> tuple[dict[str, object], ...]:
@@ -3732,6 +3750,10 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return None
     if route_name in {"replaceSharedDirectories"}:
         return {"confirmReplaceRoots": True, "roots": []}
+    if route_name == "addSharedDirectoryRoot":
+        shared_root = contract_shared_root_path()
+        shared_root.mkdir(parents=True, exist_ok=True)
+        return {"path": str(shared_root)}
     if route_name in {"shared_files_reload", "reloadSharedFiles", "reloadSharedDirectories"}:
         return {}
     if route_name.startswith("uploads_") or route_name.startswith("upload_queue_") or route_name in {
