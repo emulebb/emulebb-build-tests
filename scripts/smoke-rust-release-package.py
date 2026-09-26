@@ -23,6 +23,22 @@ from pathlib import Path
 
 API_KEY = "native-package-smoke"
 WEBUI_TITLE = "eMuleBB WebUI"
+PANEL_ROUTES = {
+    "overview": "/api/v1/status",
+    "transfers": "/api/v1/transfers",
+    "search": "/api/v1/searches",
+    "sharing": "/api/v1/shared-directories",
+    "shared-files": "/api/v1/shared-files",
+    "uploads": "/api/v1/uploads",
+    "network": "/api/v1/network",
+    "servers": "/api/v1/servers",
+    "kad": "/api/v1/kad",
+    "categories": "/api/v1/categories",
+    "friends": "/api/v1/friends",
+    "settings": "/api/v1/app/settings",
+    "diagnostics": "/api/v1/diagnostics",
+    "logs": "/api/v1/logs?limit=20",
+}
 
 
 def _available_port() -> int:
@@ -31,9 +47,20 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _request(url: str, *, api_key: str | None = None) -> bytes:
+def _request(
+    url: str,
+    *,
+    api_key: str | None = None,
+    method: str = "GET",
+    json_body: dict[str, object] | None = None,
+) -> bytes:
     headers = {"X-API-Key": api_key} if api_key else {}
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=3) as response:
+    body = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=3) as response:
         if response.status != 200:
             raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
         return response.read()
@@ -45,7 +72,7 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
     help_result = subprocess.run(
         [str(binary), "--help"], capture_output=True, text=True, timeout=20, check=True
     )
-    required_options = ("--profile", "--rest-bind-addr", "--p2p-bind-interface")
+    required_options = ("--profile", "--p2p-bind-interface")
     if any(option not in help_result.stdout for option in required_options):
         raise RuntimeError("packaged daemon CLI is missing beta options")
 
@@ -62,8 +89,7 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
     log_path = temp_root / "daemon.log"
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            [str(binary), "--profile", str(profile), "--rest-bind-addr", f"127.0.0.1:{port}",
-             "--incoming-dir", str(incoming)],
+            [str(binary), "--profile", str(profile), "--incoming-dir", str(incoming)],
             stdout=log,
             stderr=subprocess.STDOUT,
             env={**os.environ, "RUST_LOG": "warn"},
@@ -90,17 +116,42 @@ def _smoke_binary(binary: Path, webui: Path, temp_root: Path) -> dict[str, objec
             stats = data.get("stats") if isinstance(data, dict) else None
             if not isinstance(stats, dict) or "ed2kConnected" not in stats:
                 raise RuntimeError("packaged REST status is invalid")
+            panel_routes = {}
+            for panel, path in PANEL_ROUTES.items():
+                response = json.loads(_request(base_url + path, api_key=API_KEY))
+                if not isinstance(response, dict):
+                    raise RuntimeError(f"{panel} panel REST backend returned non-object JSON")
+                panel_routes[panel] = path
             if not (profile / "emulebb-rust-metadata.db").exists():
                 raise RuntimeError("packaged daemon did not create its profile database")
-            return {"status": "passed", "webuiAssets": len(assets), "restStatus": True,
-                    "sharedRoots": 0, "profile": "fresh"}
+            json.loads(
+                _request(
+                    base_url + "/api/v1/app/shutdown",
+                    api_key=API_KEY,
+                    method="POST",
+                    json_body={"confirmShutdown": True},
+                )
+            )
+            process.wait(timeout=30)
+            if process.returncode != 0:
+                raise RuntimeError(f"packaged daemon exited {process.returncode} after REST shutdown")
+            return {
+                "status": "passed",
+                "webuiAssets": len(assets),
+                "restStatus": True,
+                "webuiPanelBackends": panel_routes,
+                "gracefulShutdown": True,
+                "sharedRoots": 0,
+                "profile": "fresh",
+            }
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
             if os.name == "nt":
                 # The Windows loader can briefly retain the just-stopped EXE.
                 time.sleep(1)
