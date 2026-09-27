@@ -21,6 +21,7 @@ V16_SCHEMA_VERSION = 16
 V17_SCHEMA_VERSION = 17
 V18_SCHEMA_VERSION = 18
 V19_SCHEMA_VERSION = 19
+V20_SCHEMA_VERSION = 20
 SCHEMA = "emulebb-build-tests.rust-soak-metadata-migration.v1"
 SHARED_ROOT_COLUMNS = (
     "id",
@@ -459,6 +460,105 @@ def migrate_v18_to_v19(
     }
 
 
+def migrate_v19_to_v20(
+    *,
+    db_path: Path,
+    rust_repo: Path,
+    backup_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Add the persisted per-source eMule connect-options byte."""
+
+    db_path = db_path.resolve()
+    rust_repo = rust_repo.resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"metadata database does not exist: {db_path}")
+
+    schema_id, current_version = rust_metadata._schema_marker(rust_repo)
+    if current_version < V20_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"this migration requires Rust schema {V20_SCHEMA_VERSION}+; current schema is {current_version}"
+        )
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        before_version = schema_marker(db_path, schema_id)
+        if before_version is None:
+            raise RuntimeError(f"metadata_schema row is missing for {schema_id}")
+        columns = table_columns(conn, "transfer_sources")
+        source_count = int(
+            conn.execute("SELECT count(*) FROM transfer_sources").fetchone()[0]
+        )
+    has_connect_options = "connect_options" in columns
+
+    if before_version >= V20_SCHEMA_VERSION and has_connect_options:
+        return {
+            "schema": SCHEMA,
+            "action": "noop-v20-shape-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "schemaVersion": before_version,
+            "transferSources": source_count,
+        }
+    if before_version != V19_SCHEMA_VERSION:
+        raise RuntimeError(
+            "metadata DB is not the bounded v19 transfer-source shape "
+            f"(schemaVersion={before_version}, columns={columns})"
+        )
+    if dry_run:
+        return {
+            "schema": SCHEMA,
+            "action": "would-migrate-v19-to-v20",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "fromSchemaVersion": V19_SCHEMA_VERSION,
+            "toSchemaVersion": V20_SCHEMA_VERSION,
+            "addedColumns": (
+                [] if has_connect_options else ["transfer_sources.connect_options"]
+            ),
+            "transferSources": source_count,
+        }
+
+    backup_path = backup_database(db_path, backup_dir, "v19-to-v20")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if not has_connect_options:
+                conn.execute(
+                    "ALTER TABLE transfer_sources ADD COLUMN connect_options "
+                    "INTEGER CHECK(connect_options IS NULL OR connect_options BETWEEN 0 AND 255)"
+                )
+            conn.execute(
+                "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
+                (V20_SCHEMA_VERSION, schema_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_issues:
+            raise RuntimeError(
+                f"foreign key check failed after migration: {fk_issues[:5]}"
+            )
+        after_version = schema_marker(db_path, schema_id)
+        after_columns = table_columns(conn, "transfer_sources")
+
+    return {
+        "schema": SCHEMA,
+        "action": "migrated-v19-to-v20",
+        "metadataDb": str(db_path),
+        "backup": str(backup_path),
+        "schemaId": schema_id,
+        "fromSchemaVersion": before_version,
+        "toSchemaVersion": after_version,
+        "addedColumns": (
+            [] if has_connect_options else ["transfer_sources.connect_options"]
+        ),
+        "columns": after_columns,
+        "transferSources": source_count,
+    }
+
+
 def migrate_to_current(
     *,
     db_path: Path,
@@ -514,7 +614,7 @@ def migrate_to_current(
             dry_run=dry_run,
         )
         steps.append(result)
-    elif before_version != V18_SCHEMA_VERSION:
+    elif before_version not in (V18_SCHEMA_VERSION, V19_SCHEMA_VERSION):
         raise RuntimeError(
             f"metadata DB schemaVersion={before_version} cannot be migrated to current {current_version}"
         )
@@ -557,12 +657,27 @@ def migrate_to_current(
                 }
             )
 
-    before_version = (
-        schema_marker(db_path, schema_id) if not dry_run else V18_SCHEMA_VERSION
-    )
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version == V17_SCHEMA_VERSION:
+        before_version = V18_SCHEMA_VERSION
     if before_version == V18_SCHEMA_VERSION and current_version >= V19_SCHEMA_VERSION:
         steps.append(
             migrate_v18_to_v19(
+                db_path=db_path,
+                rust_repo=rust_repo,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+            )
+        )
+
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version == V18_SCHEMA_VERSION and current_version >= V19_SCHEMA_VERSION:
+        before_version = V19_SCHEMA_VERSION
+    if before_version == V19_SCHEMA_VERSION and current_version >= V20_SCHEMA_VERSION:
+        steps.append(
+            migrate_v19_to_v20(
                 db_path=db_path,
                 rust_repo=rust_repo,
                 backup_dir=backup_dir,
@@ -576,7 +691,13 @@ def migrate_to_current(
     if any(str(step.get("action", "")).startswith("would-") for step in steps):
         action = "would-migrate-to-current"
     elif all(
-        step.get("action") in ("noop-current", "noop-v17-shape-current")
+        step.get("action")
+        in (
+            "noop-current",
+            "noop-v17-shape-current",
+            "noop-v19-shape-current",
+            "noop-v20-shape-current",
+        )
         for step in steps
     ):
         action = "noop-current"

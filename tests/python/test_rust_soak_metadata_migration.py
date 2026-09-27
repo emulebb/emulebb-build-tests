@@ -3,11 +3,14 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from emule_test_harness import rust_metadata
 from emule_test_harness.rust_soak_metadata_migration import (
     migrate_to_current,
     migrate_v16_to_v17,
     migrate_v18_to_v19,
+    migrate_v19_to_v20,
 )
 
 
@@ -126,6 +129,37 @@ def make_v18_db_without_server_udp_metadata(path: Path) -> None:
         conn.commit()
 
 
+def make_v19_db_without_source_connect_options(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    old_schema = rust_metadata._schema_sql(rust_repo()).replace(
+        "    connect_options INTEGER CHECK(connect_options IS NULL OR connect_options BETWEEN 0 AND 255),\n",
+        "",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_schema)
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 19, 0)",
+            (schema_id,),
+        )
+        conn.execute(
+            "INSERT INTO known_files(ed2k_hash, size_bytes, display_name, first_seen_ms, last_seen_ms, updated_at_ms) "
+            "VALUES (zeroblob(16), 1, 'sample.bin', 0, 0, 0)"
+        )
+        known_file_id = conn.execute("SELECT id FROM known_files").fetchone()[0]
+        conn.execute(
+            "INSERT INTO transfers(known_file_id, visible_state, created_at_ms, updated_at_ms) "
+            "VALUES (?, 'downloading', 0, 0)",
+            (known_file_id,),
+        )
+        transfer_id = conn.execute("SELECT id FROM transfers").fetchone()[0]
+        conn.execute(
+            "INSERT INTO transfer_sources(transfer_id, ip, tcp_port, first_seen_ms, last_seen_ms) "
+            "VALUES (?, '192.0.2.20', 4662, 0, 0)",
+            (transfer_id,),
+        )
+        conn.commit()
+
+
 def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
     db_path = tmp_path / "emulebb-rust-metadata.db"
     make_v15_db(db_path)
@@ -141,6 +175,7 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         "migrated-v16-to-v17",
         "finalized-v17-to-v18",
         "migrated-v18-to-v19",
+        "migrated-v19-to-v20",
     ]
     assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
@@ -214,4 +249,27 @@ def test_migrates_v18_server_udp_metadata_to_v19(tmp_path: Path) -> None:
         assert "max_users" in columns
         assert "low_id_users" in columns
         assert conn.execute("SELECT count(*) FROM servers").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migrates_v19_source_connect_options_to_v20(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v19_db_without_source_connect_options(db_path)
+
+    result = migrate_v19_to_v20(
+        db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path
+    )
+
+    assert result["action"] == "migrated-v19-to-v20"
+    assert Path(str(result["backup"])).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 20
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(transfer_sources)")]
+        assert "connect_options" in columns
+        assert conn.execute(
+            "SELECT connect_options FROM transfer_sources"
+        ).fetchone() == (None,)
+        conn.execute("UPDATE transfer_sources SET connect_options = 7")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE transfer_sources SET connect_options = 256")
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
