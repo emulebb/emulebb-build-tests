@@ -1,8 +1,10 @@
 """Local real-process validation of the Rust client's UDP source-reask (FEAT-001).
 
-Topology (all on the LAN bind addr, through a local goed2k server):
+Topology (all on one LAN interface, through a local goed2k server):
   * eMuleBB (reference uploader) shares one fixture, configured with its
     minimum two upload slots and no elastic headroom.
+  * three temporary LAN aliases give the Rust peers distinct source addresses,
+    preserving eMuleBB's production same-IP anti-abuse limit.
   * two Rust clients download the fixture and occupy both slots.
   * the "reask" Rust client (enableUdpReask=true) then downloads the same
     fixture -> eMuleBB has no free slot -> it QUEUES the reask client
@@ -31,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -42,6 +45,8 @@ harness_cli_common = cc.harness_cli_common
 
 SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
+DIAGNOSTIC_INITIAL_REASK_DELAY_ENV = "EMULEBB_RUST_DIAGNOSTIC_INITIAL_REASK_DELAY_SECS"
+DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS = 0
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
 # eMuleBB enforces a minimum of two upload slots. Disable elastic headroom.
 EMULEBB_MAX_UPLOAD_KIB = 4
@@ -79,7 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpoint,
-               used_ports, label, enable_reask, diagnostics=False):
+               used_ports, label, enable_reask, diagnostics=False,
+               diagnostic_initial_reask_delay_seconds=None):
     """Writes a profile + launches one Rust client; returns (base_url, process, out, profile)."""
     rest_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     ed2k_port = cc.choose_extra_port(lan_bind_addr, used_ports)
@@ -116,7 +122,22 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
         packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
         packet_dir.mkdir(parents=True, exist_ok=True)
         os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
-    process = rust_client.start_rust_client_executable(executable, profile, out_path)
+    if diagnostic_initial_reask_delay_seconds is not None and not diagnostics:
+        raise ValueError("the accelerated reask delay requires the Rust diagnostics executable")
+    previous_delay = os.environ.get(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV)
+    try:
+        if diagnostic_initial_reask_delay_seconds is not None:
+            os.environ[DIAGNOSTIC_INITIAL_REASK_DELAY_ENV] = str(
+                diagnostic_initial_reask_delay_seconds
+            )
+        else:
+            os.environ.pop(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV, None)
+        process = rust_client.start_rust_client_executable(executable, profile, out_path)
+    finally:
+        if previous_delay is None:
+            os.environ.pop(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV, None)
+        else:
+            os.environ[DIAGNOSTIC_INITIAL_REASK_DELAY_ENV] = previous_delay
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     try:
         cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
@@ -203,9 +224,14 @@ def max_waiting_sessions(path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    app_exe = args.app_exe or str(
+        converged_live_wire.resolve_mfc_diagnostics_exe(
+            get_workspace_output_root(), configuration=args.configuration,
+        )
+    )
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__, suite_name=SUITE_NAME, configuration=args.configuration,
-        workspace_root=None, app_root=args.app_root, app_exe=args.app_exe,
+        workspace_root=None, app_root=args.app_root, app_exe=app_exe,
         artifacts_dir=args.artifacts_dir, keep_artifacts=args.keep_artifacts,
     )
     profile_seed_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
@@ -214,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     occupier_procs = []
     reask_proc = None
     emulebb_app = None
+    peer_ip_pool = None
     try:
         p2p_address = dtt.resolve_lan_p2p_bind_address(
             lan_bind_addr=args.lan_bind_addr,
@@ -224,6 +251,13 @@ def main(argv: list[str] | None = None) -> int:
         used_ports = set(ports.values())
         server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
+        peer_ip_pool = LanIpPool(p2p_address)
+        peer_ips = peer_ip_pool.acquire(3)
+        report["network"] = {
+            "serverAddress": p2p_address,
+            "rustPeerAddresses": peer_ips,
+            "diagnosticInitialReaskDelaySeconds": DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS,
+        }
 
         ed2k_server = goed2k.launch_ed2k_server(
             workspace_root=paths.workspace_root, server_dir=paths.source_artifacts_dir / "ed2k-server",
@@ -266,18 +300,19 @@ def main(argv: list[str] | None = None) -> int:
         # Start all three clients before requesting a transfer. Otherwise the
         # first slow transfer can time out while later clients are connecting.
         occupiers = []
-        for index in (1, 2):
+        for index, peer_ip in enumerate(peer_ips[:2], start=1):
             occ_url, occupier_proc, _occ_out, _ = start_rust(
                 repo=rust_repo, paths=paths, lan_bind_addr=args.lan_bind_addr, api_key=args.api_key,
-                p2p_address=p2p_address, server_endpoint=server_endpoint, used_ports=used_ports,
+                p2p_address=peer_ip, server_endpoint=server_endpoint, used_ports=used_ports,
                 label=f"occupier-{index}", enable_reask=False, diagnostics=args.diagnostics,
             )
             occupier_procs.append(occupier_proc)
             occupiers.append(occ_url)
         reask_url, reask_proc, reask_out, _ = start_rust(
             repo=rust_repo, paths=paths, lan_bind_addr=args.lan_bind_addr, api_key=args.api_key,
-            p2p_address=p2p_address, server_endpoint=server_endpoint, used_ports=used_ports,
-            label="reask", enable_reask=True, diagnostics=args.diagnostics,
+            p2p_address=peer_ips[2], server_endpoint=server_endpoint, used_ports=used_ports,
+            label="reask", enable_reask=True, diagnostics=True,
+            diagnostic_initial_reask_delay_seconds=DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS,
         )
         for occ_url in occupiers:
             cc.request_json(occ_url, "POST", "/api/v1/transfers", args.api_key, {"link": str(shared_link["link"]), "paused": False})
@@ -316,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
             rust_client.stop_process_tree(occupier_proc)
         rust_client.stop_process_tree(reask_proc)
         goed2k.stop_process(server_process)
+        if peer_ip_pool is not None:
+            peer_ip_pool.release()
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         harness_cli_common.write_json_file(paths.source_artifacts_dir / "emulebb-rust-reask-cross-client-result.json", report)
         print(report)
