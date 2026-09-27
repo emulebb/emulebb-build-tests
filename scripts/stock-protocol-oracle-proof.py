@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,13 @@ from emule_test_harness.protocol_goldens import (  # noqa: E402
 )
 
 SUITE_NAME = "stock-protocol-oracle-proof"
+RUST_PROOF_PACKAGES = (
+    "emulebb-ed2k",
+    "emulebb-kad-dht",
+    "emulebb-kad-net",
+    "emulebb-kad-proto",
+    "emulebb-core",
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,6 +39,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts-dir", type=Path)
     parser.add_argument("--manifest-path", type=Path)
+    parser.add_argument(
+        "--execute-rust-proofs",
+        action="store_true",
+        help="Run every Rust package containing a cited oracle proof through workspace orchestration.",
+    )
     return parser.parse_args(argv)
 
 
@@ -49,7 +62,60 @@ def publish_latest(run_dir: Path, latest_dir: Path) -> None:
     shutil.copytree(run_dir, latest_dir)
 
 
-def build_checks(manifest: dict[str, object], errors: tuple[str, ...]) -> dict[str, object]:
+def run_rust_proof_packages(workspace_root: Path) -> list[dict[str, object]]:
+    """Executes all packages containing manifest proof selectors via the workspace wrapper."""
+
+    build_repo = workspace_root / "repos" / "emulebb-build"
+    rows: list[dict[str, object]] = []
+    for package in RUST_PROOF_PACKAGES:
+        command = [
+            sys.executable,
+            "-m",
+            "emule_workspace",
+            "test",
+            "rust-unit",
+            "--package",
+            package,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=build_repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            rows.append(
+                {
+                    "package": package,
+                    "status": "passed" if completed.returncode == 0 else "failed",
+                    "returnCode": completed.returncode,
+                    "command": command,
+                    "stdoutTail": completed.stdout[-4000:],
+                    "stderrTail": completed.stderr[-4000:],
+                }
+            )
+        except OSError as exc:
+            rows.append(
+                {
+                    "package": package,
+                    "status": "failed",
+                    "returnCode": None,
+                    "command": command,
+                    "stdoutTail": "",
+                    "stderrTail": str(exc),
+                }
+            )
+    return rows
+
+
+def build_checks(
+    manifest: dict[str, object],
+    errors: tuple[str, ...],
+    rust_proof_runs: list[dict[str, object]] | None = None,
+    *,
+    execution_required: bool = False,
+) -> dict[str, object]:
     """Builds explicit proof metrics from the validated manifest."""
 
     records = manifest.get("records")
@@ -69,8 +135,14 @@ def build_checks(manifest: dict[str, object], errors: tuple[str, ...]) -> dict[s
         for row in group_rows
         if isinstance(row, dict) and isinstance(row.get("rustProofs"), list)
     )
+    execution_rows = rust_proof_runs or []
+    execution_packages = [str(row.get("package", "")) for row in execution_rows]
+    executions_passed = (
+        tuple(execution_packages) == RUST_PROOF_PACKAGES
+        and all(row.get("status") == "passed" for row in execution_rows)
+    )
     return {
-        "allRequirementsPassed": not errors,
+        "allRequirementsPassed": not errors and (not execution_required or executions_passed),
         "validationErrorCount": len(errors),
         "validationErrors": list(errors),
         "requiredCoverageCount": len(REQUIRED_STOCK_COVERAGE_IDS),
@@ -80,6 +152,11 @@ def build_checks(manifest: dict[str, object], errors: tuple[str, ...]) -> dict[s
         "stateVectorCount": len(state_records),
         "sourceAnchorCount": source_anchor_count,
         "rustProofSelectorCount": rust_proof_count,
+        "rustProofExecutionRequired": execution_required,
+        "rustProofExpectedPackageCount": len(RUST_PROOF_PACKAGES),
+        "rustProofPackageCount": len(execution_rows),
+        "rustProofPackages": execution_packages,
+        "rustProofExecutionsPassed": executions_passed,
         "baselineRevisionPinned": not any("baseline revision drift" in error for error in errors),
         "sourceAnchorsPassed": not any("source anchor" in error for error in errors),
         "rustProofSelectorsPassed": not any("Rust proof" in error for error in errors),
@@ -101,7 +178,13 @@ def main(argv: list[str] | None = None) -> int:
 
     validation = validate_golden_manifest(manifest_path, workspace_root=workspace_root)
     manifest = load_json(manifest_path)
-    checks = build_checks(manifest, validation.errors)
+    rust_proof_runs = run_rust_proof_packages(workspace_root) if args.execute_rust_proofs else []
+    checks = build_checks(
+        manifest,
+        validation.errors,
+        rust_proof_runs,
+        execution_required=args.execute_rust_proofs,
+    )
     report: dict[str, object] = {
         "suite": SUITE_NAME,
         "status": "passed" if checks["allRequirementsPassed"] else "failed",
@@ -109,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         "startedAtUtc": started,
         "finishedAtUtc": datetime.now(UTC).isoformat(),
         "manifestPath": str(manifest_path),
+        "rustProofExecutions": rust_proof_runs,
         "checks": {"stock_protocol_oracle_requirements": checks},
     }
     write_json(run_dir / f"{SUITE_NAME}-result.json", report)

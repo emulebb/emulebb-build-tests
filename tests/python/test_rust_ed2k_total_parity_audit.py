@@ -50,6 +50,10 @@ def seed_complete_evidence(output_root: Path) -> None:
                     "baselineRevisionPinned": True,
                     "sourceAnchorsPassed": True,
                     "rustProofSelectorsPassed": True,
+                    "rustProofExecutionRequired": True,
+                    "rustProofExpectedPackageCount": 5,
+                    "rustProofPackageCount": 5,
+                    "rustProofExecutionsPassed": True,
                     "binaryDigestsPassed": True,
                 }
             },

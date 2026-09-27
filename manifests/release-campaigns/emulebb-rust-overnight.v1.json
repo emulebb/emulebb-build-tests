@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust-overnight",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust full overnight parity campaign",
-  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the source-anchored binary/state oracle, full protocol-combination matrix, private Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the source-anchored binary/state oracle plus all five Rust proof packages, full protocol-combination matrix, private Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
   "phases": [
     {
@@ -49,7 +49,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/stock-protocol-oracle-proof.py",
+          "command": "python scripts/stock-protocol-oracle-proof.py --execute-rust-proofs",
           "evidence": [
             {
               "kind": "json-status",
@@ -67,6 +67,10 @@
                 "/checks/stock_protocol_oracle_requirements/baselineRevisionPinned": true,
                 "/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed": true,
+                "/checks/stock_protocol_oracle_requirements/rustProofExecutionRequired": true,
+                "/checks/stock_protocol_oracle_requirements/rustProofExpectedPackageCount": 5,
+                "/checks/stock_protocol_oracle_requirements/rustProofPackageCount": 5,
+                "/checks/stock_protocol_oracle_requirements/rustProofExecutionsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/binaryDigestsPassed": true
               }
             }

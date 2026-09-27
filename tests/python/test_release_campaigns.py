@@ -348,6 +348,8 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 97
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed"] is True
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed"] is True
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofPackageCount"] == 5
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofExecutionsPassed"] is True
     preflight_evidence = scenarios[preflight_id]["evidence"][0]
     assert preflight_evidence["kind"] == "json-status"
     assert preflight_evidence["base"] == "workspace-output"
@@ -593,6 +595,10 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                         "baselineRevisionPinned": True,
                         "sourceAnchorsPassed": True,
                         "rustProofSelectorsPassed": True,
+                        "rustProofExecutionRequired": True,
+                        "rustProofExpectedPackageCount": 5,
+                        "rustProofPackageCount": 5,
+                        "rustProofExecutionsPassed": True,
                         "binaryDigestsPassed": True,
                     }
                 },
