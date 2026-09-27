@@ -19,6 +19,8 @@ from .paths import get_required_emule_workspace_root, get_workspace_output_root
 FROM_SCHEMA_VERSION = 15
 V16_SCHEMA_VERSION = 16
 V17_SCHEMA_VERSION = 17
+V18_SCHEMA_VERSION = 18
+V19_SCHEMA_VERSION = 19
 SCHEMA = "emulebb-build-tests.rust-soak-metadata-migration.v1"
 SHARED_ROOT_COLUMNS = (
     "id",
@@ -346,6 +348,117 @@ def migrate_v16_to_v17(
     }
 
 
+SERVER_UDP_METADATA_COLUMNS = (
+    "max_users",
+    "low_id_users",
+    "obfuscation_udp_port",
+    "udp_key",
+    "udp_key_ip",
+)
+
+
+def migrate_v18_to_v19(
+    *,
+    db_path: Path,
+    rust_repo: Path,
+    backup_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Add persisted server UDP key binding and obfuscated-port metadata."""
+
+    db_path = db_path.resolve()
+    rust_repo = rust_repo.resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"metadata database does not exist: {db_path}")
+
+    schema_id, current_version = rust_metadata._schema_marker(rust_repo)
+    if current_version < V19_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"this migration requires Rust schema {V19_SCHEMA_VERSION}+; current schema is {current_version}"
+        )
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        before_version = schema_marker(db_path, schema_id)
+        if before_version is None:
+            raise RuntimeError(f"metadata_schema row is missing for {schema_id}")
+        columns = table_columns(conn, "servers")
+        server_count = int(conn.execute("SELECT count(*) FROM servers").fetchone()[0])
+    missing = [name for name in SERVER_UDP_METADATA_COLUMNS if name not in columns]
+
+    if before_version >= V19_SCHEMA_VERSION and not missing:
+        return {
+            "schema": SCHEMA,
+            "action": "noop-v19-shape-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "schemaVersion": before_version,
+            "servers": server_count,
+        }
+    if before_version != V18_SCHEMA_VERSION:
+        raise RuntimeError(
+            "metadata DB is not the bounded v18 server shape "
+            f"(schemaVersion={before_version}, columns={columns})"
+        )
+    if dry_run:
+        return {
+            "schema": SCHEMA,
+            "action": "would-migrate-v18-to-v19",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "fromSchemaVersion": V18_SCHEMA_VERSION,
+            "toSchemaVersion": V19_SCHEMA_VERSION,
+            "addedColumns": missing,
+            "servers": server_count,
+        }
+
+    backup_path = backup_database(db_path, backup_dir, "v18-to-v19")
+    column_ddl = {
+        "max_users": "INTEGER CHECK(max_users IS NULL OR max_users >= 0)",
+        "low_id_users": "INTEGER CHECK(low_id_users IS NULL OR low_id_users >= 0)",
+        "obfuscation_udp_port": (
+            "INTEGER CHECK(obfuscation_udp_port IS NULL OR "
+            "obfuscation_udp_port BETWEEN 1 AND 65535)"
+        ),
+        "udp_key": "INTEGER CHECK(udp_key IS NULL OR udp_key BETWEEN 1 AND 4294967295)",
+        "udp_key_ip": (
+            "INTEGER CHECK(udp_key_ip IS NULL OR udp_key_ip BETWEEN 1 AND 4294967295)"
+        ),
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for column in missing:
+                conn.execute(f"ALTER TABLE servers ADD COLUMN {column} {column_ddl[column]}")
+            conn.execute(
+                "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
+                (V19_SCHEMA_VERSION, schema_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_issues:
+            raise RuntimeError(
+                f"foreign key check failed after migration: {fk_issues[:5]}"
+            )
+        after_version = schema_marker(db_path, schema_id)
+        after_columns = table_columns(conn, "servers")
+
+    return {
+        "schema": SCHEMA,
+        "action": "migrated-v18-to-v19",
+        "metadataDb": str(db_path),
+        "backup": str(backup_path),
+        "schemaId": schema_id,
+        "fromSchemaVersion": before_version,
+        "toSchemaVersion": after_version,
+        "addedColumns": missing,
+        "columns": after_columns,
+        "servers": server_count,
+    }
+
+
 def migrate_to_current(
     *,
     db_path: Path,
@@ -401,47 +514,61 @@ def migrate_to_current(
             dry_run=dry_run,
         )
         steps.append(result)
-    else:
+    elif before_version != V18_SCHEMA_VERSION:
         raise RuntimeError(
             f"metadata DB schemaVersion={before_version} cannot be migrated to current {current_version}"
         )
 
-    before_version = (
-        schema_marker(db_path, schema_id) if not dry_run else V17_SCHEMA_VERSION
-    )
-    if before_version == V17_SCHEMA_VERSION and current_version > V17_SCHEMA_VERSION:
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version in (V16_SCHEMA_VERSION, V17_SCHEMA_VERSION):
+        before_version = V17_SCHEMA_VERSION
+    if before_version == V17_SCHEMA_VERSION and current_version >= V18_SCHEMA_VERSION:
         if dry_run:
             steps.append(
                 {
                     "schema": SCHEMA,
-                    "action": "would-finalize-v17-to-current",
+                    "action": "would-finalize-v17-to-v18",
                     "metadataDb": str(db_path),
                     "schemaId": schema_id,
                     "fromSchemaVersion": V17_SCHEMA_VERSION,
-                    "toSchemaVersion": current_version,
+                    "toSchemaVersion": V18_SCHEMA_VERSION,
                 }
             )
         else:
-            backup_path = backup_database(db_path, backup_dir, "v17-to-current")
+            backup_path = backup_database(db_path, backup_dir, "v17-to-v18")
             with sqlite3.connect(db_path) as conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.executescript(current_imported_known_files_sql(rust_repo))
                 conn.execute(
                     "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
-                    (current_version, schema_id),
+                    (V18_SCHEMA_VERSION, schema_id),
                 )
                 conn.commit()
             steps.append(
                 {
                     "schema": SCHEMA,
-                    "action": "finalized-v17-to-current",
+                    "action": "finalized-v17-to-v18",
                     "metadataDb": str(db_path),
                     "backup": str(backup_path),
                     "schemaId": schema_id,
                     "fromSchemaVersion": V17_SCHEMA_VERSION,
-                    "toSchemaVersion": current_version,
+                    "toSchemaVersion": V18_SCHEMA_VERSION,
                 }
             )
+
+    before_version = (
+        schema_marker(db_path, schema_id) if not dry_run else V18_SCHEMA_VERSION
+    )
+    if before_version == V18_SCHEMA_VERSION and current_version >= V19_SCHEMA_VERSION:
+        steps.append(
+            migrate_v18_to_v19(
+                db_path=db_path,
+                rust_repo=rust_repo,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+            )
+        )
 
     final_version = (
         schema_marker(db_path, schema_id) if not dry_run else current_version
