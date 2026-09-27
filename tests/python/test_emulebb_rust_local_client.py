@@ -270,6 +270,39 @@ def wait_for_condition(description: str, deadline_seconds: float, probe: Callabl
     raise AssertionError(f"Timed out waiting for {description}{detail}")
 
 
+def configure_shared_directory(
+    base_url: str,
+    root: Path,
+    expected_names: set[str],
+) -> dict[str, dict[str, object]]:
+    """Shares one root through the canonical Rust directory mutation surface."""
+
+    request_json(
+        base_url,
+        "PATCH",
+        "/api/v1/shared-directories",
+        {"roots": [str(root)], "confirmReplaceRoots": True},
+        timeout=30,
+    )
+    request_json(
+        base_url,
+        "POST",
+        "/api/v1/shared-directories/operations/reload",
+        timeout=30,
+    )
+
+    def probe() -> dict[str, dict[str, object]] | None:
+        items = request_json(base_url, "GET", "/api/v1/shared-files", timeout=30)["data"]["items"]
+        by_name = {str(item["name"]): item for item in items}
+        return by_name if expected_names <= by_name.keys() else None
+
+    return wait_for_condition(
+        f"shared files under {root}",
+        30,
+        probe,
+    )
+
+
 def terminate_process(process: subprocess.Popen[str]) -> None:
     rust_client.stop_process_tree(process, timeout_seconds=5)
 
@@ -999,16 +1032,20 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
 
-    payload_path = tmp_path / "Rust.Peer.Download.Fixture.bin"
+    seeder_shared_dir = tmp_path / "seeder-shared"
+    leecher_shared_dir = tmp_path / "leecher-shared"
+    seeder_shared_dir.mkdir()
+    leecher_shared_dir.mkdir()
+    payload_path = seeder_shared_dir / "Rust.Peer.Download.Fixture.bin"
     payload = (b"emulebb-rust-ed2k-download-fixture\n" * 256) + b"tail"
     payload_path.write_bytes(payload)
-    unicode_payload_path = tmp_path / "Rust.Peer.Unicode-\u00e9-\u6f22.Fixture.bin"
+    unicode_payload_path = seeder_shared_dir / "Rust.Peer.Unicode-\u00e9-\u6f22.Fixture.bin"
     unicode_payload = (b"emulebb-rust-ed2k-unicode-download-fixture\n" * 257) + b"tail"
     unicode_payload_path.write_bytes(unicode_payload)
-    hash_only_payload_path = tmp_path / "Rust.Peer.Hash.Only.Metadata.Fixture.bin"
+    hash_only_payload_path = seeder_shared_dir / "Rust.Peer.Hash.Only.Metadata.Fixture.bin"
     hash_only_payload = (b"emulebb-rust-ed2k-hash-only-metadata-fixture\n" * 255) + b"tail"
     hash_only_payload_path.write_bytes(hash_only_payload)
-    reverse_payload_path = tmp_path / "Rust.Peer.Reverse.Download.Fixture.bin"
+    reverse_payload_path = leecher_shared_dir / "Rust.Peer.Reverse.Download.Fixture.bin"
     reverse_payload = (b"emulebb-rust-ed2k-reverse-download-fixture\n" * 256) + b"tail"
     reverse_payload_path.write_bytes(reverse_payload)
 
@@ -1114,42 +1151,17 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             30,
             lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["stats"]["ed2kConnected"],
         )
-        share = request_json(
+        seeder_shares = configure_shared_directory(
             seeder_base_url,
-            "POST",
-            "/api/v1/shared-files",
-            {"path": str(payload_path)},
-            timeout=30,
-        )["data"]
-        assert share["ok"] is True
-        assert share["queued"] is False
-        assert share["file"]["name"] == payload_path.name
-        assert int(share["file"]["sizeBytes"]) == len(payload)
-        share_file = share["file"]
-        unicode_share = request_json(
-            seeder_base_url,
-            "POST",
-            "/api/v1/shared-files",
-            {"path": str(unicode_payload_path)},
-            timeout=30,
-        )["data"]
-        assert unicode_share["ok"] is True
-        assert unicode_share["queued"] is False
-        assert unicode_share["file"]["name"] == unicode_payload_path.name
-        assert int(unicode_share["file"]["sizeBytes"]) == len(unicode_payload)
-        unicode_share_file = unicode_share["file"]
-        hash_only_share = request_json(
-            seeder_base_url,
-            "POST",
-            "/api/v1/shared-files",
-            {"path": str(hash_only_payload_path)},
-            timeout=30,
-        )["data"]
-        assert hash_only_share["ok"] is True
-        assert hash_only_share["queued"] is False
-        assert hash_only_share["file"]["name"] == hash_only_payload_path.name
-        assert int(hash_only_share["file"]["sizeBytes"]) == len(hash_only_payload)
-        hash_only_share_file = hash_only_share["file"]
+            seeder_shared_dir,
+            {payload_path.name, unicode_payload_path.name, hash_only_payload_path.name},
+        )
+        share_file = seeder_shares[payload_path.name]
+        unicode_share_file = seeder_shares[unicode_payload_path.name]
+        hash_only_share_file = seeder_shares[hash_only_payload_path.name]
+        assert int(share_file["sizeBytes"]) == len(payload)
+        assert int(unicode_share_file["sizeBytes"]) == len(unicode_payload)
+        assert int(hash_only_share_file["sizeBytes"]) == len(hash_only_payload)
 
         listed_shares = request_json(seeder_base_url, "GET", "/api/v1/shared-files")["data"]["items"]
         assert any(file["hash"] == share_file["hash"] for file in listed_shares)
@@ -1386,18 +1398,12 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         downloaded_hash_only_payload = leecher_profile_dir / "transfers" / hash_only_hash / "pieces.bin"
         assert downloaded_hash_only_payload.read_bytes() == hash_only_payload
 
-        reverse_share = request_json(
+        reverse_share_file = configure_shared_directory(
             leecher_base_url,
-            "POST",
-            "/api/v1/shared-files",
-            {"path": str(reverse_payload_path)},
-            timeout=30,
-        )["data"]
-        assert reverse_share["ok"] is True
-        assert reverse_share["queued"] is False
-        assert reverse_share["file"]["name"] == reverse_payload_path.name
-        assert int(reverse_share["file"]["sizeBytes"]) == len(reverse_payload)
-        reverse_share_file = reverse_share["file"]
+            leecher_shared_dir,
+            {reverse_payload_path.name},
+        )[reverse_payload_path.name]
+        assert int(reverse_share_file["sizeBytes"]) == len(reverse_payload)
 
         reverse_published = goed2k.wait_for_server_file_endpoint(
             admin_base_url,
