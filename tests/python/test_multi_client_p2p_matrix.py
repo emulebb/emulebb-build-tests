@@ -342,6 +342,8 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
         "--quiet",
         "-k",
         "peers_exchange",
+        "-m",
+        "native",
     ]
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
     assert captured["env"][module.goed2k.ED2K_SERVER_EXE_ENV] == str(

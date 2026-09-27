@@ -90,6 +90,26 @@ def test_cross_client_disables_rust_kad_by_default() -> None:
     assert args.rust_kad_enabled is False
 
 
+def test_choose_extra_port_uses_bounded_harness_range_allocator(monkeypatch) -> None:
+    module = load_suite_module()
+    used_ports = {21000, 21001}
+    observed: dict[str, object] = {}
+
+    def fake_choose(lan_bind_addr: str, used: set[int], *, udp: bool = False) -> int:
+        observed.update(lan_bind_addr=lan_bind_addr, used=set(used), udp=udp)
+        return 21002
+
+    monkeypatch.setattr(module.dtt, "choose_available_local_port", fake_choose)
+
+    assert module.choose_extra_port("192.0.2.10", used_ports, udp=True) == 21002
+    assert observed == {
+        "lan_bind_addr": "192.0.2.10",
+        "used": {21000, 21001},
+        "udp": True,
+    }
+    assert used_ports == {21000, 21001, 21002}
+
+
 def test_local_kad_diagnostics_audit_rejects_nonlocal_contacts(tmp_path: Path) -> None:
     module = load_suite_module()
     rust_dir = tmp_path / "rust"

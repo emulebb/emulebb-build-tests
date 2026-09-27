@@ -241,6 +241,8 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
             "--quiet",
             "-k",
             "peers_exchange",
+            "-m",
+            "native",
         ]
     )
 

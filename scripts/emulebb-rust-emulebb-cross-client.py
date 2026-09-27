@@ -93,12 +93,9 @@ def validate_optional_soak_args(args: argparse.Namespace) -> None:
 
 
 def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = False) -> int:
-    for _ in range(100):
-        candidate = dtt.rest_smoke.choose_listen_port(lan_bind_addr)
-        if candidate not in used_ports and dtt.is_port_available(candidate, host=lan_bind_addr, udp=udp):
-            used_ports.add(candidate)
-            return candidate
-    raise RuntimeError("Could not allocate an extra LAN port.")
+    candidate = dtt.choose_available_local_port(lan_bind_addr, used_ports, udp=udp)
+    used_ports.add(candidate)
+    return candidate
 
 
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None) -> dict[str, object]:
