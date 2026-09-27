@@ -33,6 +33,24 @@ class Requirement:
 
 REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(
+        "stock-oracle",
+        "Source-anchored stock binary/state oracle covers every Phase-4 protocol family",
+        "reports/stock-protocol-oracle-proof/latest/stock-protocol-oracle-proof-result.json",
+        (
+            ("/status", "passed"),
+            ("/checks/stock_protocol_oracle_requirements/allRequirementsPassed", True),
+            ("/checks/stock_protocol_oracle_requirements/requiredCoverageCount", 97),
+            ("/checks/stock_protocol_oracle_requirements/coverageGroupCount", 15),
+            ("/checks/stock_protocol_oracle_requirements/stockRecordCount", 17),
+            ("/checks/stock_protocol_oracle_requirements/binaryVectorCount", 15),
+            ("/checks/stock_protocol_oracle_requirements/stateVectorCount", 2),
+            ("/checks/stock_protocol_oracle_requirements/baselineRevisionPinned", True),
+            ("/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed", True),
+            ("/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed", True),
+            ("/checks/stock_protocol_oracle_requirements/binaryDigestsPassed", True),
+        ),
+    ),
+    Requirement(
         "protocol-matrix",
         "All local ED2K protocol variants pass",
         "reports/local-ed2k-rust-protocol-combinations/latest/local-ed2k-rust-protocol-combinations-result.json",
@@ -249,6 +267,7 @@ def build_checks(requirements: list[dict[str, Any]]) -> dict[str, Any]:
         "allRequirementsPassed": not failed,
         "failedRequirementCount": len(failed),
         "failedRequirementIds": failed,
+        "stockOraclePassed": "stock-oracle" not in failed,
         "protocolVariantsPassed": "protocol-matrix" not in failed,
         "multiUnicodeMetadataPassed": "protocol-metadata" not in failed,
         "privateP2pOverlordModulesPassed": "private-modules" not in failed,

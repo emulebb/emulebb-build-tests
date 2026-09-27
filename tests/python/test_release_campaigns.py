@@ -324,6 +324,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
         for scenario_id in gate["coveredBy"]
     }
     protocol_id = "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"
+    stock_oracle_id = "emulebb.flow.rust.overnight.stock-protocol-oracle.v1"
     private_modules_id = "emulebb.flow.rust.overnight.private-ed2k.modules.v1"
     emulebb_cross_id = "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"
     rust_cross_id = "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
@@ -336,11 +337,17 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert preflight_id in covered_ids
     assert rest_contract_id in covered_ids
     assert protocol_id in covered_ids
+    assert stock_oracle_id in covered_ids
     assert private_modules_id in covered_ids
     assert emulebb_cross_id in covered_ids
     assert rust_cross_id in covered_ids
     assert total_audit_id in covered_ids
     assert live_wire_id in covered_ids
+    stock_oracle_evidence = scenarios[stock_oracle_id]["evidence"][0]
+    assert stock_oracle_evidence["base"] == "workspace-output"
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 97
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed"] is True
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed"] is True
     preflight_evidence = scenarios[preflight_id]["evidence"][0]
     assert preflight_evidence["kind"] == "json-status"
     assert preflight_evidence["base"] == "workspace-output"
@@ -411,9 +418,10 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert total_audit_evidence["path"] == (
         "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json"
     )
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 6
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 7
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/allRequirementsPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/failedRequirementCount"] == 0
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/stockOraclePassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed"] is True
@@ -568,6 +576,31 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
         encoding="utf-8",
     )
 
+    stock_oracle_report = output_root / "reports" / "stock-protocol-oracle-proof" / "latest"
+    stock_oracle_report.mkdir(parents=True)
+    (stock_oracle_report / "stock-protocol-oracle-proof-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "checks": {
+                    "stock_protocol_oracle_requirements": {
+                        "allRequirementsPassed": True,
+                        "requiredCoverageCount": 97,
+                        "coverageGroupCount": 15,
+                        "stockRecordCount": 17,
+                        "binaryVectorCount": 15,
+                        "stateVectorCount": 2,
+                        "baselineRevisionPinned": True,
+                        "sourceAnchorsPassed": True,
+                        "rustProofSelectorsPassed": True,
+                        "binaryDigestsPassed": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
     total_audit_report = output_root / "reports" / "rust-ed2k-total-parity-audit" / "latest"
     total_audit_report.mkdir(parents=True)
     (total_audit_report / "rust-ed2k-total-parity-audit-result.json").write_text(
@@ -576,10 +609,11 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                 "status": "passed",
                 "checks": {
                     "rust_ed2k_total_parity_audit": {
-                        "requirementCount": 6,
+                        "requirementCount": 7,
                         "allRequirementsPassed": True,
                         "failedRequirementCount": 0,
                         "failedRequirementIds": [],
+                        "stockOraclePassed": True,
                         "protocolVariantsPassed": True,
                         "multiUnicodeMetadataPassed": True,
                         "privateP2pOverlordModulesPassed": True,
@@ -660,6 +694,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
     )
 
     statuses = {scenario["id"]: scenario["status"] for scenario in report["scenarios"]}
+    assert statuses["emulebb.flow.rust.overnight.stock-protocol-oracle.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.private-ed2k.modules.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"] == "passed"

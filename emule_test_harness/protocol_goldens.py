@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -28,6 +31,112 @@ SENSITIVE_FIELD_NAMES = {
 IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 DIGEST_RE = re.compile(r"^(fnv1a64:0x[0-9A-F]{16}|sha256:[0-9a-f]{64})$")
 HEX_RE = re.compile(r"^[0-9A-Fa-f]*$")
+
+# Phase-4 stock oracle coverage is intentionally explicit. A manifest cannot
+# pass merely by accumulating a large number of records: every behavior below
+# must be tied to a canonical binary/state vector, a stock-source anchor, and a
+# Rust proof selector.
+REQUIRED_STOCK_COVERAGE_IDS = frozenset(
+    {
+        "client-udp.clear",
+        "client-udp.encrypted",
+        "client-udp.file-not-found",
+        "client-udp.queue-full",
+        "client-udp.unsolicited",
+        "client-udp.v1",
+        "client-udp.v2",
+        "client-udp.v3",
+        "client-udp.v4",
+        "ident.invalid-key",
+        "ident.ip-kind.local",
+        "ident.ip-kind.remote",
+        "ident.replay",
+        "ident.v1",
+        "ident.v2",
+        "kad.contact.v10",
+        "kad.contact.v2",
+        "kad.contact.v3",
+        "kad.contact.v4",
+        "kad.contact.v5",
+        "kad.contact.v6",
+        "kad.contact.v7",
+        "kad.contact.v8",
+        "kad.contact.v9",
+        "kad.crypto.node-id",
+        "kad.crypto.receiver-key",
+        "kad.flow.buddy",
+        "kad.flow.callback",
+        "kad.flow.firewall",
+        "kad.flow.publish",
+        "kad.flow.search",
+        "kad.frame.e4",
+        "kad.frame.e5",
+        "lowid.buddy-callback",
+        "lowid.direct-callback",
+        "lowid.relayed-reask",
+        "lowid.server-callback",
+        "nodes-dat.exact-size",
+        "nodes-dat.restart",
+        "nodes-dat.v0",
+        "nodes-dat.v1",
+        "nodes-dat.v2",
+        "nodes-dat.v3-bootstrap",
+        "nodes-dat.v3-normal",
+        "peer.boundary.uint32",
+        "peer.boundary.uint32-minus-one",
+        "peer.boundary.uint32-plus-one",
+        "peer.framing.c5",
+        "peer.framing.coalesced",
+        "peer.framing.d4",
+        "peer.framing.e3",
+        "peer.framing.fragmented",
+        "peer.profile.edonkey",
+        "peer.profile.emule-modern",
+        "peer.profile.emule-old",
+        "peer.startup.aich",
+        "peer.startup.crypt",
+        "peer.startup.large-file",
+        "peer.startup.multipacket",
+        "peer.startup.multipacket-ext",
+        "peer.startup.multipacket-ext2",
+        "peer.startup.sx2",
+        "queue.abuse-escalation",
+        "queue.admission",
+        "queue.rank-transition",
+        "upload.slot-promotion",
+        "upload.slot-recycle",
+        "server.connect.fallback",
+        "server.connect.obfuscated",
+        "server.connect.plaintext",
+        "server.login.request",
+        "server.reply.callback",
+        "server.reply.description",
+        "server.reply.search",
+        "server.reply.sources",
+        "server.reply.status",
+        "server.search.advanced",
+        "server.search.keyword",
+        "server.source.tcp-obfuscated",
+        "server.source.tcp-plain",
+        "server.source.udp-v1",
+        "server.source.udp-v2",
+        "sx2.crypt-options",
+        "sx2.part-needed-filter",
+        "sx2.v1",
+        "sx2.v2",
+        "sx2.v3",
+        "sx2.v4",
+        "tags.bsob",
+        "tags.fixed-vocabulary",
+        "tags.malformed-bounds",
+        "tags.str1-str22",
+        "tags.unknown-name",
+        "transfer.block.compressed",
+        "transfer.block.compression-bomb",
+        "transfer.block.invalid-zlib",
+        "transfer.block.uncompressed",
+    }
+)
 
 KAD_OPCODE_NAME_BY_HEX = {
     "0x01": "KADEMLIA2_BOOTSTRAP_REQ",
@@ -182,7 +291,7 @@ def summarize_state_sequences(records: Iterable[dict[str, Any]], *, scenario_id:
     return sorted(sequence_records, key=_record_sort_key)
 
 
-def validate_golden_manifest(path: Path) -> ProtocolGoldenValidation:
+def validate_golden_manifest(path: Path, *, workspace_root: Path | None = None) -> ProtocolGoldenValidation:
     """Validates a tracked protocol oracle golden manifest."""
 
     errors: list[str] = []
@@ -202,6 +311,7 @@ def validate_golden_manifest(path: Path) -> ProtocolGoldenValidation:
 
     scenario_ids = _validate_scenarios(scenarios, errors)
     _validate_records(records, scenario_ids, errors)
+    _validate_stock_oracle(payload, records, errors, workspace_root=workspace_root)
     _validate_no_sensitive_payload(payload, errors)
     return ProtocolGoldenValidation(tuple(errors))
 
@@ -272,7 +382,8 @@ def run_validate_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest-path", type=Path)
     args = parser.parse_args(argv)
     manifest_path = (args.manifest_path or default_golden_path(args.test_repo_root)).resolve()
-    validation = validate_golden_manifest(manifest_path)
+    workspace_root = Path(os.environ["EMULEBB_WORKSPACE_ROOT"]) if os.environ.get("EMULEBB_WORKSPACE_ROOT") else None
+    validation = validate_golden_manifest(manifest_path, workspace_root=workspace_root)
     for line in render_validation_lines(validation, manifest_path):
         print(line)
     return 0 if validation.passed else 1
@@ -401,6 +512,245 @@ def _validate_records(records: list[Any], scenario_ids: set[str], errors: list[s
     missing_protocols = seen_required - observed_protocols
     for protocol in sorted(missing_protocols):
         errors.append(f"records must include at least one {protocol} scenario record")
+
+
+def _validate_stock_oracle(
+    payload: dict[str, Any],
+    records: list[Any],
+    errors: list[str],
+    *,
+    workspace_root: Path | None,
+) -> None:
+    """Validates the source-anchored Phase-4 stock oracle coverage contract."""
+
+    oracle = payload.get("stockOracle")
+    groups = payload.get("coverageGroups")
+    if oracle is None and groups is None:
+        return
+    if not isinstance(oracle, dict):
+        errors.append("stockOracle must be an object")
+        return
+    if not isinstance(groups, list) or not groups:
+        errors.append("coverageGroups must be a non-empty list")
+        return
+
+    baseline_path = oracle.get("baselinePath")
+    baseline_revision = oracle.get("baselineRevision")
+    if not isinstance(baseline_path, str) or not baseline_path:
+        errors.append("stockOracle.baselinePath must be a non-empty string")
+    if not isinstance(baseline_revision, str) or re.fullmatch(r"[0-9a-f]{40}", baseline_revision) is None:
+        errors.append("stockOracle.baselineRevision must be a lowercase 40-character git revision")
+    if oracle.get("requiredCoverageCount") != len(REQUIRED_STOCK_COVERAGE_IDS):
+        errors.append(
+            "stockOracle.requiredCoverageCount must equal "
+            f"{len(REQUIRED_STOCK_COVERAGE_IDS)}"
+        )
+
+    records_by_id: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(records):
+        if not isinstance(value, dict) or "recordId" not in value:
+            continue
+        record_id = value.get("recordId")
+        if not isinstance(record_id, str) or not record_id:
+            errors.append(f"records[{index}].recordId must be a non-empty string")
+            continue
+        if record_id in records_by_id:
+            errors.append(f"duplicate recordId: {record_id}")
+        records_by_id[record_id] = value
+        _validate_stock_record(value, index, errors)
+
+    observed_coverage: set[str] = set()
+    coverage_owner: dict[str, str] = {}
+    observed_group_ids: set[str] = set()
+    source_anchors: list[tuple[str, list[str], str]] = []
+    rust_proofs: list[tuple[str, str, str]] = []
+    for index, group in enumerate(groups):
+        if not isinstance(group, dict):
+            errors.append(f"coverageGroups[{index}] must be an object")
+            continue
+        group_id = group.get("groupId")
+        if not isinstance(group_id, str) or not group_id:
+            errors.append(f"coverageGroups[{index}].groupId must be a non-empty string")
+            continue
+        if group_id in observed_group_ids:
+            errors.append(f"duplicate coverage group: {group_id}")
+        observed_group_ids.add(group_id)
+
+        coverage_ids = _string_list(group.get("coverageIds"))
+        record_ids = _string_list(group.get("recordIds"))
+        if not coverage_ids:
+            errors.append(f"coverageGroups[{index}].coverageIds must be a non-empty string list")
+        if not record_ids:
+            errors.append(f"coverageGroups[{index}].recordIds must be a non-empty string list")
+        for coverage_id in coverage_ids:
+            previous_owner = coverage_owner.get(coverage_id)
+            if previous_owner is not None:
+                errors.append(
+                    f"stock coverage ID {coverage_id} is owned by both {previous_owner} and {group_id}"
+                )
+            coverage_owner[coverage_id] = group_id
+            observed_coverage.add(coverage_id)
+
+        record_coverage: set[str] = set()
+        for record_id in record_ids:
+            record = records_by_id.get(record_id)
+            if record is None:
+                errors.append(f"coverage group {group_id} references missing recordId {record_id}")
+                continue
+            record_coverage.update(_string_list(record.get("coverageIds")))
+        missing_from_records = set(coverage_ids) - record_coverage
+        if missing_from_records:
+            errors.append(
+                f"coverage group {group_id} has IDs absent from its records: {sorted(missing_from_records)}"
+            )
+
+        anchors = group.get("sourceAnchors")
+        if not isinstance(anchors, list) or not anchors:
+            errors.append(f"coverageGroups[{index}].sourceAnchors must be a non-empty list")
+        else:
+            for anchor_index, anchor in enumerate(anchors):
+                if not isinstance(anchor, dict):
+                    errors.append(f"coverageGroups[{index}].sourceAnchors[{anchor_index}] must be an object")
+                    continue
+                path = anchor.get("path")
+                contains = _string_list(anchor.get("contains"))
+                if not isinstance(path, str) or not path or not contains:
+                    errors.append(
+                        f"coverageGroups[{index}].sourceAnchors[{anchor_index}] requires path and contains"
+                    )
+                    continue
+                source_anchors.append((path, contains, group_id))
+
+        proofs = group.get("rustProofs")
+        if not isinstance(proofs, list) or not proofs:
+            errors.append(f"coverageGroups[{index}].rustProofs must be a non-empty list")
+        else:
+            for proof_index, proof in enumerate(proofs):
+                if not isinstance(proof, dict):
+                    errors.append(f"coverageGroups[{index}].rustProofs[{proof_index}] must be an object")
+                    continue
+                path = proof.get("path")
+                selector = proof.get("selector")
+                if not isinstance(path, str) or not path or not isinstance(selector, str) or not selector:
+                    errors.append(f"coverageGroups[{index}].rustProofs[{proof_index}] requires path and selector")
+                    continue
+                rust_proofs.append((path, selector, group_id))
+
+    missing = REQUIRED_STOCK_COVERAGE_IDS - observed_coverage
+    unexpected = observed_coverage - REQUIRED_STOCK_COVERAGE_IDS
+    if missing:
+        errors.append(f"stock oracle missing required coverage IDs: {sorted(missing)}")
+    if unexpected:
+        errors.append(f"stock oracle has unknown coverage IDs: {sorted(unexpected)}")
+
+    if workspace_root is not None and isinstance(baseline_path, str) and isinstance(baseline_revision, str):
+        _validate_stock_workspace_anchors(
+            workspace_root.resolve(),
+            baseline_path,
+            baseline_revision,
+            source_anchors,
+            rust_proofs,
+            errors,
+        )
+
+
+def _validate_stock_record(record: dict[str, Any], index: int, errors: list[str]) -> None:
+    coverage_ids = _string_list(record.get("coverageIds"))
+    if not coverage_ids:
+        errors.append(f"records[{index}].coverageIds must be a non-empty string list")
+    unknown = set(coverage_ids) - REQUIRED_STOCK_COVERAGE_IDS
+    if unknown:
+        errors.append(f"records[{index}] has unknown stock coverage IDs: {sorted(unknown)}")
+
+    fixture = record.get("fixtureBase64")
+    state = record.get("oracleState")
+    if fixture is None and state is None:
+        errors.append(f"records[{index}] stock record requires fixtureBase64 or oracleState")
+        return
+    if fixture is not None:
+        if not isinstance(fixture, str):
+            errors.append(f"records[{index}].fixtureBase64 must be a string")
+            return
+        try:
+            decoded = base64.b64decode(fixture, validate=True)
+        except (ValueError, binascii.Error):
+            errors.append(f"records[{index}].fixtureBase64 is malformed")
+            return
+        if record.get("fixtureLength") != len(decoded):
+            errors.append(f"records[{index}].fixtureLength does not match fixtureBase64")
+        expected = "sha256:" + hashlib.sha256(decoded).hexdigest()
+        if record.get("payloadDigest") != expected:
+            errors.append(f"records[{index}].payloadDigest does not match fixtureBase64")
+    if state is not None:
+        canonical = json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        expected = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        if record.get("stateDigest") != expected:
+            errors.append(f"records[{index}].stateDigest does not match oracleState")
+
+
+def _validate_stock_workspace_anchors(
+    workspace_root: Path,
+    baseline_path: str,
+    baseline_revision: str,
+    source_anchors: list[tuple[str, list[str], str]],
+    rust_proofs: list[tuple[str, str, str]],
+    errors: list[str],
+) -> None:
+    baseline_root = (workspace_root / baseline_path).resolve()
+    rust_root = (workspace_root / "repos" / "emulebb-rust").resolve()
+    if not baseline_root.is_dir():
+        errors.append(f"stock oracle baseline path is missing: {baseline_root}")
+        return
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=baseline_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if revision.returncode != 0 or revision.stdout.strip() != baseline_revision:
+        errors.append(
+            "stock oracle baseline revision drift: "
+            f"expected {baseline_revision}, got {revision.stdout.strip() or 'unavailable'}"
+        )
+
+    anchored_paths = sorted({relative_path for relative_path, _, _ in source_anchors})
+    source_status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *anchored_paths],
+        cwd=baseline_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if source_status.returncode != 0:
+        errors.append("stock source anchor cleanliness could not be verified")
+    elif source_status.stdout.strip():
+        errors.append(f"stock source anchors are dirty: {source_status.stdout.strip()}")
+
+    for relative_path, tokens, group_id in source_anchors:
+        path = (baseline_root / relative_path).resolve()
+        if baseline_root not in path.parents or not path.is_file():
+            errors.append(f"stock source anchor missing for {group_id}: {relative_path}")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for token in tokens:
+            if token not in text:
+                errors.append(f"stock source anchor drift for {group_id}: {relative_path} lacks {token!r}")
+
+    for relative_path, selector, group_id in rust_proofs:
+        path = (rust_root / relative_path).resolve()
+        if rust_root not in path.parents or not path.is_file():
+            errors.append(f"Rust proof path missing for {group_id}: {relative_path}")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if selector not in text:
+            errors.append(f"Rust proof selector drift for {group_id}: {relative_path} lacks {selector!r}")
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        return []
+    return value
 
 
 def _validate_no_sensitive_payload(value: Any, errors: list[str], path: str = "$") -> None:

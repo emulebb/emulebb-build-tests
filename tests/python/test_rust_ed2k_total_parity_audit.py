@@ -34,6 +34,30 @@ def seed_complete_evidence(output_root: Path) -> None:
     write_json(
         output_root
         / "reports"
+        / "stock-protocol-oracle-proof"
+        / "latest"
+        / "stock-protocol-oracle-proof-result.json",
+        {
+            "status": "passed",
+            "checks": {
+                "stock_protocol_oracle_requirements": {
+                    "allRequirementsPassed": True,
+                    "requiredCoverageCount": 97,
+                    "coverageGroupCount": 15,
+                    "stockRecordCount": 17,
+                    "binaryVectorCount": 15,
+                    "stateVectorCount": 2,
+                    "baselineRevisionPinned": True,
+                    "sourceAnchorsPassed": True,
+                    "rustProofSelectorsPassed": True,
+                    "binaryDigestsPassed": True,
+                }
+            },
+        },
+    )
+    write_json(
+        output_root
+        / "reports"
         / "local-ed2k-rust-protocol-combinations"
         / "latest"
         / "local-ed2k-rust-protocol-combinations-result.json",
@@ -165,12 +189,13 @@ def test_total_parity_audit_accepts_complete_output_root_evidence(monkeypatch, t
     requirements.extend(module.evaluate_glob_requirement(output_root, requirement) for requirement in module.SCENARIO_REQUIREMENTS)
     checks = module.build_checks(requirements)
 
-    assert [row["status"] for row in requirements] == ["passed"] * 6
+    assert [row["status"] for row in requirements] == ["passed"] * 7
     assert checks == {
-        "requirementCount": 6,
+        "requirementCount": 7,
         "allRequirementsPassed": True,
         "failedRequirementCount": 0,
         "failedRequirementIds": [],
+        "stockOraclePassed": True,
         "protocolVariantsPassed": True,
         "multiUnicodeMetadataPassed": True,
         "privateP2pOverlordModulesPassed": True,
@@ -194,7 +219,7 @@ def test_total_parity_audit_rejects_stale_protocol_evidence(monkeypatch, tmp_pat
     payload["checks"]["protocol_matrix_coverage"]["obfuscatedRequired"] = False
     write_json(protocol_report, payload)
 
-    result = module.evaluate_path_requirement(output_root, module.REQUIREMENTS[0])
+    result = module.evaluate_path_requirement(output_root, module.REQUIREMENTS[1])
 
     assert result["status"] == "failed"
     assert result["mismatches"] == [
@@ -223,4 +248,5 @@ def test_main_writes_total_audit_latest_under_workspace_output_root(monkeypatch,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "passed"
-    assert report["checks"]["rust_ed2k_total_parity_audit"]["requirementCount"] == 6
+    assert report["checks"]["rust_ed2k_total_parity_audit"]["requirementCount"] == 7
+    assert report["checks"]["rust_ed2k_total_parity_audit"]["stockOraclePassed"] is True

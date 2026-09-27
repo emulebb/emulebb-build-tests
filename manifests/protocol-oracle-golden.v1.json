@@ -1,4 +1,631 @@
 {
+  "coverageGroups": [
+    {
+      "coverageIds": [
+        "server.login.request",
+        "server.connect.plaintext",
+        "server.connect.obfuscated",
+        "server.connect.fallback"
+      ],
+      "groupId": "server-session",
+      "recordIds": [
+        "stock.server.connect-state",
+        "stock.server.login"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn login_request_matches_oracle_tag_shape"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn server_transport_attempts_fall_back_once_then_succeed"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "packet->opcode = OP_LOGINREQUEST;",
+            "ConnectToServer(next_server, true, !m_bTryObfuscated);"
+          ],
+          "path": "srchybrid/ServerConnect.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.search.keyword",
+        "server.search.advanced",
+        "server.source.tcp-plain",
+        "server.source.tcp-obfuscated",
+        "server.source.udp-v1",
+        "server.source.udp-v2",
+        "server.reply.search",
+        "server.reply.sources",
+        "server.reply.status",
+        "server.reply.description",
+        "server.reply.callback"
+      ],
+      "groupId": "server-query-reply",
+      "recordIds": [
+        "stock.server.query-corpus",
+        "stock.server.reply-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn udp_source_request_batch_encodes_legacy_hashes"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn source_request_encoding_includes_u32_size_for_small_files"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/decoders.rs",
+          "selector": "fn search_results_decoder_preserves_source_identity_and_metadata"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/server_description.rs",
+          "selector": "fn decodes_challenge_tag_response_and_rejects_mismatch"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define OP_SEARCHREQUEST",
+            "#define OP_GETSOURCES",
+            "#define OP_GETSOURCES_OBFU",
+            "#define OP_GLOBGETSOURCES",
+            "#define OP_GLOBGETSOURCES2",
+            "#define OP_SEARCHRESULT",
+            "#define OP_SERVER_DESC_RES",
+            "#define OP_CALLBACKREQUESTED"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.framing.e3",
+        "peer.framing.c5",
+        "peer.framing.d4",
+        "peer.framing.fragmented",
+        "peer.framing.coalesced"
+      ],
+      "groupId": "peer-framing",
+      "recordIds": [
+        "stock.peer.framing-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/transport.rs",
+          "selector": "fn buffered_reads_frame_multiple_packets_from_one_burst"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn source_request_decoder_recovers_fragmented_coalesced_frames"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define OP_EDONKEYHEADER",
+            "#define OP_EMULEPROT",
+            "#define OP_PACKEDPROT"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "tags.fixed-vocabulary",
+        "tags.str1-str22",
+        "tags.bsob",
+        "tags.unknown-name",
+        "tags.malformed-bounds"
+      ],
+      "groupId": "tag-vocabulary",
+      "recordIds": [
+        "stock.tags.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn hello_binary_corpus_skips_every_stock_tag_representation"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn hello_rejects_truncated_variable_width_stock_tags"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define\tTAGTYPE_BSOB",
+            "#define TAGTYPE_STR1",
+            "#define TAGTYPE_STR22"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        },
+        {
+          "contains": [
+            "case TAGTYPE_BSOB:"
+          ],
+          "path": "srchybrid/kademlia/io/DataIO.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.profile.edonkey",
+        "peer.profile.emule-old",
+        "peer.profile.emule-modern",
+        "peer.startup.multipacket",
+        "peer.startup.multipacket-ext",
+        "peer.startup.multipacket-ext2",
+        "peer.startup.large-file",
+        "peer.startup.aich",
+        "peer.startup.crypt",
+        "peer.startup.sx2"
+      ],
+      "groupId": "peer-startup-profiles",
+      "recordIds": [
+        "stock.peer.startup-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn non_mule_hello_replies_with_emule_info_then_helloanswer"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn multipacket_ext2_source_request_matches_peer_source_exchange_version"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
+          "selector": "fn hash_only_small_file_download_learns_metadata_from_startup_answer"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_MULTIPACKET:",
+            "case OP_MULTIPACKET_EXT:",
+            "case OP_MULTIPACKET_EXT2:"
+          ],
+          "path": "srchybrid/ListenSocket.cpp"
+        },
+        {
+          "contains": [
+            "#define OP_HASHSETREQUEST2",
+            "#define OP_AICHREQUEST",
+            "#define OP_REQUESTSOURCES2"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.boundary.uint32-minus-one",
+        "peer.boundary.uint32",
+        "peer.boundary.uint32-plus-one"
+      ],
+      "groupId": "file-size-boundaries",
+      "recordIds": [
+        "stock.peer.boundary-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn source_request_encoding_uses_large_file_sentinel"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/search_expr.rs",
+          "selector": "fn uint32_boundary_remains_32bit_for_every_server"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "OP_COMPRESSEDPART_I64",
+            "OP_SENDINGPART_I64"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "transfer.block.uncompressed",
+        "transfer.block.compressed",
+        "transfer.block.invalid-zlib",
+        "transfer.block.compression-bomb"
+      ],
+      "groupId": "transfer-blocks",
+      "recordIds": [
+        "stock.transfer.block-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn compressed_part_fragment_rejects_decompression_bomb"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/stale_packets.rs",
+          "selector": "fn inflate_error_skips_stream_but_session_continues"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/frame_sending_part.rs",
+          "selector": "fn small_file_download_accepts_split_sending_part_frames"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_COMPRESSEDPART:",
+            "case OP_COMPRESSEDPART_I64:"
+          ],
+          "path": "srchybrid/ListenSocket.cpp"
+        },
+        {
+          "contains": [
+            "Z_DATA_ERROR"
+          ],
+          "path": "srchybrid/DownloadClient.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "sx2.v1",
+        "sx2.v2",
+        "sx2.v3",
+        "sx2.v4",
+        "sx2.crypt-options",
+        "sx2.part-needed-filter"
+      ],
+      "groupId": "source-exchange-two",
+      "recordIds": [
+        "stock.sx2.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn source_exchange2_v1_through_v4_preserve_their_wire_capabilities"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_source_exchange_returns_only_parts_useful_to_requester"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_source_exchange_preserves_live_source_connect_options"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define SOURCEEXCHANGE2_VERSION",
+            "#define OP_REQUESTSOURCES2",
+            "#define OP_ANSWERSOURCES2"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        },
+        {
+          "contains": [
+            "min(byRequestedVersion, (uint8)SOURCEEXCHANGE2_VERSION)"
+          ],
+          "path": "srchybrid/PartFile.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "ident.v1",
+        "ident.v2",
+        "ident.ip-kind.local",
+        "ident.ip-kind.remote",
+        "ident.replay",
+        "ident.invalid-key"
+      ],
+      "groupId": "secure-ident",
+      "recordIds": [
+        "stock.ident.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn v1_valid_signature_verifies"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn v2_localclient_signature_binds_peer_ip"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn verify_without_issued_challenge_errors"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn tampered_signature_fails"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "Packet *packet = new Packet(OP_SIGNATURE",
+            "Packet *packet = new Packet(OP_SECIDENTSTATE"
+          ],
+          "path": "srchybrid/BaseClient.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "lowid.server-callback",
+        "lowid.direct-callback",
+        "lowid.buddy-callback",
+        "lowid.relayed-reask"
+      ],
+      "groupId": "lowid-callbacks",
+      "recordIds": [
+        "stock.lowid.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/udp_callback.rs",
+          "selector": "fn global_callback_sends_exact_plaintext_datagram_to_server_udp_port"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn direct_callback_req_encode_decode_roundtrips"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn reask_callback_udp_v4_round_trip_prepends_buddy_id"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "packet->opcode = OP_DIRECTCALLBACKREQ;"
+          ],
+          "path": "srchybrid/BaseClient.cpp"
+        },
+        {
+          "contains": [
+            "case OP_REASKCALLBACKUDP:",
+            "case OP_DIRECTCALLBACKREQ:"
+          ],
+          "path": "srchybrid/ClientUDPSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "client-udp.v1",
+        "client-udp.v2",
+        "client-udp.v3",
+        "client-udp.v4",
+        "client-udp.clear",
+        "client-udp.encrypted",
+        "client-udp.queue-full",
+        "client-udp.file-not-found",
+        "client-udp.unsolicited"
+      ],
+      "groupId": "client-udp",
+      "recordIds": [
+        "stock.client-udp.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn reask_file_ping_v4_round_trip_with_partstatus_and_count"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/outbound.rs",
+          "selector": "fn ack_round_trips_obfuscated"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/registry.rs",
+          "selector": "fn pending_registry_correlates_replies_and_drops_unsolicited"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_REASKFILEPING:",
+            "case OP_REASKACK:",
+            "case OP_FILENOTFOUND:",
+            "case OP_QUEUEFULL:"
+          ],
+          "path": "srchybrid/ClientUDPSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "kad.contact.v2",
+        "kad.contact.v3",
+        "kad.contact.v4",
+        "kad.contact.v5",
+        "kad.contact.v6",
+        "kad.contact.v7",
+        "kad.contact.v8",
+        "kad.contact.v9",
+        "kad.contact.v10",
+        "kad.frame.e4",
+        "kad.frame.e5"
+      ],
+      "groupId": "kad-contact-versions",
+      "recordIds": [
+        "stock.kad.contacts-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-dht/src/publish/tests.rs",
+          "selector": "fn source_publish_selects_stock_packet_family_for_versions_two_through_ten"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/traversal/tests.rs",
+          "selector": "fn search_phase_selects_stock_packet_family_for_versions_two_through_ten"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define KADEMLIA_VERSION2_47a",
+            "#define KADEMLIA_VERSION3_47b",
+            "#define KADEMLIA_VERSION8_49b",
+            "#define KADEMLIA_VERSION\t\t\t0x0a",
+            "#define OP_KADEMLIAHEADER",
+            "#define OP_KADEMLIAPACKEDPROT"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "kad.crypto.node-id",
+        "kad.crypto.receiver-key",
+        "kad.flow.search",
+        "kad.flow.publish",
+        "kad.flow.firewall",
+        "kad.flow.buddy",
+        "kad.flow.callback"
+      ],
+      "groupId": "kad-crypto-flows",
+      "recordIds": [
+        "stock.kad.flow-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-net/src/obfuscation/tests.rs",
+          "selector": "fn test_encrypt_decrypt_roundtrip_with_node_id_mode"
+        },
+        {
+          "path": "crates/emulebb-kad-net/src/obfuscation/tests.rs",
+          "selector": "fn test_encrypt_decrypt_roundtrip_with_receiver_key_mode"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_publish_source_req_roundtrip"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_find_buddy_req_roundtrip"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_callback_req_roundtrip"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "DecryptReceivedClient",
+            "EncryptSendClient",
+            "verify keys"
+          ],
+          "path": "srchybrid/EncryptedDatagramSocket.cpp"
+        },
+        {
+          "contains": [
+            "case KADEMLIA2_PUBLISH_SOURCE_REQ:",
+            "case KADEMLIA_FINDBUDDY_REQ:",
+            "case KADEMLIA_CALLBACK_REQ:"
+          ],
+          "path": "srchybrid/kademlia/net/KademliaUDPListener.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "nodes-dat.v0",
+        "nodes-dat.v1",
+        "nodes-dat.v2",
+        "nodes-dat.v3-normal",
+        "nodes-dat.v3-bootstrap",
+        "nodes-dat.exact-size",
+        "nodes-dat.restart"
+      ],
+      "groupId": "nodes-dat-persistence",
+      "recordIds": [
+        "stock.nodes-dat.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn encoding_roundtrips_all_extended_security_metadata"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn exact_record_sizes_reject_truncation_and_trailing_bytes"
+        },
+        {
+          "path": "crates/emulebb-core/src/network_api.rs",
+          "selector": "fn learned_contact_is_atomically_persisted_and_reloaded_on_restart"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "void CRoutingZone::ReadFile",
+            "special bootstrap-only nodes.dat",
+            "Skipped storing nodes.dat"
+          ],
+          "path": "srchybrid/kademlia/routing/RoutingZone.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "queue.admission",
+        "queue.rank-transition",
+        "upload.slot-promotion",
+        "upload.slot-recycle",
+        "queue.abuse-escalation"
+      ],
+      "groupId": "queue-upload-state",
+      "recordIds": [
+        "stock.queue.state"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/tests/upload_queue.rs",
+          "selector": "fn upload_queue_grants_immediately_then_promotes_waiter"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/download_abuse.rs",
+          "selector": "fn queue_rank_flood_disconnects_then_bans_across_connections"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/tests/upload_slot_recycle_window.rs",
+          "selector": "fn burst_then_stall_slot_is_slow_recycled_within_the_ten_second_window"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "void CUploadQueue::AddClientToQueue",
+            "CUploadQueue::AddUpNextClient",
+            "CUploadQueue::GetWaitingPosition"
+          ],
+          "path": "srchybrid/UploadQueue.cpp"
+        },
+        {
+          "contains": [
+            "void CUpDownClient::SendRankingInfo"
+          ],
+          "path": "srchybrid/UploadClient.cpp"
+        }
+      ]
+    }
+  ],
   "description": "Normalized Kad/eD2K protocol oracle evidence. Raw tracing-harness JSONL and packet captures stay in generated reports.",
   "records": [
     {
@@ -134,6 +761,371 @@
       "transport": "udp",
       "transportMode": "receiver_verify_key",
       "wireLength": 1
+    },
+    {
+      "coverageIds": [
+        "server.connect.plaintext",
+        "server.connect.obfuscated",
+        "server.connect.fallback"
+      ],
+      "fixtureBase64": "cGxhaW46Y29ubmVjdC0+bG9naW58b2JmdXNjYXRlZDpuZWdvdGlhdGUtPmxvZ2lufHByZWZlcnJlZC1mYWlsdXJlLT5wbGFpbi1yZXRyeXxyZXF1aXJlZC1mYWlsdXJlLT5zdG9w",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 102,
+      "payloadDigest": "sha256:3833474af1ac9d40280c32a2efe41fcba1c1363830d63cb38e1ddc3b3e89d9eb",
+      "protocol": "ed2k",
+      "recordId": "stock.server.connect-state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.01.server-connect.v1",
+      "sequence": "plain connect/login; obfuscated negotiate/login; preferred crypt failure/plain retry; required crypt failure/stop",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.login.request"
+      ],
+      "direction": "send",
+      "fixtureBase64": "4xsAAAABAAECAwQFBgcICQoLDA0ODwAAAAA2EgAAAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 32,
+      "opcode": "0x01",
+      "opcodeName": "OP_LOGINREQUEST",
+      "payloadDigest": "sha256:93848ec68b808e04b06ceb59c50b27d9d47b2d95796aba72056aba44977c12d8",
+      "protocol": "ed2k",
+      "recordId": "stock.server.login",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.02.server-login.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.search.keyword",
+        "server.search.advanced",
+        "server.source.tcp-plain",
+        "server.source.tcp-obfuscated",
+        "server.source.udp-v1",
+        "server.source.udp-v2"
+      ],
+      "direction": "send",
+      "fixtureBase64": "4woAAAAWggEFAGxpbnV44xUAAAAZEREREREREREREREREREREf/////jHQAAACMiIiIiIiIiIiIiIiIiIiIiAAAAAAEAAAABAAAA45ozMzMzMzMzMzMzMzMzMzMz45REREREREREREREREREREREAAAAAAEAAAABAAAA",
+      "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
+      "fixtureLength": 123,
+      "opcode": "MULTI",
+      "opcodeName": "SERVER_QUERY_CORPUS",
+      "payloadDigest": "sha256:f531428843945682d14a2fe7f26c451fad119891c99c35888cf4aa09f886e4f3",
+      "protocol": "ed2k",
+      "recordId": "stock.server.query-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.03.server-query.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "server.reply.search",
+        "server.reply.sources",
+        "server.reply.status",
+        "server.reply.description",
+        "server.reply.callback"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4zMBAAAAAAAA40JVVVVVVVVVVVVVVVVVVVVVAONAAQAAAOM1fwAAATYS45YBAgME46ISNFZ446MBAABhAQAAAGI=",
+      "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
+      "fixtureLength": 65,
+      "opcode": "MULTI",
+      "opcodeName": "SERVER_REPLY_CORPUS",
+      "payloadDigest": "sha256:5422881c2f783da840ba1759689750136d66fbdea41dd130e93872a036e9f48a",
+      "protocol": "ed2k",
+      "recordId": "stock.server.reply-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "peer.framing.e3",
+        "peer.framing.c5",
+        "peer.framing.d4",
+        "peer.framing.fragmented",
+        "peer.framing.coalesced"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4wQAAAABqrvMxQMAAAA43e7UCAAAAEB4nAMAAAAAAQ==",
+      "fixtureEncoding": "concatenated-ed2k-frame-corpus",
+      "fixtureLength": 31,
+      "opcode": "MULTI",
+      "opcodeName": "E3_C5_D4_FRAME_CORPUS",
+      "payloadDigest": "sha256:3eee43eda2779904b2c116c4f0b1b8b14ab53ebc821d2a568bed8cb8c331caf6",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.framing-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.05.peer-framing.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "tags.fixed-vocabulary",
+        "tags.str1-str22",
+        "tags.bsob",
+        "tags.unknown-name",
+        "tags.malformed-bounds"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "AQIDBAUGBwgJCgsREhMUFRYXGBkaGxwdHh8gISIjJCUmfwACeHk=",
+      "fixtureEncoding": "stock-tag-type-and-malformed-tail-corpus",
+      "fixtureLength": 38,
+      "opcode": "NONE",
+      "opcodeName": "TAG_TYPE_CORPUS",
+      "payloadDigest": "sha256:8ce11d11ee0bf808eaf00e17698759d96ede0f1c02c82997cdfcd510352bd17d",
+      "protocol": "ed2k",
+      "recordId": "stock.tags.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.06.tags.v1",
+      "transport": "codec"
+    },
+    {
+      "coverageIds": [
+        "peer.profile.edonkey",
+        "peer.profile.emule-old",
+        "peer.profile.emule-modern",
+        "peer.startup.multipacket",
+        "peer.startup.multipacket-ext",
+        "peer.startup.multipacket-ext2",
+        "peer.startup.large-file",
+        "peer.startup.aich",
+        "peer.startup.crypt",
+        "peer.startup.sx2"
+      ],
+      "direction": "both",
+      "fixtureBase64": "4wEAAAABxQEAAAABxQEAAACSxQEAAACkxQEAAACpxQEAAACxxQEAAACFxQEAAACD",
+      "fixtureEncoding": "concatenated-profile-and-startup-opcode-corpus",
+      "fixtureLength": 48,
+      "opcode": "MULTI",
+      "opcodeName": "PEER_STARTUP_CORPUS",
+      "payloadDigest": "sha256:a08808db822df5cbd6a755e548bfd4b5832948c94dee216db6838753382ea18d",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.startup-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.07.peer-startup.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "peer.boundary.uint32-minus-one",
+        "peer.boundary.uint32",
+        "peer.boundary.uint32-plus-one"
+      ],
+      "direction": "meta",
+      "fixtureBase64": "/v///wAAAAD/////AAAAAAAAAAABAAAA",
+      "fixtureEncoding": "little-endian-u64-corpus",
+      "fixtureLength": 24,
+      "opcode": "NONE",
+      "opcodeName": "UINT32_BOUNDARY_CORPUS",
+      "payloadDigest": "sha256:65b924d9749e0ba966e2fbfd18a7ef7d75ac02d3ba60d6bd66cd16cfe3da90e8",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.boundary-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.08.file-size-boundary.v1",
+      "transport": "codec"
+    },
+    {
+      "coverageIds": [
+        "transfer.block.uncompressed",
+        "transfer.block.compressed",
+        "transfer.block.invalid-zlib",
+        "transfer.block.compression-bomb"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4xkAAABGAAECAwQFBgcICQoLDA0ODwAAAAABAAAAQcURAAAAQAABAgMEBQYHCAkKCwwNDg8AAAAACAAAAHicAwAAAAABeJz/eAHtwQEBAAAAgA==",
+      "fixtureEncoding": "concatenated-block-and-zlib-corpus",
+      "fixtureLength": 82,
+      "opcode": "MULTI",
+      "opcodeName": "BLOCK_COMPRESSION_CORPUS",
+      "payloadDigest": "sha256:3feae9f5935dc008a67fab060bc7ccb994b51b1c77c748f7b881f9fbb59c448f",
+      "protocol": "ed2k",
+      "recordId": "stock.transfer.block-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.09.transfer-block.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "sx2.v1",
+        "sx2.v2",
+        "sx2.v3",
+        "sx2.v4",
+        "sx2.crypt-options",
+        "sx2.part-needed-filter"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xRQAAACDAQEBAQEBAQEBAQEBAQEBAQEAAMUUAAAAgwICAgICAgICAgICAgICAgICAQDFFAAAAIMDAwMDAwMDAwMDAwMDAwMDAwIAxRQAAACDBAQEBAQEBAQEBAQEBAQEBAQDAA==",
+      "fixtureEncoding": "concatenated-sx2-v1-v4-corpus",
+      "fixtureLength": 100,
+      "opcode": "0x83",
+      "opcodeName": "OP_REQUESTSOURCES2",
+      "payloadDigest": "sha256:e4acd5dbc4e1a9adbf8fc20a39a5f934e0827549328291de4b416a2ea427ab42",
+      "protocol": "ed2k",
+      "recordId": "stock.sx2.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.10.sx2.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "ident.v1",
+        "ident.v2",
+        "ident.ip-kind.local",
+        "ident.ip-kind.remote",
+        "ident.replay",
+        "ident.invalid-key"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xQYAAACHATQSAADFAwAAAIUBAMUEAAAAhgEAAcUEAAAAhgEAAg==",
+      "fixtureEncoding": "concatenated-secure-ident-corpus",
+      "fixtureLength": 37,
+      "opcode": "MULTI",
+      "opcodeName": "SECURE_IDENT_CORPUS",
+      "payloadDigest": "sha256:775bdf0d1e8f364a6286792f6b4e38ab3808a0f2e7e77a7288a6321bc54086e1",
+      "protocol": "ed2k",
+      "recordId": "stock.ident.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.11.secure-ident.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "lowid.server-callback",
+        "lowid.direct-callback",
+        "lowid.buddy-callback",
+        "lowid.relayed-reask"
+      ],
+      "direction": "both",
+      "fixtureBase64": "4wUAAAAcAQAAAOOcfwAAATYSAQAAAMUUAAAAlTYSAAECAwQFBgcICQoLDA0ODwHFIQAAAJkAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHzYSxSEAAACaAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "fixtureEncoding": "concatenated-lowid-callback-corpus",
+      "fixtureLength": 125,
+      "opcode": "MULTI",
+      "opcodeName": "LOWID_CALLBACK_CORPUS",
+      "payloadDigest": "sha256:41ed731ea1de36604ec96ab00610c1075905a3fac391f9fefc20928e12ebd294",
+      "protocol": "ed2k",
+      "recordId": "stock.lowid.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.12.lowid.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "client-udp.v1",
+        "client-udp.v2",
+        "client-udp.v3",
+        "client-udp.v4",
+        "client-udp.clear",
+        "client-udp.encrypted",
+        "client-udp.queue-full",
+        "client-udp.file-not-found",
+        "client-udp.unsolicited"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xZAAAQIDBAUGBwgJCgsMDQ4PxZEBAMWSxZPFlAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAgABAA==",
+      "fixtureEncoding": "concatenated-client-udp-corpus",
+      "fixtureLength": 64,
+      "opcode": "MULTI",
+      "opcodeName": "CLIENT_UDP_V1_V4_CORPUS",
+      "payloadDigest": "sha256:89468db8e028268f21598216f5949ae11c2b1c3e1370b151d3d7136e8fda812b",
+      "protocol": "client_udp",
+      "recordId": "stock.client-udp.corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.13.client-udp.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "kad.contact.v2",
+        "kad.contact.v3",
+        "kad.contact.v4",
+        "kad.contact.v5",
+        "kad.contact.v6",
+        "kad.contact.v7",
+        "kad.contact.v8",
+        "kad.contact.v9",
+        "kad.contact.v10",
+        "kad.frame.e4",
+        "kad.frame.e5"
+      ],
+      "direction": "both",
+      "fixtureBase64": "5BECAwQFBgcICQrlEQIDBAUGBwgJCg==",
+      "fixtureEncoding": "kad-contact-version-and-marker-corpus",
+      "fixtureLength": 22,
+      "opcode": "0x11",
+      "opcodeName": "KADEMLIA2_HELLO_REQ",
+      "payloadDigest": "sha256:3525a958af88338930449ff0666d8e7a68f37439968c8e566d535a0d6178326c",
+      "protocol": "kad2",
+      "recordId": "stock.kad.contacts-corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.14.kad-contacts.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "kad.crypto.node-id",
+        "kad.crypto.receiver-key",
+        "kad.flow.search",
+        "kad.flow.publish",
+        "kad.flow.firewall",
+        "kad.flow.buddy",
+        "kad.flow.callback"
+      ],
+      "direction": "both",
+      "fixtureBase64": "5DPkNOQ15DvkQ+RE5EXkS+RM5FDkU+RY5FnkYORh5GLkY+RkAhECRAIRAkQCZA==",
+      "fixtureEncoding": "kad-opcode-and-obfuscation-marker-corpus",
+      "fixtureLength": 46,
+      "opcode": "MULTI",
+      "opcodeName": "KAD_FLOW_CORPUS",
+      "payloadDigest": "sha256:367c7f49cb03c5b61135f2c2ae865b88f4077bec7e449e27e897e082bd78e9a8",
+      "protocol": "kad2",
+      "recordId": "stock.kad.flow-corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.15.kad-flows.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "nodes-dat.v0",
+        "nodes-dat.v1",
+        "nodes-dat.v2",
+        "nodes-dat.v3-normal",
+        "nodes-dat.v3-bootstrap",
+        "nodes-dat.exact-size",
+        "nodes-dat.restart"
+      ],
+      "direction": "meta",
+      "fixtureBase64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAgAAAAEAAAAAAAAAAwAAAAAAAAABAAAAAAAAAAMAAAABAAAAAQAAAA==",
+      "fixtureEncoding": "concatenated-nodes-dat-version-header-corpus",
+      "fixtureLength": 88,
+      "opcode": "NONE",
+      "opcodeName": "NODES_DAT_V0_V3_CORPUS",
+      "payloadDigest": "sha256:1bf4c1bcd7ab83665209883edc53dd3aae87c14908e81244d7646d6db1138e2d",
+      "protocol": "kad2",
+      "recordId": "stock.nodes-dat.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.16.nodes-dat.v1",
+      "transport": "persistence"
+    },
+    {
+      "coverageIds": [
+        "queue.admission",
+        "queue.rank-transition",
+        "upload.slot-promotion",
+        "upload.slot-recycle",
+        "queue.abuse-escalation"
+      ],
+      "fixtureBase64": "d2FpdGluZy0+cmFua2VkLT5ncmFudGVkLT51cGxvYWRpbmctPnJlY3ljbGVkfHJlZnVzZWQtPnNpbGVudHxyYW5rLWZsb29kLT5kaXNjb25uZWN0LT5iYW58b3V0LW9mLXBhcnQtPmNvb2xkb3duLT5xdWFyYW50aW5l",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 123,
+      "payloadDigest": "sha256:f3b80d5993c66c090f7e0505e480c4135ab5af5bcea893c0a376928f78b3319c",
+      "protocol": "ed2k",
+      "recordId": "stock.queue.state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.17.queue-upload.v1",
+      "sequence": "waiting/ranked/granted/uploading/recycled; refused/silent; rank-flood/disconnect/ban; out-of-part/cooldown/quarantine",
+      "transport": "state"
     }
   ],
   "scenarioSource": "main/community native protocol-parity plus tracing-harness JSONL normalizer contract",
@@ -155,7 +1147,115 @@
       "protocol": "kad2",
       "scenarioId": "kad.udp.publish-search.v1",
       "source": "tracing-harness"
+    },
+    {
+      "description": "Stock clear/obfuscated server connection and downgrade state machine.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.01.server-connect.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock ED2K server login request frame.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.02.server-login.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock server search and TCP/UDP source request variants.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.03.server-query.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock server search/source/status/description/callback reply shapes.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.04.server-reply.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock E3/C5/D4 fragmented and coalesced peer framing corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.05.peer-framing.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Complete stock tag-type vocabulary and bounded malformed tail corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.06.tags.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "eDonkey/old-modern eMule profile and startup opcode corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.07.peer-startup.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "UINT32_MAX adjacent file-size boundaries.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.08.file-size-boundary.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Uncompressed/compressed block and hostile zlib corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.09.transfer-block.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "SX2 v1-v4 request, crypt-option, and useful-part filtering corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.10.sx2.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Secure-ident v1/v2 IP-kind and adversarial state corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.11.secure-ident.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Server/direct/buddy/relayed LowID callback corpus.",
+      "protocol": "mixed",
+      "scenarioId": "stock.12.lowid.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Client UDP v1-v4 clear/encrypted and reply-correlation corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.13.client-udp.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Kad contact v2-v10 and E4/E5 framing corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.14.kad-contacts.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Kad NodeID/receiver-key crypto and search/publish/firewall/buddy/callback corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.15.kad-flows.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock nodes.dat v0-v3 exact-layout and restart corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.16.nodes-dat.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock queue/upload transition and anti-abuse state sequence.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.17.queue-upload.v1",
+      "source": "community-stock-source"
     }
   ],
-  "schemaVersion": "emulebb-build-tests.protocol-oracle-golden.v1"
+  "schemaVersion": "emulebb-build-tests.protocol-oracle-golden.v1",
+  "stockOracle": {
+    "baselinePath": "workspaces/workspace/app/emulebb-community-baseline",
+    "baselineRevision": "953efc05b377f75152d5b8beaf93553d69ce9dca",
+    "derivation": "Canonical synthetic fixtures transcribed from the pinned community/stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
+    "requiredCoverageCount": 97
+  }
 }

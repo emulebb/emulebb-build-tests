@@ -26,6 +26,7 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("GET", "/api/v1/kad/nodes"),
     ("GET", "/api/v1/nat"),
     ("GET", "/api/v1/network"),
+    ("GET", "/api/v1/transfers/{}/comments"),
     ("GET", "/api/v1/vpn-guard"),
     ("PATCH", "/api/v1/app/settings"),
     ("POST", "/api/v1/ip-filter/operations/reload"),

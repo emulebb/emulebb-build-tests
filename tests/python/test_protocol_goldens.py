@@ -13,6 +13,7 @@ from emule_test_harness.protocol_goldens import (
     normalize_ed2k_records,
     normalize_udp_records,
     pcap_tool_status,
+    REQUIRED_STOCK_COVERAGE_IDS,
     run_compare_cli,
     run_normalize_cli,
     validate_golden_manifest,
@@ -23,6 +24,31 @@ def test_tracked_protocol_oracle_manifest_validates() -> None:
     validation = validate_golden_manifest(default_golden_path(Path(__file__).resolve().parents[2]))
 
     assert validation.errors == ()
+
+
+def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> None:
+    manifest_path = default_golden_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    coverage_ids = [coverage_id for group in payload["coverageGroups"] for coverage_id in group["coverageIds"]]
+
+    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 97
+    assert len(coverage_ids) == len(set(coverage_ids))
+    assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
+    assert payload["stockOracle"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
+
+
+def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
+    source = default_golden_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["records"][-1]["payloadDigest"] = "sha256:" + "0" * 64
+    payload["coverageGroups"][-1]["coverageIds"].remove("queue.admission")
+    manifest = tmp_path / "drifted.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_golden_manifest(manifest)
+
+    assert any("payloadDigest does not match fixtureBase64" in error for error in validation.errors)
+    assert any("missing required coverage IDs" in error for error in validation.errors)
 
 
 def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> None:

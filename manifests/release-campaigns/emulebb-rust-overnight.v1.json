@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust-overnight",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust full overnight parity campaign",
-  "description": "Long-form Rust headless core proof for total local eD2K parity. It promotes the full protocol-combination matrix, private Rust ED2K queue/resume/callback/serving modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the source-anchored binary/state oracle, full protocol-combination matrix, private Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
   "phases": [
     {
@@ -42,6 +42,36 @@
       "id": "protocol-parity",
       "title": "Protocol parity",
       "scenarios": [
+        {
+          "id": "emulebb.flow.rust.overnight.stock-protocol-oracle.v1",
+          "title": "Rust overnight source-anchored stock binary/state oracle",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/stock-protocol-oracle-proof.py",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/stock-protocol-oracle-proof/latest/stock-protocol-oracle-proof-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/stock_protocol_oracle_requirements/allRequirementsPassed": true,
+                "/checks/stock_protocol_oracle_requirements/requiredCoverageCount": 97,
+                "/checks/stock_protocol_oracle_requirements/coverageGroupCount": 15,
+                "/checks/stock_protocol_oracle_requirements/stockRecordCount": 17,
+                "/checks/stock_protocol_oracle_requirements/binaryVectorCount": 15,
+                "/checks/stock_protocol_oracle_requirements/stateVectorCount": 2,
+                "/checks/stock_protocol_oracle_requirements/baselineRevisionPinned": true,
+                "/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed": true,
+                "/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed": true,
+                "/checks/stock_protocol_oracle_requirements/binaryDigestsPassed": true
+              }
+            }
+          ]
+        },
         {
           "id": "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
           "title": "Rust overnight local eD2K protocol-combination matrix",
@@ -246,9 +276,10 @@
               "path": "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/checks/rust_ed2k_total_parity_audit/requirementCount": 6,
+                "/checks/rust_ed2k_total_parity_audit/requirementCount": 7,
                 "/checks/rust_ed2k_total_parity_audit/allRequirementsPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/failedRequirementCount": 0,
+                "/checks/rust_ed2k_total_parity_audit/stockOraclePassed": true,
                 "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/privateP2pOverlordModulesPassed": true,
@@ -336,6 +367,7 @@
     {
       "id": "emulebb-rust-overnight-ed2k-protocol-parity",
       "coveredBy": [
+        "emulebb.flow.rust.overnight.stock-protocol-oracle.v1",
         "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
         "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
         "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
