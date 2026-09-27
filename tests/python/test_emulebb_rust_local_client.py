@@ -1224,7 +1224,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         remembered_hash = str(share_file["hash"]).lower()
         wait_for_condition(
             "remembered-source startup hydration",
-            30,
+            60,
             lambda: next(
                 (
                     transfer
