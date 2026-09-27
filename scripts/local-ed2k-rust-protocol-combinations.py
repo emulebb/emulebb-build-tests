@@ -144,14 +144,36 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info["name"]))
 
 
-def ed2k_link_with_source(link: str, source_ip: str, source_port: int, user_hash: str | None = None) -> str:
-    """Appends a stock ED2K link source hint for deterministic local handoff."""
+def client_connect_options(case: protocol_matrix.ProtocolCase) -> int:
+    """Returns the peer crypt bits represented by one protocol-matrix case."""
+
+    return (
+        int(case.client_crypt_supported)
+        | (int(case.client_crypt_requested) << 1)
+        | (int(case.client_crypt_required) << 2)
+    )
+
+
+def ed2k_link_with_source(
+    link: str,
+    source_ip: str,
+    source_port: int,
+    user_hash: str | None = None,
+    connect_options: int | None = None,
+) -> str:
+    """Appends a deterministic Rust ED2K source hint with explicit crypt metadata."""
 
     if not link.endswith("|/"):
         raise RuntimeError(f"Cannot append source hint to malformed ED2K link: {link!r}")
+    if connect_options is not None and user_hash is None:
+        raise RuntimeError("ED2K source connect options require a peer user hash.")
+    if connect_options is not None and not 0 <= connect_options <= 0xFF:
+        raise RuntimeError(f"ED2K source connect options must fit in one byte, got {connect_options}.")
     source = f"{source_ip}:{source_port}"
     if user_hash:
         source = f"{source}:{user_hash}"
+    if connect_options is not None:
+        source = f"{source}:{connect_options}"
     return f"{link[:-2]}|sources,{source}|/"
 
 
@@ -791,6 +813,7 @@ def run_protocol_case(
             if case.client_crypt_supported
             else None
         )
+        source_connect_options = client_connect_options(case) if source_user_hash else None
         report["checks"]["rust_hashset_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             expected_hash=transfer_hash,
@@ -818,6 +841,7 @@ def run_protocol_case(
             p2p_address,
             ports["client2_tcp"],
             source_user_hash,
+            source_connect_options,
         )
         report["checks"]["rust_secondary_create"] = rust_emulebb.request_json(
             rust_base_url,
@@ -865,6 +889,7 @@ def run_protocol_case(
             p2p_address,
             ports["client2_tcp"],
             source_user_hash,
+            source_connect_options,
         )
         report["checks"]["rust_hash_only_input"] = {
             "hashOnlyLink": hash_only_link,

@@ -124,12 +124,21 @@ def test_ed2k_link_with_source_appends_obfuscated_identity_hint() -> None:
         "192.0.2.10",
         4662,
         "72cc5df03b0ed00338bb298d724a6f2f",
+        7,
     )
 
     assert (
         link
-        == "ed2k://|file|Alpha.bin|4096|00112233445566778899AABBCCDDEEFF|sources,192.0.2.10:4662:72cc5df03b0ed00338bb298d724a6f2f|/"
+        == "ed2k://|file|Alpha.bin|4096|00112233445566778899AABBCCDDEEFF|sources,192.0.2.10:4662:72cc5df03b0ed00338bb298d724a6f2f:7|/"
     )
+
+
+def test_client_connect_options_preserve_each_crypt_preference_bit() -> None:
+    module = load_suite_module()
+
+    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]) == 0
+    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-preferred"]) == 3
+    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required"]) == 7
 
 
 def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
