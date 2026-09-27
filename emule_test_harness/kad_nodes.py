@@ -25,10 +25,11 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# Smallest valid contact record: node_id(16) + ip(4) + udp(2) + tcp(2) +
-# version(1) = 25. Modern records are 34 bytes (adds contact_type + last_seen +
-# udp_key); entry size is derived from the payload so both layouts parse.
+# Stock record widths: node_id(16) + ip(4) + udp(2) + tcp(2) + version/type(1),
+# with v2/normal-v3 adding CKadUDPKey(key + bound public IP) and verified byte.
 _ENTRY_BASIC = 25
+_ENTRY_EXTENDED = 34
+_MAX_CONTACTS = 500_000
 
 
 class BootstrapContact(NamedTuple):
@@ -69,13 +70,13 @@ def _is_public_ipv4(ip: str) -> bool:
 def parse_nodes_dat(data: bytes) -> list[BootstrapContact]:
     """Parses a ``nodes.dat`` payload into public, routable Kad contacts.
 
-    Mirrors ``parse_nodes_dat`` in the Rust DHT crate: the first u32 is either
-    a ``0`` magic prefix (modern, followed by version + count), a bare version
-    (2 or 3), or the legacy contact count. The IP is stored little-endian and
-    recovered with ``to_be_bytes`` (i.e. the raw 4 bytes reversed).
+    Mirrors the exact stock grammar used by the Rust DHT crate. A non-zero first
+    u32 is always the legacy v0 contact count (including 2 and 3). A zero first
+    word introduces modern v1/v2/v3 headers. Record widths are selected by the
+    declared format and the total payload must match exactly.
     """
 
-    if len(data) < 8:
+    if len(data) < 4:
         return []
 
     offset = 0
@@ -83,34 +84,42 @@ def parse_nodes_dat(data: bytes) -> list[BootstrapContact]:
     offset += 4
 
     if first == 0:
+        if len(data) == 4:  # valid empty legacy file
+            return []
+        if len(data) < 12:
+            return []
         (version,) = struct.unpack_from("<I", data, offset)
         offset += 4
-        if version == 3:
-            offset += 4  # bootstrap edition
-        elif version != 2:
+        if version == 1:
+            entry_size = _ENTRY_BASIC
+        elif version == 2:
+            entry_size = _ENTRY_EXTENDED
+        elif version == 3:
+            if len(data) < 16:
+                return []
+            (edition,) = struct.unpack_from("<I", data, offset)
+            offset += 4
+            if edition == 0:
+                entry_size = _ENTRY_EXTENDED
+            elif edition == 1:
+                entry_size = _ENTRY_BASIC
+            else:
+                return []
+        else:
             return []
-        (count,) = struct.unpack_from("<I", data, offset)
-        offset += 4
-    elif first in (2, 3):
-        if first == 3:
-            offset += 4  # bootstrap edition
         (count,) = struct.unpack_from("<I", data, offset)
         offset += 4
     else:
         count = first
+        entry_size = _ENTRY_BASIC
 
-    if count == 0 or count > 500_000:
+    if count > _MAX_CONTACTS:
         return []
-
-    remaining = len(data) - offset
-    entry_size = remaining // count
-    if entry_size < _ENTRY_BASIC:
+    if len(data) != offset + count * entry_size:
         return []
 
     contacts: list[BootstrapContact] = []
     for _ in range(count):
-        if offset + entry_size > len(data):
-            break
         # ip is 4 bytes at node_id(16); to_be_bytes(le_u32) == raw bytes reversed.
         (ip_le,) = struct.unpack_from("<I", data, offset + 16)
         udp_port, tcp_port = struct.unpack_from("<HH", data, offset + 20)
