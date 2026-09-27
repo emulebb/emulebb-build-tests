@@ -12,6 +12,7 @@ from emule_test_harness.rust_soak_metadata_migration import (
     migrate_v18_to_v19,
     migrate_v19_to_v20,
     migrate_v20_to_v21,
+    migrate_v21_to_v22,
 )
 
 
@@ -200,6 +201,24 @@ def make_v20_db_without_source_file_descriptions(path: Path) -> None:
         conn.commit()
 
 
+def make_v21_db_without_extended_server_metadata(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    old_schema = rust_metadata._schema_sql(rust_repo())
+    old_schema = old_schema.replace("    dynamic_host TEXT NOT NULL DEFAULT '',\n", "")
+    old_schema = old_schema.replace("    auxiliary_ports TEXT NOT NULL DEFAULT '',\n", "")
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_schema)
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 21, 0)",
+            (schema_id,),
+        )
+        conn.execute(
+            "INSERT INTO servers(address, port, name, first_seen_ms, last_seen_ms) "
+            "VALUES ('192.0.2.10', 4661, 'legacy server', 0, 0)"
+        )
+        conn.commit()
+
+
 def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
     db_path = tmp_path / "emulebb-rust-metadata.db"
     make_v15_db(db_path)
@@ -217,6 +236,7 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         "migrated-v18-to-v19",
         "migrated-v19-to-v20",
         "migrated-v20-to-v21",
+        "migrated-v21-to-v22",
     ]
     assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
@@ -339,4 +359,28 @@ def test_migrates_v20_source_file_descriptions_to_v21(tmp_path: Path) -> None:
         )
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("UPDATE transfer_sources SET file_rating = 256")
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migrates_v21_extended_server_metadata_to_v22(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v21_db_without_extended_server_metadata(db_path)
+
+    result = migrate_v21_to_v22(
+        db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path
+    )
+
+    assert result["action"] == "migrated-v21-to-v22"
+    assert Path(str(result["backup"])).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 22
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(servers)")]
+        assert "dynamic_host" in columns
+        assert "auxiliary_ports" in columns
+        assert conn.execute(
+            "SELECT dynamic_host, auxiliary_ports FROM servers"
+        ).fetchone() == ("", "")
+        conn.execute(
+            "UPDATE servers SET dynamic_host = 'server.example', auxiliary_ports = '4662,4663'"
+        )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
