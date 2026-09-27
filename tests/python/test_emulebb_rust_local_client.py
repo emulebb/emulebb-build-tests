@@ -1221,8 +1221,23 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         )
         remembered_base_url = f"http://{lan_host}:{remembered_rest_port}"
         wait_for_rest(remembered_base_url, remembered_leecher_process, remembered_output_path)
-        remembered_transfers = request_json(remembered_base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert any(transfer["hash"] == str(share_file["hash"]).lower() for transfer in remembered_transfers)
+        remembered_hash = str(share_file["hash"]).lower()
+        wait_for_condition(
+            "remembered-source startup hydration",
+            30,
+            lambda: next(
+                (
+                    transfer
+                    for transfer in request_json(
+                        remembered_base_url,
+                        "GET",
+                        "/api/v1/transfers",
+                    )["data"]["items"]
+                    if transfer["hash"] == remembered_hash
+                ),
+                None,
+            ),
+        )
         remembered_resume = request_json(
             remembered_base_url,
             "POST",
