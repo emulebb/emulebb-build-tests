@@ -222,15 +222,15 @@
               "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/scenarios/1/id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
-                "/scenarios/1/status": "passed",
-                "/scenarios/1/report/status": "passed",
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers": true,
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames": true,
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/recursiveSharedTreeUpload": true,
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedSourceUserHash": true,
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedMd4Hashset": true,
-                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset": true
+                "/scenarios/0/id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                "/scenarios/0/status": "passed",
+                "/scenarios/0/report/status": "passed",
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers": true,
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames": true,
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/recursiveSharedTreeUpload": true,
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/rustPersistedSourceUserHash": true,
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/rustPersistedMd4Hashset": true,
+                "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset": true
               }
             }
           ]
@@ -251,15 +251,15 @@
               "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/scenarios/1/id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
-                "/scenarios/1/status": "passed",
-                "/scenarios/1/report/status": "passed",
-                "/scenarios/1/report/checks/multiTransferCount": 3,
-                "/scenarios/1/report/checks/unicodeFilenameTransfer": true,
-                "/scenarios/1/report/checks/hashOnlyMetadataRecovery": true,
-                "/scenarios/1/report/checks/bidirectionalRustTransfers": true,
-                "/scenarios/1/report/checks/sourcePersistenceAfterRestart": true,
-                "/scenarios/1/report/checks/sourceControlOperations": true
+                "/scenarios/0/id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                "/scenarios/0/status": "passed",
+                "/scenarios/0/report/status": "passed",
+                "/scenarios/0/report/checks/multiTransferCount": 3,
+                "/scenarios/0/report/checks/unicodeFilenameTransfer": true,
+                "/scenarios/0/report/checks/hashOnlyMetadataRecovery": true,
+                "/scenarios/0/report/checks/bidirectionalRustTransfers": true,
+                "/scenarios/0/report/checks/sourcePersistenceAfterRestart": true,
+                "/scenarios/0/report/checks/sourceControlOperations": true
               }
             }
           ]
