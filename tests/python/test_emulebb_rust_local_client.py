@@ -281,7 +281,7 @@ def configure_shared_directory(
         base_url,
         "PATCH",
         "/api/v1/shared-directories",
-        {"roots": [str(root)], "confirmReplaceRoots": True},
+        {"roots": [{"path": str(root)}], "confirmReplaceRoots": True},
         timeout=30,
     )
     request_json(
