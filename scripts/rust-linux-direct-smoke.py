@@ -46,6 +46,7 @@ REST_PORT = 4731
 ED2K_PORT = 41662
 KAD_PORT = 41672
 CONNECT_COOLDOWN_SECONDS = 300.0
+SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS = 60.0
 ALLOWED_TRANSFER_SUFFIXES = {".iso", ".pdf"}
 
 
@@ -346,7 +347,13 @@ def webui_ready(base_url: str) -> bool:
         return False
 
 
-def post_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+def post_json(
+    base_url: str,
+    path: str,
+    body: dict[str, Any],
+    *,
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{base_url}{path}",
         data=json.dumps(body).encode("utf-8"),
@@ -354,12 +361,24 @@ def post_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json", "X-API-Key": API_KEY},
     )
     try:
-        with urllib.request.urlopen(request, timeout=20.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"POST {path} returned HTTP {error.code}: {detail}") from error
     return payload if isinstance(payload, dict) else {}
+
+
+def request_server_connect(base_url: str) -> dict[str, Any]:
+    # The product can spend up to 20 seconds in its required initial UPnP
+    # reconcile before this operation replies. Leave ample transport headroom so
+    # the harness does not race that intentional product-side bound.
+    return post_json(
+        base_url,
+        "/api/v1/servers/operations/connect",
+        {},
+        timeout_seconds=SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS,
+    )
 
 
 def add_allowlisted_transfer(base_url: str, row: dict[str, Any]) -> None:
@@ -672,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         retry_http_json("kad start", 2, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
         enforce_connect_cooldown(output_root / "live-wire" / ".last-server-connect")
-        post_json(base_url, "/api/v1/servers/operations/connect", {})
+        request_server_connect(base_url)
         def connected_stats() -> dict[str, Any] | None:
             current = status(base_url)
             return current if current.get("ed2kConnected") else None

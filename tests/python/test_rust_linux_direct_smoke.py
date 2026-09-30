@@ -89,6 +89,22 @@ def test_safe_transfer_add_percent_encodes_stock_filename(monkeypatch) -> None:
     assert calls[0][2]["link"] == "ed2k://|file|Linux%20Guide%20%C3%A9.pdf|123|" + "A" * 32 + "|/"
 
 
+def test_server_connect_request_outlives_initial_upnp_reconcile(monkeypatch) -> None:
+    module = load_module()
+    calls = []
+    monkeypatch.setattr(module, "post_json", lambda *args, **kwargs: calls.append((args, kwargs)) or {})
+
+    module.request_server_connect("http://192.0.2.1:4731")
+
+    assert calls == [
+        (
+            ("http://192.0.2.1:4731", "/api/v1/servers/operations/connect", {}),
+            {"timeout_seconds": module.SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS},
+        )
+    ]
+    assert module.SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS > 20.0
+
+
 def test_sha256_file_hashes_completed_payload(tmp_path: Path) -> None:
     module = load_module()
     payload = tmp_path / "manual.pdf"
