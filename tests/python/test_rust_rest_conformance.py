@@ -194,6 +194,47 @@ def test_rust_openapi_transfer_schema_includes_delivery_fields() -> None:
     assert transfer_properties["inIncoming"] == {"type": "boolean"}
 
 
+def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
+        properties = schemas[component]["properties"]
+        assert properties["nickname"] == {"type": "string", "maxLength": 50}
+        assert properties["useServerPriorities"] == {
+            "type": "boolean",
+            "description": (
+                "Apply stable high, normal, then low server-priority ordering; "
+                "stock default true."
+            ),
+        }
+        assert properties["autoConnectStaticOnly"] == {
+            "type": "boolean",
+            "description": (
+                "Restrict application startup auto-connect to static servers; "
+                "explicit targeted connects are unaffected."
+            ),
+        }
+
+    server = schemas["Server"]
+    assert "auxiliaryPorts" in server["required"]
+    assert server["properties"]["auxiliaryPorts"] == {
+        "type": "array",
+        "items": {"type": "integer", "minimum": 1, "maximum": 65535},
+    }
+
+
+def test_rust_openapi_documents_all_supported_nat_backends() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    for component in ("NatSettings", "NatSettingsUpdate"):
+        assert schemas[component]["properties"]["backendOrder"]["items"]["enum"] == [
+            "upnp_miniupnpc",
+            "upnp_igd",
+        ]
+
+
 def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
