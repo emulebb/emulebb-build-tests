@@ -8,6 +8,7 @@ existing P2P project, its containers, networks, and volumes are never addressed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -56,6 +57,25 @@ def captured_packet_count(result: subprocess.CompletedProcess[str]) -> int:
     return len(packet_lines)
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def url_is_reachable(url: str, key: str) -> bool:
+    request = urllib.request.Request(url, headers={"X-API-Key": key})
+    try:
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, TimeoutError):
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
@@ -64,6 +84,7 @@ def main() -> int:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--image", default="ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1")
     parser.add_argument("--capture-image", default="nicolaka/netshoot:v0.13")
+    parser.add_argument("--expected-executable-sha256")
     args = parser.parse_args()
     if not args.archive.is_file() or not args.compose.is_file():
         raise RuntimeError("the OCI archive and Compose file must exist")
@@ -73,6 +94,9 @@ def main() -> int:
     pcap = args.report.with_suffix(".off-tunnel.pcap")
     if args.report.exists() or pcap.exists():
         raise RuntimeError("refusing to overwrite an existing proof report or packet capture")
+    expected_executable_sha256 = (args.expected_executable_sha256 or "").lower()
+    if expected_executable_sha256 and not re.fullmatch(r"[0-9a-f]{64}", expected_executable_sha256):
+        raise RuntimeError("--expected-executable-sha256 must be a lowercase SHA-256 digest")
     args.report.parent.mkdir(parents=True, exist_ok=True)
 
     project = f"emulebb-rust-beta-proof-{os.getpid()}"
@@ -82,10 +106,13 @@ def main() -> int:
     env = {**os.environ, "EMULEBB_TEST_VPN_PRIVATE_ROOT": str(args.private_root.resolve())}
     compose = ("docker", "compose", "--project-name", project, "--file", str(args.compose))
     report: dict[str, object] = {
-        "schema": "emulebb.rust.gluetun-proof/1", "status": "failed",
+        "schema": "emulebb.rust.gluetun-proof/2", "status": "failed",
         "project": project, "image": args.image, "captureImage": args.capture_image,
+        "archive": str(args.archive.resolve()),
+        "archiveSha256": sha256_file(args.archive),
     }
     started = False
+    evidence_checks_passed = False
     try:
         command(*compose, "config", "--quiet", env=env)
         docker("load", "--input", str(args.archive), timeout=300)
@@ -101,6 +128,18 @@ def main() -> int:
         rust = command(*compose, "ps", "--quiet", "emulebb-rust", env=env).stdout.strip()
         if not gluetun or not rust:
             raise RuntimeError("isolated Gluetun/Rust containers were not created")
+        executable_sha256 = docker(
+            "exec", rust, "sha256sum", "/usr/lib/emulebb-rust/emulebb-rust"
+        ).stdout.split()[0].lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", executable_sha256):
+            raise RuntimeError("could not read the Rust executable SHA-256 from the image")
+        report["rustExecutableSha256"] = executable_sha256
+        if expected_executable_sha256 and executable_sha256 != expected_executable_sha256:
+            raise RuntimeError(
+                "Rust executable SHA-256 does not match the certified staged binary: "
+                f"{executable_sha256} != {expected_executable_sha256}"
+            )
+        report["rustExecutableMatchesExpected"] = bool(expected_executable_sha256)
         bridge_ip = docker("inspect", "--format",
                            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
                            gluetun).stdout.strip()
@@ -165,10 +204,25 @@ def main() -> int:
         still_running = docker("inspect", "--format", "{{.State.Running}}", rust,
                                check=False).stdout.strip() == "true"
         report["rustRunningAfterTunnelDown"] = still_running
-        if still_running:
-            interfaces = docker("run", "--rm", "--network", f"container:{rust}",
-                                args.capture_image, "ip", "-o", "link", "show")
-            report["remainingInterfaces"] = re.findall(r"\d+: ([^:]+):", interfaces.stdout)
+        if not still_running:
+            raise RuntimeError("Rust daemon stopped instead of remaining alive and isolated")
+        interfaces = docker("run", "--rm", "--network", f"container:{rust}",
+                            args.capture_image, "ip", "-o", "link", "show")
+        remaining_interfaces = re.findall(r"\d+: ([^:]+):", interfaces.stdout)
+        report["remainingInterfaces"] = remaining_interfaces
+        if set(remaining_interfaces) - {"lo"}:
+            raise RuntimeError(f"non-loopback interface remained after tunnel shutdown: {remaining_interfaces}")
+        namespace_rest = docker(
+            "exec", rust, "curl", "--fail", "--silent", "--max-time", "3",
+            "--header", f"X-API-Key: {api_key}", "http://127.0.0.1:4711/api/v1/status",
+            check=False,
+        )
+        if namespace_rest.returncode:
+            raise RuntimeError("Rust loopback REST stopped responding after tunnel shutdown")
+        report["restReachableAfterTunnelDownInNamespace"] = True
+        if url_is_reachable("http://127.0.0.1:14711/api/v1/status", api_key):
+            raise RuntimeError("host-published REST remained reachable after Gluetun shutdown")
+        report["hostRestIsolatedAfterTunnelDown"] = True
         capture_mount = f"{args.report.parent.resolve()}:/proof"
         capture = docker(
             "run", "--rm", "--network", "host", "--cap-add", "NET_RAW",
@@ -197,27 +251,67 @@ def main() -> int:
         report["offTunnelPcap"] = str(pcap)
         if report["offTunnelPacketCount"] != 0:
             raise RuntimeError("off-tunnel IPv4 packet observed after tunnel shutdown")
-        report["status"] = "passed"
-        return 0
+        evidence_checks_passed = True
     except Exception as error:
         report["error"] = str(error)
         if started:
             logs = command(*compose, "logs", "--tail", "40", env=env, check=False)
             report["containerLogTail"] = (logs.stdout + logs.stderr)[-4000:]
-        return 1
     finally:
+        teardown_error = ""
+        down_returncode = None
         if started:
             # Only the just-created, uniquely named test project and volumes.
-            command(*compose, "down", "--volumes", env=env, timeout=90, check=False)
-        after = project_states()
-        report["preExistingProjectsPreserved"] = all(
-            after.get(name) == status for name, status in before.items()
+            down = command(*compose, "down", "--volumes", env=env, timeout=90, check=False)
+            down_returncode = down.returncode
+            if down.returncode:
+                teardown_error = (down.stdout + down.stderr)[-1000:]
+        try:
+            after = project_states()
+            pre_existing_preserved = all(after.get(name) == status for name, status in before.items())
+            project_removed = project not in after
+            remaining_containers = docker(
+                "ps", "--all", "--quiet", "--filter", f"label=com.docker.compose.project={project}"
+            ).stdout.split()
+            remaining_networks = docker(
+                "network", "ls", "--quiet", "--filter", f"label=com.docker.compose.project={project}"
+            ).stdout.split()
+            remaining_volumes = docker(
+                "volume", "ls", "--quiet", "--filter", f"label=com.docker.compose.project={project}"
+            ).stdout.split()
+        except Exception as error:
+            pre_existing_preserved = False
+            project_removed = False
+            remaining_containers = ["inspection-failed"]
+            remaining_networks = ["inspection-failed"]
+            remaining_volumes = ["inspection-failed"]
+            teardown_error = str(error)
+        report["preExistingProjectsPreserved"] = pre_existing_preserved
+        report["testProjectRemoved"] = project_removed
+        report["remainingTestContainers"] = remaining_containers
+        report["remainingTestNetworks"] = remaining_networks
+        report["remainingTestVolumes"] = remaining_volumes
+        clean_teardown = (
+            (not started or down_returncode == 0)
+            and pre_existing_preserved
+            and project_removed
+            and not remaining_containers
+            and not remaining_networks
+            and not remaining_volumes
         )
+        report["cleanTeardown"] = clean_teardown
+        if teardown_error:
+            report["teardownError"] = teardown_error
+        if evidence_checks_passed and clean_teardown:
+            report["status"] = "passed"
+        elif evidence_checks_passed and "error" not in report:
+            report["error"] = "isolated Compose teardown was not clean"
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                                encoding="utf-8")
         print(json.dumps({key: value for key, value in report.items()
                           if key not in ("preFailureStatus", "containerLogTail")}, sort_keys=True))
+    return 0 if report["status"] == "passed" else 1
 
 
 if __name__ == "__main__":

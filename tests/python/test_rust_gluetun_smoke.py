@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import subprocess
 import sys
@@ -44,3 +45,11 @@ def test_empty_capture_without_summary_is_not_a_pass() -> None:
     )
     with pytest.raises(RuntimeError, match="no capture summary"):
         module.captured_packet_count(result)
+
+
+def test_sha256_file(tmp_path: Path) -> None:
+    module = load_module()
+    payload = tmp_path / "payload.bin"
+    payload.write_bytes(b"same-image-input")
+
+    assert module.sha256_file(payload) == hashlib.sha256(b"same-image-input").hexdigest()
