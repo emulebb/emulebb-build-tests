@@ -80,14 +80,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--compose", type=Path, required=True)
+    parser.add_argument("--compose-override", type=Path)
     parser.add_argument("--private-root", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--image", default="ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1")
     parser.add_argument("--capture-image", default="nicolaka/netshoot:v0.13")
     parser.add_argument("--expected-executable-sha256")
+    parser.add_argument("--expected-gluetun-image")
     args = parser.parse_args()
     if not args.archive.is_file() or not args.compose.is_file():
         raise RuntimeError("the OCI archive and Compose file must exist")
+    if args.compose_override and not args.compose_override.is_file():
+        raise RuntimeError("the Compose override file must exist")
     for name in ("custom.conf", "ca.pem", "StaticKey.pem", "openvpn_user", "openvpn_password"):
         if not (args.private_root / name).is_file():
             raise RuntimeError(f"VPN private root lacks {name}")
@@ -104,13 +108,21 @@ def main() -> int:
         raise RuntimeError("unsafe or existing test Compose project")
     before = project_states()
     env = {**os.environ, "EMULEBB_TEST_VPN_PRIVATE_ROOT": str(args.private_root.resolve())}
-    compose = ("docker", "compose", "--project-name", project, "--file", str(args.compose))
+    compose_args = ["docker", "compose", "--project-name", project, "--file", str(args.compose)]
+    if args.compose_override:
+        compose_args.extend(("--file", str(args.compose_override)))
+    compose = tuple(compose_args)
     report: dict[str, object] = {
         "schema": "emulebb.rust.gluetun-proof/2", "status": "failed",
         "project": project, "image": args.image, "captureImage": args.capture_image,
         "archive": str(args.archive.resolve()),
         "archiveSha256": sha256_file(args.archive),
+        "compose": str(args.compose.resolve()),
+        "composeSha256": sha256_file(args.compose),
     }
+    if args.compose_override:
+        report["composeOverride"] = str(args.compose_override.resolve())
+        report["composeOverrideSha256"] = sha256_file(args.compose_override)
     started = False
     evidence_checks_passed = False
     try:
@@ -128,6 +140,16 @@ def main() -> int:
         rust = command(*compose, "ps", "--quiet", "emulebb-rust", env=env).stdout.strip()
         if not gluetun or not rust:
             raise RuntimeError("isolated Gluetun/Rust containers were not created")
+        gluetun_image = docker("inspect", "--format", "{{.Config.Image}}", gluetun).stdout.strip()
+        report["gluetunImage"] = gluetun_image
+        report["gluetunImageId"] = docker(
+            "inspect", "--format", "{{.Image}}", gluetun
+        ).stdout.strip()
+        if args.expected_gluetun_image and gluetun_image != args.expected_gluetun_image:
+            raise RuntimeError(
+                f"Gluetun image does not match expectation: {gluetun_image} "
+                f"!= {args.expected_gluetun_image}"
+            )
         executable_sha256 = docker(
             "exec", rust, "sha256sum", "/usr/lib/emulebb-rust/emulebb-rust"
         ).stdout.split()[0].lower()
