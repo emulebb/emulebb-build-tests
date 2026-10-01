@@ -296,7 +296,10 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             value = api_data(base_url, f"searches/{search_id}?limit=200", api_key)
             if not isinstance(value, dict) or value.get("status") != "complete":
                 return None
-            return value if int(value.get("total") or 0) > 0 else None
+            # A live backend can validly complete with no matches. The workflow
+            # still requires the exact allowlisted PDF from at least one method
+            # before it can trigger a download from the rendered result table.
+            return value
 
         completed = _wait_for_api(
             f"rendered WebUI {method} search results",
