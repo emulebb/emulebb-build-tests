@@ -90,7 +90,12 @@ def verify_extracted_payload(root: Path, manifest: dict[str, Any]) -> int:
     return len(expected_paths)
 
 
-def _candidate_rows(payload: dict[str, Any], max_download_bytes: int) -> list[dict[str, Any]]:
+def _candidate_rows(
+    payload: dict[str, Any],
+    max_download_bytes: int,
+    *,
+    require_sha256: bool = False,
+) -> list[dict[str, Any]]:
     rows = payload.get("auto_browse", {}).get("direct_bootstrap_transfers", [])
     candidates: list[dict[str, Any]] = []
     for raw in rows if isinstance(rows, list) else []:
@@ -109,8 +114,10 @@ def _candidate_rows(payload: dict[str, Any], max_download_bytes: int) -> list[di
             or not 0 < size <= max_download_bytes
             or len(transfer_hash) != 32
             or any(ch not in "0123456789abcdef" for ch in transfer_hash)
-            or len(sha256) != 64
-            or any(ch not in "0123456789abcdef" for ch in sha256)
+            or (
+                require_sha256
+                and (len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256))
+            )
         ):
             continue
         candidates.append(
@@ -125,15 +132,21 @@ def _candidate_rows(payload: dict[str, Any], max_download_bytes: int) -> list[di
     return sorted(candidates, key=lambda row: (int(row["size"]), str(row["hash"])))
 
 
-def load_consumer_transfer(inputs_path: Path, max_transfer_bytes: int) -> dict[str, Any]:
+def load_consumer_transfer(
+    inputs_path: Path,
+    max_transfer_bytes: int,
+    *,
+    require_sha256: bool = False,
+) -> dict[str, Any]:
     """Load one exact operator-approved public transfer without retaining its identity."""
 
     payload = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
-    candidates = _candidate_rows(payload, max_transfer_bytes)
+    candidates = _candidate_rows(payload, max_transfer_bytes, require_sha256=require_sha256)
     if not candidates:
         raise RuntimeError(
             "consumer live proof requires an approved PDF smaller than 5 MiB and no larger than "
-            f"{max_transfer_bytes} bytes with exact eD2K hash, size, and SHA-256"
+            f"{max_transfer_bytes} bytes with exact eD2K hash and size"
+            + (", plus SHA-256 for completion mode" if require_sha256 else "")
         )
     return candidates[0]
 
@@ -380,7 +393,11 @@ def run_consumer_live(
     if max_transfer_bytes > DEFAULT_MAX_TRANSFER_BYTES:
         raise RuntimeError("consumer live proof requires a PDF strictly smaller than 5 MiB")
     manifest = verify_release_zip(release_zip)
-    transfer = load_consumer_transfer(inputs_path, max_transfer_bytes)
+    transfer = load_consumer_transfer(
+        inputs_path,
+        max_transfer_bytes,
+        require_sha256=complete_transfer,
+    )
     if complete_transfer and int(transfer["size"]) > max_completion_bytes:
         raise RuntimeError(
             "full consumer download completion requires an approved transfer no larger than "

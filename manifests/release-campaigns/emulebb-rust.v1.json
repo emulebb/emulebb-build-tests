@@ -189,9 +189,9 @@
           "flowCategory": "live-wire",
           "required": true,
           "blocking": true,
-          "command": "python scripts/rust-consumer-live.py --inputs live-wire-inputs.local.json --release-zip ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/release/rust-v0.1.0-beta.1/emulebb-rust-v0.1.0-beta.1-windows-x64.zip --search-term linux --max-transfer-bytes 5242879 --max-completion-bytes 5242879",
+          "command": "python scripts/rust-consumer-live.py --inputs rust-consumer-pdf.local.json --release-zip ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/release/rust-v0.1.0-beta.1/emulebb-rust-v0.1.0-beta.1-windows-x64.zip --search-term linux --max-transfer-bytes 5242879 --max-completion-bytes 5242879",
           "localInputs": [
-            "live-wire-inputs.local.json contains an operator-approved exact PDF candidate smaller than 5 MiB with eD2K hash, size, and SHA-256",
+            "rust-consumer-pdf.local.json contains an operator-approved exact PDF candidate smaller than 5 MiB with eD2K hash and size; completion mode additionally requires SHA-256",
             "the exact unsigned Windows x64 beta ZIP and sibling manifest already exist under the canonical output release root",
             "runtime search text is supplied explicitly and is redacted from retained evidence",
             "TCP 4711 and 4662 plus UDP 4672 are available for the isolated default-profile proof"

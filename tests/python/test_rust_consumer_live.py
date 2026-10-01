@@ -50,8 +50,19 @@ def test_load_consumer_transfer_requires_bounded_pdf_allowlist_entry(tmp_path: P
     inputs = tmp_path / "live-wire-inputs.local.json"
     write_inputs(inputs, [transfer_row(name="too-large.iso", size=4097, digit="a")])
 
-    with pytest.raises(RuntimeError, match="exact eD2K hash, size, and SHA-256"):
+    with pytest.raises(RuntimeError, match="exact eD2K hash and size"):
         rust_consumer_live.load_consumer_transfer(inputs, 4096)
+
+
+def test_completion_mode_requires_sha256_but_trigger_mode_does_not(tmp_path: Path) -> None:
+    inputs = tmp_path / "rust-consumer-pdf.local.json"
+    row = transfer_row(name="guide.pdf", size=1024, digit="a")
+    row.pop("sha256")
+    write_inputs(inputs, [row])
+
+    assert rust_consumer_live.load_consumer_transfer(inputs, 4096)["name"] == "guide.pdf"
+    with pytest.raises(RuntimeError, match="plus SHA-256 for completion mode"):
+        rust_consumer_live.load_consumer_transfer(inputs, 4096, require_sha256=True)
 
 
 def test_parser_requires_explicit_runtime_search_term() -> None:

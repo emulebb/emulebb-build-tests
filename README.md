@@ -111,6 +111,7 @@ Script inventory:
 | `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust route, query, body, Settings section-resource metadata, and section-resource response shapes against the Rust OpenAPI artifact |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
 | `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB MFC/Rust cross-client transfers and records optional eMuleAI readiness |
+| `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through best-effort UPnP setup and restart, public server/Kad imports, independent disconnect/reconnect, safe PDF-only searches, rendered-result download activity, stop, and persistence |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |

@@ -11,5 +11,6 @@ __pycache__/
 !.env.example
 .tracked-file-privacy-identifiers.local.json
 live-wire-inputs.local.json
+rust-consumer-pdf.local.json
 live-process-monitor.local.json
 vpn-guard-live.local.json
