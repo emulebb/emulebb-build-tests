@@ -578,6 +578,7 @@ def run_consumer_live(
                 raise RuntimeError("completed consumer download failed exact size/SHA-256 verification")
             report["checks"]["download"] = {
                 "triggered": bool(transfer_check.get("triggeredFromRenderedSearchResult")),
+                "identityVerified": bool(transfer_check.get("identityVerified")),
                 "delivered": True,
                 "sizeVerified": True,
                 "sha256Verified": True,
@@ -585,6 +586,8 @@ def run_consumer_live(
         else:
             report["checks"]["download"] = {
                 "triggered": bool(transfer_check.get("triggeredFromRenderedSearchResult")),
+                "identityVerified": bool(transfer_check.get("identityVerified")),
+                "networkActivityRequired": bool(transfer_check.get("networkActivityRequired")),
                 "networkActivityObserved": bool(transfer_check.get("networkActivityObserved")),
                 "stoppedAfterObservation": bool(transfer_check.get("stoppedFlag")),
             }

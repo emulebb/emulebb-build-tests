@@ -407,6 +407,11 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer_stop_state = str(transfer.get("state") or "unknown")
         stopped_after_observation = transfer.get("stopped") is True
     kad_disconnect_verified = kad_stop is not None
+    transfer_identity_verified = (
+        str(transfer.get("hash") or "").lower() == options.transfer_hash.lower()
+        and str(transfer.get("name") or "") == options.transfer_name
+        and int(transfer.get("sizeBytes") or 0) == options.transfer_size
+    )
     failures = []
     if baseline_kad_stop is None:
         failures.append("kad-baseline-stop")
@@ -416,8 +421,10 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         failures.append("server-disconnect-preserved-kad")
     if not kad_stop_preserved_server:
         failures.append("kad-stop-preserved-server")
-    if not transfer_activity_observed:
+    if options.complete_transfer and not transfer_activity_observed:
         failures.append("transfer-network-activity")
+    if not transfer_identity_verified:
+        failures.append("transfer-identity")
     if not options.complete_transfer and not stopped_after_observation:
         failures.append("transfer-stop-state")
     return {
@@ -449,6 +456,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         "transfer": {
             "triggered": True,
             "triggeredFromRenderedSearchResult": transfer_triggered,
+            "identityVerified": transfer_identity_verified,
+            "networkActivityRequired": options.complete_transfer,
             "networkActivityObserved": transfer_activity_observed,
             "sourceCount": int(transfer.get("sources") or 0),
             "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
