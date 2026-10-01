@@ -184,6 +184,25 @@ def _port_is_claimed(port: int, *, udp: bool = False) -> bool:
     )
 
 
+def _wait_for_p2p_ports(
+    process: subprocess.Popen[str],
+    log_path: Path,
+    timeout_seconds: float,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            tail = log_path.read_text(encoding="utf-8", errors="replace")[-3000:]
+            raise RuntimeError(
+                f"hosted package exited {process.returncode} before claiming P2P ports: "
+                f"{sanitize_report_text(tail)}"
+            )
+        if _port_is_claimed(ED2K_PORT) and _port_is_claimed(KAD_PORT, udp=True):
+            return
+        time.sleep(0.25)
+    raise RuntimeError("fresh consumer profile did not claim the default eD2K and Kad ports")
+
+
 def _wait_for_profile(settings_path: Path, process: subprocess.Popen[str], log_path: Path) -> str:
     deadline = time.monotonic() + 90.0
     while time.monotonic() < deadline:
@@ -494,6 +513,7 @@ def run_consumer_live(
         nodes_dat_bytes = nodes_dat_path.stat().st_size if nodes_dat_path.is_file() else 0
         if nodes_dat_bytes == 0:
             raise RuntimeError("fresh consumer profile did not download nodes.dat")
+        _wait_for_p2p_ports(process, log_path, min(60.0, network_timeout_seconds))
         report["checks"]["firstRun"] = {
             "freshProfile": metadata_path.is_file(),
             "apiKeyCreated": bool(api_key),
@@ -616,7 +636,7 @@ def run_consumer_live(
         _wait_for_clean_exit(process)
         process = None
         report["checks"]["cleanShutdown"] = {
-            "upnpSetup": True,
+            "firstRun": True,
             "networkWorkflow": bool(report["checks"]["networkCleanShutdown"]),
             "persistence": True,
         }
