@@ -176,7 +176,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             population_last_changed = time.monotonic()
         if (
             not signature
-            or time.monotonic() - population_sampling_started < 18.0
+            or time.monotonic() - population_sampling_started < 55.0
             or time.monotonic() - population_last_changed < 3.0
         ):
             return None
