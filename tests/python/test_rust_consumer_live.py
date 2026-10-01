@@ -98,3 +98,14 @@ def test_verify_extracted_payload_rejects_extra_files(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="file set"):
         rust_consumer_live.verify_extracted_payload(root, manifest)
+
+
+def test_persist_consumer_report_rewrites_post_run_recovery_fields(tmp_path: Path) -> None:
+    path = tmp_path / "run" / "rust-consumer-live-result.json"
+    report = {"runId": "test-run", "status": "passed"}
+    rust_consumer_live.persist_consumer_report(path, report)
+
+    report["operatorDaemonRestored"] = True
+    rust_consumer_live.persist_consumer_report(path, report)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == report

@@ -43,6 +43,13 @@ class SuspendedDaemon:
     graceful_shutdown: bool
 
 
+def persist_consumer_report(path: Path, report: dict[str, Any]) -> None:
+    """Persist the current report state, including post-run recovery fields."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def sha256_file(path: Path) -> str:
     """Return the streaming SHA-256 digest for one artifact or delivered file."""
 
@@ -648,7 +655,7 @@ def run_consumer_live(
         if log_handle is not None:
             log_handle.close()
         report["finishedUtc"] = datetime.now(UTC).isoformat()
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_consumer_report(report_path, report)
     return report
 
 
@@ -716,5 +723,13 @@ def run(argv: list[str] | None = None) -> int:
         report["operatorDaemonRestored"] = True
         report["operatorDaemonPid"] = restored_pid
         report["operatorDaemonGracefulShutdown"] = suspended.graceful_shutdown
+        persist_consumer_report(
+            get_workspace_output_root()
+            / "reports"
+            / "rust-consumer-live"
+            / str(report["runId"])
+            / "rust-consumer-live-result.json",
+            report,
+        )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("status") == "passed" else 1
