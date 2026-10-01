@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from emule_test_harness import rust_consumer_live
+
+
+def write_inputs(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text(
+        json.dumps({"auto_browse": {"direct_bootstrap_transfers": rows}}),
+        encoding="utf-8",
+    )
+
+
+def transfer_row(*, name: str, size: int, digit: str) -> dict[str, object]:
+    return {
+        "name": name,
+        "size": size,
+        "hash": digit * 32,
+        "sha256": digit * 64,
+    }
+
+
+def test_load_consumer_transfer_selects_smallest_exact_pdf_or_iso(tmp_path: Path) -> None:
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    write_inputs(
+        inputs,
+        [
+            transfer_row(name="larger.iso", size=2048, digit="b"),
+            transfer_row(name="small.pdf", size=1024, digit="a"),
+            transfer_row(name="ignored.zip", size=1, digit="c"),
+        ],
+    )
+
+    selected = rust_consumer_live.load_consumer_transfer(inputs, 4096)
+
+    assert selected == {
+        "name": "small.pdf",
+        "hash": "a" * 32,
+        "sha256": "a" * 64,
+        "size": 1024,
+        "suffix": ".pdf",
+    }
+
+
+def test_load_consumer_transfer_requires_bounded_allowlist_entry(tmp_path: Path) -> None:
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    write_inputs(inputs, [transfer_row(name="too-large.iso", size=4097, digit="a")])
+
+    with pytest.raises(RuntimeError, match="exact eD2K hash, size, and SHA-256"):
+        rust_consumer_live.load_consumer_transfer(inputs, 4096)
+
+
+def test_parser_requires_explicit_runtime_search_term() -> None:
+    parser = rust_consumer_live.build_parser()
+
+    args = parser.parse_args(
+        [
+            "--release-zip",
+            "release.zip",
+            "--inputs",
+            "live-wire-inputs.local.json",
+            "--search-term",
+            "linux",
+        ]
+    )
+
+    assert args.search_term == "linux"
+    assert args.complete_transfer is False
+    assert args.max_transfer_bytes == 4 * 1024 * 1024 * 1024
+
+
+def test_verify_extracted_payload_rejects_extra_files(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / "expected.txt").write_text("expected", encoding="utf-8")
+    (root / "extra.txt").write_text("extra", encoding="utf-8")
+    manifest = {
+        "perFileSha256": {
+            "expected.txt": rust_consumer_live.sha256_file(root / "expected.txt"),
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="file set"):
+        rust_consumer_live.verify_extracted_payload(root, manifest)

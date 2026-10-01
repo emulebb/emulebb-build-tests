@@ -8,10 +8,12 @@ import os
 import re
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
 
@@ -50,6 +52,377 @@ PERFORMANCE_ABSOLUTE_METRICS = (
     "Nodes",
     "JSEventListeners",
 )
+
+
+@dataclass(frozen=True)
+class ConsumerNetworkWorkflow:
+    """Operator-approved public-network actions exercised through the WebUI."""
+
+    search_term: str
+    transfer_name: str
+    transfer_hash: str
+    transfer_size: int
+    network_timeout_seconds: float
+    transfer_timeout_seconds: float
+    complete_transfer: bool = False
+
+
+def profile_settings_api_key(settings_path: Path) -> str:
+    """Read the bootstrap API key without exposing it on the process command line."""
+
+    import tomllib
+
+    payload = tomllib.loads(settings_path.read_text(encoding="utf-8"))
+    api_key = payload.get("rest", {}).get("apiKey")
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise RuntimeError(f"REST API key is missing from {settings_path}")
+    return api_key.strip()
+
+
+def api_data(base_url: str, path: str, api_key: str) -> Any:
+    """Fetch one authenticated REST resource and unwrap the API envelope."""
+
+    request = Request(
+        f"{base_url.rstrip('/')}/api/v1/{path.lstrip('/')}",
+        headers={"X-API-Key": api_key},
+    )
+    with urlopen(request, timeout=5.0) as response:
+        payload = json.loads(response.read())
+    return payload.get("data", payload) if isinstance(payload, dict) else payload
+
+
+def _wait_for_api(description: str, timeout_seconds: float, probe) -> Any:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            value = probe()
+            if value:
+                return value
+        except Exception as exc:  # noqa: BLE001 - retain the final live observation
+            last_error = exc
+        time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
+    suffix = f": {last_error}" if last_error is not None else ""
+    raise RuntimeError(f"timed out waiting for {description}{suffix}")
+
+
+def _consumer_network_actions(page, *, base_url: str, api_key: str, options: ConsumerNetworkWorkflow) -> dict[str, Any]:
+    """Drive server, Kad, search, and allowlisted transfer actions in the rendered UI."""
+
+    page.get_by_role("button", name="Servers", exact=True).click()
+    servers_panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Servers", exact=True)
+    )
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Disconnect", exact=True
+    ).click()
+    page.get_by_text("Servers disconnected", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    def disconnected_server() -> dict[str, Any] | None:
+        status = api_data(base_url, "status", api_key)
+        stats = status.get("stats", {}) if isinstance(status, dict) else {}
+        return status if not stats.get("ed2kConnected") else None
+
+    _wait_for_api(
+        "rendered WebUI eD2K baseline disconnect",
+        options.network_timeout_seconds,
+        disconnected_server,
+    )
+    servers_panel.get_by_placeholder("server.met URL").locator("xpath=..").get_by_role(
+        "button", name="Import", exact=True
+    ).click()
+    page.get_by_text("Server list import started", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    def imported_servers() -> dict[str, Any] | None:
+        value = api_data(base_url, "servers", api_key)
+        if not isinstance(value, dict):
+            return None
+        return value if len(value.get("items", [])) > 0 else None
+
+    server_list = _wait_for_api(
+        "rendered WebUI server.met import",
+        options.network_timeout_seconds,
+        imported_servers,
+    )
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Connect", exact=True
+    ).click()
+
+    def connected_server() -> dict[str, Any] | None:
+        status = api_data(base_url, "status", api_key)
+        stats = status.get("stats", {}) if isinstance(status, dict) else {}
+        return status if stats.get("ed2kConnected") else None
+
+    server_status = _wait_for_api(
+        "rendered WebUI eD2K server connection",
+        options.network_timeout_seconds,
+        connected_server,
+    )
+    initial_server_stats = server_status.get("stats", {})
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Disconnect", exact=True
+    ).click()
+    page.get_by_text("Servers disconnected", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+    _wait_for_api(
+        "rendered WebUI eD2K disconnect",
+        options.network_timeout_seconds,
+        disconnected_server,
+    )
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Connect", exact=True
+    ).click()
+    reconnected_server_status = _wait_for_api(
+        "rendered WebUI eD2K reconnect",
+        options.network_timeout_seconds,
+        connected_server,
+    )
+    reconnected_server_stats = reconnected_server_status.get("stats", {})
+
+    page.get_by_role("button", name="Kad", exact=True).click()
+    kad_panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Kad", exact=True)
+    )
+    kad_panel.get_by_role("button", name="Stop", exact=True).click()
+    page.get_by_text("Kad stopped", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+    try:
+        baseline_kad_stop = _wait_for_api(
+            "rendered WebUI Kad baseline stop",
+            min(15.0, options.network_timeout_seconds),
+            lambda: (lambda value: value if isinstance(value, dict) and not value.get("running") else None)(
+                api_data(base_url, "kad", api_key)
+            ),
+        )
+    except RuntimeError:
+        baseline_kad_stop = None
+    kad_panel.get_by_role("button", name="Start", exact=True).click()
+    _wait_for_api(
+        "rendered WebUI Kad start",
+        options.network_timeout_seconds,
+        lambda: (lambda value: value if isinstance(value, dict) and value.get("running") else None)(
+            api_data(base_url, "kad", api_key)
+        ),
+    )
+    kad_panel.get_by_role("button", name="Import", exact=True).click()
+    page.get_by_text("Kad nodes import started", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    def connected_kad() -> dict[str, Any] | None:
+        kad = api_data(base_url, "kad", api_key)
+        if not isinstance(kad, dict):
+            return None
+        return kad if kad.get("connected") and int(kad.get("contactCount") or 0) > 0 else None
+
+    kad_status = _wait_for_api(
+        "rendered WebUI Kad connection",
+        options.network_timeout_seconds,
+        connected_kad,
+    )
+    kad_panel.get_by_role("button", name="Stop", exact=True).click()
+    page.get_by_text("Kad stopped", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+    try:
+        kad_stop = _wait_for_api(
+            "rendered WebUI Kad stop",
+            min(15.0, options.network_timeout_seconds),
+            lambda: (lambda value: value if isinstance(value, dict) and not value.get("running") else None)(
+                api_data(base_url, "kad", api_key)
+            ),
+        )
+    except RuntimeError:
+        kad_stop = None
+    kad_panel.get_by_role("button", name="Start", exact=True).click()
+    reconnected_kad_status = _wait_for_api(
+        "rendered WebUI Kad reconnect",
+        options.network_timeout_seconds,
+        connected_kad,
+    )
+
+    search_results: list[dict[str, Any]] = []
+    for method in ("automatic", "server", "kad"):
+        page.get_by_role("button", name="Search", exact=True).click()
+        search_panel = page.locator("section.panel").filter(
+            has=page.get_by_role("heading", name="Search", exact=True)
+        )
+        before = api_data(base_url, "searches", api_key)
+        before_ids = {
+            int(row.get("id"))
+            for row in (before.get("items", []) if isinstance(before, dict) else [])
+            if isinstance(row, dict) and row.get("id") is not None
+        }
+        search_panel.get_by_placeholder("Search query").fill(options.search_term)
+        search_panel.locator("select").nth(0).select_option(method)
+        search_panel.get_by_role("button", name="Start", exact=True).click()
+        page.get_by_text("Search started", exact=True).wait_for(
+            timeout=int(options.network_timeout_seconds * 1000)
+        )
+
+        def new_search() -> dict[str, Any] | None:
+            collection = api_data(base_url, "searches", api_key)
+            rows = collection.get("items", []) if isinstance(collection, dict) else []
+            candidates = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("id") is not None
+                and int(row["id"]) not in before_ids
+            ]
+            return max(candidates, key=lambda row: int(row["id"])) if candidates else None
+
+        created = _wait_for_api(
+            f"rendered WebUI {method} search creation",
+            options.network_timeout_seconds,
+            new_search,
+        )
+        search_id = int(created["id"])
+
+        def completed_search() -> dict[str, Any] | None:
+            value = api_data(base_url, f"searches/{search_id}?limit=200", api_key)
+            if not isinstance(value, dict) or value.get("status") != "complete":
+                return None
+            return value if int(value.get("total") or 0) > 0 else None
+
+        completed = _wait_for_api(
+            f"rendered WebUI {method} search results",
+            options.network_timeout_seconds,
+            completed_search,
+        )
+        search_results.append(
+            {
+                "method": method,
+                "status": completed.get("status"),
+                "resultCount": int(completed.get("total") or 0),
+            }
+        )
+
+    encoded_name = quote(options.transfer_name, safe="")
+    ed2k_link = (
+        f"ed2k://|file|{encoded_name}|{options.transfer_size}|"
+        f"{options.transfer_hash.upper()}|/"
+    )
+    page.get_by_role("button", name="Transfers", exact=True).click()
+    transfer_panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Transfers", exact=True)
+    )
+    transfer_panel.get_by_placeholder("One eD2K link per line").fill(ed2k_link)
+    paused = transfer_panel.get_by_role("checkbox", name="Paused")
+    if paused.is_checked():
+        paused.uncheck()
+    transfer_panel.get_by_role("button", name="Add links", exact=True).click()
+    page.get_by_text("Transfers queued", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    def active_transfer() -> dict[str, Any] | None:
+        value = api_data(
+            base_url,
+            f"transfers/{options.transfer_hash.lower()}",
+            api_key,
+        )
+        if not isinstance(value, dict):
+            return None
+        completed_bytes = int(value.get("completedBytes") or 0)
+        source_count = int(value.get("sources") or 0)
+        transferring = int(value.get("sourcesTransferring") or 0)
+        return value if completed_bytes > 0 or source_count > 0 or transferring > 0 else None
+
+    transfer_activity_observed = True
+    try:
+        transfer = _wait_for_api(
+            "rendered WebUI allowlisted transfer network activity",
+            options.transfer_timeout_seconds,
+            active_transfer,
+        )
+    except RuntimeError:
+        transfer_activity_observed = False
+        transfer = api_data(
+            base_url,
+            f"transfers/{options.transfer_hash.lower()}",
+            api_key,
+        )
+        if not isinstance(transfer, dict):
+            transfer = {}
+    stopped_after_observation = False
+    transfer_stop_state = str(transfer.get("state") or "unknown")
+    if options.complete_transfer:
+        transfer = _wait_for_api(
+            "rendered WebUI allowlisted transfer completion",
+            options.transfer_timeout_seconds,
+            lambda: (lambda value: value if int(value.get("completedBytes") or 0) == options.transfer_size else None)(
+                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+            ),
+        )
+    else:
+        transfer_row = transfer_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
+        transfer_row.get_by_role("button", name="Stop", exact=True).click()
+        page.get_by_text("Transfer stopped", exact=True).wait_for(
+            timeout=int(options.network_timeout_seconds * 1000)
+        )
+        transfer = _wait_for_api(
+            "rendered WebUI transfer quiescence after Stop",
+            min(15.0, options.network_timeout_seconds),
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("state") in {"stopped", "paused"} else None)(
+                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+            ),
+        )
+        transfer_stop_state = str(transfer.get("state") or "unknown")
+        stopped_after_observation = transfer_stop_state == "stopped"
+    kad_disconnect_verified = kad_stop is not None
+    failures = []
+    if baseline_kad_stop is None:
+        failures.append("kad-baseline-stop")
+    if not kad_disconnect_verified:
+        failures.append("kad-disconnect")
+    if not transfer_activity_observed:
+        failures.append("transfer-network-activity")
+    if not options.complete_transfer and not stopped_after_observation:
+        failures.append("transfer-stop-state")
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "server": {
+            "connected": True,
+            "disconnectVerified": True,
+            "reconnectVerified": True,
+            "importSucceeded": True,
+            "serverCount": len(server_list.get("items", [])),
+            "initialHighId": bool(initial_server_stats.get("ed2kHighId")),
+            "reconnectedHighId": bool(reconnected_server_stats.get("ed2kHighId")),
+        },
+        "kad": {
+            "running": bool(reconnected_kad_status.get("running")),
+            "connected": bool(reconnected_kad_status.get("connected")),
+            "baselineStopVerified": baseline_kad_stop is not None,
+            "disconnectVerified": kad_disconnect_verified,
+            "reconnectVerified": kad_disconnect_verified
+            and bool(reconnected_kad_status.get("connected")),
+            "initialContactCount": int(kad_status.get("contactCount") or 0),
+            "reconnectedContactCount": int(reconnected_kad_status.get("contactCount") or 0),
+            "importSucceeded": True,
+        },
+        "searches": search_results,
+        "transfer": {
+            "triggered": True,
+            "networkActivityObserved": transfer_activity_observed,
+            "sourceCount": int(transfer.get("sources") or 0),
+            "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
+            "completed": int(transfer.get("completedBytes") or 0) == options.transfer_size,
+            "completedBytes": int(transfer.get("completedBytes") or 0),
+            "sizeBytes": int(transfer.get("sizeBytes") or options.transfer_size),
+            "stopRequested": not options.complete_transfer,
+            "finalState": transfer_stop_state,
+            "stoppedAfterObservation": stopped_after_observation,
+        },
+    }
 
 
 class RequestRecorder:
@@ -93,6 +466,17 @@ def sanitize_api_request_key(key: str) -> str:
     """Removes live transfer/file hash material from an API request key."""
 
     return HASH_TOKEN_RE.sub("{hash}", key)
+
+
+def sanitize_report_text(value: str, redactions: tuple[str, ...] = ()) -> str:
+    """Remove live hashes and machine-local Windows paths from retained text."""
+
+    value = HASH_TOKEN_RE.sub("{hash}", value)
+    value = re.sub(r"[A-Za-z]:\\[^\s,;]+", "{path}", value)
+    for secret in redactions:
+        if secret:
+            value = value.replace(secret, "{redacted}")
+    return value
 
 
 def default_base_url() -> str:
@@ -225,7 +609,7 @@ def install_browser_diagnostics(page, diagnostics: dict[str, list[dict[str, Any]
                 "failure": str(request.failure),
                 "method": request.method,
                 "resourceType": request.resource_type,
-                "urlPath": urlparse(request.url).path,
+                "urlPath": sanitize_api_request_key(urlparse(request.url).path),
             }
         ),
     )
@@ -250,6 +634,8 @@ def run_webui_live_proof(
     max_main_thread_busy_ratio: float,
     navigation_only: bool = False,
     verify_stale_key_recovery: bool = False,
+    consumer_workflow: ConsumerNetworkWorkflow | None = None,
+    shutdown_after_proof: bool = False,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
 
@@ -268,6 +654,8 @@ def run_webui_live_proof(
         "maxMainThreadBusyRatio": max_main_thread_busy_ratio,
         "navigationOnly": navigation_only,
         "verifyStaleKeyRecovery": verify_stale_key_recovery,
+        "consumerWorkflow": consumer_workflow is not None,
+        "shutdownAfterProof": shutdown_after_proof,
         "tabsExpected": list(TAB_LABELS),
         "checks": {},
     }
@@ -277,6 +665,7 @@ def run_webui_live_proof(
         "page_errors": [],
         "request_failures": [],
     }
+    consumer_workflow_failed = False
     recorder = RequestRecorder(base_url)
     start = time.monotonic()
     try:
@@ -382,6 +771,16 @@ def run_webui_live_proof(
                     "ok": [row["label"] for row in visited_tabs] == list(TAB_LABELS),
                 }
 
+                if consumer_workflow is not None:
+                    workflow_result = _consumer_network_actions(
+                        page,
+                        base_url=base_url,
+                        api_key=api_key,
+                        options=consumer_workflow,
+                    )
+                    report["checks"]["consumerNetworkWorkflow"] = workflow_result
+                    consumer_workflow_failed = not bool(workflow_result.get("ok"))
+
                 page.get_by_role("button", name="Transfers", exact=True).click(timeout=int(timeout_seconds * 1000))
                 page.wait_for_timeout(int(tab_wait_seconds * 1000))
                 transfer_dom = page.evaluate(
@@ -412,8 +811,9 @@ def run_webui_live_proof(
                     transfer_dom.get("rows", []),
                     bool(transfer_dom.get("emptyVisible")),
                 )
-                transfer_workflow["required"] = not navigation_only
-                if not transfer_workflow["ok"] and not navigation_only:
+                transfer_workflow["required"] = not navigation_only and consumer_workflow is None
+                transfer_workflow["consumerTriggerCovered"] = consumer_workflow is not None
+                if not transfer_workflow["ok"] and transfer_workflow["required"]:
                     raise RuntimeError(
                         "Rust WebUI transfer workflow did not show completed delivery or active download "
                         f"progress: {transfer_workflow!r}"
@@ -432,13 +832,45 @@ def run_webui_live_proof(
                 report["checks"]["pageMetrics"] = metrics
                 assert_no_browser_diagnostics(diagnostics)
                 report["checks"]["browserDiagnostics"] = diagnostics
+                if shutdown_after_proof:
+                    page.get_by_role("button", name="Diagnostics", exact=True).click(
+                        timeout=int(timeout_seconds * 1000)
+                    )
+                    page.get_by_placeholder("Type SHUTDOWN").fill("SHUTDOWN")
+                    with page.expect_response(
+                        lambda response: urlparse(response.url).path == "/api/v1/app/shutdown",
+                        timeout=int(timeout_seconds * 1000),
+                    ) as shutdown_response:
+                        page.get_by_role("button", name="Shutdown", exact=True).click(
+                            timeout=int(timeout_seconds * 1000)
+                        )
+                    report["checks"]["shutdown"] = {
+                        "requested": True,
+                        "httpStatus": shutdown_response.value.status,
+                        "ok": shutdown_response.value.ok,
+                    }
+                    if not shutdown_response.value.ok:
+                        raise RuntimeError(
+                            "Rust WebUI shutdown request failed with "
+                            f"HTTP {shutdown_response.value.status}"
+                        )
+                if consumer_workflow_failed:
+                    raise RuntimeError("consumer network workflow completed with failed checks")
                 report["status"] = "passed"
                 return report
             finally:
                 browser.close()
     except Exception as exc:
         report["status"] = "failed"
-        report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+        redactions = () if consumer_workflow is None else (
+            consumer_workflow.search_term,
+            consumer_workflow.transfer_name,
+            consumer_workflow.transfer_hash,
+        )
+        report["error"] = {
+            "type": type(exc).__name__,
+            "message": sanitize_report_text(str(exc) or repr(exc), redactions),
+        }
         report["checks"]["browserDiagnostics"] = diagnostics
         return report
     finally:
@@ -451,7 +883,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=default_base_url())
-    parser.add_argument("--api-key", default=DEFAULT_API_KEY)
+    key_source = parser.add_mutually_exclusive_group()
+    key_source.add_argument("--api-key", default=DEFAULT_API_KEY)
+    key_source.add_argument(
+        "--profile-settings",
+        type=Path,
+        help="Read the API key from an emulebb-rust-settings.toml file.",
+    )
     parser.add_argument("--report-path", type=Path, default=default_report_path())
     parser.add_argument("--steady-seconds", type=float, default=DEFAULT_STEADY_SECONDS)
     parser.add_argument("--tab-wait-seconds", type=float, default=DEFAULT_TAB_WAIT_SECONDS)
@@ -471,9 +909,14 @@ def run(argv: list[str] | None = None) -> int:
     """Runs the Rust WebUI live proof command."""
 
     args = build_parser().parse_args(argv)
+    api_key = (
+        profile_settings_api_key(args.profile_settings)
+        if args.profile_settings is not None
+        else str(args.api_key or DEFAULT_API_KEY)
+    )
     report = run_webui_live_proof(
         base_url=str(args.base_url).rstrip("/"),
-        api_key=str(args.api_key),
+        api_key=api_key,
         report_path=args.report_path,
         steady_seconds=float(args.steady_seconds),
         tab_wait_seconds=float(args.tab_wait_seconds),

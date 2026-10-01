@@ -191,3 +191,19 @@ def test_parser_can_verify_stale_key_recovery() -> None:
     args = rust_webui_live_proof.build_parser().parse_args(["--verify-stale-key-recovery"])
 
     assert args.verify_stale_key_recovery is True
+
+
+def test_profile_settings_api_key_reads_generated_secret(tmp_path) -> None:
+    settings = tmp_path / "emulebb-rust-settings.toml"
+    settings.write_text('[rest]\napiKey = "generated-key"\n', encoding="utf-8")
+
+    assert rust_webui_live_proof.profile_settings_api_key(settings) == "generated-key"
+
+
+def test_sanitize_report_text_applies_runtime_redactions() -> None:
+    text = rust_webui_live_proof.sanitize_report_text(
+        "linux private.iso ABCDEF0123456789ABCDEF0123456789 C:\\profile\\file",
+        ("linux", "private.iso"),
+    )
+
+    assert text == "{redacted} {redacted} {hash} {path}"
