@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .live_dependencies import safe_extract_zip
@@ -380,15 +381,20 @@ def _restore_existing_daemon(suspended: SuspendedDaemon) -> int:
 def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> dict[str, Any]:
     searches = api_data(base_url, "searches", api_key)
     search_rows = searches.get("items", []) if isinstance(searches, dict) else []
-    transfer = api_data(base_url, f"transfers/{transfer_hash}", api_key)
-    if not isinstance(transfer, dict):
+    try:
+        transfer = api_data(base_url, f"transfers/{transfer_hash}", api_key)
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+        transfer = None
+    if transfer is not None and not isinstance(transfer, dict):
         raise RuntimeError("persisted transfer did not return an object")
     return {
         "searchCount": len(search_rows),
-        "transferPresent": bool(transfer.get("hash")),
-        "transferCompleted": int(transfer.get("completedBytes") or 0)
-        == int(transfer.get("sizeBytes") or -1),
-        "transferState": str(transfer.get("state") or "unknown"),
+        "transferPresent": bool(transfer and transfer.get("hash")),
+        "transferCompleted": bool(transfer)
+        and int(transfer.get("completedBytes") or 0) == int(transfer.get("sizeBytes") or -1),
+        "transferState": str(transfer.get("state") or "unknown") if transfer else "deleted",
     }
 
 
@@ -474,7 +480,7 @@ def run_consumer_live(
         },
         "download": {
             "approved": True,
-            "mode": "complete" if complete_transfer else "trigger-observe-stop",
+            "mode": "complete" if complete_transfer else "trigger-observe-stop-delete",
             "pdfOnly": True,
             "strictLessThan5MiB": True,
             "maxTransferBytes": max_transfer_bytes,
@@ -598,6 +604,7 @@ def run_consumer_live(
                 "networkActivityRequired": bool(transfer_check.get("networkActivityRequired")),
                 "networkActivityObserved": bool(transfer_check.get("networkActivityObserved")),
                 "stoppedAfterObservation": bool(transfer_check.get("stoppedFlag")),
+                "deletedAfterStop": bool(transfer_check.get("deletedAfterStop")),
             }
 
         process, log_handle = _start_daemon(
@@ -610,10 +617,13 @@ def run_consumer_live(
             raise RuntimeError("default-profile API key changed across restart")
         _wait_for_rest(base_url, api_key, process, log_path)
         persistence = _persistence_snapshot(base_url, api_key, str(transfer["hash"]))
-        if persistence["searchCount"] < 3 or not persistence["transferPresent"]:
-            raise RuntimeError("search or transfer state did not persist across restart")
-        if complete_transfer and not persistence["transferCompleted"]:
-            raise RuntimeError("completed-transfer state did not persist across restart")
+        if persistence["searchCount"] < 3:
+            raise RuntimeError("search state did not persist across restart")
+        if complete_transfer:
+            if not persistence["transferPresent"] or not persistence["transferCompleted"]:
+                raise RuntimeError("completed-transfer state did not persist across restart")
+        elif persistence["transferPresent"]:
+            raise RuntimeError("WebUI-deleted transfer reappeared after restart")
         second_proof = run_webui_live_proof(
             base_url=base_url,
             api_key=api_key,

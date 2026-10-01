@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -109,3 +110,19 @@ def test_persist_consumer_report_rewrites_post_run_recovery_fields(tmp_path: Pat
     rust_consumer_live.persist_consumer_report(path, report)
 
     assert json.loads(path.read_text(encoding="utf-8")) == report
+
+
+def test_persistence_snapshot_reports_webui_deleted_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_api_data(_base_url: str, path: str, _api_key: str):
+        if path == "searches":
+            return {"items": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}
+        raise HTTPError("http://127.0.0.1/transfers/redacted", 404, "not found", None, None)
+
+    monkeypatch.setattr(rust_consumer_live, "api_data", fake_api_data)
+
+    assert rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "redacted") == {
+        "searchCount": 3,
+        "transferPresent": False,
+        "transferCompleted": False,
+        "transferState": "deleted",
+    }

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -457,6 +458,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         if not isinstance(transfer, dict):
             transfer = {}
     stopped_after_observation = False
+    deleted_after_stop = False
     transfer_stop_state = str(transfer.get("state") or "unknown")
     if options.complete_transfer:
         transfer = _wait_for_api(
@@ -481,6 +483,31 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         )
         transfer_stop_state = str(transfer.get("state") or "unknown")
         stopped_after_observation = transfer.get("stopped") is True
+        page.once("dialog", lambda dialog: dialog.accept())
+        transfer_row.get_by_role("button", name="Delete", exact=True).click()
+        page.get_by_text("Transfer deleted", exact=True).wait_for(
+            timeout=int(options.network_timeout_seconds * 1000)
+        )
+        transfer_row.wait_for(
+            state="detached",
+            timeout=int(options.network_timeout_seconds * 1000),
+        )
+
+        def deleted_transfer() -> dict[str, Any] | None:
+            try:
+                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+            except HTTPError as error:
+                if error.code == 404:
+                    return {"status": 404}
+                raise
+            return None
+
+        _wait_for_api(
+            "rendered WebUI transfer deletion",
+            min(15.0, options.network_timeout_seconds),
+            deleted_transfer,
+        )
+        deleted_after_stop = True
     kad_disconnect_verified = kad_stop is not None
     transfer_identity_verified = (
         str(transfer.get("hash") or "").lower() == options.transfer_hash.lower()
@@ -500,6 +527,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         failures.append("transfer-identity")
     if not options.complete_transfer and not stopped_after_observation:
         failures.append("transfer-stop-state")
+    if not options.complete_transfer and not deleted_after_stop:
+        failures.append("transfer-delete")
     return {
         "ok": not failures,
         "failures": failures,
@@ -548,9 +577,12 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "completedBytes": int(transfer.get("completedBytes") or 0),
             "sizeBytes": int(transfer.get("sizeBytes") or options.transfer_size),
             "stopRequested": not options.complete_transfer,
+            "deleteRequested": not options.complete_transfer,
             "finalState": transfer_stop_state,
             "stoppedAfterObservation": stopped_after_observation,
             "stoppedFlag": bool(transfer.get("stopped")),
+            "deletedAfterStop": deleted_after_stop,
+            "absentAfterDelete": deleted_after_stop,
         },
         "nat": _consumer_nat_status(base_url, api_key),
     }
