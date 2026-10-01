@@ -3,6 +3,27 @@ from __future__ import annotations
 from emule_test_harness import rust_webui_live_proof
 
 
+def test_select_filtered_live_pdf_enforces_safe_shape_and_prefers_sources() -> None:
+    selected = rust_webui_live_proof.select_filtered_live_pdf(
+        [
+            {"name": "manual.pdf", "hash": "a" * 32, "sizeBytes": 4096, "sources": 2},
+            {"name": "popular.PDF", "hash": "b" * 32, "sizeBytes": 2048, "sources": 4},
+            {"name": "too-large.pdf", "hash": "c" * 32, "sizeBytes": 5001, "sources": 99},
+            {"name": "archive.zip", "hash": "d" * 32, "sizeBytes": 1024, "sources": 99},
+            {"name": "..\\unsafe.pdf", "hash": "e" * 32, "sizeBytes": 1024, "sources": 99},
+            {"name": "no-sources.pdf", "hash": "f" * 32, "sizeBytes": 1024, "sources": 0},
+        ],
+        5000,
+    )
+
+    assert selected == {
+        "name": "popular.PDF",
+        "hash": "b" * 32,
+        "sizeBytes": 2048,
+        "sources": 4,
+    }
+
+
 def test_request_recorder_counts_only_same_origin_api_and_static_assets() -> None:
     recorder = rust_webui_live_proof.RequestRecorder("http://192.0.2.10:4731/")
 

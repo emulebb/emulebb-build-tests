@@ -66,6 +66,44 @@ class ConsumerNetworkWorkflow:
     network_timeout_seconds: float
     transfer_timeout_seconds: float
     complete_transfer: bool = False
+    max_transfer_bytes: int | None = None
+
+
+def select_filtered_live_pdf(rows: Any, max_bytes: int) -> dict[str, Any] | None:
+    """Select a sourced PDF from already-rendered, size-bounded live search results."""
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        transfer_hash = str(row.get("hash") or "").lower()
+        size = row.get("sizeBytes")
+        sources = row.get("sources", row.get("availability", 0))
+        if (
+            Path(name).name != name
+            or Path(name).suffix.lower() != ".pdf"
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= max_bytes
+            or len(transfer_hash) != 32
+            or any(character not in "0123456789abcdef" for character in transfer_hash)
+            or not isinstance(sources, int)
+            or isinstance(sources, bool)
+            or sources <= 0
+        ):
+            continue
+        candidates.append(row)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda row: (
+            int(row.get("sources", row.get("availability", 0))),
+            -int(row["sizeBytes"]),
+            str(row["hash"]),
+        ),
+    )
 
 
 def profile_settings_api_key(settings_path: Path) -> str:
@@ -325,6 +363,13 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
     search_results: list[dict[str, Any]] = []
     transfer_triggered = False
+    selected_transfer = {
+        "hash": options.transfer_hash,
+        "name": options.transfer_name,
+        "sizeBytes": options.transfer_size,
+    }
+    selected_from_exact_allowlist = False
+    max_transfer_bytes = options.max_transfer_bytes or options.transfer_size
     for method in ("automatic", "server", "kad"):
         page.get_by_role("button", name="Search", exact=True).click()
         search_panel = page.locator("section.panel").filter(
@@ -343,7 +388,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             if not details.evaluate("element => element.open"):
                 search_panel.get_by_text("Advanced search filters", exact=True).click()
         search_panel.get_by_placeholder("Extension").fill("pdf")
-        search_panel.get_by_placeholder("Maximum bytes").fill(str(options.transfer_size))
+        search_panel.get_by_placeholder("Maximum bytes").fill(str(max_transfer_bytes))
         search_panel.get_by_role("button", name="Start", exact=True).click()
         page.get_by_text("Search started", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
@@ -373,8 +418,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             if not isinstance(value, dict) or value.get("status") != "complete":
                 return None
             # A live backend can validly complete with no matches. The workflow
-            # still requires the exact allowlisted PDF from at least one method
-            # before it can trigger a download from the rendered result table.
+            # still requires a sourced PDF inside the explicit size bound before
+            # it can trigger a download from the rendered result table.
             return value
 
         completed = _wait_for_api(
@@ -397,19 +442,28 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             None,
         )
         exact_allowlisted_result = exact_result is not None
-        if exact_allowlisted_result and not transfer_triggered:
+        filtered_live_pdf = select_filtered_live_pdf(rows, max_transfer_bytes)
+        download_result = exact_result or (None if options.complete_transfer else filtered_live_pdf)
+        if download_result is not None and not transfer_triggered:
             # The REST poll above observes completion before the SPA's periodic
             # snapshot refresh necessarily does. Trigger the rendered refresh
             # control so the SPA selects and fetches the newest search session.
             page.get_by_title("Refresh", exact=True).click(
                 timeout=int(options.network_timeout_seconds * 1000)
             )
-            result_row = search_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
+            result_name = str(download_result["name"])
+            result_row = search_panel.locator("tbody tr").filter(has_text=result_name).first
             result_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
             result_row.get_by_role("button", name="Download", exact=True).click()
             page.get_by_text("Download queued", exact=True).wait_for(
                 timeout=int(options.network_timeout_seconds * 1000)
             )
+            selected_transfer = {
+                "hash": str(download_result["hash"]).lower(),
+                "name": result_name,
+                "sizeBytes": int(download_result["sizeBytes"]),
+            }
+            selected_from_exact_allowlist = exact_result is not None
             transfer_triggered = True
         search_results.append(
             {
@@ -417,13 +471,14 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
                 "status": completed.get("status"),
                 "resultCount": int(completed.get("total") or 0),
                 "pdfFilter": True,
-                "maxBytesFilter": options.transfer_size,
+                "maxBytesFilter": max_transfer_bytes,
                 "exactAllowlistedResult": exact_allowlisted_result,
+                "eligibleFilteredLivePdf": filtered_live_pdf is not None,
             }
         )
 
     if not transfer_triggered:
-        raise RuntimeError("the exact allowlisted PDF was not found in rendered search results")
+        raise RuntimeError("no sourced PDF inside the strict size bound was found in rendered search results")
     page.get_by_role("button", name="Transfers", exact=True).click()
     transfer_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Transfers", exact=True)
@@ -432,7 +487,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     def active_transfer() -> dict[str, Any] | None:
         value = api_data(
             base_url,
-            f"transfers/{options.transfer_hash.lower()}",
+            f"transfers/{selected_transfer['hash']}",
             api_key,
         )
         if not isinstance(value, dict):
@@ -452,7 +507,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer_activity_observed = False
         transfer = api_data(
             base_url,
-            f"transfers/{options.transfer_hash.lower()}",
+            f"transfers/{selected_transfer['hash']}",
             api_key,
         )
         if not isinstance(transfer, dict):
@@ -464,12 +519,12 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer = _wait_for_api(
             "rendered WebUI allowlisted transfer completion",
             options.transfer_timeout_seconds,
-            lambda: (lambda value: value if int(value.get("completedBytes") or 0) == options.transfer_size else None)(
-                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+            lambda: (lambda value: value if int(value.get("completedBytes") or 0) == selected_transfer["sizeBytes"] else None)(
+                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
             ),
         )
     else:
-        transfer_row = transfer_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
+        transfer_row = transfer_panel.locator("tbody tr").filter(has_text=selected_transfer["name"]).first
         transfer_row.get_by_role("button", name="Stop", exact=True).click()
         page.get_by_text("Transfer stopped", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
@@ -478,7 +533,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "rendered WebUI transfer quiescence after Stop",
             min(15.0, options.network_timeout_seconds),
             lambda: (lambda value: value if isinstance(value, dict) and value.get("stopped") is True else None)(
-                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
             ),
         )
         transfer_stop_state = str(transfer.get("state") or "unknown")
@@ -495,7 +550,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
         def deleted_transfer() -> dict[str, Any] | None:
             try:
-                api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
+                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
             except HTTPError as error:
                 if error.code == 404:
                     return {"status": 404}
@@ -510,9 +565,9 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         deleted_after_stop = True
     kad_disconnect_verified = kad_stop is not None
     transfer_identity_verified = (
-        str(transfer.get("hash") or "").lower() == options.transfer_hash.lower()
-        and str(transfer.get("name") or "") == options.transfer_name
-        and int(transfer.get("sizeBytes") or 0) == options.transfer_size
+        str(transfer.get("hash") or "").lower() == selected_transfer["hash"]
+        and str(transfer.get("name") or "") == selected_transfer["name"]
+        and int(transfer.get("sizeBytes") or 0) == selected_transfer["sizeBytes"]
     )
     failures = []
     if not kad_disconnect_verified:
@@ -568,6 +623,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         "transfer": {
             "triggered": True,
             "triggeredFromRenderedSearchResult": transfer_triggered,
+            "selectedFromExactAllowlist": selected_from_exact_allowlist,
+            "selectedFromFilteredLiveResults": not selected_from_exact_allowlist,
             "identityVerified": transfer_identity_verified,
             "networkActivityRequired": options.complete_transfer,
             "networkActivityObserved": transfer_activity_observed,
@@ -575,7 +632,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
             "completed": int(transfer.get("completedBytes") or 0) == options.transfer_size,
             "completedBytes": int(transfer.get("completedBytes") or 0),
-            "sizeBytes": int(transfer.get("sizeBytes") or options.transfer_size),
+            "sizeBytes": int(transfer.get("sizeBytes") or selected_transfer["sizeBytes"]),
             "stopRequested": not options.complete_transfer,
             "deleteRequested": not options.complete_transfer,
             "finalState": transfer_stop_state,

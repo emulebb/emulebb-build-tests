@@ -381,6 +381,8 @@ def _restore_existing_daemon(suspended: SuspendedDaemon) -> int:
 def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> dict[str, Any]:
     searches = api_data(base_url, "searches", api_key)
     search_rows = searches.get("items", []) if isinstance(searches, dict) else []
+    transfers = api_data(base_url, "transfers", api_key)
+    transfer_rows = transfers.get("items", []) if isinstance(transfers, dict) else []
     try:
         transfer = api_data(base_url, f"transfers/{transfer_hash}", api_key)
     except HTTPError as error:
@@ -391,6 +393,7 @@ def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> di
         raise RuntimeError("persisted transfer did not return an object")
     return {
         "searchCount": len(search_rows),
+        "transferCount": len(transfer_rows),
         "transferPresent": bool(transfer and transfer.get("hash")),
         "transferCompleted": bool(transfer)
         and int(transfer.get("completedBytes") or 0) == int(transfer.get("sizeBytes") or -1),
@@ -544,6 +547,7 @@ def run_consumer_live(
             network_timeout_seconds=network_timeout_seconds,
             transfer_timeout_seconds=transfer_timeout_seconds,
             complete_transfer=complete_transfer,
+            max_transfer_bytes=max_transfer_bytes,
         )
         network_proof = run_webui_live_proof(
             base_url=base_url,
@@ -622,8 +626,8 @@ def run_consumer_live(
         if complete_transfer:
             if not persistence["transferPresent"] or not persistence["transferCompleted"]:
                 raise RuntimeError("completed-transfer state did not persist across restart")
-        elif persistence["transferPresent"]:
-            raise RuntimeError("WebUI-deleted transfer reappeared after restart")
+        elif persistence["transferCount"] != 0:
+            raise RuntimeError("WebUI-deleted transfer queue was not empty after restart")
         second_proof = run_webui_live_proof(
             base_url=base_url,
             api_key=api_key,

@@ -116,12 +116,15 @@ def test_persistence_snapshot_reports_webui_deleted_transfer(monkeypatch: pytest
     def fake_api_data(_base_url: str, path: str, _api_key: str):
         if path == "searches":
             return {"items": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}
+        if path == "transfers":
+            return {"items": []}
         raise HTTPError("http://127.0.0.1/transfers/redacted", 404, "not found", None, None)
 
     monkeypatch.setattr(rust_consumer_live, "api_data", fake_api_data)
 
     assert rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "redacted") == {
         "searchCount": 3,
+        "transferCount": 0,
         "transferPresent": False,
         "transferCompleted": False,
         "transferState": "deleted",
