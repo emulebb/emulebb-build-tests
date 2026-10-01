@@ -109,50 +109,31 @@ def _wait_for_api(description: str, timeout_seconds: float, probe) -> Any:
 def _consumer_network_actions(page, *, base_url: str, api_key: str, options: ConsumerNetworkWorkflow) -> dict[str, Any]:
     """Drive server, Kad, search, and allowlisted transfer actions in the rendered UI."""
 
+    zero_configuration_defaults = _assert_zero_configuration_defaults(
+        page,
+        timeout_seconds=options.network_timeout_seconds,
+    )
     page.get_by_role("button", name="Servers", exact=True).click()
     servers_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Servers", exact=True)
     )
+
     def disconnected_server() -> dict[str, Any] | None:
         status = api_data(base_url, "status", api_key)
         stats = status.get("stats", {}) if isinstance(status, dict) else {}
         return status if not stats.get("ed2kConnected") else None
 
-    if servers_panel.locator(".section-title").get_by_role(
-        "button", name="Disconnect", exact=True
-    ).is_enabled():
-        servers_panel.locator(".section-title").get_by_role(
-            "button", name="Disconnect", exact=True
-        ).click()
-        page.get_by_text("Server disconnected; Kad remains available", exact=True).wait_for(
-            timeout=int(options.network_timeout_seconds * 1000)
-        )
-        _wait_for_api(
-            "rendered WebUI eD2K baseline disconnect",
-            options.network_timeout_seconds,
-            disconnected_server,
-        )
-    servers_panel.get_by_placeholder("server.met URL").locator("xpath=..").get_by_role(
-        "button", name="Import", exact=True
-    ).click()
-    page.get_by_text("server.met imported; the server list is ready", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
-    )
-
-    def imported_servers() -> dict[str, Any] | None:
+    def discovered_servers() -> dict[str, Any] | None:
         value = api_data(base_url, "servers", api_key)
         if not isinstance(value, dict):
             return None
         return value if len(value.get("items", [])) > 0 else None
 
     server_list = _wait_for_api(
-        "rendered WebUI server.met import",
+        "automatic first-run server.met discovery",
         options.network_timeout_seconds,
-        imported_servers,
+        discovered_servers,
     )
-    servers_panel.locator(".section-title").get_by_role(
-        "button", name="Connect", exact=True
-    ).click()
 
     def connected_server() -> dict[str, Any] | None:
         status = api_data(base_url, "status", api_key)
@@ -160,28 +141,94 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         return status if stats.get("ed2kConnected") else None
 
     server_status = _wait_for_api(
-        "rendered WebUI eD2K server connection",
+        "automatic first-run eD2K server connection",
         options.network_timeout_seconds,
         connected_server,
     )
+    servers_panel.get_by_text(re.compile(r"Server network:\s+Connected")).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    population_signature: tuple[tuple[str, int, int], ...] = ()
+    population_last_changed = time.monotonic()
+
+    def servers_with_stable_live_population() -> dict[str, Any] | None:
+        nonlocal population_signature, population_last_changed
+        value = discovered_servers()
+        if value is None:
+            return None
+        signature = tuple(
+            sorted(
+                (
+                    f"{row.get('address')}:{row.get('port')}",
+                    int(row.get("users") or 0),
+                    int(row.get("files") or 0),
+                )
+                for row in value.get("items", [])
+                if isinstance(row, dict)
+                and row.get("enabled", True)
+                and int(row.get("users") or 0) > 0
+            )
+        )
+        if signature != population_signature:
+            population_signature = signature
+            population_last_changed = time.monotonic()
+        if not signature or time.monotonic() - population_last_changed < 3.0:
+            return None
+        return value
+
+    ranked_server_list = _wait_for_api(
+        "stable live server population metrics",
+        options.network_timeout_seconds,
+        servers_with_stable_live_population,
+    )
+    server_rows = [
+        row
+        for row in ranked_server_list.get("items", [])
+        if isinstance(row, dict) and row.get("enabled", True)
+    ]
+    if not server_rows:
+        raise RuntimeError("automatic server.met discovery produced no enabled servers")
+    most_popular_server = max(
+        server_rows,
+        key=lambda row: (
+            int(row.get("users") or 0),
+            int(row.get("files") or 0),
+            str(row.get("name") or ""),
+        ),
+    )
+    targeted_server_endpoint = (
+        f"{most_popular_server.get('address')}:{most_popular_server.get('port')}"
+    )
+
+    def automatically_selected_most_popular_server() -> dict[str, Any] | None:
+        value = discovered_servers()
+        if value is None:
+            return None
+        return next(
+            (
+                row
+                for row in value.get("items", [])
+                if isinstance(row, dict)
+                and f"{row.get('address')}:{row.get('port')}" == targeted_server_endpoint
+                and row.get("connected") is True
+                and row.get("current") is True
+            ),
+            None,
+        )
+
+    _wait_for_api(
+        "automatic selection of the most popular responding server",
+        options.network_timeout_seconds,
+        automatically_selected_most_popular_server,
+    )
+    server_status = connected_server() or server_status
     initial_server_stats = server_status.get("stats", {})
 
     page.get_by_role("button", name="Kad", exact=True).click()
     kad_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Kad", exact=True)
     )
-    baseline_kad_stop = _wait_for_api(
-        "rendered WebUI Kad baseline stop",
-        min(15.0, options.network_timeout_seconds),
-        lambda: (lambda value: value if isinstance(value, dict) and not value.get("running") else None)(
-            api_data(base_url, "kad", api_key)
-        ),
-    )
-    kad_panel.get_by_role("button", name="Import", exact=True).click()
-    page.get_by_text("nodes.dat imported, validated, and saved", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
-    )
-    kad_panel.get_by_role("button", name="Start", exact=True).click()
 
     def connected_kad() -> dict[str, Any] | None:
         kad = api_data(base_url, "kad", api_key)
@@ -190,9 +237,12 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         return kad if kad.get("connected") and int(kad.get("contactCount") or 0) > 0 else None
 
     kad_status = _wait_for_api(
-        "rendered WebUI Kad connection",
+        "automatic first-run Kad connection from downloaded nodes.dat",
         options.network_timeout_seconds,
         connected_kad,
+    )
+    kad_panel.get_by_text(re.compile(r"Kad network:\s+Connected")).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
     )
 
     page.get_by_role("button", name="Servers", exact=True).click()
@@ -213,11 +263,24 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         and kad_after_server_disconnect.get("running")
         and kad_after_server_disconnect.get("connected")
     )
-    servers_panel.locator(".section-title").get_by_role(
-        "button", name="Connect", exact=True
-    ).click()
+    targeted_server_row = servers_panel.locator("tbody tr").filter(
+        has_text=targeted_server_endpoint
+    ).first
+    targeted_server_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and "/api/v1/servers/" in response.url
+        and response.url.endswith("/operations/connect"),
+        timeout=int(options.network_timeout_seconds * 1000),
+    ) as targeted_connect_response:
+        targeted_server_row.get_by_title("Connect", exact=True).click()
+    if not targeted_connect_response.value.ok:
+        raise RuntimeError(
+            "rendered server-row Connect failed with HTTP "
+            f"{targeted_connect_response.value.status}"
+        )
     reconnected_server_status = _wait_for_api(
-        "rendered WebUI eD2K reconnect",
+        "rendered WebUI targeted eD2K reconnect",
         options.network_timeout_seconds,
         connected_server,
     )
@@ -413,8 +476,6 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         and int(transfer.get("sizeBytes") or 0) == options.transfer_size
     )
     failures = []
-    if baseline_kad_stop is None:
-        failures.append("kad-baseline-stop")
     if not kad_disconnect_verified:
         failures.append("kad-disconnect")
     if not server_disconnect_preserved_kad:
@@ -430,11 +491,20 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     return {
         "ok": not failures,
         "failures": failures,
+        "zeroConfigurationDefaults": zero_configuration_defaults,
         "server": {
             "connected": True,
             "disconnectVerified": True,
             "reconnectVerified": True,
-            "importSucceeded": True,
+            "targetedReconnectVerified": True,
+            "targetedServerEndpoint": targeted_server_endpoint,
+            "targetedServerName": str(most_popular_server.get("name") or ""),
+            "targetedServerUsers": int(most_popular_server.get("users") or 0),
+            "selectedBy": "maximum live users, then files",
+            "autoConnectVerified": True,
+            "automaticMostPopularSelectionVerified": True,
+            "automaticServerMetDownloadVerified": True,
+            "manualImportUsed": False,
             "serverCount": len(server_list.get("items", [])),
             "initialHighId": bool(initial_server_stats.get("ed2kHighId")),
             "reconnectedHighId": bool(reconnected_server_stats.get("ed2kHighId")),
@@ -443,14 +513,15 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         "kad": {
             "running": bool(reconnected_kad_status.get("running")),
             "connected": bool(reconnected_kad_status.get("connected")),
-            "baselineStopVerified": baseline_kad_stop is not None,
+            "autoConnectVerified": True,
             "disconnectVerified": kad_disconnect_verified,
             "reconnectVerified": kad_disconnect_verified
             and bool(reconnected_kad_status.get("connected")),
             "stopPreservedServer": kad_stop_preserved_server,
             "initialContactCount": int(kad_status.get("contactCount") or 0),
             "reconnectedContactCount": int(reconnected_kad_status.get("contactCount") or 0),
-            "importSucceeded": True,
+            "automaticNodesDatDownloadVerified": True,
+            "manualImportUsed": False,
         },
         "searches": search_results,
         "transfer": {
@@ -485,6 +556,49 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
         "backendPresent": bool(value.get("backend")),
         "lastErrorPresent": bool(value.get("lastError")),
     }
+
+
+def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict[str, Any]:
+    """Prove fresh-profile auto-connect and best-effort UPnP in the rendered form."""
+
+    page.get_by_role("button", name="Settings", exact=True).click(
+        timeout=int(timeout_seconds * 1000)
+    )
+    panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Settings", exact=True)
+    )
+    advanced = panel.get_by_label(re.compile("Advanced"))
+    if not advanced.is_checked():
+        advanced.check()
+    auto_connect = panel.get_by_role(
+        "checkbox",
+        name=re.compile(r"^Auto connect(?:\s|$)"),
+    )
+    nat_section = panel.locator('[data-settings-section="nat"]')
+    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
+    require_initial = nat_section.get_by_role(
+        "checkbox",
+        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
+    )
+    auto_connect.wait_for(timeout=int(timeout_seconds * 1000))
+    nat_enabled.wait_for(timeout=int(timeout_seconds * 1000))
+    require_initial.wait_for(timeout=int(timeout_seconds * 1000))
+    observed = {
+        "autoConnect": auto_connect.is_checked(),
+        "upnpEnabled": nat_enabled.is_checked(),
+        "requireInitialMapping": require_initial.is_checked(),
+        "verifiedThroughRenderedWebui": True,
+    }
+    if (
+        not observed["autoConnect"]
+        or not observed["upnpEnabled"]
+        or observed["requireInitialMapping"]
+    ):
+        raise RuntimeError(
+            "fresh-profile WebUI defaults are not auto-connect plus best-effort UPnP: "
+            f"{observed!r}"
+        )
+    return observed
 
 
 def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, Any]:

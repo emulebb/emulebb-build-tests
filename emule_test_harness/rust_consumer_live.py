@@ -476,8 +476,24 @@ def run_consumer_live(
         _wait_for_rest(base_url, api_key, process, log_path)
         settings = api_data(base_url, "app/settings", api_key)
         daemon_settings = settings.get("daemon", {}) if isinstance(settings, dict) else {}
+        core_settings = settings.get("core", {}) if isinstance(settings, dict) else {}
+        nat_settings = settings.get("nat", {}) if isinstance(settings, dict) else {}
         if daemon_settings.get("p2pBindIp") or daemon_settings.get("p2pBindInterface"):
             raise RuntimeError("fresh consumer profile unexpectedly configured a P2P bind override")
+        if core_settings.get("autoConnect") is not True:
+            raise RuntimeError("fresh consumer profile did not enable automatic network connection")
+        if nat_settings.get("enabled") is not True:
+            raise RuntimeError("fresh consumer profile did not enable UPnP/NAT mapping")
+        if nat_settings.get("requireInitialMapping") is not False:
+            raise RuntimeError("fresh consumer profile did not configure UPnP as best effort")
+        server_list = api_data(base_url, "servers", api_key)
+        server_count = len(server_list.get("items", [])) if isinstance(server_list, dict) else 0
+        if server_count == 0:
+            raise RuntimeError("fresh consumer profile did not download and import server.met")
+        nodes_dat_path = profile_dir / "nodes.dat"
+        nodes_dat_bytes = nodes_dat_path.stat().st_size if nodes_dat_path.is_file() else 0
+        if nodes_dat_bytes == 0:
+            raise RuntimeError("fresh consumer profile did not download nodes.dat")
         report["checks"]["firstRun"] = {
             "freshProfile": metadata_path.is_file(),
             "apiKeyCreated": bool(api_key),
@@ -485,48 +501,13 @@ def run_consumer_live(
             "p2pBindInterfaceEmpty": not bool(daemon_settings.get("p2pBindInterface")),
             "tcpPortClaimed": _port_is_claimed(ED2K_PORT),
             "udpPortClaimed": _port_is_claimed(KAD_PORT, udp=True),
-        }
-        upnp_setup = run_webui_live_proof(
-            base_url=base_url,
-            api_key=api_key,
-            report_path=report_dir / "first-run-upnp-webui.json",
-            steady_seconds=3.0,
-            tab_wait_seconds=0.4,
-            timeout_seconds=max(60.0, network_timeout_seconds),
-            max_main_thread_busy_ratio=0.25,
-            navigation_only=True,
-            verify_stale_key_recovery=True,
-            configure_best_effort_upnp=True,
-            shutdown_after_proof=True,
-        )
-        report["checks"]["upnpSetupWebui"] = upnp_setup
-        if upnp_setup.get("status") != "passed":
-            raise RuntimeError("first-run rendered UPnP setup failed")
-        if not upnp_setup.get("checks", {}).get("shutdown", {}).get("ok"):
-            raise RuntimeError("UPnP setup proof did not request package shutdown")
-        _wait_for_clean_exit(process)
-        process = None
-        if log_handle is not None:
-            log_handle.close()
-            log_handle = None
-
-        process, log_handle = _start_daemon(
-            executable,
-            local_app_data=local_app_data,
-            log_path=log_path,
-        )
-        restarted_api_key = _wait_for_profile(settings_path, process, log_path)
-        if restarted_api_key != api_key:
-            raise RuntimeError("default-profile API key changed after UPnP setup restart")
-        _wait_for_rest(base_url, api_key, process, log_path)
-        restarted_settings = api_data(base_url, "app/settings", api_key)
-        nat_settings = restarted_settings.get("nat", {}) if isinstance(restarted_settings, dict) else {}
-        if nat_settings.get("enabled") is not True or nat_settings.get("requireInitialMapping") is not False:
-            raise RuntimeError("best-effort UPnP settings did not persist across restart")
-        report["checks"]["upnpRestart"] = {
-            "apiKeyStable": True,
-            "enabled": True,
-            "requireInitialMapping": False,
+            "autoConnectDefault": True,
+            "upnpDefaultEnabled": True,
+            "upnpBestEffort": True,
+            "serverMetDownloadedAndImported": True,
+            "serverCount": server_count,
+            "nodesDatDownloaded": True,
+            "nodesDatBytes": nodes_dat_bytes,
         }
 
         workflow = ConsumerNetworkWorkflow(
@@ -547,7 +528,7 @@ def run_consumer_live(
             timeout_seconds=max(60.0, network_timeout_seconds),
             max_main_thread_busy_ratio=0.25,
             navigation_only=False,
-            verify_stale_key_recovery=False,
+            verify_stale_key_recovery=True,
             consumer_workflow=workflow,
             shutdown_after_proof=True,
         )
