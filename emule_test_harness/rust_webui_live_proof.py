@@ -150,6 +150,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     )
 
     population_signature: tuple[tuple[str, int, int], ...] = ()
+    population_sampling_started = time.monotonic()
     population_last_changed = time.monotonic()
 
     def servers_with_stable_live_population() -> dict[str, Any] | None:
@@ -173,7 +174,11 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         if signature != population_signature:
             population_signature = signature
             population_last_changed = time.monotonic()
-        if not signature or time.monotonic() - population_last_changed < 3.0:
+        if (
+            not signature
+            or time.monotonic() - population_sampling_started < 18.0
+            or time.monotonic() - population_last_changed < 3.0
+        ):
             return None
         return value
 
