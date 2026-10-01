@@ -129,3 +129,71 @@ def test_persistence_snapshot_reports_webui_deleted_transfer(monkeypatch: pytest
         "transferCompleted": False,
         "transferState": "deleted",
     }
+
+
+def test_create_shared_fixtures_is_small_recursive_and_deterministic(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    run_id = "20261001T120000Z"
+
+    first = rust_consumer_live.create_shared_fixtures(first_root, run_id)
+    second = rust_consumer_live.create_shared_fixtures(second_root, run_id)
+
+    assert len(first) == 2
+    assert [fixture.relative_path for fixture in first] == [
+        "emulebb-live-share-20261001t120000z-root.txt",
+        "nested/deep/emulebb-live-share-20261001t120000z-nested.bin",
+    ]
+    assert [fixture.size_bytes for fixture in first] == [32 * 1024, 64 * 1024]
+    assert [fixture.sha256 for fixture in first] == [fixture.sha256 for fixture in second]
+    for fixture in first:
+        path = first_root / fixture.relative_path
+        assert path.stat().st_size == fixture.size_bytes
+        assert rust_consumer_live.sha256_file(path) == fixture.sha256
+
+
+def test_finalize_consumer_artifacts_cleans_pass_and_retains_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_id = "20261001T120000Z"
+    report_dir, package_dir, profile_parent = rust_consumer_live._consumer_run_paths(
+        tmp_path, run_id
+    )
+    package_dir.mkdir(parents=True)
+    profile_parent.mkdir(parents=True)
+    (package_dir / "binary.exe").write_bytes(b"package")
+    (profile_parent / "fixture.bin").write_bytes(b"fixture")
+    monkeypatch.setattr(rust_consumer_live, "get_workspace_output_root", lambda: tmp_path)
+    report = {"runId": run_id, "status": "passed"}
+
+    rust_consumer_live.finalize_consumer_artifacts(report)
+
+    assert not package_dir.exists()
+    assert not profile_parent.exists()
+    assert report["cleanup"]["payloadsRetained"] is False
+    assert (report_dir / "rust-consumer-live-result.json").is_file()
+
+
+def test_finalize_consumer_artifacts_retains_failed_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_id = "20261001T120000Z"
+    report_dir, package_dir, profile_parent = rust_consumer_live._consumer_run_paths(
+        tmp_path, run_id
+    )
+    package_dir.mkdir(parents=True)
+    profile_parent.mkdir(parents=True)
+    monkeypatch.setattr(rust_consumer_live, "get_workspace_output_root", lambda: tmp_path)
+    report = {"runId": run_id, "status": "failed"}
+
+    rust_consumer_live.finalize_consumer_artifacts(report)
+
+    assert package_dir.is_dir()
+    assert profile_parent.is_dir()
+    assert report["cleanup"] == {
+        "policy": "clean-pass-retain-failure",
+        "payloadsRetained": True,
+        "reason": "run-failed",
+    }

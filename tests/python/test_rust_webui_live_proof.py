@@ -24,6 +24,85 @@ def test_select_filtered_live_pdf_enforces_safe_shape_and_prefers_sources() -> N
     }
 
 
+def test_matched_shared_catalog_requires_exact_fixture_identity() -> None:
+    fixtures = (
+        rust_webui_live_proof.ConsumerSharedFixture(
+            name="root.txt",
+            relative_path="root.txt",
+            size_bytes=32,
+            sha256="1" * 64,
+        ),
+        rust_webui_live_proof.ConsumerSharedFixture(
+            name="nested.bin",
+            relative_path="nested/nested.bin",
+            size_bytes=64,
+            sha256="2" * 64,
+        ),
+    )
+    matched = rust_webui_live_proof._matched_shared_catalog(
+        {
+            "items": [
+                {
+                    "name": "nested.bin",
+                    "sizeBytes": 64,
+                    "hash": "b" * 32,
+                    "ed2kLink": "ed2k://|file|nested.bin|64|" + "b" * 32 + "|/",
+                },
+                {
+                    "name": "root.txt",
+                    "sizeBytes": 32,
+                    "hash": "a" * 32,
+                    "ed2kLink": "ed2k://|file|root.txt|32|" + "a" * 32 + "|/",
+                },
+            ]
+        },
+        fixtures,
+    )
+
+    assert matched == [
+        {
+            "name": "nested.bin",
+            "relativePath": "nested/nested.bin",
+            "sizeBytes": 64,
+            "sha256": "2" * 64,
+            "ed2kHash": "b" * 32,
+        },
+        {
+            "name": "root.txt",
+            "relativePath": "root.txt",
+            "sizeBytes": 32,
+            "sha256": "1" * 64,
+            "ed2kHash": "a" * 32,
+        },
+    ]
+    assert rust_webui_live_proof._matched_shared_catalog(
+        {"items": [{"name": "root.txt", "sizeBytes": 31}]}, fixtures
+    ) is None
+
+
+def test_consumer_nat_status_requires_both_default_mappings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        rust_webui_live_proof,
+        "api_data",
+        lambda *_args: {
+            "enabled": True,
+            "gatewayDiscovered": True,
+            "backend": "upnp",
+            "lastError": None,
+            "mappings": [
+                {"name": "ed2k_tcp", "protocol": "tcp", "localAddr": "192.0.2.1:4662"},
+                {"name": "kad_udp", "protocol": "udp", "localAddr": "192.0.2.1:4672"},
+            ],
+        },
+    )
+
+    status = rust_webui_live_proof._consumer_nat_status("http://127.0.0.1", "key")
+
+    assert status["ready"] is True
+    assert status["requiredMappings"] == ["tcp:4662", "udp:4672"]
+    assert status["mappingNames"] == ["ed2k_tcp", "kad_udp"]
+
+
 def test_request_recorder_counts_only_same_origin_api_and_static_assets() -> None:
     recorder = rust_webui_live_proof.RequestRecorder("http://192.0.2.10:4731/")
 

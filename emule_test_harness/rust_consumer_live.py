@@ -6,6 +6,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shutil
 import socket
 import subprocess
 import time
@@ -20,6 +22,8 @@ from .live_dependencies import safe_extract_zip
 from .paths import get_workspace_output_root
 from .rust_webui_live_proof import (
     ConsumerNetworkWorkflow,
+    ConsumerSharedFixture,
+    _matched_shared_catalog,
     api_data,
     profile_settings_api_key,
     run_webui_live_proof,
@@ -34,6 +38,11 @@ REST_PORT = 4711
 ED2K_PORT = 4662
 KAD_PORT = 4672
 PACKAGE_ROOT = "emulebb-rust"
+RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
+SHARED_FIXTURE_LAYOUT = (
+    ("emulebb-live-share-{run_id}-root.txt", 32 * 1024),
+    ("nested/deep/emulebb-live-share-{run_id}-nested.bin", 64 * 1024),
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +68,97 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def create_shared_fixtures(root: Path, run_id: str) -> tuple[ConsumerSharedFixture, ...]:
+    """Create a small deterministic recursive share tree for one disposable run."""
+
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise RuntimeError("consumer shared fixture requires a canonical run id")
+    fixtures: list[ConsumerSharedFixture] = []
+    for relative_template, size_bytes in SHARED_FIXTURE_LAYOUT:
+        relative = Path(relative_template.format(run_id=run_id.lower()))
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        seed = hashlib.sha256(f"emulebb-consumer-live:{run_id}:{relative.as_posix()}".encode()).digest()
+        payload = (seed * ((size_bytes + len(seed) - 1) // len(seed)))[:size_bytes]
+        path.write_bytes(payload)
+        fixtures.append(
+            ConsumerSharedFixture(
+                name=path.name,
+                relative_path=relative.as_posix(),
+                size_bytes=size_bytes,
+                sha256=hashlib.sha256(payload).hexdigest(),
+            )
+        )
+    return tuple(fixtures)
+
+
+def _consumer_run_paths(output_root: Path, run_id: str) -> tuple[Path, Path, Path]:
+    """Return the report, extracted package, and disposable profile paths for a run."""
+
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise RuntimeError("consumer report contained an invalid run id")
+    report_dir = output_root / "reports" / "rust-consumer-live" / run_id
+    package_dir = report_dir / "package"
+    profile_parent = output_root / "profiles" / "rust-consumer-live" / run_id
+    return report_dir, package_dir, profile_parent
+
+
+def _remove_contained_tree(target: Path, output_root: Path) -> bool:
+    """Remove one run-owned tree only when its resolved path is below the output root."""
+
+    root = output_root.resolve()
+    resolved = target.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise RuntimeError("refusing to remove a consumer artifact outside the output root")
+    if not target.exists():
+        return False
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return True
+
+
+def finalize_consumer_artifacts(report: dict[str, Any]) -> None:
+    """Apply pass-clean/fail-retain policy and persist its sanitized outcome."""
+
+    output_root = get_workspace_output_root()
+    run_id = str(report.get("runId") or "")
+    report_dir, package_dir, profile_parent = _consumer_run_paths(output_root, run_id)
+    report_path = report_dir / "rust-consumer-live-result.json"
+    if report.get("status") != "passed":
+        report["cleanup"] = {
+            "policy": "clean-pass-retain-failure",
+            "payloadsRetained": True,
+            "reason": "run-failed",
+        }
+        persist_consumer_report(report_path, report)
+        return
+    removed: list[str] = []
+    try:
+        if _remove_contained_tree(profile_parent, output_root):
+            removed.append("disposable-profile-and-fixtures")
+        if _remove_contained_tree(package_dir, output_root):
+            removed.append("extracted-package")
+        report["cleanup"] = {
+            "policy": "clean-pass-retain-failure",
+            "payloadsRetained": False,
+            "removed": removed,
+        }
+    except Exception as exc:  # noqa: BLE001 - cleanup is part of the release gate
+        report["status"] = "failed"
+        report["error"] = {
+            "type": type(exc).__name__,
+            "message": sanitize_report_text(str(exc) or repr(exc)),
+        }
+        report["cleanup"] = {
+            "policy": "clean-pass-retain-failure",
+            "payloadsRetained": True,
+            "reason": "cleanup-failed",
+        }
+    persist_consumer_report(report_path, report)
 
 
 def verify_release_zip(asset: Path) -> dict[str, Any]:
@@ -401,6 +501,27 @@ def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> di
     }
 
 
+def _shared_persistence_snapshot(
+    base_url: str,
+    api_key: str,
+    fixtures: tuple[ConsumerSharedFixture, ...],
+) -> dict[str, Any]:
+    """Verify that the synthetic root and exact shared catalog survive restart."""
+
+    directories = api_data(base_url, "shared-directories", api_key)
+    roots = directories.get("roots", []) if isinstance(directories, dict) else []
+    files = api_data(base_url, "shared-files?limit=100", api_key)
+    matched = _matched_shared_catalog(files, fixtures)
+    if not isinstance(roots, list) or len(roots) != 1 or matched is None:
+        raise RuntimeError("synthetic shared root or catalog did not persist across restart")
+    return {
+        "rootCount": 1,
+        "fileCount": len(matched),
+        "exactCatalog": True,
+        "files": matched,
+    }
+
+
 def run_consumer_live(
     *,
     release_zip: Path,
@@ -443,15 +564,15 @@ def run_consumer_live(
 
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_root = get_workspace_output_root()
-    report_dir = output_root / "reports" / "rust-consumer-live" / run_id
-    package_dir = report_dir / "package"
-    profile_parent = output_root / "profiles" / "rust-consumer-live" / run_id
+    report_dir, package_dir, profile_parent = _consumer_run_paths(output_root, run_id)
     local_app_data = profile_parent / "localappdata"
     profile_dir = local_app_data / "emulebb-rust"
+    fixture_root = profile_parent / "shared-fixtures"
     if profile_dir.exists():
         raise RuntimeError("consumer live proof profile must be fresh")
     report_dir.mkdir(parents=True, exist_ok=False)
     local_app_data.mkdir(parents=True, exist_ok=False)
+    shared_fixtures = create_shared_fixtures(fixture_root, run_id)
     safe_extract_zip(release_zip, package_dir)
     verified_file_count = verify_extracted_payload(package_dir, manifest)
     executable = package_dir / PACKAGE_ROOT / "emulebb-rust.exe"
@@ -465,7 +586,7 @@ def run_consumer_live(
     log_path = report_dir / "daemon.log"
     report_path = report_dir / "rust-consumer-live-result.json"
     report: dict[str, Any] = {
-        "schema": "emulebb.rust-consumer-live.v1",
+        "schema": "emulebb.rust-consumer-live.v2",
         "status": "running",
         "runId": run_id,
         "artifact": {
@@ -476,7 +597,22 @@ def run_consumer_live(
         },
         "networkMode": "direct-default-route",
         "bindOverride": False,
-        "sharedRootCount": 0,
+        "sharedRootCount": 1,
+        "sharedFixture": {
+            "synthetic": True,
+            "rootCount": 1,
+            "fileCount": len(shared_fixtures),
+            "recursive": any("/" in fixture.relative_path for fixture in shared_fixtures),
+            "files": [
+                {
+                    "name": fixture.name,
+                    "relativePath": fixture.relative_path,
+                    "sizeBytes": fixture.size_bytes,
+                    "sha256": fixture.sha256,
+                }
+                for fixture in shared_fixtures
+            ],
+        },
         "search": {
             "operatorProvided": True,
             "methods": ["automatic", "server", "kad"],
@@ -486,6 +622,7 @@ def run_consumer_live(
             "mode": "complete" if complete_transfer else "trigger-observe-stop-delete",
             "pdfOnly": True,
             "strictLessThan5MiB": True,
+            "networkBytesRequired": True,
             "maxTransferBytes": max_transfer_bytes,
             "maxCompletionBytes": max_completion_bytes,
         },
@@ -548,6 +685,8 @@ def run_consumer_live(
             transfer_timeout_seconds=transfer_timeout_seconds,
             complete_transfer=complete_transfer,
             max_transfer_bytes=max_transfer_bytes,
+            shared_root_path=str(fixture_root.resolve()),
+            shared_files=shared_fixtures,
         )
         network_proof = run_webui_live_proof(
             base_url=base_url,
@@ -586,6 +725,10 @@ def run_consumer_live(
 
         workflow_check = network_proof.get("checks", {}).get("consumerNetworkWorkflow", {})
         transfer_check = workflow_check.get("transfer", {}) if isinstance(workflow_check, dict) else {}
+        sharing_check = workflow_check.get("sharing", {}) if isinstance(workflow_check, dict) else {}
+        if not isinstance(sharing_check, dict) or sharing_check.get("ok") is not True:
+            raise RuntimeError("rendered consumer sharing and network publish proof failed")
+        report["checks"]["sharing"] = sharing_check
         if complete_transfer:
             delivered = incoming_dir / str(transfer["name"])
             if (
@@ -605,7 +748,7 @@ def run_consumer_live(
             report["checks"]["download"] = {
                 "triggered": bool(transfer_check.get("triggeredFromRenderedSearchResult")),
                 "identityVerified": bool(transfer_check.get("identityVerified")),
-                "networkActivityRequired": bool(transfer_check.get("networkActivityRequired")),
+                "networkActivityRequired": True,
                 "networkActivityObserved": bool(transfer_check.get("networkActivityObserved")),
                 "stoppedAfterObservation": bool(transfer_check.get("stoppedFlag")),
                 "deletedAfterStop": bool(transfer_check.get("deletedAfterStop")),
@@ -621,6 +764,7 @@ def run_consumer_live(
             raise RuntimeError("default-profile API key changed across restart")
         _wait_for_rest(base_url, api_key, process, log_path)
         persistence = _persistence_snapshot(base_url, api_key, str(transfer["hash"]))
+        shared_persistence = _shared_persistence_snapshot(base_url, api_key, shared_fixtures)
         if persistence["searchCount"] < 3:
             raise RuntimeError("search state did not persist across restart")
         if complete_transfer:
@@ -643,6 +787,7 @@ def run_consumer_live(
         report["checks"]["persistence"] = {
             **persistence,
             "apiKeyStable": True,
+            "sharing": shared_persistence,
             "renderedWebui": second_proof,
         }
         if second_proof.get("status") != "passed":
@@ -661,7 +806,13 @@ def run_consumer_live(
             "type": type(exc).__name__,
             "message": sanitize_report_text(
                 str(exc) or repr(exc),
-                (search_term, str(transfer.get("name") or ""), str(transfer.get("hash") or "")),
+                (
+                    search_term,
+                    str(transfer.get("name") or ""),
+                    str(transfer.get("hash") or ""),
+                    str(fixture_root),
+                    *(fixture.name for fixture in shared_fixtures),
+                ),
             ),
         }
     finally:
@@ -719,7 +870,10 @@ def run(argv: list[str] | None = None) -> int:
             )
         else:
             raise RuntimeError("no running operator daemon was available to suspend")
-    report: dict[str, Any]
+    report: dict[str, Any] | None = None
+    run_error: Exception | None = None
+    restore_error: Exception | None = None
+    restored_pid = 0
     try:
         report = run_consumer_live(
             release_zip=args.release_zip.resolve(),
@@ -731,20 +885,35 @@ def run(argv: list[str] | None = None) -> int:
             network_timeout_seconds=float(args.network_timeout_seconds),
             transfer_timeout_seconds=float(args.transfer_timeout_seconds),
         )
+    except Exception as exc:  # noqa: BLE001 - restore the operator before propagating
+        run_error = exc
     finally:
         if suspended is not None:
-            restored_pid = _restore_existing_daemon(suspended)
+            try:
+                restored_pid = _restore_existing_daemon(suspended)
+            except Exception as exc:  # noqa: BLE001 - restoration is part of the gate
+                restore_error = exc
+    if run_error is not None:
+        if restore_error is not None:
+            raise RuntimeError(
+                "consumer proof failed and the operator daemon could not be restored: "
+                f"{sanitize_report_text(str(restore_error) or repr(restore_error))}"
+            ) from run_error
+        raise run_error
+    if report is None:
+        raise RuntimeError("consumer proof did not return a report")
     if suspended is not None:
-        report["operatorDaemonRestored"] = True
-        report["operatorDaemonPid"] = restored_pid
+        report["operatorDaemonRestored"] = restore_error is None
+        if restored_pid:
+            report["operatorDaemonPid"] = restored_pid
         report["operatorDaemonGracefulShutdown"] = suspended.graceful_shutdown
-        persist_consumer_report(
-            get_workspace_output_root()
-            / "reports"
-            / "rust-consumer-live"
-            / str(report["runId"])
-            / "rust-consumer-live-result.json",
-            report,
-        )
+    if restore_error is not None:
+        report["status"] = "failed"
+        report["error"] = {
+            "type": type(restore_error).__name__,
+            "message": "operator daemon restore failed: "
+            + sanitize_report_text(str(restore_error) or repr(restore_error)),
+        }
+    finalize_consumer_artifacts(report)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("status") == "passed" else 1

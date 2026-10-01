@@ -56,6 +56,16 @@ PERFORMANCE_ABSOLUTE_METRICS = (
 
 
 @dataclass(frozen=True)
+class ConsumerSharedFixture:
+    """One synthetic file expected in the disposable consumer share tree."""
+
+    name: str
+    relative_path: str
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class ConsumerNetworkWorkflow:
     """Operator-approved public-network actions exercised through the WebUI."""
 
@@ -67,6 +77,8 @@ class ConsumerNetworkWorkflow:
     transfer_timeout_seconds: float
     complete_transfer: bool = False
     max_transfer_bytes: int | None = None
+    shared_root_path: str | None = None
+    shared_files: tuple[ConsumerSharedFixture, ...] = ()
 
 
 def select_filtered_live_pdf(rows: Any, max_bytes: int) -> dict[str, Any] | None:
@@ -143,6 +155,235 @@ def _wait_for_api(description: str, timeout_seconds: float, probe) -> Any:
         time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
     suffix = f": {last_error}" if last_error is not None else ""
     raise RuntimeError(f"timed out waiting for {description}{suffix}")
+
+
+def _integer_field(value: Any, name: str) -> int:
+    """Return one non-boolean integer field from a REST object."""
+
+    if not isinstance(value, dict):
+        return 0
+    field = value.get(name)
+    return int(field) if isinstance(field, int) and not isinstance(field, bool) else 0
+
+
+def _publish_diagnostics(status: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Extract path-free eD2K and Kad publish snapshots from status."""
+
+    runtime = status.get("runtimeDiagnostics", {}) if isinstance(status, dict) else {}
+    if not isinstance(runtime, dict):
+        runtime = {}
+    ed2k = runtime.get("ed2kPublish", {})
+    kad = runtime.get("kadPublish", {})
+    return (
+        ed2k if isinstance(ed2k, dict) else {},
+        kad if isinstance(kad, dict) else {},
+    )
+
+
+def _matched_shared_catalog(
+    value: Any,
+    expected: tuple[ConsumerSharedFixture, ...],
+) -> list[dict[str, Any]] | None:
+    """Return exact synthetic fixture rows once the shared catalog is complete."""
+
+    rows = value.get("items", []) if isinstance(value, dict) else []
+    if not isinstance(rows, list):
+        return None
+    expected_by_name = {fixture.name: fixture for fixture in expected}
+    if len(expected_by_name) != len(expected) or len(rows) != len(expected):
+        return None
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        name = str(row.get("name") or "")
+        fixture = expected_by_name.get(name)
+        transfer_hash = str(row.get("hash") or "").lower()
+        ed2k_link = str(row.get("ed2kLink") or "")
+        if (
+            fixture is None
+            or row.get("sizeBytes") != fixture.size_bytes
+            or len(transfer_hash) != 32
+            or any(character not in "0123456789abcdef" for character in transfer_hash)
+            or not ed2k_link.startswith("ed2k://|file|")
+        ):
+            return None
+        matched.append(
+            {
+                "name": fixture.name,
+                "relativePath": fixture.relative_path,
+                "sizeBytes": fixture.size_bytes,
+                "sha256": fixture.sha256,
+                "ed2kHash": transfer_hash,
+            }
+        )
+    return sorted(matched, key=lambda row: str(row["relativePath"]))
+
+
+def _sharing_publish_actions(
+    page,
+    *,
+    base_url: str,
+    api_key: str,
+    options: ConsumerNetworkWorkflow,
+) -> dict[str, Any]:
+    """Add a disposable share in the WebUI and prove server/Kad advertisement."""
+
+    if not options.shared_root_path or not options.shared_files:
+        raise RuntimeError("consumer sharing proof requires a root and synthetic fixture files")
+    expected_count = len(options.shared_files)
+    baseline_status = api_data(base_url, "status", api_key)
+    baseline_ed2k, baseline_kad = _publish_diagnostics(baseline_status)
+
+    page.get_by_role("button", name="Sharing", exact=True).click()
+    sharing_panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Shared Folders", exact=True)
+    )
+    sharing_panel.get_by_placeholder("Server folder path").fill(options.shared_root_path)
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and urlparse(response.url).path == "/api/v1/shared-directories/roots",
+        timeout=int(options.network_timeout_seconds * 1000),
+    ) as add_root_response:
+        sharing_panel.get_by_role("button", name="Add root", exact=True).click()
+    if not add_root_response.value.ok:
+        raise RuntimeError(
+            "rendered shared-root Add failed with HTTP "
+            f"{add_root_response.value.status}"
+        )
+    page.get_by_text("Folder added", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+
+    def indexed_fixture(min_updated_at_ms: int = 0) -> dict[str, Any] | None:
+        directories = api_data(base_url, "shared-directories", api_key)
+        roots = directories.get("roots", []) if isinstance(directories, dict) else []
+        reload_progress = (
+            directories.get("reloadProgress", {}) if isinstance(directories, dict) else {}
+        )
+        if not isinstance(roots, list) or len(roots) != 1 or not isinstance(reload_progress, dict):
+            return None
+        if reload_progress.get("running") or reload_progress.get("pending"):
+            return None
+        updated_at_ms = _integer_field(reload_progress, "updatedAtMs")
+        if updated_at_ms <= min_updated_at_ms:
+            return None
+        if _integer_field(reload_progress, "failedHashCount") != 0:
+            raise RuntimeError("synthetic shared-file hashing reported failures")
+        files = api_data(base_url, "shared-files?limit=100", api_key)
+        matched = _matched_shared_catalog(files, options.shared_files)
+        if matched is None:
+            return None
+        return {
+            "files": matched,
+            "hashedCount": _integer_field(reload_progress, "hashedCount"),
+            "newCount": _integer_field(reload_progress, "newCount"),
+            "reusedCount": _integer_field(reload_progress, "reusedCount"),
+            "updatedAtMs": updated_at_ms,
+        }
+
+    initial_catalog = _wait_for_api(
+        "synthetic shared-tree indexing",
+        options.network_timeout_seconds,
+        indexed_fixture,
+    )
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and urlparse(response.url).path == "/api/v1/shared-directories/operations/reload",
+        timeout=int(options.network_timeout_seconds * 1000),
+    ) as reload_response:
+        sharing_panel.get_by_role("button", name="Reload", exact=True).click()
+    if not reload_response.value.ok:
+        raise RuntimeError(
+            "rendered shared-root Reload failed with HTTP "
+            f"{reload_response.value.status}"
+        )
+    page.get_by_text("Reload queued", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+    reloaded_catalog = _wait_for_api(
+        "synthetic shared-tree reload",
+        options.network_timeout_seconds,
+        lambda: indexed_fixture(_integer_field(initial_catalog, "updatedAtMs")),
+    )
+
+    page.get_by_role("button", name="Shared Files", exact=True).click()
+    shared_files_panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Shared Files", exact=True)
+    )
+    for fixture in options.shared_files:
+        row = shared_files_panel.locator("tbody tr").filter(has_text=fixture.name).first
+        row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
+
+    def published_fixture() -> dict[str, Any] | None:
+        status = api_data(base_url, "status", api_key)
+        ed2k, kad = _publish_diagnostics(status)
+        ed2k_ready = (
+            _integer_field(ed2k, "lastSuccessAtMs")
+            > _integer_field(baseline_ed2k, "lastSuccessAtMs")
+            and _integer_field(ed2k, "totalEntries") == expected_count
+            and _integer_field(ed2k, "publishedEntries") == expected_count
+            and _integer_field(ed2k, "pendingEntries") == 0
+            and not ed2k.get("lastError")
+        )
+        kad_ready = (
+            kad.get("bootstrapped") is True
+            and kad.get("gateAllowed") is True
+            and _integer_field(kad, "itemCount") == expected_count
+            and _integer_field(kad, "keywordPublishedTotal")
+            > _integer_field(baseline_kad, "keywordPublishedTotal")
+            and _integer_field(kad, "sourcePublishedTotal")
+            >= _integer_field(baseline_kad, "sourcePublishedTotal") + expected_count
+            and _integer_field(kad, "keywordAckedContactsTotal")
+            > _integer_field(baseline_kad, "keywordAckedContactsTotal")
+            and _integer_field(kad, "sourceAckedContactsTotal")
+            > _integer_field(baseline_kad, "sourceAckedContactsTotal")
+        )
+        if not ed2k_ready or not kad_ready:
+            return None
+        return {
+            "ed2k": {
+                "phase": str(ed2k.get("phase") or "unknown"),
+                "entriesSent": _integer_field(ed2k, "entriesSent"),
+                "totalEntries": _integer_field(ed2k, "totalEntries"),
+                "publishedEntries": _integer_field(ed2k, "publishedEntries"),
+                "pendingEntries": _integer_field(ed2k, "pendingEntries"),
+                "lastSuccessAdvanced": True,
+            },
+            "kad": {
+                "phase": str(kad.get("phase") or "unknown"),
+                "itemCount": _integer_field(kad, "itemCount"),
+                "gateAllowed": True,
+                "keywordPublishedDelta": _integer_field(kad, "keywordPublishedTotal")
+                - _integer_field(baseline_kad, "keywordPublishedTotal"),
+                "sourcePublishedDelta": _integer_field(kad, "sourcePublishedTotal")
+                - _integer_field(baseline_kad, "sourcePublishedTotal"),
+                "keywordAckedContactsDelta": _integer_field(
+                    kad, "keywordAckedContactsTotal"
+                )
+                - _integer_field(baseline_kad, "keywordAckedContactsTotal"),
+                "sourceAckedContactsDelta": _integer_field(kad, "sourceAckedContactsTotal")
+                - _integer_field(baseline_kad, "sourceAckedContactsTotal"),
+            },
+        }
+
+    publish = _wait_for_api(
+        "eD2K offer and acknowledged Kad fixture publishing",
+        options.network_timeout_seconds,
+        published_fixture,
+    )
+    return {
+        "ok": True,
+        "rootAddedThroughRenderedWebui": True,
+        "reloadTriggeredThroughRenderedWebui": True,
+        "rootCount": 1,
+        "fileCount": expected_count,
+        "recursiveFixture": any("/" in fixture.relative_path for fixture in options.shared_files),
+        "initialCatalog": initial_catalog,
+        "reloadedCatalog": reloaded_catalog,
+        "renderedSharedFileRows": expected_count,
+        "publish": publish,
+    }
 
 
 def _consumer_network_actions(page, *, base_url: str, api_key: str, options: ConsumerNetworkWorkflow) -> dict[str, Any]:
@@ -268,7 +509,6 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         options.network_timeout_seconds,
         automatically_selected_most_popular_server,
     )
-    ranked_server_list = automatic_selection["collection"]
     most_popular_server = automatic_selection["server"]
     targeted_server_endpoint = (
         f"{most_popular_server.get('address')}:{most_popular_server.get('port')}"
@@ -359,6 +599,20 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         "rendered WebUI Kad reconnect",
         options.network_timeout_seconds,
         connected_kad,
+    )
+
+    nat_status = _wait_for_api(
+        "UPnP gateway and eD2K/Kad port mappings",
+        options.network_timeout_seconds,
+        lambda: (lambda value: value if value.get("ready") else None)(
+            _consumer_nat_status(base_url, api_key)
+        ),
+    )
+    sharing = _sharing_publish_actions(
+        page,
+        base_url=base_url,
+        api_key=api_key,
+        options=options,
     )
 
     search_results: list[dict[str, Any]] = []
@@ -493,8 +747,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         if not isinstance(value, dict):
             return None
         completed_bytes = int(value.get("completedBytes") or 0)
-        transferring = int(value.get("sourcesTransferring") or 0)
-        return value if completed_bytes > 0 or transferring > 0 else None
+        return value if completed_bytes > 0 else None
 
     transfer_activity_observed = True
     try:
@@ -564,11 +817,16 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         )
         deleted_after_stop = True
     kad_disconnect_verified = kad_stop is not None
-    transfer_identity_verified = (
+    transfer_hash_verified = (
         str(transfer.get("hash") or "").lower() == selected_transfer["hash"]
-        and str(transfer.get("name") or "") == selected_transfer["name"]
-        and int(transfer.get("sizeBytes") or 0) == selected_transfer["sizeBytes"]
     )
+    transfer_size_verified = (
+        int(transfer.get("sizeBytes") or 0) == selected_transfer["sizeBytes"]
+    )
+    transfer_name_round_trip = str(transfer.get("name") or "") == selected_transfer["name"]
+    # eD2K protocol identity is hash + byte size. Display names may be normalized
+    # by a live result source and are retained as a non-gating diagnostic only.
+    transfer_identity_verified = transfer_hash_verified and transfer_size_verified
     failures = []
     if not kad_disconnect_verified:
         failures.append("kad-disconnect")
@@ -576,7 +834,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         failures.append("server-disconnect-preserved-kad")
     if not kad_stop_preserved_server:
         failures.append("kad-stop-preserved-server")
-    if options.complete_transfer and not transfer_activity_observed:
+    if not transfer_activity_observed:
         failures.append("transfer-network-activity")
     if not transfer_identity_verified:
         failures.append("transfer-identity")
@@ -620,13 +878,17 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "manualImportUsed": False,
         },
         "searches": search_results,
+        "sharing": sharing,
         "transfer": {
             "triggered": True,
             "triggeredFromRenderedSearchResult": transfer_triggered,
             "selectedFromExactAllowlist": selected_from_exact_allowlist,
             "selectedFromFilteredLiveResults": not selected_from_exact_allowlist,
             "identityVerified": transfer_identity_verified,
-            "networkActivityRequired": options.complete_transfer,
+            "hashVerified": transfer_hash_verified,
+            "sizeVerified": transfer_size_verified,
+            "displayNameRoundTrip": transfer_name_round_trip,
+            "networkActivityRequired": True,
             "networkActivityObserved": transfer_activity_observed,
             "sourceCount": int(transfer.get("sources") or 0),
             "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
@@ -641,19 +903,53 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "deletedAfterStop": deleted_after_stop,
             "absentAfterDelete": deleted_after_stop,
         },
-        "nat": _consumer_nat_status(base_url, api_key),
+        "nat": nat_status,
     }
 
 
 def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
     value = api_data(base_url, "nat", api_key)
     if not isinstance(value, dict):
-        return {"enabled": False, "gatewayDiscovered": False, "mappingCount": 0}
+        return {
+            "ready": False,
+            "enabled": False,
+            "gatewayDiscovered": False,
+            "mappingCount": 0,
+            "requiredMappings": [],
+        }
     mappings = value.get("mappings", [])
+    mapping_rows = mappings if isinstance(mappings, list) else []
+    observed: set[tuple[str, int]] = set()
+    mapping_names: list[str] = []
+    for mapping in mapping_rows:
+        if not isinstance(mapping, dict):
+            continue
+        protocol = str(mapping.get("protocol") or "").lower()
+        local_addr = str(mapping.get("localAddr") or "")
+        try:
+            port = int(local_addr.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            port = 0
+        if protocol and port:
+            observed.add((protocol, port))
+        name = str(mapping.get("name") or "")
+        if name:
+            mapping_names.append(name)
+    required = {("tcp", 4662), ("udp", 4672)}
+    ready = (
+        value.get("enabled") is True
+        and value.get("gatewayDiscovered") is True
+        and bool(value.get("backend"))
+        and not value.get("lastError")
+        and required.issubset(observed)
+    )
     return {
+        "ready": ready,
         "enabled": bool(value.get("enabled")),
         "gatewayDiscovered": bool(value.get("gatewayDiscovered")),
-        "mappingCount": len(mappings) if isinstance(mappings, list) else 0,
+        "mappingCount": len(mapping_rows),
+        "requiredMappings": ["tcp:4662", "udp:4672"],
+        "mappingNames": sorted(mapping_names),
         "backendPresent": bool(value.get("backend")),
         "lastErrorPresent": bool(value.get("lastError")),
     }
@@ -968,6 +1264,9 @@ def run_webui_live_proof(
         "navigationOnly": navigation_only,
         "verifyStaleKeyRecovery": verify_stale_key_recovery,
         "consumerWorkflow": consumer_workflow is not None,
+        "consumerSharingWorkflow": bool(
+            consumer_workflow is not None and consumer_workflow.shared_files
+        ),
         "configureBestEffortUpnp": configure_best_effort_upnp,
         "shutdownAfterProof": shutdown_after_proof,
         "tabsExpected": list(TAB_LABELS),
@@ -1186,6 +1485,8 @@ def run_webui_live_proof(
             consumer_workflow.search_term,
             consumer_workflow.transfer_name,
             consumer_workflow.transfer_hash,
+            str(consumer_workflow.shared_root_path or ""),
+            *(fixture.name for fixture in consumer_workflow.shared_files),
         )
         report["error"] = {
             "type": type(exc).__name__,
