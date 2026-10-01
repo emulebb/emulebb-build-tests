@@ -480,10 +480,14 @@ def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, An
     advanced = panel.get_by_label(re.compile("Advanced"))
     if not advanced.is_checked():
         advanced.check()
-    nat_enabled = panel.get_by_label("NAT", exact=True)
+    nat_section = panel.locator('[data-settings-section="nat"]')
+    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
     if not nat_enabled.is_checked():
         nat_enabled.check()
-    require_initial = panel.get_by_label("Require initial NAT mapping", exact=True)
+    require_initial = nat_section.get_by_role(
+        "checkbox",
+        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
+    )
     if require_initial.is_checked():
         require_initial.uncheck()
     panel.get_by_role("button", name="Save", exact=True).click()
