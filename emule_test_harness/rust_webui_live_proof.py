@@ -320,10 +320,9 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         exact_allowlisted_result = exact_result is not None
         if exact_allowlisted_result and not transfer_triggered:
             # The REST poll above observes completion before the SPA's periodic
-            # snapshot refresh necessarily does. Reload and reopen Search so the
-            # result is fetched by the rendered UI before clicking its action.
-            page.reload(wait_until="domcontentloaded")
-            page.get_by_role("button", name="Search", exact=True).click(
+            # snapshot refresh necessarily does. Trigger the rendered refresh
+            # control so the SPA selects and fetches the newest search session.
+            page.get_by_title("Refresh", exact=True).click(
                 timeout=int(options.network_timeout_seconds * 1000)
             )
             result_row = search_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
