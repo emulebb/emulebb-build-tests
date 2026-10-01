@@ -182,50 +182,57 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             return None
         return value
 
-    ranked_server_list = _wait_for_api(
+    _wait_for_api(
         "stable live server population metrics",
         options.network_timeout_seconds,
         servers_with_stable_live_population,
     )
-    server_rows = [
-        row
-        for row in ranked_server_list.get("items", [])
-        if isinstance(row, dict) and row.get("enabled", True)
-    ]
-    if not server_rows:
-        raise RuntimeError("automatic server.met discovery produced no enabled servers")
-    most_popular_server = max(
-        server_rows,
-        key=lambda row: (
-            int(row.get("users") or 0),
-            int(row.get("files") or 0),
-            str(row.get("name") or ""),
-        ),
-    )
-    targeted_server_endpoint = (
-        f"{most_popular_server.get('address')}:{most_popular_server.get('port')}"
-    )
+    automatic_candidate_endpoint = ""
+    automatic_candidate_since = time.monotonic()
 
     def automatically_selected_most_popular_server() -> dict[str, Any] | None:
+        nonlocal automatic_candidate_endpoint, automatic_candidate_since
         value = discovered_servers()
         if value is None:
             return None
-        return next(
-            (
-                row
-                for row in value.get("items", [])
-                if isinstance(row, dict)
-                and f"{row.get('address')}:{row.get('port')}" == targeted_server_endpoint
-                and row.get("connected") is True
-                and row.get("current") is True
+        server_rows = [
+            row
+            for row in value.get("items", [])
+            if isinstance(row, dict)
+            and row.get("enabled", True)
+            and int(row.get("users") or 0) > 0
+        ]
+        if not server_rows:
+            return None
+        candidate = max(
+            server_rows,
+            key=lambda row: (
+                int(row.get("users") or 0),
+                int(row.get("files") or 0),
+                str(row.get("name") or ""),
             ),
-            None,
         )
+        endpoint = f"{candidate.get('address')}:{candidate.get('port')}"
+        if candidate.get("connected") is not True or candidate.get("current") is not True:
+            automatic_candidate_endpoint = ""
+            return None
+        if endpoint != automatic_candidate_endpoint:
+            automatic_candidate_endpoint = endpoint
+            automatic_candidate_since = time.monotonic()
+            return None
+        if time.monotonic() - automatic_candidate_since < 2.0:
+            return None
+        return {"collection": value, "server": candidate}
 
-    _wait_for_api(
-        "automatic selection of the most popular responding server",
+    automatic_selection = _wait_for_api(
+        "automatic selection of the most popular reachable server",
         options.network_timeout_seconds,
         automatically_selected_most_popular_server,
+    )
+    ranked_server_list = automatic_selection["collection"]
+    most_popular_server = automatic_selection["server"]
+    targeted_server_endpoint = (
+        f"{most_popular_server.get('address')}:{most_popular_server.get('port')}"
     )
     server_status = connected_server() or server_status
     initial_server_stats = server_status.get("stats", {})
@@ -505,7 +512,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "targetedServerEndpoint": targeted_server_endpoint,
             "targetedServerName": str(most_popular_server.get("name") or ""),
             "targetedServerUsers": int(most_popular_server.get("users") or 0),
-            "selectedBy": "maximum live users, then files",
+            "selectedBy": "maximum live users, then files, among reachable enabled servers",
             "autoConnectVerified": True,
             "automaticMostPopularSelectionVerified": True,
             "automaticServerMetDownloadVerified": True,
