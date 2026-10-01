@@ -319,7 +319,15 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         )
         exact_allowlisted_result = exact_result is not None
         if exact_allowlisted_result and not transfer_triggered:
+            # The REST poll above observes completion before the SPA's periodic
+            # snapshot refresh necessarily does. Reload and reopen Search so the
+            # result is fetched by the rendered UI before clicking its action.
+            page.reload(wait_until="domcontentloaded")
+            page.get_by_role("button", name="Search", exact=True).click(
+                timeout=int(options.network_timeout_seconds * 1000)
+            )
             result_row = search_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
+            result_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
             result_row.get_by_role("button", name="Download", exact=True).click()
             page.get_by_text("Download queued", exact=True).wait_for(
                 timeout=int(options.network_timeout_seconds * 1000)
