@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
@@ -113,27 +113,29 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     servers_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Servers", exact=True)
     )
-    servers_panel.locator(".section-title").get_by_role(
-        "button", name="Disconnect", exact=True
-    ).click()
-    page.get_by_text("Servers disconnected", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
-    )
-
     def disconnected_server() -> dict[str, Any] | None:
         status = api_data(base_url, "status", api_key)
         stats = status.get("stats", {}) if isinstance(status, dict) else {}
         return status if not stats.get("ed2kConnected") else None
 
-    _wait_for_api(
-        "rendered WebUI eD2K baseline disconnect",
-        options.network_timeout_seconds,
-        disconnected_server,
-    )
+    if servers_panel.locator(".section-title").get_by_role(
+        "button", name="Disconnect", exact=True
+    ).is_enabled():
+        servers_panel.locator(".section-title").get_by_role(
+            "button", name="Disconnect", exact=True
+        ).click()
+        page.get_by_text("Server disconnected; Kad remains available", exact=True).wait_for(
+            timeout=int(options.network_timeout_seconds * 1000)
+        )
+        _wait_for_api(
+            "rendered WebUI eD2K baseline disconnect",
+            options.network_timeout_seconds,
+            disconnected_server,
+        )
     servers_panel.get_by_placeholder("server.met URL").locator("xpath=..").get_by_role(
         "button", name="Import", exact=True
     ).click()
-    page.get_by_text("Server list import started", exact=True).wait_for(
+    page.get_by_text("server.met imported; the server list is ready", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
     )
 
@@ -163,57 +165,23 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         connected_server,
     )
     initial_server_stats = server_status.get("stats", {})
-    servers_panel.locator(".section-title").get_by_role(
-        "button", name="Disconnect", exact=True
-    ).click()
-    page.get_by_text("Servers disconnected", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
-    )
-    _wait_for_api(
-        "rendered WebUI eD2K disconnect",
-        options.network_timeout_seconds,
-        disconnected_server,
-    )
-    servers_panel.locator(".section-title").get_by_role(
-        "button", name="Connect", exact=True
-    ).click()
-    reconnected_server_status = _wait_for_api(
-        "rendered WebUI eD2K reconnect",
-        options.network_timeout_seconds,
-        connected_server,
-    )
-    reconnected_server_stats = reconnected_server_status.get("stats", {})
 
     page.get_by_role("button", name="Kad", exact=True).click()
     kad_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Kad", exact=True)
     )
-    kad_panel.get_by_role("button", name="Stop", exact=True).click()
-    page.get_by_text("Kad stopped", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
-    )
-    try:
-        baseline_kad_stop = _wait_for_api(
-            "rendered WebUI Kad baseline stop",
-            min(15.0, options.network_timeout_seconds),
-            lambda: (lambda value: value if isinstance(value, dict) and not value.get("running") else None)(
-                api_data(base_url, "kad", api_key)
-            ),
-        )
-    except RuntimeError:
-        baseline_kad_stop = None
-    kad_panel.get_by_role("button", name="Start", exact=True).click()
-    _wait_for_api(
-        "rendered WebUI Kad start",
-        options.network_timeout_seconds,
-        lambda: (lambda value: value if isinstance(value, dict) and value.get("running") else None)(
+    baseline_kad_stop = _wait_for_api(
+        "rendered WebUI Kad baseline stop",
+        min(15.0, options.network_timeout_seconds),
+        lambda: (lambda value: value if isinstance(value, dict) and not value.get("running") else None)(
             api_data(base_url, "kad", api_key)
         ),
     )
     kad_panel.get_by_role("button", name="Import", exact=True).click()
-    page.get_by_text("Kad nodes import started", exact=True).wait_for(
+    page.get_by_text("nodes.dat imported, validated, and saved", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
     )
+    kad_panel.get_by_role("button", name="Start", exact=True).click()
 
     def connected_kad() -> dict[str, Any] | None:
         kad = api_data(base_url, "kad", api_key)
@@ -226,8 +194,38 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         options.network_timeout_seconds,
         connected_kad,
     )
+
+    page.get_by_role("button", name="Servers", exact=True).click()
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Disconnect", exact=True
+    ).click()
+    page.get_by_text("Server disconnected; Kad remains available", exact=True).wait_for(
+        timeout=int(options.network_timeout_seconds * 1000)
+    )
+    _wait_for_api(
+        "rendered WebUI eD2K disconnect",
+        options.network_timeout_seconds,
+        disconnected_server,
+    )
+    kad_after_server_disconnect = api_data(base_url, "kad", api_key)
+    server_disconnect_preserved_kad = bool(
+        isinstance(kad_after_server_disconnect, dict)
+        and kad_after_server_disconnect.get("running")
+        and kad_after_server_disconnect.get("connected")
+    )
+    servers_panel.locator(".section-title").get_by_role(
+        "button", name="Connect", exact=True
+    ).click()
+    reconnected_server_status = _wait_for_api(
+        "rendered WebUI eD2K reconnect",
+        options.network_timeout_seconds,
+        connected_server,
+    )
+    reconnected_server_stats = reconnected_server_status.get("stats", {})
+
+    page.get_by_role("button", name="Kad", exact=True).click()
     kad_panel.get_by_role("button", name="Stop", exact=True).click()
-    page.get_by_text("Kad stopped", exact=True).wait_for(
+    page.get_by_text("Kad stopped; the server connection remains available", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
     )
     try:
@@ -240,6 +238,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         )
     except RuntimeError:
         kad_stop = None
+    server_after_kad_stop = connected_server()
+    kad_stop_preserved_server = server_after_kad_stop is not None
     kad_panel.get_by_role("button", name="Start", exact=True).click()
     reconnected_kad_status = _wait_for_api(
         "rendered WebUI Kad reconnect",
@@ -248,6 +248,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     )
 
     search_results: list[dict[str, Any]] = []
+    transfer_triggered = False
     for method in ("automatic", "server", "kad"):
         page.get_by_role("button", name="Search", exact=True).click()
         search_panel = page.locator("section.panel").filter(
@@ -261,6 +262,12 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         }
         search_panel.get_by_placeholder("Search query").fill(options.search_term)
         search_panel.locator("select").nth(0).select_option(method)
+        if search_panel.get_by_text("Advanced search filters", exact=True).count():
+            details = search_panel.locator("details.search-filters")
+            if not details.evaluate("element => element.open"):
+                search_panel.get_by_text("Advanced search filters", exact=True).click()
+        search_panel.get_by_placeholder("Extension").fill("pdf")
+        search_panel.get_by_placeholder("Maximum bytes").fill(str(options.transfer_size))
         search_panel.get_by_role("button", name="Start", exact=True).click()
         page.get_by_text("Search started", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
@@ -296,30 +303,44 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             options.network_timeout_seconds,
             completed_search,
         )
+        rows = completed.get("items", completed.get("results", []))
+        if not isinstance(rows, list):
+            rows = []
+        exact_result = next(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and str(row.get("hash") or "").lower() == options.transfer_hash.lower()
+                and str(row.get("name") or "") == options.transfer_name
+                and row.get("sizeBytes") == options.transfer_size
+            ),
+            None,
+        )
+        exact_allowlisted_result = exact_result is not None
+        if exact_allowlisted_result and not transfer_triggered:
+            result_row = search_panel.locator("tbody tr").filter(has_text=options.transfer_name).first
+            result_row.get_by_role("button", name="Download", exact=True).click()
+            page.get_by_text("Download queued", exact=True).wait_for(
+                timeout=int(options.network_timeout_seconds * 1000)
+            )
+            transfer_triggered = True
         search_results.append(
             {
                 "method": method,
                 "status": completed.get("status"),
                 "resultCount": int(completed.get("total") or 0),
+                "pdfFilter": True,
+                "maxBytesFilter": options.transfer_size,
+                "exactAllowlistedResult": exact_allowlisted_result,
             }
         )
 
-    encoded_name = quote(options.transfer_name, safe="")
-    ed2k_link = (
-        f"ed2k://|file|{encoded_name}|{options.transfer_size}|"
-        f"{options.transfer_hash.upper()}|/"
-    )
+    if not transfer_triggered:
+        raise RuntimeError("the exact allowlisted PDF was not found in rendered search results")
     page.get_by_role("button", name="Transfers", exact=True).click()
     transfer_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Transfers", exact=True)
-    )
-    transfer_panel.get_by_placeholder("One eD2K link per line").fill(ed2k_link)
-    paused = transfer_panel.get_by_role("checkbox", name="Paused")
-    if paused.is_checked():
-        paused.uncheck()
-    transfer_panel.get_by_role("button", name="Add links", exact=True).click()
-    page.get_by_text("Transfers queued", exact=True).wait_for(
-        timeout=int(options.network_timeout_seconds * 1000)
     )
 
     def active_transfer() -> dict[str, Any] | None:
@@ -331,9 +352,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         if not isinstance(value, dict):
             return None
         completed_bytes = int(value.get("completedBytes") or 0)
-        source_count = int(value.get("sources") or 0)
         transferring = int(value.get("sourcesTransferring") or 0)
-        return value if completed_bytes > 0 or source_count > 0 or transferring > 0 else None
+        return value if completed_bytes > 0 or transferring > 0 else None
 
     transfer_activity_observed = True
     try:
@@ -370,18 +390,22 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer = _wait_for_api(
             "rendered WebUI transfer quiescence after Stop",
             min(15.0, options.network_timeout_seconds),
-            lambda: (lambda value: value if isinstance(value, dict) and value.get("state") in {"stopped", "paused"} else None)(
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("stopped") is True else None)(
                 api_data(base_url, f"transfers/{options.transfer_hash.lower()}", api_key)
             ),
         )
         transfer_stop_state = str(transfer.get("state") or "unknown")
-        stopped_after_observation = transfer_stop_state == "stopped"
+        stopped_after_observation = transfer.get("stopped") is True
     kad_disconnect_verified = kad_stop is not None
     failures = []
     if baseline_kad_stop is None:
         failures.append("kad-baseline-stop")
     if not kad_disconnect_verified:
         failures.append("kad-disconnect")
+    if not server_disconnect_preserved_kad:
+        failures.append("server-disconnect-preserved-kad")
+    if not kad_stop_preserved_server:
+        failures.append("kad-stop-preserved-server")
     if not transfer_activity_observed:
         failures.append("transfer-network-activity")
     if not options.complete_transfer and not stopped_after_observation:
@@ -397,6 +421,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "serverCount": len(server_list.get("items", [])),
             "initialHighId": bool(initial_server_stats.get("ed2kHighId")),
             "reconnectedHighId": bool(reconnected_server_stats.get("ed2kHighId")),
+            "disconnectPreservedKad": server_disconnect_preserved_kad,
         },
         "kad": {
             "running": bool(reconnected_kad_status.get("running")),
@@ -405,6 +430,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "disconnectVerified": kad_disconnect_verified,
             "reconnectVerified": kad_disconnect_verified
             and bool(reconnected_kad_status.get("connected")),
+            "stopPreservedServer": kad_stop_preserved_server,
             "initialContactCount": int(kad_status.get("contactCount") or 0),
             "reconnectedContactCount": int(reconnected_kad_status.get("contactCount") or 0),
             "importSucceeded": True,
@@ -412,6 +438,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         "searches": search_results,
         "transfer": {
             "triggered": True,
+            "triggeredFromRenderedSearchResult": transfer_triggered,
             "networkActivityObserved": transfer_activity_observed,
             "sourceCount": int(transfer.get("sources") or 0),
             "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
@@ -421,7 +448,54 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "stopRequested": not options.complete_transfer,
             "finalState": transfer_stop_state,
             "stoppedAfterObservation": stopped_after_observation,
+            "stoppedFlag": bool(transfer.get("stopped")),
         },
+        "nat": _consumer_nat_status(base_url, api_key),
+    }
+
+
+def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
+    value = api_data(base_url, "nat", api_key)
+    if not isinstance(value, dict):
+        return {"enabled": False, "gatewayDiscovered": False, "mappingCount": 0}
+    mappings = value.get("mappings", [])
+    return {
+        "enabled": bool(value.get("enabled")),
+        "gatewayDiscovered": bool(value.get("gatewayDiscovered")),
+        "mappingCount": len(mappings) if isinstance(mappings, list) else 0,
+        "backendPresent": bool(value.get("backend")),
+        "lastErrorPresent": bool(value.get("lastError")),
+    }
+
+
+def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, Any]:
+    """Enable best-effort NAT mapping through the rendered Settings form."""
+
+    page.get_by_role("button", name="Settings", exact=True).click(
+        timeout=int(timeout_seconds * 1000)
+    )
+    panel = page.locator("section.panel").filter(
+        has=page.get_by_role("heading", name="Settings", exact=True)
+    )
+    advanced = panel.get_by_label(re.compile("Advanced"))
+    if not advanced.is_checked():
+        advanced.check()
+    nat_enabled = panel.get_by_label("NAT", exact=True)
+    if not nat_enabled.is_checked():
+        nat_enabled.check()
+    require_initial = panel.get_by_label("Require initial NAT mapping", exact=True)
+    if require_initial.is_checked():
+        require_initial.uncheck()
+    panel.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text(
+        "Settings saved; restart daemon for bind, port, NAT, VPN, and filter changes",
+        exact=True,
+    ).wait_for(timeout=int(timeout_seconds * 1000))
+    return {
+        "enabled": True,
+        "requireInitialMapping": False,
+        "restartRequired": True,
+        "configuredThroughRenderedWebui": True,
     }
 
 
@@ -635,6 +709,7 @@ def run_webui_live_proof(
     navigation_only: bool = False,
     verify_stale_key_recovery: bool = False,
     consumer_workflow: ConsumerNetworkWorkflow | None = None,
+    configure_best_effort_upnp: bool = False,
     shutdown_after_proof: bool = False,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
@@ -655,6 +730,7 @@ def run_webui_live_proof(
         "navigationOnly": navigation_only,
         "verifyStaleKeyRecovery": verify_stale_key_recovery,
         "consumerWorkflow": consumer_workflow is not None,
+        "configureBestEffortUpnp": configure_best_effort_upnp,
         "shutdownAfterProof": shutdown_after_proof,
         "tabsExpected": list(TAB_LABELS),
         "checks": {},
@@ -770,6 +846,12 @@ def run_webui_live_proof(
                     "api": recorder.snapshot(),
                     "ok": [row["label"] for row in visited_tabs] == list(TAB_LABELS),
                 }
+
+                if configure_best_effort_upnp:
+                    report["checks"]["upnpConfiguration"] = _configure_best_effort_upnp(
+                        page,
+                        timeout_seconds=timeout_seconds,
+                    )
 
                 if consumer_workflow is not None:
                     workflow_result = _consumer_network_actions(

@@ -25,8 +25,8 @@ from .rust_webui_live_proof import (
     sanitize_report_text,
 )
 
-DEFAULT_MAX_TRANSFER_BYTES = 4 * 1024 * 1024 * 1024
-DEFAULT_MAX_COMPLETION_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_TRANSFER_BYTES = 5 * 1024 * 1024 - 1
+DEFAULT_MAX_COMPLETION_BYTES = DEFAULT_MAX_TRANSFER_BYTES
 DEFAULT_NETWORK_TIMEOUT_SECONDS = 240.0
 DEFAULT_TRANSFER_TIMEOUT_SECONDS = 120.0
 REST_PORT = 4711
@@ -103,7 +103,7 @@ def _candidate_rows(payload: dict[str, Any], max_download_bytes: int) -> list[di
         suffix = Path(name).suffix.lower()
         if (
             Path(name).name != name
-            or suffix not in {".pdf", ".iso"}
+            or suffix != ".pdf"
             or not isinstance(size, int)
             or isinstance(size, bool)
             or not 0 < size <= max_download_bytes
@@ -132,7 +132,7 @@ def load_consumer_transfer(inputs_path: Path, max_transfer_bytes: int) -> dict[s
     candidates = _candidate_rows(payload, max_transfer_bytes)
     if not candidates:
         raise RuntimeError(
-            "consumer live proof requires an approved PDF/ISO transfer no larger than "
+            "consumer live proof requires an approved PDF smaller than 5 MiB and no larger than "
             f"{max_transfer_bytes} bytes with exact eD2K hash, size, and SHA-256"
         )
     return candidates[0]
@@ -377,6 +377,8 @@ def run_consumer_live(
         or transfer_timeout_seconds <= 0
     ):
         raise RuntimeError("consumer live proof bounds must be positive")
+    if max_transfer_bytes > DEFAULT_MAX_TRANSFER_BYTES:
+        raise RuntimeError("consumer live proof requires a PDF strictly smaller than 5 MiB")
     manifest = verify_release_zip(release_zip)
     transfer = load_consumer_transfer(inputs_path, max_transfer_bytes)
     if complete_transfer and int(transfer["size"]) > max_completion_bytes:
@@ -430,10 +432,10 @@ def run_consumer_live(
         "download": {
             "approved": True,
             "mode": "complete" if complete_transfer else "trigger-observe-stop",
+            "pdfOnly": True,
+            "strictLessThan5MiB": True,
             "maxTransferBytes": max_transfer_bytes,
             "maxCompletionBytes": max_completion_bytes,
-            "expectedBytes": int(transfer["size"]),
-            "suffix": str(transfer["suffix"]),
         },
         "checks": {},
     }
@@ -460,6 +462,49 @@ def run_consumer_live(
             "tcpPortClaimed": _port_is_claimed(ED2K_PORT),
             "udpPortClaimed": _port_is_claimed(KAD_PORT, udp=True),
         }
+        upnp_setup = run_webui_live_proof(
+            base_url=base_url,
+            api_key=api_key,
+            report_path=report_dir / "first-run-upnp-webui.json",
+            steady_seconds=3.0,
+            tab_wait_seconds=0.4,
+            timeout_seconds=max(60.0, network_timeout_seconds),
+            max_main_thread_busy_ratio=0.25,
+            navigation_only=True,
+            verify_stale_key_recovery=True,
+            configure_best_effort_upnp=True,
+            shutdown_after_proof=True,
+        )
+        report["checks"]["upnpSetupWebui"] = upnp_setup
+        if upnp_setup.get("status") != "passed":
+            raise RuntimeError("first-run rendered UPnP setup failed")
+        if not upnp_setup.get("checks", {}).get("shutdown", {}).get("ok"):
+            raise RuntimeError("UPnP setup proof did not request package shutdown")
+        _wait_for_clean_exit(process)
+        process = None
+        if log_handle is not None:
+            log_handle.close()
+            log_handle = None
+
+        process, log_handle = _start_daemon(
+            executable,
+            local_app_data=local_app_data,
+            log_path=log_path,
+        )
+        restarted_api_key = _wait_for_profile(settings_path, process, log_path)
+        if restarted_api_key != api_key:
+            raise RuntimeError("default-profile API key changed after UPnP setup restart")
+        _wait_for_rest(base_url, api_key, process, log_path)
+        restarted_settings = api_data(base_url, "app/settings", api_key)
+        nat_settings = restarted_settings.get("nat", {}) if isinstance(restarted_settings, dict) else {}
+        if nat_settings.get("enabled") is not True or nat_settings.get("requireInitialMapping") is not False:
+            raise RuntimeError("best-effort UPnP settings did not persist across restart")
+        report["checks"]["upnpRestart"] = {
+            "apiKeyStable": True,
+            "enabled": True,
+            "requireInitialMapping": False,
+        }
+
         workflow = ConsumerNetworkWorkflow(
             search_term=search_term,
             transfer_name=str(transfer["name"]),
@@ -469,41 +514,43 @@ def run_consumer_live(
             transfer_timeout_seconds=transfer_timeout_seconds,
             complete_transfer=complete_transfer,
         )
-        first_proof = run_webui_live_proof(
+        network_proof = run_webui_live_proof(
             base_url=base_url,
             api_key=api_key,
-            report_path=report_dir / "first-run-webui.json",
+            report_path=report_dir / "network-workflow-webui.json",
             steady_seconds=3.0,
             tab_wait_seconds=0.4,
             timeout_seconds=max(60.0, network_timeout_seconds),
             max_main_thread_busy_ratio=0.25,
             navigation_only=False,
-            verify_stale_key_recovery=True,
+            verify_stale_key_recovery=False,
             consumer_workflow=workflow,
             shutdown_after_proof=True,
         )
-        report["checks"]["firstRunWebui"] = first_proof
+        report["checks"]["networkWorkflowWebui"] = network_proof
         shutdown_requested = bool(
-            first_proof.get("checks", {}).get("shutdown", {}).get("ok")
+            network_proof.get("checks", {}).get("shutdown", {}).get("ok")
         )
         if shutdown_requested:
             try:
                 _wait_for_clean_exit(process)
-                report["checks"]["firstCleanShutdown"] = True
+                report["checks"]["networkCleanShutdown"] = True
             except RuntimeError:
-                report["checks"]["firstCleanShutdown"] = False
+                report["checks"]["networkCleanShutdown"] = False
                 _stop_process(process)
             process = None
             if log_handle is not None:
                 log_handle.close()
                 log_handle = None
-        if first_proof.get("status") != "passed":
-            raise RuntimeError("first-run rendered consumer workflow failed")
+        if network_proof.get("status") != "passed":
+            raise RuntimeError("rendered consumer network workflow failed")
         if not shutdown_requested:
             raise RuntimeError("first-run WebUI proof did not request package shutdown")
-        if not report["checks"]["firstCleanShutdown"]:
-            raise RuntimeError("hosted package did not exit after first WebUI shutdown")
+        if not report["checks"]["networkCleanShutdown"]:
+            raise RuntimeError("hosted package did not exit after network WebUI shutdown")
 
+        workflow_check = network_proof.get("checks", {}).get("consumerNetworkWorkflow", {})
+        transfer_check = workflow_check.get("transfer", {}) if isinstance(workflow_check, dict) else {}
         if complete_transfer:
             delivered = incoming_dir / str(transfer["name"])
             if (
@@ -513,16 +560,16 @@ def run_consumer_live(
             ):
                 raise RuntimeError("completed consumer download failed exact size/SHA-256 verification")
             report["checks"]["download"] = {
-                "triggered": True,
+                "triggered": bool(transfer_check.get("triggeredFromRenderedSearchResult")),
                 "delivered": True,
                 "sizeVerified": True,
                 "sha256Verified": True,
             }
         else:
             report["checks"]["download"] = {
-                "triggered": True,
-                "networkActivityObserved": True,
-                "stoppedAfterObservation": True,
+                "triggered": bool(transfer_check.get("triggeredFromRenderedSearchResult")),
+                "networkActivityObserved": bool(transfer_check.get("networkActivityObserved")),
+                "stoppedAfterObservation": bool(transfer_check.get("stoppedFlag")),
             }
 
         process, log_handle = _start_daemon(
@@ -561,15 +608,19 @@ def run_consumer_live(
         _wait_for_clean_exit(process)
         process = None
         report["checks"]["cleanShutdown"] = {
-            "first": bool(report["checks"]["firstCleanShutdown"]),
-            "second": True,
+            "upnpSetup": True,
+            "networkWorkflow": bool(report["checks"]["networkCleanShutdown"]),
+            "persistence": True,
         }
         report["status"] = "passed"
     except Exception as exc:  # noqa: BLE001 - retain bounded failure evidence
         report["status"] = "failed"
         report["error"] = {
             "type": type(exc).__name__,
-            "message": sanitize_report_text(str(exc) or repr(exc)),
+            "message": sanitize_report_text(
+                str(exc) or repr(exc),
+                (search_term, str(transfer.get("name") or ""), str(transfer.get("hash") or "")),
+            ),
         }
     finally:
         if process is not None:

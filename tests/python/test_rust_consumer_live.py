@@ -24,7 +24,7 @@ def transfer_row(*, name: str, size: int, digit: str) -> dict[str, object]:
     }
 
 
-def test_load_consumer_transfer_selects_smallest_exact_pdf_or_iso(tmp_path: Path) -> None:
+def test_load_consumer_transfer_selects_smallest_exact_pdf_and_rejects_iso(tmp_path: Path) -> None:
     inputs = tmp_path / "live-wire-inputs.local.json"
     write_inputs(
         inputs,
@@ -46,7 +46,7 @@ def test_load_consumer_transfer_selects_smallest_exact_pdf_or_iso(tmp_path: Path
     }
 
 
-def test_load_consumer_transfer_requires_bounded_allowlist_entry(tmp_path: Path) -> None:
+def test_load_consumer_transfer_requires_bounded_pdf_allowlist_entry(tmp_path: Path) -> None:
     inputs = tmp_path / "live-wire-inputs.local.json"
     write_inputs(inputs, [transfer_row(name="too-large.iso", size=4097, digit="a")])
 
@@ -70,7 +70,8 @@ def test_parser_requires_explicit_runtime_search_term() -> None:
 
     assert args.search_term == "linux"
     assert args.complete_transfer is False
-    assert args.max_transfer_bytes == 4 * 1024 * 1024 * 1024
+    assert args.max_transfer_bytes == 5 * 1024 * 1024 - 1
+    assert args.max_completion_bytes == 5 * 1024 * 1024 - 1
 
 
 def test_verify_extracted_payload_rejects_extra_files(tmp_path: Path) -> None:

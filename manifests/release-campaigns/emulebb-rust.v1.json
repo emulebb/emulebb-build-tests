@@ -59,6 +59,22 @@
               "description": "Focused pytest drives the emulebb-rust behavioral shared-directory integration tests (crates/emulebb-core/tests: long_path_shared_dir, shared_dir_monitor_e2e) through Cargo under the workspace output-root target dir, proving scoped Windows long-path (>260 char) scan/ingest/share for shared trees plus live filesystem-monitor auto-share on file drop and auto-remove on delete."
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.rust.webui.e2e.v1",
+          "title": "Rust WebUI stateful end-to-end gate",
+          "phase": "preflight",
+          "flowCategory": "web-ui",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test rust-webui",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "The locked WebUI suite runs unit tests, stateful Playwright coverage, type checking, and a production build from an external output-root stage. The browser scenario imports server.met and nodes.dat, starts Kad, disconnects and reconnects the server independently, searches for linux with a PDF-only sub-5-MiB filter, triggers the rendered result download, observes transfer state, stops it, and then stops Kad without dropping the server."
+            }
+          ]
         }
       ]
     },
@@ -165,6 +181,28 @@
               "description": "Host-level converged live-wire run binds REST/control to X_LOCAL_IP, binds P2P through hide.me, uses the persisted MFC and Rust profiles from live-wire inputs, connects both clients to 45.82.80.155:5687, bootstraps Kad from the selected nodes.dat source, and records synchronized REST, server, Kad, upload, transfer, and diagnostic parity checkpoints under EMULEBB_WORKSPACE_OUTPUT_ROOT."
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.rust.webui.consumer-live.v1",
+          "title": "Rust packaged WebUI consumer live proof",
+          "phase": "live-wire-release",
+          "flowCategory": "live-wire",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/rust-consumer-live.py --inputs live-wire-inputs.local.json --release-zip ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/release/rust-v0.1.0-beta.1/emulebb-rust-v0.1.0-beta.1-windows-x64.zip --search-term linux --max-transfer-bytes 5242879 --max-completion-bytes 5242879",
+          "localInputs": [
+            "live-wire-inputs.local.json contains an operator-approved exact PDF candidate smaller than 5 MiB with eD2K hash, size, and SHA-256",
+            "the exact unsigned Windows x64 beta ZIP and sibling manifest already exist under the canonical output release root",
+            "runtime search text is supplied explicitly and is redacted from retained evidence",
+            "TCP 4711 and 4662 plus UDP 4672 are available for the isolated default-profile proof"
+          ],
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "A fresh extracted release package is driven only through its rendered WebUI. The proof enables best-effort UPnP through Settings, restarts with the same default profile, imports public server.met and nodes.dat while Kad is stopped, proves server and Kad disconnect/reconnect independence, runs automatic/server/Kad searches for the runtime safe term with exact PDF and size filters, clicks the allowlisted rendered result, requires real bytes or an actively transferring source, stops the transfer with its stopped flag set, restarts again, and verifies persisted search, transfer, settings, and API-key state."
+            }
+          ]
         }
       ]
     },
@@ -255,6 +293,12 @@
       ]
     },
     {
+      "id": "emulebb-rust-webui-e2e",
+      "coveredBy": [
+        "emulebb.flow.rust.webui.e2e.v1"
+      ]
+    },
+    {
       "id": "emulebb-rust-local-ed2k-protocol",
       "coveredBy": [
         "emulebb.flow.rust.local-ed2k.search-download.v1",
@@ -277,7 +321,14 @@
     {
       "id": "emulebb-rust-live-wire-release",
       "coveredBy": [
-        "emulebb.flow.rust.live-wire.hideme.v1"
+        "emulebb.flow.rust.live-wire.hideme.v1",
+        "emulebb.flow.rust.webui.consumer-live.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-webui-consumer-live",
+      "coveredBy": [
+        "emulebb.flow.rust.webui.consumer-live.v1"
       ]
     }
   ]
