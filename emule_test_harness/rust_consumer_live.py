@@ -614,7 +614,7 @@ def run_consumer_live(
             tab_wait_seconds=0.4,
             timeout_seconds=60.0,
             max_main_thread_busy_ratio=0.25,
-            navigation_only=False,
+            navigation_only=True,
             verify_stale_key_recovery=False,
             shutdown_after_proof=True,
         )
