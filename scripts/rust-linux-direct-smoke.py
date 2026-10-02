@@ -741,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
                     output_handle=handle,
                     env=launch_env,
                 )
+                if monitor is not None:
+                    monitor.process = process
                 wait_until("Rust REST restart", 60.0, lambda: status(base_url) or None)
                 request_nat_matrix_trigger_connect(base_url)
 
