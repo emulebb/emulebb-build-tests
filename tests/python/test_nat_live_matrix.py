@@ -83,3 +83,45 @@ def test_unsupported_result_fails_when_fallback_attempt_is_missing() -> None:
 
     assert result["passed"] is False
     assert "upnp_miniupnpc" in result["failures"][0]
+
+
+def test_run_matrix_waits_for_each_initial_reconcile(monkeypatch) -> None:
+    cases = nat_live_matrix.matrix_cases()
+    current = -1
+    reads = [0, 0, 0, 0]
+    latest_patch: dict[str, object] = {}
+
+    def apply_settings(payload: dict[str, object]) -> dict[str, object]:
+        latest_patch.clear()
+        latest_patch.update(payload)
+        return {"data": payload}
+
+    def restart_daemon() -> None:
+        nonlocal current
+        current += 1
+
+    def read_nat_status() -> dict[str, object]:
+        reads[current] += 1
+        case = cases[current]
+        if reads[current] == 1:
+            return status(pcpServerIp=case["pcpServerIp"])
+        attempts = "; ".join(
+            f"{backend}: unavailable" for backend in case["attemptedBackends"]
+        )
+        return status(
+            pcpServerIp=case["pcpServerIp"],
+            lastRefreshUnixSecs=1,
+            lastError=attempts,
+        )
+
+    monkeypatch.setattr(nat_live_matrix.time, "sleep", lambda _seconds: None)
+    result = nat_live_matrix.run_matrix(
+        apply_settings=apply_settings,
+        restart_daemon=restart_daemon,
+        read_nat_status=read_nat_status,
+        daemon_alive=lambda: True,
+    )
+
+    assert result["passed"] is True
+    assert reads == [2, 2, 2, 2]
+    assert latest_patch["ed2k"] == {"obfuscationEnabled": False}

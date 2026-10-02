@@ -166,10 +166,18 @@ def run_matrix(
         if nat.get("pcpServerIp") != case["pcpServerIp"]:
             raise RuntimeError("settings update did not retain the PCP server override")
         restart_daemon()
+        status_payload = read_nat_status()
+        while (
+            _response_data(status_payload).get("lastRefreshUnixSecs") is None
+            and daemon_alive()
+            and time.monotonic() - started <= maximum_case_seconds
+        ):
+            time.sleep(0.25)
+            status_payload = read_nat_status()
         results.append(
             evaluate_case(
                 case,
-                read_nat_status(),
+                status_payload,
                 duration_seconds=time.monotonic() - started,
                 daemon_alive=daemon_alive(),
                 maximum_seconds=maximum_case_seconds,

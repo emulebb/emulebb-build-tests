@@ -695,6 +695,7 @@ def main(argv: list[str] | None = None) -> int:
                     env=launch_env,
                 )
                 wait_until("Rust REST restart", 60.0, lambda: status(base_url) or None)
+                request_server_connect(base_url)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
                 apply_settings=apply_nat_settings,
