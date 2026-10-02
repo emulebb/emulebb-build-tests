@@ -83,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
             f"CARGO_TARGET_DIR={translated['cargoTargetDir']}",
             f"APPIMAGETOOL={translated['appimagetool']}",
             "APPIMAGE_EXTRACT_AND_RUN=1",
+            # WSL Git otherwise treats the Windows CRLF worktrees as dirty.
+            # Pass the operator's Windows checkout semantics without mutating
+            # either the Windows or WSL Git configuration.
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=core.autocrlf",
+            "GIT_CONFIG_VALUE_0=true",
             "python3",
             "-m",
             "emule_workspace",

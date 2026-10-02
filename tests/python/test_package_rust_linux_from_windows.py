@@ -58,6 +58,8 @@ def test_launcher_translates_inherited_operator_state(monkeypatch, tmp_path: Pat
     assert "EMULEBB_WORKSPACE_ROOT=/wsl/workspace" in command
     assert "EMULEBB_WORKSPACE_OUTPUT_ROOT=/wsl/output" in command
     assert "CARGO_TARGET_DIR=/wsl/target-wsl" in command
+    assert "GIT_CONFIG_KEY_0=core.autocrlf" in command
+    assert "GIT_CONFIG_VALUE_0=true" in command
     assert "--skip-build" in command
     reports = list((output / "reports" / "rust-linux-package-launch").glob("*/wsl-boundary.json"))
     assert len(reports) == 1
