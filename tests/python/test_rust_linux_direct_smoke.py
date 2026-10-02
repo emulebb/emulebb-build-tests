@@ -105,6 +105,47 @@ def test_server_connect_request_outlives_initial_upnp_reconcile(monkeypatch) -> 
     assert module.SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS > 20.0
 
 
+def test_nat_matrix_uses_non_public_explicit_server(monkeypatch) -> None:
+    module = load_module()
+    retry_calls = []
+    post_calls = []
+    monkeypatch.setattr(
+        module,
+        "retry_http_json",
+        lambda *args, **kwargs: retry_calls.append((args, kwargs)) or {},
+    )
+    monkeypatch.setattr(
+        module,
+        "post_json",
+        lambda *args, **kwargs: post_calls.append((args, kwargs)) or {},
+    )
+
+    module.add_nat_matrix_trigger_server("http://192.0.2.2:4731")
+    module.request_nat_matrix_trigger_connect("http://192.0.2.2:4731")
+    module.remove_nat_matrix_trigger_server("http://192.0.2.2:4731")
+
+    assert retry_calls[0][0][3] == "/api/v1/servers"
+    assert retry_calls[0][1]["body"] == {
+        "address": "192.0.2.1",
+        "port": 9,
+        "name": "NAT matrix trigger",
+        "static": False,
+        "connect": False,
+    }
+    assert post_calls == [
+        (
+            (
+                "http://192.0.2.2:4731",
+                "/api/v1/servers/192.0.2.1:9/operations/connect",
+                {},
+            ),
+            {"timeout_seconds": module.SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS},
+        )
+    ]
+    assert retry_calls[1][0][3] == "/api/v1/servers/192.0.2.1:9"
+    assert retry_calls[1][1]["method"] == "DELETE"
+
+
 def test_sha256_file_hashes_completed_payload(tmp_path: Path) -> None:
     module = load_module()
     payload = tmp_path / "manual.pdf"

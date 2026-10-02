@@ -47,6 +47,9 @@ ED2K_PORT = 41662
 KAD_PORT = 41672
 CONNECT_COOLDOWN_SECONDS = 300.0
 SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS = 60.0
+NAT_MATRIX_TRIGGER_ADDRESS = "192.0.2.1"
+NAT_MATRIX_TRIGGER_PORT = 9
+NAT_MATRIX_TRIGGER_ENDPOINT = f"{NAT_MATRIX_TRIGGER_ADDRESS}:{NAT_MATRIX_TRIGGER_PORT}"
 ALLOWED_TRANSFER_SUFFIXES = {".iso", ".pdf"}
 
 
@@ -383,6 +386,48 @@ def request_server_connect(base_url: str) -> dict[str, Any]:
     )
 
 
+def add_nat_matrix_trigger_server(base_url: str) -> None:
+    """Adds a non-public server whose connect operation starts the NAT runtime."""
+
+    retry_http_json(
+        "NAT matrix trigger server add",
+        2,
+        base_url,
+        "/api/v1/servers",
+        api_key=API_KEY,
+        method="POST",
+        body={
+            "address": NAT_MATRIX_TRIGGER_ADDRESS,
+            "port": NAT_MATRIX_TRIGGER_PORT,
+            "name": "NAT matrix trigger",
+            "static": False,
+            "connect": False,
+        },
+    )
+
+
+def request_nat_matrix_trigger_connect(base_url: str) -> dict[str, Any]:
+    # TEST-NET-1 cannot contact a public eD2K service. The explicit connect
+    # still starts the client runtime and its startup NAT reconciliation.
+    return post_json(
+        base_url,
+        f"/api/v1/servers/{NAT_MATRIX_TRIGGER_ENDPOINT}/operations/connect",
+        {},
+        timeout_seconds=SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+def remove_nat_matrix_trigger_server(base_url: str) -> None:
+    retry_http_json(
+        "NAT matrix trigger server remove",
+        2,
+        base_url,
+        f"/api/v1/servers/{NAT_MATRIX_TRIGGER_ENDPOINT}",
+        api_key=API_KEY,
+        method="DELETE",
+    )
+
+
 def add_allowlisted_transfer(base_url: str, row: dict[str, Any]) -> None:
     # Stock MFC EncodeUrlUtf8 percent-encodes spaces and UTF-8 file-name bytes.
     encoded_name = urllib.parse.quote(str(row["name"]), safe="")
@@ -666,6 +711,8 @@ def main(argv: list[str] | None = None) -> int:
         wait_until("Rust REST ready", 60.0, lambda: status(base_url) or None)
         report["webuiReady"] = webui_ready(base_url)
         if args.nat_matrix:
+            add_nat_matrix_trigger_server(base_url)
+
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, Any]:
                 return retry_http_json(
                     "NAT matrix settings",
@@ -695,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
                     env=launch_env,
                 )
                 wait_until("Rust REST restart", 60.0, lambda: status(base_url) or None)
-                request_server_connect(base_url)
+                request_nat_matrix_trigger_connect(base_url)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
                 apply_settings=apply_nat_settings,
@@ -705,6 +752,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if not report["natMatrix"]["passed"]:
                 raise RuntimeError("one or more capability-aware NAT matrix cases failed")
+            remove_nat_matrix_trigger_server(base_url)
         server_rows = api_rows(
             retry_http_json("imported servers", 2, base_url, "/api/v1/servers", api_key=API_KEY),
             "servers",
