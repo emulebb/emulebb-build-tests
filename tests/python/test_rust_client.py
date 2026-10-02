@@ -56,6 +56,32 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert "[ed2k]" not in text
     assert "runtimeDir" not in text
     assert metadata_path(profile_dir).is_file()
+    assert setting_value(profile_dir, "core", "autoConnect") is False
+    assert setting_value(profile_dir, "nat", "enabled") is False
+
+
+def test_write_rust_profile_can_preserve_consumer_auto_connect_default(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        auto_connect=None,
+        nat_enabled=None,
+    )
+
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        auto_connect = conn.execute(
+            "SELECT value_json FROM settings WHERE section = 'core' AND key = 'autoConnect'"
+        ).fetchone()
+        nat_enabled = conn.execute(
+            "SELECT value_json FROM settings WHERE section = 'nat' AND key = 'enabled'"
+        ).fetchone()
+    assert auto_connect is None
+    assert nat_enabled is None
 
 
 def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_path: Path) -> None:

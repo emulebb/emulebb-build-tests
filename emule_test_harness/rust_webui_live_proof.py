@@ -38,6 +38,22 @@ TAB_LABELS = (
     "Diagnostics",
     "Logs",
 )
+
+
+def _primary_nav_item(page, label: str):
+    nav_item = page.get_by_role("link", name=label, exact=True)
+    if nav_item.count() == 0:
+        # Compatibility with packages built before primary navigation became
+        # canonical history-routing links.
+        nav_item = page.get_by_role("button", name=label, exact=True)
+    return nav_item
+
+
+def _click_primary_nav(page, label: str, *, timeout_ms: int | None = None) -> None:
+    options = {} if timeout_ms is None else {"timeout": timeout_ms}
+    _primary_nav_item(page, label).click(**options)
+
+
 ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
 HASH_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
 FULL_PROGRESS_RE = re.compile(r"^100(?:\.0+)?%$")
@@ -235,7 +251,7 @@ def _sharing_publish_actions(
     baseline_status = api_data(base_url, "status", api_key)
     baseline_ed2k, baseline_kad = _publish_diagnostics(baseline_status)
 
-    page.get_by_role("button", name="Sharing", exact=True).click()
+    _click_primary_nav(page, "Sharing")
     sharing_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Shared Folders", exact=True)
     )
@@ -307,7 +323,7 @@ def _sharing_publish_actions(
         lambda: indexed_fixture(_integer_field(initial_catalog, "updatedAtMs")),
     )
 
-    page.get_by_role("button", name="Shared Files", exact=True).click()
+    _click_primary_nav(page, "Shared Files")
     shared_files_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Shared Files", exact=True)
     )
@@ -393,7 +409,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         page,
         timeout_seconds=options.network_timeout_seconds,
     )
-    page.get_by_role("button", name="Servers", exact=True).click()
+    _click_primary_nav(page, "Servers")
     servers_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Servers", exact=True)
     )
@@ -516,7 +532,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     server_status = connected_server() or server_status
     initial_server_stats = server_status.get("stats", {})
 
-    page.get_by_role("button", name="Kad", exact=True).click()
+    _click_primary_nav(page, "Kad")
     kad_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Kad", exact=True)
     )
@@ -536,7 +552,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         timeout=int(options.network_timeout_seconds * 1000)
     )
 
-    page.get_by_role("button", name="Servers", exact=True).click()
+    _click_primary_nav(page, "Servers")
     servers_panel.locator(".section-title").get_by_role(
         "button", name="Disconnect", exact=True
     ).click()
@@ -577,7 +593,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     )
     reconnected_server_stats = reconnected_server_status.get("stats", {})
 
-    page.get_by_role("button", name="Kad", exact=True).click()
+    _click_primary_nav(page, "Kad")
     kad_panel.get_by_role("button", name="Stop", exact=True).click()
     page.get_by_text("Kad stopped; the server connection remains available", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
@@ -625,7 +641,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     selected_from_exact_allowlist = False
     max_transfer_bytes = options.max_transfer_bytes or options.transfer_size
     for method in ("automatic", "server", "kad"):
-        page.get_by_role("button", name="Search", exact=True).click()
+        _click_primary_nav(page, "Search")
         search_panel = page.locator("section.panel").filter(
             has=page.get_by_role("heading", name="Search", exact=True)
         )
@@ -733,7 +749,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
     if not transfer_triggered:
         raise RuntimeError("no sourced PDF inside the strict size bound was found in rendered search results")
-    page.get_by_role("button", name="Transfers", exact=True).click()
+    _click_primary_nav(page, "Transfers")
     transfer_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Transfers", exact=True)
     )
@@ -958,9 +974,7 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
 def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict[str, Any]:
     """Prove fresh-profile auto-connect and best-effort UPnP in the rendered form."""
 
-    page.get_by_role("button", name="Settings", exact=True).click(
-        timeout=int(timeout_seconds * 1000)
-    )
+    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
     panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Settings", exact=True)
     )
@@ -1001,9 +1015,7 @@ def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict
 def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, Any]:
     """Enable best-effort NAT mapping through the rendered Settings form."""
 
-    page.get_by_role("button", name="Settings", exact=True).click(
-        timeout=int(timeout_seconds * 1000)
-    )
+    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
     panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Settings", exact=True)
     )
@@ -1297,7 +1309,7 @@ def run_webui_live_proof(
                     page.get_by_role("heading", name="Connect to the local daemon").wait_for(
                         timeout=int(timeout_seconds * 1000)
                     )
-                    if page.get_by_role("button", name="Overview", exact=True).count() != 0:
+                    if page.get_by_role("navigation", name="Primary views").count() != 0:
                         raise RuntimeError("Rust WebUI exposed protected navigation for a stale API key")
                     page.get_by_placeholder("X-API-Key").fill(api_key)
                     page.get_by_role("button", name="Connect", exact=True).click(
@@ -1370,7 +1382,7 @@ def run_webui_live_proof(
                 recorder.reset_api()
                 for label in TAB_LABELS:
                     before = recorder.total_api_requests
-                    page.get_by_role("button", name=label, exact=True).click(timeout=int(timeout_seconds * 1000))
+                    _click_primary_nav(page, label, timeout_ms=int(timeout_seconds * 1000))
                     page.wait_for_timeout(int(tab_wait_seconds * 1000))
                     visited_tabs.append(
                         {
@@ -1400,7 +1412,7 @@ def run_webui_live_proof(
                     report["checks"]["consumerNetworkWorkflow"] = workflow_result
                     consumer_workflow_failed = not bool(workflow_result.get("ok"))
 
-                page.get_by_role("button", name="Transfers", exact=True).click(timeout=int(timeout_seconds * 1000))
+                _click_primary_nav(page, "Transfers", timeout_ms=int(timeout_seconds * 1000))
                 page.wait_for_timeout(int(tab_wait_seconds * 1000))
                 transfer_dom = page.evaluate(
                     """() => {
@@ -1452,8 +1464,10 @@ def run_webui_live_proof(
                 assert_no_browser_diagnostics(diagnostics)
                 report["checks"]["browserDiagnostics"] = diagnostics
                 if shutdown_after_proof:
-                    page.get_by_role("button", name="Diagnostics", exact=True).click(
-                        timeout=int(timeout_seconds * 1000)
+                    _click_primary_nav(
+                        page,
+                        "Diagnostics",
+                        timeout_ms=int(timeout_seconds * 1000),
                     )
                     page.get_by_placeholder("Type SHUTDOWN").fill("SHUTDOWN")
                     with page.expect_response(

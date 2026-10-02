@@ -46,6 +46,7 @@ def write_rust_profile(
     rest_addr: str,
     rest_port: int,
     api_key: str,
+    auto_connect: bool | None = False,
     p2p_bind_ip: str | None = None,
     p2p_bind_interface: str | None = None,
     ed2k_port: int | None = None,
@@ -60,7 +61,7 @@ def write_rust_profile(
     enable_udp_reask: bool = False,
     publish_emule_rust_identity: bool = False,
     upload_active_slots: int | None = None,
-    nat_enabled: bool | None = None,
+    nat_enabled: bool | None = False,
     nat_require_initial_mapping: bool | None = None,
     replace_servers: bool = False,
     vpn_guard_mode: str = "off",
@@ -85,10 +86,18 @@ def write_rust_profile(
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(rust_repo, metadata_path)
+    core_settings: dict[str, object] = {}
+    if auto_connect is not None:
+        # Persisted harness profiles are deterministic and start networking only
+        # when their scenario asks for it. Consumer-default proofs opt in to the
+        # product's automatic first-run connection explicitly.
+        core_settings["autoConnect"] = auto_connect
     if local_only_discovery:
         # An empty nodes.dat suppresses first-run URL import, but the DHT still
         # has built-in public fallback contacts. ED2K-only lanes disable Kad.
-        rust_metadata.replace_settings_section(metadata_path, "core", {"networkKademlia": False})
+        core_settings["networkKademlia"] = False
+    if core_settings:
+        rust_metadata.replace_settings_section(metadata_path, "core", core_settings)
 
     lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
     settings_path.write_text("\n".join(lines), encoding="utf-8")

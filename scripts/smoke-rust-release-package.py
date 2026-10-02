@@ -47,6 +47,13 @@ PANEL_ROUTES = {
 }
 
 
+def _webui_asset_paths(html: str) -> list[str]:
+    """Return root-relative asset paths from Vite's relative or rooted output."""
+
+    assets = re.findall(r'(?:src|href)="((?:\./|/)?assets/[^"]+)"', html)
+    return ["/" + asset.removeprefix("./").removeprefix("/") for asset in assets]
+
+
 def _available_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
@@ -121,8 +128,8 @@ def _smoke_binary(
                     time.sleep(0.5)
             if WEBUI_TITLE not in html or '<div id="app"></div>' not in html:
                 raise RuntimeError("packaged WebUI index is incomplete")
-            assets = re.findall(r'(?:src|href)="(\.\/assets\/[^\"]+)"', html)
-            if not assets or not all(_request(base_url + "/" + asset.removeprefix("./")) for asset in assets):
+            assets = _webui_asset_paths(html)
+            if not assets or not all(_request(base_url + asset) for asset in assets):
                 raise RuntimeError("packaged WebUI assets are missing")
             data = status.get("data", status) if isinstance(status, dict) else None
             stats = data.get("stats") if isinstance(data, dict) else None
