@@ -14,11 +14,20 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import nat_live_matrix
 
 
 def command(*argv: str, timeout: int = 60, check: bool = True,
@@ -31,14 +40,23 @@ def docker(*argv: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
     return command("docker", *argv, **kwargs)
 
 
-def request_json(url: str, key: str, *, method: str = "GET") -> dict[str, object]:
+def request_json(
+    url: str,
+    key: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
     headers = {"X-API-Key": key}
     body = None
-    if method == "POST":
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(payload).encode("utf-8")
+    elif method == "POST":
         headers["Content-Type"] = "application/json"
         body = b"{}"
     request = urllib.request.Request(url, headers=headers, data=body, method=method)
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
 
 
@@ -98,6 +116,11 @@ def main() -> int:
     parser.add_argument("--capture-image", default="nicolaka/netshoot:v0.13")
     parser.add_argument("--expected-executable-sha256")
     parser.add_argument("--expected-gluetun-image")
+    parser.add_argument(
+        "--nat-matrix",
+        action="store_true",
+        help="Run the capability-aware PCP/NAT-PMP and MiniUPnPc matrix.",
+    )
     args = parser.parse_args()
     if not args.archive.is_file() or not args.compose.is_file():
         raise RuntimeError("the OCI archive and Compose file must exist")
@@ -203,6 +226,48 @@ def main() -> int:
         report["p2pInterfacePinned"] = True
         report["webuiAndRest"] = True
         api = "http://127.0.0.1:14711/api/v1"
+        if args.nat_matrix:
+            def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
+                return request_json(
+                    api + "/app/settings",
+                    api_key,
+                    method="PATCH",
+                    payload=payload,
+                )
+
+            def restart_for_nat() -> None:
+                command(*compose, "restart", "emulebb-rust", env=env, timeout=90)
+                restart_deadline = time.monotonic() + 120
+                while True:
+                    page = docker(
+                        "exec",
+                        rust,
+                        "curl",
+                        "--fail",
+                        "--silent",
+                        "--max-time",
+                        "3",
+                        "http://127.0.0.1:4711/",
+                        check=False,
+                    )
+                    if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
+                        return
+                    if time.monotonic() >= restart_deadline:
+                        raise RuntimeError("Rust WebUI did not restart for NAT matrix case")
+                    time.sleep(2)
+
+            report["natMatrix"] = nat_live_matrix.run_matrix(
+                apply_settings=apply_nat_settings,
+                restart_daemon=restart_for_nat,
+                read_nat_status=lambda: request_json(api + "/nat", api_key),
+                daemon_alive=lambda: docker(
+                    "inspect", "--format", "{{.State.Running}}", rust, check=False
+                ).stdout.strip()
+                == "true",
+            )
+            report["protocolObfuscationEnabled"] = False
+            if not report["natMatrix"]["passed"]:
+                raise RuntimeError("one or more capability-aware NAT matrix cases failed")
         report["networkStartupMode"] = "consumer-default-auto-connect"
         deadline = time.monotonic() + 180
         while True:

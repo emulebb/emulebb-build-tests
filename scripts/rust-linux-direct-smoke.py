@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.direct_safe_corpus import LINUX_PDF_TERMS, MAX_PDF_BYTES
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness import rust_client
+from emule_test_harness import nat_live_matrix, rust_client
 from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_profile,
@@ -310,6 +310,8 @@ def run_in_wsl(args: argparse.Namespace) -> int:
     )
     if args.enable_upnp:
         command.append("--enable-upnp")
+    if args.nat_matrix:
+        command.append("--nat-matrix")
     if args.complete_transfers:
         command.append("--complete-transfers")
     if args.require_diagnostics:
@@ -549,6 +551,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-stock-bytes", action="store_true", help="Require accepted bytes from a stock-identifying live peer.")
     parser.add_argument("--require-diagnostics", action="store_true", help="Use the diagnostics binary and require its packet dumps.")
     parser.add_argument("--enable-upnp", action="store_true", help="Require live UPnP discovery and TCP/UDP mappings.")
+    parser.add_argument(
+        "--nat-matrix",
+        action="store_true",
+        help="Run the capability-aware PCP/NAT-PMP and MiniUPnPc matrix.",
+    )
     parser.add_argument("--wsl-distribution")
     parser.add_argument("--native-windows", action="store_true", help="Use the staged Windows diagnostics daemon and direct host route instead of WSL.")
     parser.add_argument("--wsl-child", action="store_true", help=argparse.SUPPRESS)
@@ -617,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
         replace_servers=False,
         kad_bootstrap_min_routing_contacts=2,
         nat_enabled=args.enable_upnp,
-        nat_require_initial_mapping=args.enable_upnp,
+        nat_require_initial_mapping=args.enable_upnp and not args.nat_matrix,
         initial_shared_directory_reload=False,
         vpn_guard_mode="off",
     )
@@ -658,6 +665,45 @@ def main(argv: list[str] | None = None) -> int:
     try:
         wait_until("Rust REST ready", 60.0, lambda: status(base_url) or None)
         report["webuiReady"] = webui_ready(base_url)
+        if args.nat_matrix:
+            def apply_nat_settings(payload: dict[str, object]) -> dict[str, Any]:
+                return retry_http_json(
+                    "NAT matrix settings",
+                    2,
+                    base_url,
+                    "/api/v1/app/settings",
+                    api_key=API_KEY,
+                    method="PATCH",
+                    body=payload,
+                )
+
+            def restart_for_nat() -> None:
+                nonlocal process
+                post_json(
+                    base_url,
+                    "/api/v1/app/shutdown",
+                    {"confirmShutdown": True},
+                )
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired as error:
+                    raise RuntimeError("Rust daemon did not stop cleanly for NAT matrix") from error
+                process = rust_client.spawn_rust_daemon(
+                    executable,
+                    profile_dir,
+                    output_handle=handle,
+                    env=launch_env,
+                )
+                wait_until("Rust REST restart", 60.0, lambda: status(base_url) or None)
+
+            report["natMatrix"] = nat_live_matrix.run_matrix(
+                apply_settings=apply_nat_settings,
+                restart_daemon=restart_for_nat,
+                read_nat_status=lambda: nat_status(base_url),
+                daemon_alive=lambda: process.poll() is None,
+            )
+            if not report["natMatrix"]["passed"]:
+                raise RuntimeError("one or more capability-aware NAT matrix cases failed")
         server_rows = api_rows(
             retry_http_json("imported servers", 2, base_url, "/api/v1/servers", api_key=API_KEY),
             "servers",
@@ -763,7 +809,15 @@ def main(argv: list[str] | None = None) -> int:
         connectivity_passed = (
             report["webuiReady"]
             and report["ed2k"]["connected"]
-            and (not args.enable_upnp or (report["ed2k"]["highId"] and report["upnp"]["gatewayDiscovered"] and report["upnp"]["mappingCount"] >= 2))
+            and (
+                not args.enable_upnp
+                or args.nat_matrix
+                or (
+                    report["ed2k"]["highId"]
+                    and report["upnp"]["gatewayDiscovered"]
+                    and report["upnp"]["mappingCount"] >= 2
+                )
+            )
             and report["kad"]["running"]
             and report["kad"]["connected"]
             and report["kad"]["contactCount"] > 0

@@ -14,10 +14,19 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.request
 from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import nat_live_matrix
 
 
 REQUIRED_PRIVATE_FILES = (
@@ -336,6 +345,11 @@ def main() -> int:
         help="Drop inbound tun0 IP packets at or above this size after readiness",
     )
     parser.add_argument("--disable-protocol-obfuscation", action="store_true")
+    parser.add_argument(
+        "--nat-matrix",
+        action="store_true",
+        help="Run the capability-aware PCP/NAT-PMP and MiniUPnPc matrix.",
+    )
     args = parser.parse_args()
 
     if not args.archive.is_file() or not args.compose.is_file():
@@ -390,7 +404,9 @@ def main() -> int:
         "bindingMode": args.binding_mode,
         "searchMethods": args.methods,
         "searchRepeatCount": args.repeat_searches,
-        "protocolObfuscationRequested": not args.disable_protocol_obfuscation,
+        "protocolObfuscationRequested": not (
+            args.disable_protocol_obfuscation or args.nat_matrix
+        ),
     }
     if args.drop_inbound_packets_over is not None:
         report["inboundPacketDropThresholdBytes"] = args.drop_inbound_packets_over
@@ -500,7 +516,7 @@ def main() -> int:
         api_key = tomllib.loads(settings)["rest"]["apiKey"]
         api = "http://127.0.0.1:14712/api/v1"
         settings_patch: dict[str, object] = {}
-        if args.disable_protocol_obfuscation:
+        if args.disable_protocol_obfuscation or args.nat_matrix:
             settings_patch["ed2k"] = {"obfuscationEnabled": False}
         if args.binding_mode == "interface-ip":
             settings_patch["daemon"] = {
@@ -516,7 +532,7 @@ def main() -> int:
                     payload=settings_patch,
                 )
             )
-            if args.disable_protocol_obfuscation:
+            if args.disable_protocol_obfuscation or args.nat_matrix:
                 updated_ed2k = updated.get("ed2k", {})
                 if not isinstance(updated_ed2k, dict) or updated_ed2k.get("obfuscationEnabled") is not False:
                     raise RuntimeError("REST settings PATCH did not disable protocol obfuscation")
@@ -544,7 +560,7 @@ def main() -> int:
                     raise RuntimeError("Rust WebUI did not restart after settings update")
                 time.sleep(2)
             persisted = response_data(request_json(api + "/app/settings", api_key))
-            if args.disable_protocol_obfuscation:
+            if args.disable_protocol_obfuscation or args.nat_matrix:
                 persisted_ed2k = persisted.get("ed2k", {})
                 if not isinstance(persisted_ed2k, dict) or persisted_ed2k.get("obfuscationEnabled") is not False:
                     raise RuntimeError("protocol-obfuscation setting did not persist across restart")
@@ -553,7 +569,51 @@ def main() -> int:
                 if not isinstance(persisted_daemon, dict) or persisted_daemon.get("p2pBindIp") != tun_ip:
                     raise RuntimeError("P2P bind IP did not persist across restart")
                 report["p2pBindIpMatchesTun0"] = True
-        report["protocolObfuscationEnabled"] = not args.disable_protocol_obfuscation
+        report["protocolObfuscationEnabled"] = not (
+            args.disable_protocol_obfuscation or args.nat_matrix
+        )
+
+        if args.nat_matrix:
+            def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
+                return request_json(
+                    api + "/app/settings",
+                    api_key,
+                    method="PATCH",
+                    payload=payload,
+                )
+
+            def restart_for_nat() -> None:
+                command(*compose, "restart", "emulebb-rust", env=env, timeout=90)
+                restart_deadline = time.monotonic() + 120
+                while True:
+                    page = docker(
+                        "exec",
+                        rust,
+                        "curl",
+                        "--fail",
+                        "--silent",
+                        "--max-time",
+                        "3",
+                        "http://127.0.0.1:4711/",
+                        check=False,
+                    )
+                    if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
+                        return
+                    if time.monotonic() >= restart_deadline:
+                        raise RuntimeError("Rust WebUI did not restart for NAT matrix case")
+                    time.sleep(2)
+
+            report["natMatrix"] = nat_live_matrix.run_matrix(
+                apply_settings=apply_nat_settings,
+                restart_daemon=restart_for_nat,
+                read_nat_status=lambda: request_json(api + "/nat", api_key),
+                daemon_alive=lambda: docker(
+                    "inspect", "--format", "{{.State.Running}}", rust, check=False
+                ).stdout.strip()
+                == "true",
+            )
+            if not report["natMatrix"]["passed"]:
+                raise RuntimeError("one or more capability-aware NAT matrix cases failed")
 
         network = response_data(request_json(api + "/network", api_key))
         binding = network.get("binding", {})
