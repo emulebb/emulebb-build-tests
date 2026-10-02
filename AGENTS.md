@@ -14,6 +14,10 @@ Everything below is this repo's local deltas only:
   implementation modules stay under `emule_test_harness` with snake_case names.
 - New reusable harness helpers should include succinct docstrings or comments
   when their behavior is not obvious.
+- For `emulebb-rust` public-network live tests, prefer WSL2 + Docker with the
+  plain OpenVPN lane in `scripts/smoke-rust-openvpn.py`. Use the Gluetun lane or
+  Windows hide.me only when the scenario specifically requires that topology.
+  Keep VPN inputs outside the workspace and mount them read-only.
 
 ## Survey before adding a script or helper (avoid duplicates)
 

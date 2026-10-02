@@ -1,0 +1,46 @@
+services:
+  openvpn:
+    image: local/emulebb-test-openvpn-client:alpine-3.22
+    build:
+      context: .
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    volumes:
+      # The supplied custom.conf contains absolute /gluetun certificate paths.
+      # This is only a read-only compatibility mount; no Gluetun process runs.
+      - ${EMULEBB_TEST_VPN_PRIVATE_ROOT:?provide an existing read-only VPN private path}:/gluetun:ro
+    secrets: [openvpn_user, openvpn_password]
+    tmpfs:
+      - /run/openvpn:mode=0700
+    ports:
+      - "127.0.0.1:14712:4711/tcp"
+    healthcheck:
+      test: ["CMD-SHELL", "ip -4 -o addr show dev tun0 | grep -q ' inet '"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+  emulebb-rust:
+    image: ${EMULEBB_TEST_RUST_IMAGE-ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1}
+    network_mode: service:openvpn
+    depends_on:
+      openvpn:
+        condition: service_healthy
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+      RUST_LOG: ${EMULEBB_TEST_RUST_LOG-info}
+      # Set this to an empty string to reproduce the unbound Linux/OpenVPN path.
+      EMULEBB_RUST_P2P_INTERFACE: ${EMULEBB_TEST_P2P_INTERFACE-tun0}
+    volumes:
+      - emulebb-rust-config:/config
+      - emulebb-rust-data:/data
+volumes:
+  emulebb-rust-config:
+  emulebb-rust-data:
+secrets:
+  openvpn_user:
+    file: ${EMULEBB_TEST_VPN_PRIVATE_ROOT:?provide an existing read-only VPN private path}/openvpn_user
+  openvpn_password:
+    file: ${EMULEBB_TEST_VPN_PRIVATE_ROOT:?provide an existing read-only VPN private path}/openvpn_password

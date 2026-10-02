@@ -39,6 +39,22 @@ Supported branch:
 
 - `main`
 
+Rust live OpenVPN lane:
+
+- `scripts/smoke-rust-openvpn.py` is the preferred public-network live path for
+  `emulebb-rust`: it runs under WSL2, starts a plain OpenVPN Docker namespace,
+  and places the released Rust image in that namespace without Gluetun.
+- VPN configuration and credentials stay outside the workspace, are mounted
+  read-only, and are consumed as Docker secrets. Reports and bounded per-search
+  PCAPs go below the operator's external output root.
+- The lane verifies the release executable hash, `tun0` routing, Rust interface
+  binding, eD2K/Kad readiness, and server/global/Kad searches. Use
+  `--disable-protocol-obfuscation` only for an explicit wire-diagnostics run.
+- Use `--tunnel-egress-delay-ms` for a bounded `netem` latency experiment after
+  readiness; the delay and its installation are recorded in the JSON report.
+- Gluetun and Windows hide.me lanes remain useful topology-specific comparisons,
+  but are not the default Rust live-test route.
+
 Workspace branch roles are owned by
 `EMULEBB_WORKSPACE_ROOT\repos\emulebb-tooling\docs\WORKSPACE-POLICY.md`. Do not
 infer release status from branch names. Baseline workspaces may be edited only
