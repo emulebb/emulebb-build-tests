@@ -47,6 +47,19 @@ def test_empty_capture_without_summary_is_not_a_pass() -> None:
         module.captured_packet_count(result)
 
 
+def test_public_network_ready_requires_ed2k_and_kad_contacts() -> None:
+    module = load_module()
+    assert module.public_network_ready({
+        "data": {"stats": {"ed2kConnected": True}, "kad": {"contactCount": 12}}
+    })
+    assert not module.public_network_ready({
+        "data": {"stats": {"ed2kConnected": False}, "kad": {"contactCount": 12}}
+    })
+    assert not module.public_network_ready({
+        "data": {"stats": {"ed2kConnected": True}, "kad": {"contactCount": 0}}
+    })
+
+
 def test_sha256_file(tmp_path: Path) -> None:
     module = load_module()
     payload = tmp_path / "payload.bin"

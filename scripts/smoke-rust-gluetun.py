@@ -57,6 +57,17 @@ def captured_packet_count(result: subprocess.CompletedProcess[str]) -> int:
     return len(packet_lines)
 
 
+def public_network_ready(payload: dict[str, object]) -> bool:
+    data = payload.get("data", payload)
+    if not isinstance(data, dict):
+        return False
+    stats = data.get("stats", {})
+    kad = data.get("kad", {})
+    if not isinstance(stats, dict) or not isinstance(kad, dict):
+        return False
+    return bool(stats.get("ed2kConnected")) and int(kad.get("contactCount") or 0) > 0
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -192,15 +203,12 @@ def main() -> int:
         report["p2pInterfacePinned"] = True
         report["webuiAndRest"] = True
         api = "http://127.0.0.1:14711/api/v1"
-        request_json(api + "/servers/operations/connect", api_key, method="POST")
-        request_json(api + "/kad/operations/start", api_key, method="POST")
+        report["networkStartupMode"] = "consumer-default-auto-connect"
         deadline = time.monotonic() + 180
         while True:
             status = request_json(api + "/status", api_key)
             data = status.get("data", status)
-            stats = data.get("stats", {})
-            kad = data.get("kad", {})
-            if stats.get("ed2kConnected") and int(kad.get("contactCount") or 0) > 0:
+            if public_network_ready(status):
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError("P2P did not connect through the healthy tunnel")
