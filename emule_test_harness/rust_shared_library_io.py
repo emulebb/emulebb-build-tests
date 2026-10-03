@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Callable
 
 from . import (
+    goed2k,
     rust_client,
+    rust_local_ed2k,
     rust_metadata,
     rust_shared_library_fixture as fixture,
     rust_shared_library_storage as storage,
@@ -29,19 +31,32 @@ from .paths import (
     get_workspace_output_root,
     path_is_relative_to,
 )
+from .script_modules import load_script_module
 
 REPORT_SCHEMA = "emulebb.rust-shared-library-io.v4"
 MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v1"
+LAN_STARTUP_REPORT_SCHEMA = "emulebb.rust-shared-library-lan-startup.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
+DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
 DEFAULT_MEDIA_ROOTS_FILE = (
     Path(__file__).resolve().parent.parent
     / "live-wire-emulebb-rust-sharedroots.local.txt"
+)
+
+
+dtt = load_script_module(
+    "deterministic_two_client_transfer_shared_library_io",
+    "deterministic-two-client-transfer.py",
+)
+local_kad = load_script_module(
+    "local_kad_swarm_shared_library_io",
+    "local-kad-swarm.py",
 )
 
 
@@ -240,9 +255,7 @@ def load_media_roots(path: Path) -> list[Path]:
             continue
         candidate = Path(value)
         if not candidate.is_absolute():
-            raise RuntimeError(
-                f"multi-HDD root on line {line_number} must be absolute"
-            )
+            raise RuntimeError(f"multi-HDD root on line {line_number} must be absolute")
         if not candidate.is_dir():
             raise RuntimeError(
                 f"multi-HDD root on line {line_number} is not an existing directory"
@@ -744,8 +757,7 @@ def disk_io_deltas(
     after: dict[str, dict[str, int] | None],
 ) -> dict[str, dict[str, int] | None]:
     return {
-        key: counter_delta(snapshot, after.get(key))
-        for key, snapshot in before.items()
+        key: counter_delta(snapshot, after.get(key)) for key, snapshot in before.items()
     }
 
 
@@ -790,9 +802,13 @@ def run_dynamic_reload_phase(
         )
         progress = compact_progress(data)
         scanned = int(progress.get("scannedCount") or 0)
-        saw_activity = saw_activity or bool(progress.get("running")) or (
-            progress.get("startedAtMs") is not None
-            and progress.get("startedAtMs") != before_started
+        saw_activity = (
+            saw_activity
+            or bool(progress.get("running"))
+            or (
+                progress.get("startedAtMs") is not None
+                and progress.get("startedAtMs") != before_started
+            )
         )
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
@@ -801,8 +817,7 @@ def run_dynamic_reload_phase(
             0,
         )
         captured_observation = (
-            not observations
-            or time.monotonic() - started >= len(observations) * 30
+            not observations or time.monotonic() - started >= len(observations) * 30
         )
         if captured_observation:
             observations.append(progress)
@@ -817,9 +832,7 @@ def run_dynamic_reload_phase(
                         "maxActiveHashCount": max_active,
                         "maxPerDiskActiveCount": max_disk_active,
                         "process": sampler.summary(process_start),
-                        "physicalDiskIoDeltas": disk_io_deltas(
-                            disk_before, disk_now
-                        ),
+                        "physicalDiskIoDeltas": disk_io_deltas(disk_before, disk_now),
                         "observations": observations[-20:],
                     }
                 )
@@ -1016,6 +1029,434 @@ def stop_daemon(
         return {"method": "forcedFallback", "exitCode": process.returncode}
 
 
+def _configure_lan_startup_profile(
+    *,
+    paths: HarnessPaths,
+    profile_dir: Path,
+    spec,
+    peer_spec,
+    lan_bind_addr: str,
+    server_endpoint: str,
+    initial_reload: bool,
+    shared_root: Path | None,
+) -> dict[str, object]:
+    """Create one isolated Rust profile whose discovery is restricted to this LAN pair."""
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=paths.rust_repo,
+        incoming_dir=profile_dir / "incoming",
+        rest_addr=lan_bind_addr,
+        rest_port=spec.rest_port,
+        api_key=API_KEY,
+        auto_connect=True,
+        p2p_bind_ip=lan_bind_addr,
+        ed2k_port=spec.tcp_port,
+        kad_port=spec.udp_port,
+        server_endpoint=server_endpoint,
+        kad_bootstrap_nodes=None,
+        kad_bootstrap_min_routing_contacts=1,
+        nat_enabled=False,
+        initial_shared_directory_reload=initial_reload,
+        local_only_discovery=True,
+        replace_servers=True,
+    )
+    metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.replace_settings_section(
+        metadata_path,
+        "core",
+        {
+            "autoConnect": True,
+            "networkEd2k": True,
+            "networkKademlia": True,
+        },
+    )
+    if shared_root is not None:
+        rust_metadata.seed_shared_directory_roots(
+            metadata_path,
+            [
+                {
+                    "path": str(shared_root) + os.sep,
+                    "monitorOwned": False,
+                    "shareable": True,
+                    "accessible": True,
+                }
+            ],
+        )
+    nodes = local_kad.write_nodes_dat(
+        profile_dir / "nodes.dat",
+        owner=spec,
+        peers=[spec, peer_spec],
+        peer_address=lan_bind_addr,
+    )
+    preflight = local_kad.validate_local_nodes_dat(
+        profile_dir / "nodes.dat",
+        peer_address=lan_bind_addr,
+        expected_udp_ports={peer_spec.udp_port},
+    )
+    return {
+        "profileFingerprint": path_fingerprint(profile_dir),
+        "initialSharedDirectoryReload": initial_reload,
+        "sharedRootFingerprint": (
+            path_fingerprint(shared_root) if shared_root is not None else None
+        ),
+        "nodes": {
+            "contactCount": nodes["contact_count"],
+            "validated": preflight["validated"],
+        },
+    }
+
+
+def _server_target_publications(
+    payload: dict[str, object], *, host: str, port: int
+) -> list[dict[str, object]]:
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return []
+    matches: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        endpoints = row.get("endpoints")
+        if not isinstance(endpoints, list):
+            continue
+        if any(
+            isinstance(endpoint, dict)
+            and endpoint.get("host") == host
+            and int(endpoint.get("port") or 0) == port
+            for endpoint in endpoints
+        ):
+            matches.append(row)
+    return matches
+
+
+def lan_startup_overlap_acceptance(
+    observation: dict[str, object], *, expected_file_count: int
+) -> dict[str, object]:
+    """Evaluate proof that both networks publish before the initial scan settles."""
+
+    progress = (
+        observation.get("progress")
+        if isinstance(observation.get("progress"), dict)
+        else {}
+    )
+    ed2k_publish = (
+        observation.get("ed2kPublish")
+        if isinstance(observation.get("ed2kPublish"), dict)
+        else {}
+    )
+    kad_publish = (
+        observation.get("kadPublish")
+        if isinstance(observation.get("kadPublish"), dict)
+        else {}
+    )
+    target_kad = (
+        observation.get("targetKad")
+        if isinstance(observation.get("targetKad"), dict)
+        else {}
+    )
+    seed_kad = (
+        observation.get("seedKad")
+        if isinstance(observation.get("seedKad"), dict)
+        else {}
+    )
+    shared_files_total = int(observation.get("sharedFilesTotal") or 0)
+    planned_hash_count = int(progress.get("plannedHashCount") or 0)
+    hashed_count = int(progress.get("hashedCount") or 0)
+    checks = {
+        "initialReloadStillRunning": progress.get("running") is True,
+        "initialIngestionIncomplete": planned_hash_count > 0
+        and hashed_count < planned_hash_count,
+        "partialCatalogAvailable": 0 < shared_files_total < expected_file_count,
+        "ed2kConnected": observation.get("ed2kConnected") is True,
+        "ed2kBatchPublished": int(ed2k_publish.get("publishedEntries") or 0) > 0,
+        "ed2kServerObservedTarget": int(
+            observation.get("serverTargetPublicationCount") or 0
+        )
+        > 0,
+        "targetKadConnected": target_kad.get("connected") is True
+        and int(target_kad.get("contactCount") or 0) > 0,
+        "seedKadConnected": seed_kad.get("connected") is True
+        and int(seed_kad.get("contactCount") or 0) > 0,
+        "kadPublishWorkerActive": kad_publish.get("phase") == "publishing"
+        and kad_publish.get("running") is True,
+        "kadKeywordPublishStarted": int(kad_publish.get("keywordAttempted") or 0) > 0,
+        "kadSourcePublishStarted": int(kad_publish.get("sourceAttempted") or 0) > 0,
+    }
+    return {"ok": all(checks.values()), "checks": checks}
+
+
+def _lan_startup_observation(
+    *,
+    target_client: RestClient,
+    target_base_url: str,
+    seed_base_url: str,
+    admin_base_url: str,
+    target_host: str,
+    target_port: int,
+) -> dict[str, object]:
+    directories = target_client.request(
+        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+    )
+    shared = target_client.request(
+        "GET",
+        "/shared-files?offset=0&limit=1",
+        timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+    )
+    status = target_client.request(
+        "GET", "/status", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+    )
+    diagnostics = target_client.request(
+        "GET", "/diagnostics", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+    )
+    target_kad = rust_local_ed2k.request_json(
+        target_base_url, "GET", "/api/v1/kad", API_KEY
+    )
+    seed_kad = rust_local_ed2k.request_json(
+        seed_base_url, "GET", "/api/v1/kad", API_KEY
+    )
+    server_files = goed2k.admin_request(
+        admin_base_url, API_KEY, "/api/files?page=1&per_page=200", timeout_seconds=5.0
+    )
+    target_publications = _server_target_publications(
+        server_files, host=target_host, port=target_port
+    )
+    stats = status.get("stats") if isinstance(status.get("stats"), dict) else {}
+    return {
+        "observedAtUtc": utc_now(),
+        "progress": compact_progress(directories),
+        "hashingCount": directories.get("hashingCount"),
+        "sharedFilesTotal": shared.get("total"),
+        "ed2kConnected": stats.get("ed2kConnected"),
+        "ed2kPublish": diagnostics.get("ed2kPublish"),
+        "kadPublish": diagnostics.get("kadPublish"),
+        "targetKad": local_kad.compact_local_kad_status(target_kad),
+        "seedKad": local_kad.compact_local_kad_status(seed_kad),
+        "serverFileCount": (
+            server_files.get("meta", {}).get("total")
+            if isinstance(server_files.get("meta"), dict)
+            else len(server_files.get("data") or [])
+        ),
+        "serverTargetPublicationCount": len(target_publications),
+        "serverTargetPublishedHashes": sorted(
+            str(row.get("hash") or "") for row in target_publications
+        )[:10],
+    }
+
+
+def run_lan_startup_campaign(
+    paths: HarnessPaths, args: argparse.Namespace
+) -> tuple[Path, dict[str, object]]:
+    """Prove LAN eD2K/Kad readiness and publication during the 100k startup scan."""
+
+    manifest = load_prepared_manifest(paths)
+    validation = validate_fixture(paths.fixture_root)
+    if not validation["ok"]:
+        raise RuntimeError(f"fixture failed pre-run validation: {validation}")
+    if not paths.staged_executable.is_file():
+        raise RuntimeError(
+            f"staged emulebb-rust executable is missing: {paths.staged_executable}"
+        )
+    inventory = physical_disk_inventory()
+    target_disk_row = target_disk(paths, inventory)
+    assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
+
+    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = dtt.choose_distinct_ports(lan_bind_addr)
+    seed_spec = local_kad.KadClientSpec(
+        index=1,
+        profile_id="rust-lan-seed",
+        nick="rust-lan-seed",
+        tcp_port=ports["client1_tcp"],
+        udp_port=ports["client1_udp"],
+        rest_port=ports["client1_rest"],
+    )
+    target_spec = local_kad.KadClientSpec(
+        index=2,
+        profile_id="rust-library-target",
+        nick="rust-library-target",
+        tcp_port=ports["client2_tcp"],
+        udp_port=ports["client2_udp"],
+        rest_port=ports["client2_rest"],
+    )
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    run_root = paths.runs_root / f"lan-startup-{run_id}"
+    if storage.is_directory(run_root):
+        raise RuntimeError("generated LAN startup run directory already exists")
+    storage.make_directories(run_root)
+    report_path = paths.reports_root / f"rust-shared-library-lan-startup-{run_id}.json"
+    server_endpoint = f"{lan_bind_addr}:{ports['ed2k_tcp']}"
+    report: dict[str, object] = {
+        "schema": LAN_STARTUP_REPORT_SCHEMA,
+        "status": "running",
+        "runId": run_id,
+        "startedAtUtc": utc_now(),
+        "networkClass": "lan-only",
+        "fixture": {
+            "fingerprint": path_fingerprint(paths.fixture_root),
+            "fileCount": validation["fileCount"],
+            "totalBytes": validation["totalBytes"],
+            "longPathFileCount": validation["longPathFileCount"],
+            "contentGeneration": manifest.get("contentGeneration"),
+        },
+        "network": {
+            "bindAddress": lan_bind_addr,
+            "serverEndpoint": server_endpoint,
+            "ports": ports,
+            "publicDiscoveryEnabled": False,
+        },
+        "paths": {
+            "runFingerprint": path_fingerprint(run_root),
+            "outputRootFingerprint": path_fingerprint(paths.output_root),
+        },
+        "observations": [],
+    }
+    seed_profile = run_root / "seed-profile"
+    target_profile = run_root / "target-profile"
+    seed_process: subprocess.Popen[str] | None = None
+    target_process: subprocess.Popen[str] | None = None
+    server_process: subprocess.Popen | None = None
+    seed_client: RestClient | None = None
+    target_client: RestClient | None = None
+    started = time.monotonic()
+    try:
+        report["profiles"] = {
+            "seed": _configure_lan_startup_profile(
+                paths=paths,
+                profile_dir=seed_profile,
+                spec=seed_spec,
+                peer_spec=target_spec,
+                lan_bind_addr=lan_bind_addr,
+                server_endpoint=server_endpoint,
+                initial_reload=False,
+                shared_root=None,
+            ),
+            "target": _configure_lan_startup_profile(
+                paths=paths,
+                profile_dir=target_profile,
+                spec=target_spec,
+                peer_spec=seed_spec,
+                lan_bind_addr=lan_bind_addr,
+                server_endpoint=server_endpoint,
+                initial_reload=True,
+                shared_root=paths.fixture_root,
+            ),
+        }
+        server_repo = (
+            Path(args.ed2k_server_repo).resolve()
+            if args.ed2k_server_repo
+            else paths.workspace_root / "repos" / "goed2k-server"
+        )
+        if not (server_repo / "go.mod").is_file():
+            raise RuntimeError(f"goed2k-server repo is missing go.mod: {server_repo}")
+        server = goed2k.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=run_root / "ed2k-server",
+            ed2k_port=ports["ed2k_tcp"],
+            admin_port=ports["ed2k_admin"],
+            token=API_KEY,
+            admin_address=lan_bind_addr,
+            ed2k_address=lan_bind_addr,
+            repo_override=str(server_repo),
+            exe_override=args.ed2k_server_exe,
+        )
+        server_process = server.process
+        report["server"] = {
+            "health": server.health,
+            "build": server.build,
+        }
+
+        seed_log = run_root / "seed.log"
+        seed_process = rust_client.start_rust_client_executable(
+            paths.staged_executable, seed_profile, seed_log
+        )
+        seed_client = RestClient(
+            f"http://{lan_bind_addr}:{seed_spec.rest_port}/api/v1", API_KEY
+        )
+        wait_for_rest(seed_client, seed_process, args.rest_ready_timeout_seconds)
+        seed_base_url = f"http://{lan_bind_addr}:{seed_spec.rest_port}"
+        rust_local_ed2k.request_json(
+            seed_base_url, "POST", "/api/v1/kad/operations/start", API_KEY, {}
+        )
+
+        target_log = run_root / "target.log"
+        target_process = rust_client.start_rust_client_executable(
+            paths.staged_executable, target_profile, target_log
+        )
+        target_client = RestClient(
+            f"http://{lan_bind_addr}:{target_spec.rest_port}/api/v1", API_KEY
+        )
+        wait_for_rest(target_client, target_process, args.rest_ready_timeout_seconds)
+        target_base_url = f"http://{lan_bind_addr}:{target_spec.rest_port}"
+        rust_local_ed2k.request_json(
+            target_base_url, "POST", "/api/v1/kad/operations/start", API_KEY, {}
+        )
+        rust_local_ed2k.request_json(
+            target_base_url,
+            "POST",
+            "/api/v1/kad/operations/bootstrap",
+            API_KEY,
+            {"address": lan_bind_addr, "port": seed_spec.udp_port},
+        )
+        rust_local_ed2k.request_json(
+            seed_base_url,
+            "POST",
+            "/api/v1/kad/operations/bootstrap",
+            API_KEY,
+            {"address": lan_bind_addr, "port": target_spec.udp_port},
+        )
+
+        deadline = started + args.timeout_seconds
+        final_observation: dict[str, object] | None = None
+        while time.monotonic() < deadline:
+            if seed_process.poll() is not None or target_process.poll() is not None:
+                raise RuntimeError(
+                    "a Rust LAN startup peer exited before overlap evidence completed"
+                )
+            observation = _lan_startup_observation(
+                target_client=target_client,
+                target_base_url=target_base_url,
+                seed_base_url=seed_base_url,
+                admin_base_url=server.admin_base_url,
+                target_host=lan_bind_addr,
+                target_port=target_spec.tcp_port,
+            )
+            acceptance = lan_startup_overlap_acceptance(
+                observation, expected_file_count=PRODUCTION_SPEC.file_count
+            )
+            observation["acceptance"] = acceptance
+            observations = report["observations"]
+            if isinstance(observations, list):
+                observations.append(observation)
+                if len(observations) > 30:
+                    del observations[:-30]
+            if acceptance["ok"]:
+                final_observation = observation
+                break
+            time.sleep(args.poll_seconds)
+        if final_observation is None:
+            raise TimeoutError(
+                "LAN startup did not prove eD2K/Kad publication before the initial scan settled"
+            )
+        report["overlapEvidence"] = final_observation
+        report["acceptance"] = final_observation["acceptance"]
+        report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+        report["status"] = "passed"
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        raise
+    finally:
+        report["shutdown"] = {
+            "target": stop_daemon(target_process, target_client),
+            "seed": stop_daemon(seed_process, seed_client),
+        }
+        goed2k.stop_process(server_process)
+        report["finishedAtUtc"] = utc_now()
+        write_json(report_path, report)
+    return report_path, report
+
+
 def phase_acceptance(
     phase: dict[str, object], expected: dict[str, int]
 ) -> dict[str, object]:
@@ -1110,7 +1551,8 @@ def media_no_change_acceptance(
         initial.get("progress") if isinstance(initial.get("progress"), dict) else {}
     )
     checks = {
-        "catalogStable": phase.get("sharedFilesTotal") == initial.get("sharedFilesTotal"),
+        "catalogStable": phase.get("sharedFilesTotal")
+        == initial.get("sharedFilesTotal"),
         "scannedCountStable": progress.get("scannedCount")
         == initial_progress.get("scannedCount"),
         "noHashPlan": int(progress.get("plannedHashCount") or 0) == 0,
@@ -1966,10 +2408,16 @@ def run_campaign(
 
 
 def media_campaign_paths(paths: HarnessPaths) -> tuple[Path, Path]:
-    scenario_root = paths.output_root / "profiles" / "emulebb-rust-shared-library-media-io"
-    reports_root = paths.output_root / "reports" / "emulebb-rust" / "shared-library-media-io"
+    scenario_root = (
+        paths.output_root / "profiles" / "emulebb-rust-shared-library-media-io"
+    )
+    reports_root = (
+        paths.output_root / "reports" / "emulebb-rust" / "shared-library-media-io"
+    )
     if not path_is_relative_to(scenario_root, paths.output_root):
-        raise RuntimeError("multi-HDD profile root escaped EMULEBB_WORKSPACE_OUTPUT_ROOT")
+        raise RuntimeError(
+            "multi-HDD profile root escaped EMULEBB_WORKSPACE_OUTPUT_ROOT"
+        )
     return scenario_root, reports_root
 
 
@@ -2106,9 +2554,7 @@ def run_media_campaign(
         )
         report.pop("inProgressPhase", None)
         no_change["storage"] = profile_storage_snapshot(profile_dir)
-        no_change["acceptance"] = media_no_change_acceptance(
-            no_change, initial=initial
-        )
+        no_change["acceptance"] = media_no_change_acceptance(no_change, initial=initial)
         report["phases"].append(no_change)
         report["finalShutdown"] = stop_daemon(process, client)
         process = None
@@ -2171,9 +2617,7 @@ def describe_media_roots(
         "physicalDisks": sanitized_disk_inventory(inventory),
         "reportDirectory": str(reports_root),
         "stagedExecutable": str(paths.staged_executable),
-        "commands": {
-            "run": "python scripts/rust-shared-library-io.py media-run"
-        },
+        "commands": {"run": "python scripts/rust-shared-library-io.py media-run"},
     }
 
 
@@ -2314,6 +2758,10 @@ def describe(paths: HarnessPaths) -> dict[str, object]:
         "commands": {
             "prepare": "python scripts/rust-shared-library-io.py prepare",
             "run": "python scripts/rust-shared-library-io.py run",
+            "lanStartup": (
+                "python scripts/rust-shared-library-io.py lan-startup "
+                "--lan-bind-addr <LAN-IP>"
+            ),
             "cleanup": "python scripts/rust-shared-library-io.py cleanup --confirm-delete",
         },
     }
@@ -2369,6 +2817,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WATCHER_POLL_SECONDS,
     )
     run.add_argument("--allow-non-ssd", action="store_true")
+    lan_startup = subparsers.add_parser(
+        "lan-startup",
+        help=(
+            "prove local eD2K/Kad connectivity and publication while the 100k "
+            "initial scan is still running"
+        ),
+    )
+    lan_startup.add_argument("--lan-bind-addr", required=True)
+    lan_startup.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS,
+    )
+    lan_startup.add_argument("--poll-seconds", type=float, default=1.0)
+    lan_startup.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
+    lan_startup.add_argument("--allow-non-ssd", action="store_true")
+    lan_startup.add_argument("--ed2k-server-repo")
+    lan_startup.add_argument("--ed2k-server-exe")
     media_describe = subparsers.add_parser(
         "media-describe",
         help="resolve private existing media roots without scanning their contents",
@@ -2415,6 +2881,21 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise RuntimeError("timeouts and poll interval must be positive")
             report_path, report = run_campaign(paths, args)
+            result = {
+                "status": report["status"],
+                "reportPath": str(report_path),
+                "reportFingerprint": path_fingerprint(report_path),
+            }
+        elif args.command == "lan-startup":
+            if (
+                args.timeout_seconds <= 0
+                or args.poll_seconds <= 0
+                or args.rest_ready_timeout_seconds <= 0
+            ):
+                raise RuntimeError(
+                    "LAN startup timeouts and poll interval must be positive"
+                )
+            report_path, report = run_lan_startup_campaign(paths, args)
             result = {
                 "status": report["status"],
                 "reportPath": str(report_path),

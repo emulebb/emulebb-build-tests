@@ -65,6 +65,63 @@ def test_production_fixture_reserves_exactly_one_long_path_group() -> None:
 
 
 @pytest.mark.unit
+def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> None:
+    observation = {
+        "progress": {
+            "running": True,
+            "scannedCount": 100_000,
+            "plannedHashCount": 99_800,
+            "hashedCount": 4_096,
+        },
+        "sharedFilesTotal": 200,
+        "ed2kConnected": True,
+        "ed2kPublish": {"publishedEntries": 200},
+        "serverTargetPublicationCount": 200,
+        "targetKad": {"connected": True, "contactCount": 1},
+        "seedKad": {"connected": True, "contactCount": 1},
+        "kadPublish": {
+            "phase": "publishing",
+            "running": True,
+            "keywordAttempted": 1,
+            "sourceAttempted": 1,
+        },
+    }
+
+    accepted = subject.lan_startup_overlap_acceptance(
+        observation, expected_file_count=100_000
+    )
+
+    assert accepted["ok"] is True
+    observation["progress"]["running"] = False
+    assert (
+        subject.lan_startup_overlap_acceptance(
+            observation, expected_file_count=100_000
+        )["ok"]
+        is False
+    )
+
+
+@pytest.mark.unit
+def test_lan_startup_server_publication_filter_requires_target_endpoint() -> None:
+    payload = {
+        "data": [
+            {
+                "hash": "target",
+                "endpoints": [{"host": "192.0.2.10", "port": 47002}],
+            },
+            {
+                "hash": "seed",
+                "endpoints": [{"host": "192.0.2.10", "port": 47001}],
+            },
+        ]
+    }
+
+    assert subject._server_target_publications(
+        payload, host="192.0.2.10", port=47002
+    ) == [payload["data"][0]]
+
+
+@pytest.mark.unit
 def test_watcher_cohort_is_exactly_one_percent_with_balanced_path_classes() -> None:
     summary = subject.fixture.watcher_cohort_summary()
     paths = [
@@ -477,15 +534,15 @@ def test_parser_exposes_independent_watcher_timing() -> None:
 
 
 @pytest.mark.unit
-def test_media_roots_file_is_private_absolute_and_non_overlapping(tmp_path: Path) -> None:
+def test_media_roots_file_is_private_absolute_and_non_overlapping(
+    tmp_path: Path,
+) -> None:
     first = tmp_path / "disk-a" / "library"
     second = tmp_path / "disk-b" / "library"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
     roots_file = tmp_path / "roots.local.txt"
-    roots_file.write_text(
-        f"# private roots\n{first}\n\n{second}\n", encoding="utf-8"
-    )
+    roots_file.write_text(f"# private roots\n{first}\n\n{second}\n", encoding="utf-8")
 
     assert subject.load_media_roots(roots_file) == [
         first.resolve(),
@@ -751,6 +808,4 @@ def test_dynamic_reload_checkpoints_running_progress(
     assert phase["progress"]["scannedCount"] == 8
     assert checkpoints[0]["status"] == "running"
     assert checkpoints[0]["progress"]["scannedCount"] == 4
-    assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {
-        "read_count": 1
-    }
+    assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {"read_count": 1}
