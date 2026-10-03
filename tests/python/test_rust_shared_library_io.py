@@ -324,10 +324,11 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
                 aich_root BLOB
             );
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE transfers (
-                known_file_id INTEGER, source_path_id INTEGER,
-                source_mtime_ms INTEGER, removed_at_ms INTEGER
+            CREATE TABLE shared_file_sources (
+                known_file_id INTEGER, path_id INTEGER,
+                file_size INTEGER, source_mtime_ms INTEGER
             );
+            CREATE TABLE unshared_files (known_file_id INTEGER);
             """
         )
         connection.execute(
@@ -344,11 +345,89 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
         connection.execute(
             "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "removed"),)
         )
-        connection.execute("INSERT INTO transfers VALUES (1, 1, 123, NULL)")
-        connection.execute("INSERT INTO transfers VALUES (2, 2, 124, 125)")
+        connection.execute("INSERT INTO shared_file_sources VALUES (1, 1, 16, 123)")
+        connection.execute("INSERT INTO shared_file_sources VALUES (2, 2, 16, 124)")
+        connection.execute("INSERT INTO unshared_files VALUES (2)")
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
+
+
+@pytest.mark.unit
+def test_storage_snapshot_counts_active_shared_sources_not_transfers(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    long_path = str(tmp_path / ("long-segment-" * 30) / "active.bin")
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE known_files (
+                id INTEGER PRIMARY KEY, size_bytes INTEGER, completed INTEGER,
+                md4_hashset_acquired INTEGER, aich_hashset_acquired INTEGER,
+                aich_root BLOB
+            );
+            CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
+            CREATE TABLE shared_file_sources (
+                known_file_id INTEGER, path_id INTEGER,
+                file_size INTEGER, source_mtime_ms INTEGER
+            );
+            CREATE TABLE unshared_files (known_file_id INTEGER);
+            CREATE TABLE transfers (removed_at_ms INTEGER);
+            CREATE TABLE shared_file_memberships (removed_at_ms INTEGER);
+            CREATE TABLE shared_file_scan_failures (id INTEGER);
+            """
+        )
+        connection.execute(
+            "INSERT INTO known_files VALUES (1, 16, 1, 1, 1, ?)",
+            (bytes.fromhex("11" * 20),),
+        )
+        connection.execute(
+            "INSERT INTO known_files VALUES (2, 32, 1, 1, 1, ?)",
+            (bytes.fromhex("22" * 20),),
+        )
+        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (long_path,))
+        connection.execute(
+            "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
+        )
+        connection.execute("INSERT INTO shared_file_sources VALUES (1, 1, 16, 123)")
+        connection.execute("INSERT INTO shared_file_sources VALUES (2, 2, 32, 124)")
+        connection.execute("INSERT INTO unshared_files VALUES (2)")
+        connection.execute("INSERT INTO transfers VALUES (NULL)")
+
+    snapshot = subject.profile_storage_snapshot(profile)
+    counts = snapshot["rowCounts"]
+    assert counts["shareSourceRows"] == 2
+    assert counts["activeShareSources"] == 1
+    assert counts["activeShareBytes"] == 16
+    assert counts["activeLongPathSources"] == 1
+    assert counts["invalidActiveShareIntegrity"] == 0
+    assert subject.storage_acceptance(
+        snapshot,
+        expected_active=1,
+        expected_bytes=16,
+        expected_minimum_long=1,
+    ) == {
+        "databaseActiveShares": True,
+        "databaseActiveBytes": True,
+        "databaseHashIntegrity": True,
+        "databaseLongPathShares": True,
+        "databaseScanFailures": True,
+    }
+
+
+@pytest.mark.unit
+def test_watcher_log_summary_reports_empty_logs_without_faking_registration(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.log"
+    empty.write_bytes(b"")
+    summary = subject.watcher_log_summary([empty])
+    assert summary["logByteCount"] == 0
+    assert summary["nonEmptyLogCount"] == 0
+    assert summary["watcherRegistrations"] == 0
 
 
 @pytest.mark.unit

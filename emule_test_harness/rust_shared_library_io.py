@@ -30,7 +30,7 @@ from .paths import (
     path_is_relative_to,
 )
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v2"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v3"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
@@ -656,10 +656,60 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
             for key, query in {
                 "knownFiles": "SELECT COUNT(*) FROM known_files",
                 "shareSourceRows": "SELECT COUNT(*) FROM shared_file_sources",
-                "activeShareTransfers": "SELECT COUNT(*) FROM transfers WHERE source_path_id IS NOT NULL AND removed_at_ms IS NULL",
-                "activeShareBytes": "SELECT coalesce(sum(known_files.size_bytes), 0) FROM transfers JOIN known_files ON known_files.id = transfers.known_file_id WHERE transfers.source_path_id IS NOT NULL AND transfers.removed_at_ms IS NULL",
-                "activeLongPathTransfers": "SELECT COUNT(*) FROM transfers JOIN local_paths ON local_paths.id = transfers.source_path_id WHERE transfers.removed_at_ms IS NULL AND length(local_paths.display_path) > 260",
-                "invalidActiveShareIntegrity": "SELECT COUNT(*) FROM transfers JOIN known_files ON known_files.id = transfers.known_file_id WHERE transfers.source_path_id IS NOT NULL AND transfers.removed_at_ms IS NULL AND (known_files.completed != 1 OR known_files.md4_hashset_acquired != 1 OR known_files.aich_hashset_acquired != 1 OR known_files.aich_root IS NULL OR length(known_files.aich_root) != 20)",
+                "unsharedFiles": "SELECT COUNT(*) FROM unshared_files",
+                "transferRows": "SELECT COUNT(*) FROM transfers",
+                "activeTransferRows": (
+                    "SELECT COUNT(*) FROM transfers WHERE removed_at_ms IS NULL"
+                ),
+                "activeShareSources": """
+                    SELECT COUNT(*)
+                    FROM shared_file_sources
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM unshared_files
+                        WHERE unshared_files.known_file_id =
+                              shared_file_sources.known_file_id
+                    )
+                """,
+                "activeShareBytes": """
+                    SELECT coalesce(sum(shared_file_sources.file_size), 0)
+                    FROM shared_file_sources
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM unshared_files
+                        WHERE unshared_files.known_file_id =
+                              shared_file_sources.known_file_id
+                    )
+                """,
+                "activeLongPathSources": """
+                    SELECT COUNT(*)
+                    FROM shared_file_sources
+                    JOIN local_paths
+                      ON local_paths.id = shared_file_sources.path_id
+                    WHERE length(local_paths.display_path) > 260
+                      AND NOT EXISTS (
+                          SELECT 1 FROM unshared_files
+                          WHERE unshared_files.known_file_id =
+                                shared_file_sources.known_file_id
+                      )
+                """,
+                "invalidActiveShareIntegrity": """
+                    SELECT COUNT(*)
+                    FROM shared_file_sources
+                    JOIN known_files
+                      ON known_files.id = shared_file_sources.known_file_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM unshared_files
+                        WHERE unshared_files.known_file_id =
+                              shared_file_sources.known_file_id
+                    )
+                      AND (
+                          known_files.completed != 1
+                          OR known_files.md4_hashset_acquired != 1
+                          OR known_files.aich_hashset_acquired != 1
+                          OR known_files.aich_root IS NULL
+                          OR length(known_files.aich_root) != 20
+                          OR known_files.size_bytes != shared_file_sources.file_size
+                      )
+                """,
                 "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_ms IS NULL",
                 "scanFailures": "SELECT COUNT(*) FROM shared_file_scan_failures",
             }.items():
@@ -686,10 +736,10 @@ def storage_acceptance(
         snapshot.get("rowCounts") if isinstance(snapshot.get("rowCounts"), dict) else {}
     )
     checks = {
-        "databaseActiveShares": counts.get("activeShareTransfers") == expected_active,
+        "databaseActiveShares": counts.get("activeShareSources") == expected_active,
         "databaseActiveBytes": counts.get("activeShareBytes") == expected_bytes,
         "databaseHashIntegrity": counts.get("invalidActiveShareIntegrity") == 0,
-        "databaseLongPathShares": int(counts.get("activeLongPathTransfers") or 0)
+        "databaseLongPathShares": int(counts.get("activeLongPathSources") or 0)
         >= expected_minimum_long,
         "databaseScanFailures": counts.get("scanFailures") == 0,
     }
@@ -823,12 +873,16 @@ def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
                    known_files.md4_hashset_acquired,
                    known_files.aich_hashset_acquired,
                    length(known_files.aich_root), local_paths.display_path,
-                   transfers.source_mtime_ms
-            FROM known_files
-            JOIN transfers ON transfers.known_file_id = known_files.id
-            JOIN local_paths ON local_paths.id = transfers.source_path_id
+                   shared_file_sources.source_mtime_ms
+            FROM shared_file_sources
+            JOIN known_files
+              ON known_files.id = shared_file_sources.known_file_id
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
             WHERE known_files.display_name GLOB 'watch-probe-*.bin'
-              AND transfers.removed_at_ms IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM unshared_files
+                  WHERE unshared_files.known_file_id = known_files.id
+              )
             """
         ).fetchall()
     return {
@@ -1128,6 +1182,8 @@ def run_watcher_phase(
 
 def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
     marker_counts = {
+        "logByteCount": 0,
+        "nonEmptyLogCount": 0,
         "watcherRegistrations": 0,
         "autoShared": 0,
         "autoRemoved": 0,
@@ -1143,6 +1199,9 @@ def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
     for path in log_paths:
         if not path.is_file():
             continue
+        byte_count = path.stat().st_size
+        marker_counts["logByteCount"] += byte_count
+        marker_counts["nonEmptyLogCount"] += int(byte_count > 0)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             marker_counts["watcherRegistrations"] += int(
                 "watching shared directory for auto-pickup" in line
@@ -1515,6 +1574,20 @@ def run_campaign(
         watcher_results = [
             phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]
         ]
+        functional_watcher_registration = len(watcher_results) == 4 and all(
+            watcher_results
+        )
+        report["watcherRegistrationEvidence"] = {
+            "method": (
+                "tracingLog"
+                if int(logs["watcherRegistrations"]) > 0
+                else "functionalLifecycle"
+            ),
+            "logMarkerCount": int(logs["watcherRegistrations"]),
+            "successfulLifecyclePhaseCount": sum(
+                bool(value) for value in watcher_results
+            ),
+        }
         global_checks = {
             "fixtureExact": validation["ok"] is True,
             "longPathBaselineExact": validation["longPathFileCount"]
@@ -1548,7 +1621,8 @@ def run_campaign(
                 "fileCount": len(mutation_indices()),
                 "totalBytes": expected_mutation_bytes(),
             },
-            "watcherRegistered": int(logs["watcherRegistrations"]) > 0,
+            "watcherRegistered": int(logs["watcherRegistrations"]) > 0
+            or functional_watcher_registration,
             "noWatcherErrors": int(logs["watcherErrors"]) == 0,
             "noRestErrors": rest["errorCount"] == 0,
             "withinTimeout": time.monotonic() - overall_started <= args.timeout_seconds,
