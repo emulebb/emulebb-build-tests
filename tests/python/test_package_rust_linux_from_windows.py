@@ -57,10 +57,49 @@ def test_launcher_translates_inherited_operator_state(monkeypatch, tmp_path: Pat
     command = calls[0][0]
     assert "EMULEBB_WORKSPACE_ROOT=/wsl/workspace" in command
     assert "EMULEBB_WORKSPACE_OUTPUT_ROOT=/wsl/output" in command
-    assert "CARGO_TARGET_DIR=/wsl/target-wsl" in command
+    assert "CARGO_TARGET_DIR=/wsl/target" in command
     assert "GIT_CONFIG_KEY_0=core.autocrlf" in command
     assert "GIT_CONFIG_VALUE_0=true" in command
     assert "--skip-build" in command
     reports = list((output / "reports" / "rust-linux-package-launch").glob("*/wsl-boundary.json"))
     assert len(reports) == 1
     assert json.loads(reports[0].read_text(encoding="utf-8"))["exitCode"] == 0
+
+
+def test_launcher_builds_through_windows_before_wsl_packaging(monkeypatch, tmp_path: Path) -> None:
+    module = load_module()
+    workspace = tmp_path / "workspace"
+    output = tmp_path / "output"
+    build_repo = workspace / "repos" / "emulebb-build"
+    cargo = output / "builds" / "rust" / "target"
+    tool = output / "tools" / "appimagetool.AppImage"
+    build_repo.mkdir(parents=True)
+    cargo.mkdir(parents=True)
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    tool.write_bytes(b"tool")
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(cargo))
+    monkeypatch.setattr(module, "wsl_path", lambda path, _distribution: "/wsl/" + path.name)
+    calls = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(returncode=0),
+    )
+
+    result = module.main(
+        [
+            "--release-version",
+            "0.1.0-beta.2",
+            "--appimagetool",
+            str(tool),
+        ]
+    )
+
+    assert result == 0
+    assert calls[0][0][1:6] == ["-m", "emule_workspace", "build", "clients", "--client"]
+    assert calls[0][1]["cwd"] == build_repo
+    assert calls[1][0][0] == "wsl.exe"
+    assert "--skip-build" in calls[1][0]

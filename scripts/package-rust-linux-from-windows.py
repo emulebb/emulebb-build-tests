@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -65,14 +66,18 @@ def main(argv: list[str] | None = None) -> int:
     translated = {
         "workspaceRoot": wsl_path(workspace_root, args.wsl_distribution),
         "outputRoot": wsl_path(output_root, args.wsl_distribution),
-        "cargoTargetDir": wsl_path(output_root / "builds" / "rust" / "target-wsl", args.wsl_distribution),
+        "cargoTargetDir": wsl_path(cargo_target, args.wsl_distribution),
+        "linuxBuildCargoTargetDir": wsl_path(
+            output_root / "builds" / "rust" / "target-wsl",
+            args.wsl_distribution,
+        ),
         "buildRepo": wsl_path(build_repo, args.wsl_distribution),
         "appimagetool": wsl_path(appimagetool, args.wsl_distribution),
     }
-    command = ["wsl.exe"]
+    package_command = ["wsl.exe"]
     if args.wsl_distribution:
-        command.extend(("--distribution", args.wsl_distribution))
-    command.extend(
+        package_command.extend(("--distribution", args.wsl_distribution))
+    package_command.extend(
         (
             "--cd",
             translated["buildRepo"],
@@ -101,10 +106,27 @@ def main(argv: list[str] | None = None) -> int:
             args.platform,
             "--build-output-mode",
             args.build_output_mode,
+            "--skip-build",
         )
     )
-    if args.skip_build:
-        command.append("--skip-build")
+
+    build_command = [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "clients",
+        "--client",
+        "emulebb-rust",
+        "--target-os",
+        "linux",
+        "--config",
+        "Release",
+        "--platform",
+        args.platform,
+        "--build-output-mode",
+        args.build_output_mode,
+    ]
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_dir = output_root / "reports" / "rust-linux-package-launch" / run_id
@@ -119,13 +141,22 @@ def main(argv: list[str] | None = None) -> int:
             "cargoTargetDir": str(cargo_target),
         },
         "translated": translated,
+        "buildSkipped": args.skip_build,
     }
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    completed = subprocess.run(command, check=False)
-    evidence["exitCode"] = completed.returncode
+    build_exit_code = 0
+    if not args.skip_build:
+        build_exit_code = subprocess.run(build_command, cwd=build_repo, check=False).returncode
+    package_exit_code = 0
+    if build_exit_code == 0:
+        package_exit_code = subprocess.run(package_command, check=False).returncode
+    exit_code = build_exit_code or package_exit_code
+    evidence["buildExitCode"] = build_exit_code
+    evidence["packageExitCode"] = package_exit_code if build_exit_code == 0 else None
+    evidence["exitCode"] = exit_code
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"wslBoundaryEvidence": str(evidence_path), "exitCode": completed.returncode}))
-    return completed.returncode
+    print(json.dumps({"wslBoundaryEvidence": str(evidence_path), "exitCode": exit_code}))
+    return exit_code
 
 
 if __name__ == "__main__":
