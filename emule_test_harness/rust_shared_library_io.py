@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
-import shutil
 import socket
 import sqlite3
 import subprocess
@@ -15,68 +13,31 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable
 
-from . import rust_client, rust_metadata
+from . import (
+    rust_client,
+    rust_metadata,
+    rust_shared_library_fixture as fixture,
+    rust_shared_library_storage as storage,
+)
 from .paths import (
     get_required_emule_workspace_root,
     get_workspace_output_root,
     path_is_relative_to,
 )
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v1"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v2"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
-FIXTURE_SCHEMA = "emulebb.rust-shared-library-fixture.v1"
+FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
+DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
+DEFAULT_WATCHER_POLL_SECONDS = 0.5
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
-MIB = 1024 * 1024
-
-
-@dataclass(frozen=True)
-class FixtureSpec:
-    """Shape and size distribution for a deterministic synthetic library."""
-
-    top_directories: int = 100
-    leaf_directories_per_top: int = 100
-    files_per_leaf: int = 10
-    small_count: int = 80_000
-    small_size: int = 16 * 1024
-    medium_count: int = 15_000
-    medium_size: int = 256 * 1024
-    large_count: int = 5_000
-    large_size: int = 1 * MIB
-
-    @property
-    def file_count(self) -> int:
-        return (
-            self.top_directories * self.leaf_directories_per_top * self.files_per_leaf
-        )
-
-    @property
-    def bucket_count(self) -> int:
-        return self.small_count + self.medium_count + self.large_count
-
-    @property
-    def total_bytes(self) -> int:
-        return (
-            self.small_count * self.small_size
-            + self.medium_count * self.medium_size
-            + self.large_count * self.large_size
-        )
-
-    def validate(self) -> None:
-        if self.file_count != self.bucket_count:
-            raise ValueError("fixture layout and size bucket counts must match")
-        if min(asdict(self).values()) <= 0:
-            raise ValueError("fixture dimensions, counts, and sizes must be positive")
-
-
-PRODUCTION_SPEC = FixtureSpec()
-MUTATION_COUNTS = (800, 150, 50)
 
 
 @dataclass(frozen=True)
@@ -155,94 +116,17 @@ def write_json(path: Path, payload: object) -> None:
     os.replace(temporary, path)
 
 
-def file_size_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    """Map a stable file index to its requested payload size."""
-
-    if not 0 <= index < spec.file_count:
-        raise IndexError(index)
-    if index < spec.small_count:
-        return spec.small_size
-    if index < spec.small_count + spec.medium_count:
-        return spec.medium_size
-    return spec.large_size
-
-
-def relative_file_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> Path:
-    """Map one file to the 100 x 100 x 10 production tree."""
-
-    if not 0 <= index < spec.file_count:
-        raise IndexError(index)
-    files_per_top = spec.leaf_directories_per_top * spec.files_per_leaf
-    top = index // files_per_top
-    leaf = (index % files_per_top) // spec.files_per_leaf
-    return Path(f"group-{top:03d}") / f"leaf-{leaf:03d}" / f"file-{index:06d}.bin"
-
-
-def iter_fixture_files(
-    root: Path, spec: FixtureSpec = PRODUCTION_SPEC
-) -> Iterator[tuple[int, Path, int]]:
-    for index in range(spec.file_count):
-        yield (
-            index,
-            root / relative_file_for_index(index, spec),
-            file_size_for_index(index, spec),
-        )
-
-
-def mutation_indices(spec: FixtureSpec = PRODUCTION_SPEC) -> tuple[int, ...]:
-    """Select a deterministic, evenly spread 1% sample across all size tiers."""
-
-    if spec == PRODUCTION_SPEC:
-        requested = MUTATION_COUNTS
-    else:
-        requested = tuple(
-            min(count, bucket)
-            for count, bucket in zip(
-                MUTATION_COUNTS,
-                (
-                    spec.small_count,
-                    spec.medium_count,
-                    spec.large_count,
-                ),
-            )
-        )
-    starts = (0, spec.small_count, spec.small_count + spec.medium_count)
-    buckets = (spec.small_count, spec.medium_count, spec.large_count)
-    selected: list[int] = []
-    for start, bucket_count, requested_count in zip(starts, buckets, requested):
-        if requested_count == 0:
-            continue
-        selected.extend(
-            start + (offset * bucket_count // requested_count)
-            for offset in range(requested_count)
-        )
-    return tuple(selected)
-
-
-def expected_mutation_bytes(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    return sum(file_size_for_index(index, spec) for index in mutation_indices(spec))
-
-
-def deterministic_payload(
-    index: int, size: int, *, generation: str = "base-v1"
-) -> bytes:
-    """Generate reproducible, non-compressibility-dependent file content."""
-
-    seed = f"emulebb-rust-shared-library-io:{generation}:{index}".encode("ascii")
-    return hashlib.shake_256(seed).digest(size)
-
-
 def fixture_manifest(
     spec: FixtureSpec, *, status: str, disk_number: int | None
 ) -> dict[str, object]:
     return {
         "schema": FIXTURE_SCHEMA,
         "status": status,
-        "contentGeneration": "base-v1",
+        "contentGeneration": "base-v2",
         "generatedAtUtc": utc_now(),
         "cacheCondition": "bestEffort",
         "cacheFlushAttempted": False,
-        "diskNumber": disk_number,
+        "targetRoots": [{"role": "ssdBaseline", "diskNumber": disk_number}],
         "fileCount": spec.file_count,
         "totalBytes": spec.total_bytes,
         "layout": {
@@ -259,193 +143,13 @@ def fixture_manifest(
             "fileCount": len(mutation_indices(spec)),
             "totalBytes": expected_mutation_bytes(spec),
         },
+        "longPaths": {
+            "fileCount": fixture.baseline_long_path_count(spec),
+            "minimumRelativeCharacters": fixture.LONG_PATH_MIN_RELATIVE_CHARS,
+            "maximumComponentCharacters": fixture.LONG_SEGMENT_LENGTH,
+        },
+        "watcherCohort": fixture.watcher_cohort_summary(),
     }
-
-
-def _write_payload(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_bytes(payload)
-    os.replace(temporary, path)
-
-
-def validate_fixture(
-    root: Path, spec: FixtureSpec = PRODUCTION_SPEC
-) -> dict[str, object]:
-    """Fully inventory a fixture without reading payload bytes."""
-
-    file_count = 0
-    total_bytes = 0
-    empty_directory_count = 0
-    unexpected_size_count = 0
-    expected_paths = {
-        relative_file_for_index(index, spec): file_size_for_index(index, spec)
-        for index in range(spec.file_count)
-    }
-    seen: set[Path] = set()
-    for directory, subdirs, files in os.walk(root):
-        if not subdirs and not files:
-            empty_directory_count += 1
-        directory_path = Path(directory)
-        for name in files:
-            path = directory_path / name
-            relative = path.relative_to(root)
-            size = path.stat().st_size
-            file_count += 1
-            total_bytes += size
-            seen.add(relative)
-            if expected_paths.get(relative) != size:
-                unexpected_size_count += 1
-    missing_count = len(set(expected_paths) - seen)
-    unexpected_path_count = len(seen - set(expected_paths))
-    return {
-        "ok": (
-            file_count == spec.file_count
-            and total_bytes == spec.total_bytes
-            and empty_directory_count == 0
-            and unexpected_size_count == 0
-            and missing_count == 0
-            and unexpected_path_count == 0
-        ),
-        "fileCount": file_count,
-        "totalBytes": total_bytes,
-        "emptyDirectoryCount": empty_directory_count,
-        "unexpectedSizeCount": unexpected_size_count,
-        "missingCount": missing_count,
-        "unexpectedPathCount": unexpected_path_count,
-    }
-
-
-def _windows_volume_identity(path: Path) -> tuple[str, str, int | None]:
-    """Return the containing mount point, GUID volume, and physical disk number."""
-
-    if os.name != "nt":
-        return (str(path.anchor), "", None)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetVolumePathNameW.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_wchar_p,
-        ctypes.c_uint32,
-    ]
-    kernel32.GetVolumePathNameW.restype = ctypes.c_int
-    kernel32.GetVolumeNameForVolumeMountPointW.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_wchar_p,
-        ctypes.c_uint32,
-    ]
-    kernel32.GetVolumeNameForVolumeMountPointW.restype = ctypes.c_int
-    kernel32.CreateFileW.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-    ]
-    mount_buffer = ctypes.create_unicode_buffer(32_768)
-    if not kernel32.GetVolumePathNameW(str(path), mount_buffer, len(mount_buffer)):
-        raise OSError(ctypes.get_last_error(), f"GetVolumePathNameW failed for {path}")
-    mount_path = mount_buffer.value
-    volume_buffer = ctypes.create_unicode_buffer(64)
-    if not kernel32.GetVolumeNameForVolumeMountPointW(
-        mount_path, volume_buffer, len(volume_buffer)
-    ):
-        raise OSError(
-            ctypes.get_last_error(),
-            f"GetVolumeNameForVolumeMountPointW failed for {mount_path}",
-        )
-    volume_name = volume_buffer.value
-
-    kernel32.CreateFileW.restype = ctypes.c_void_p
-    handle = kernel32.CreateFileW(volume_name.rstrip("\\/"), 0, 3, None, 3, 0, None)
-    invalid_handle = ctypes.c_void_p(-1).value
-    if handle == invalid_handle:
-        raise OSError(ctypes.get_last_error(), "CreateFileW failed for resolved volume")
-    kernel32.DeviceIoControl.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.POINTER(ctypes.c_uint32),
-        ctypes.c_void_p,
-    ]
-    kernel32.DeviceIoControl.restype = ctypes.c_int
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_int
-    try:
-        buffer = ctypes.create_string_buffer(4096)
-        returned = ctypes.c_uint32()
-        ok = kernel32.DeviceIoControl(
-            handle,
-            0x00560000,
-            None,
-            0,
-            buffer,
-            len(buffer),
-            ctypes.byref(returned),
-            None,
-        )
-        disk_number = (
-            int.from_bytes(buffer.raw[8:12], "little")
-            if ok and returned.value >= 12
-            else None
-        )
-    finally:
-        kernel32.CloseHandle(handle)
-    return mount_path, volume_name, disk_number
-
-
-def physical_disk_inventory() -> list[dict[str, object]]:
-    """Read Windows disk/media/mount data without collecting serial numbers."""
-
-    if os.name != "nt":
-        return []
-    script = r"""
-$ErrorActionPreference = 'Stop'
-$media = @{}
-Get-PhysicalDisk | ForEach-Object { $media[[int]$_.DeviceId] = $_ }
-$rows = @(Get-Disk | Sort-Object Number | ForEach-Object {
-  $disk = $_
-  $physical = $media[[int]$disk.Number]
-  $volumes = @(Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | ForEach-Object {
-    $partition = $_
-    $volume = $partition | Get-Volume -ErrorAction SilentlyContinue
-    [pscustomobject]@{
-      accessPaths = @($partition.AccessPaths | Where-Object { $_ -notlike '\\?\Volume*' })
-      sizeBytes = if ($volume) { [uint64]$volume.Size } else { 0 }
-      freeBytes = if ($volume) { [uint64]$volume.SizeRemaining } else { 0 }
-    }
-  })
-  [pscustomobject]@{
-    diskNumber = [int]$disk.Number
-    friendlyName = [string]$disk.FriendlyName
-    busType = [string]$disk.BusType
-    mediaType = if ($physical) { [string]$physical.MediaType } else { 'Unspecified' }
-    sizeBytes = [uint64]$disk.Size
-    healthStatus = if ($physical) { [string]$physical.HealthStatus } else { 'Unknown' }
-    operationalStatus = [string]($disk.OperationalStatus -join ',')
-    volumes = $volumes
-  }
-})
-$rows | ConvertTo-Json -Depth 5 -Compress
-"""
-    completed = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"physical disk inventory failed: {completed.stderr.strip()}"
-        )
-    payload = json.loads(completed.stdout or "[]")
-    rows = payload if isinstance(payload, list) else [payload]
-    return [row for row in rows if isinstance(row, dict)]
 
 
 def sanitized_disk_inventory(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -492,39 +196,28 @@ def sanitized_disk_inventory(rows: list[dict[str, object]]) -> list[dict[str, ob
     return sanitized
 
 
+# Public facade aliases keep existing harness imports stable while the implementation
+# is split by responsibility.
+FixtureSpec = fixture.FixtureSpec
+PRODUCTION_SPEC = fixture.PRODUCTION_SPEC
+MIB = fixture.MIB
+MUTATION_COUNTS = fixture.MUTATION_COUNTS
+file_size_for_index = fixture.file_size_for_index
+relative_file_for_index = fixture.relative_file_for_index
+iter_fixture_files = fixture.iter_fixture_files
+mutation_indices = fixture.mutation_indices
+expected_mutation_bytes = fixture.expected_mutation_bytes
+deterministic_payload = fixture.deterministic_payload
+validate_fixture = fixture.validate_fixture
+_write_payload = fixture.write_payload
+physical_disk_inventory = storage.physical_disk_inventory
+assert_ssd_target = storage.assert_ssd_target
+
+
 def target_disk(
     paths: HarnessPaths, inventory: list[dict[str, object]]
 ) -> dict[str, object]:
-    """Resolve the generated fixture location to its physical disk record."""
-
-    probe = paths.scenario_root
-    while not probe.exists() and probe != paths.output_root:
-        probe = probe.parent
-    if not probe.exists():
-        raise RuntimeError(
-            f"EMULEBB_WORKSPACE_OUTPUT_ROOT does not exist: {paths.output_root}"
-        )
-    mount_path, volume_name, disk_number = _windows_volume_identity(probe)
-    row = next(
-        (item for item in inventory if item.get("diskNumber") == disk_number), {}
-    )
-    return {
-        "diskNumber": disk_number,
-        "mediaType": row.get("mediaType"),
-        "busType": row.get("busType"),
-        "friendlyName": row.get("friendlyName"),
-        "mountPath": mount_path,
-        "volumeName": volume_name,
-    }
-
-
-def assert_ssd_target(target: dict[str, object], *, allow_non_ssd: bool) -> None:
-    media_type = str(target.get("mediaType") or "").casefold()
-    if media_type != "ssd" and not allow_non_ssd:
-        raise RuntimeError(
-            f"fixture target disk {target.get('diskNumber')} is {target.get('mediaType')!r}, not SSD; "
-            "use --allow-non-ssd only for an intentional override"
-        )
+    return storage.target_disk(paths.scenario_root, paths.output_root, inventory)
 
 
 def prepare_fixture(
@@ -545,6 +238,10 @@ def prepare_fixture(
         )
     if paths.owner_path.is_file() and paths.manifest_path.is_file():
         existing = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
+        if existing.get("schema") != FIXTURE_SCHEMA:
+            raise RuntimeError(
+                "fixture manifest is not v2; run cleanup --confirm-delete and prepare again"
+            )
         if (
             existing.get("schema") == FIXTURE_SCHEMA
             and existing.get("status") == "prepared"
@@ -558,17 +255,21 @@ def prepare_fixture(
                     "elapsedSeconds": 0.0,
                     "fixture": validation,
                     "contentGeneration": existing.get("contentGeneration"),
-                    "targetDisk": {
-                        key: target.get(key)
-                        for key in (
-                            "diskNumber",
-                            "mediaType",
-                            "busType",
-                            "friendlyName",
-                        )
-                    },
+                    "targetRoots": [
+                        {"role": "ssdBaseline"}
+                        | {
+                            key: target.get(key)
+                            for key in (
+                                "diskNumber",
+                                "counterKey",
+                                "mediaType",
+                                "busType",
+                                "friendlyName",
+                            )
+                        }
+                    ],
                 }
-    paths.scenario_root.mkdir(parents=True, exist_ok=True)
+    storage.make_directories(paths.scenario_root)
     if not paths.owner_path.exists():
         write_json(
             paths.owner_path, {"schema": OWNER_SCHEMA, "createdAtUtc": utc_now()}
@@ -584,7 +285,7 @@ def prepare_fixture(
     reused = 0
     started = time.monotonic()
     for index, path, size in iter_fixture_files(paths.fixture_root, spec):
-        if path.is_file() and path.stat().st_size == size:
+        if storage.is_file(path) and storage.stat(path).st_size == size:
             reused += 1
             continue
         _write_payload(path, deterministic_payload(index, size))
@@ -608,10 +309,19 @@ def prepare_fixture(
         "reusedCount": reused,
         "elapsedSeconds": round(time.monotonic() - started, 3),
         "fixture": validation,
-        "targetDisk": {
-            key: target.get(key)
-            for key in ("diskNumber", "mediaType", "busType", "friendlyName")
-        },
+        "targetRoots": [
+            {"role": "ssdBaseline"}
+            | {
+                key: target.get(key)
+                for key in (
+                    "diskNumber",
+                    "counterKey",
+                    "mediaType",
+                    "busType",
+                    "friendlyName",
+                )
+            }
+        ],
     }
 
 
@@ -620,42 +330,15 @@ def load_prepared_manifest(paths: HarnessPaths) -> dict[str, object]:
         raise RuntimeError("fixture is not prepared; run the prepare subcommand first")
     owner = json.loads(paths.owner_path.read_text(encoding="utf-8"))
     manifest = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
-    if owner.get("schema") != OWNER_SCHEMA or manifest.get("schema") != FIXTURE_SCHEMA:
-        raise RuntimeError("fixture ownership or manifest schema is invalid")
+    if owner.get("schema") != OWNER_SCHEMA:
+        raise RuntimeError("fixture ownership marker is invalid")
+    if manifest.get("schema") != FIXTURE_SCHEMA:
+        raise RuntimeError(
+            "fixture manifest is not v2; run cleanup --confirm-delete and prepare again"
+        )
     if manifest.get("status") != "prepared":
         raise RuntimeError("fixture preparation did not complete")
     return manifest
-
-
-def mutate_fixture(root: Path, spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, int]:
-    """Rewrite the deterministic 1% sample and force a changed source mtime."""
-
-    total_bytes = 0
-    for index in mutation_indices(spec):
-        path = root / relative_file_for_index(index, spec)
-        size = file_size_for_index(index, spec)
-        old_mtime_ns = path.stat().st_mtime_ns
-        _write_payload(
-            path, deterministic_payload(index, size, generation="mutation-v1")
-        )
-        new_mtime_ns = max(time.time_ns(), old_mtime_ns + 2_000_000_000)
-        os.utime(path, ns=(new_mtime_ns, new_mtime_ns))
-        total_bytes += size
-    return {"fileCount": len(mutation_indices(spec)), "totalBytes": total_bytes}
-
-
-def restore_fixture_baseline(
-    root: Path, spec: FixtureSpec = PRODUCTION_SPEC
-) -> dict[str, int]:
-    """Restore only the mutation sample to its deterministic base generation."""
-
-    total_bytes = 0
-    for index in mutation_indices(spec):
-        path = root / relative_file_for_index(index, spec)
-        size = file_size_for_index(index, spec)
-        _write_payload(path, deterministic_payload(index, size))
-        total_bytes += size
-    return {"fileCount": len(mutation_indices(spec)), "totalBytes": total_bytes}
 
 
 def update_fixture_generation(paths: HarnessPaths, generation: str) -> None:
@@ -665,6 +348,12 @@ def update_fixture_generation(paths: HarnessPaths, generation: str) -> None:
     manifest["contentGeneration"] = generation
     manifest["generationUpdatedAtUtc"] = utc_now()
     write_json(paths.manifest_path, manifest)
+
+
+# These implementations own long-path-safe fixture mutation after the facade's
+# legacy helpers above have finished defining the command surface.
+mutate_fixture = fixture.mutate_fixture
+restore_fixture_baseline = fixture.restore_fixture_baseline
 
 
 def choose_loopback_port() -> int:
@@ -763,28 +452,8 @@ def _load_psutil():
     return psutil
 
 
-def disk_io_snapshot(disk_number: int | None) -> dict[str, int] | None:
-    if disk_number is None:
-        return None
-    psutil = _load_psutil()
-    rows = psutil.disk_io_counters(perdisk=True) or {}
-    keys = (f"physicaldrive{disk_number}", str(disk_number))
-    counter = next(
-        (value for name, value in rows.items() if name.casefold() in keys), None
-    )
-    if counter is None:
-        return None
-    return {
-        field: int(getattr(counter, field, 0))
-        for field in (
-            "read_count",
-            "write_count",
-            "read_bytes",
-            "write_bytes",
-            "read_time",
-            "write_time",
-        )
-    }
+def disk_io_snapshot(counter_key: str | int | None) -> dict[str, int] | None:
+    return storage.disk_io_snapshot(counter_key)
 
 
 def counter_delta(
@@ -905,7 +574,7 @@ def wait_for_reload(
     client: RestClient,
     process: subprocess.Popen[str],
     sampler: ProcessSampler,
-    disk_number: int | None,
+    disk_counter_key: str | int | None,
     expected_scanned: int,
     timeout_seconds: float,
     poll_seconds: float,
@@ -915,7 +584,7 @@ def wait_for_reload(
     started = time.monotonic()
     deadline = started + timeout_seconds
     process_start = len(sampler.samples)
-    disk_before = disk_io_snapshot(disk_number)
+    disk_before = disk_io_snapshot(disk_counter_key)
     max_active = 0
     max_disk_active = 0
     observations: list[dict[str, object]] = []
@@ -950,7 +619,7 @@ def wait_for_reload(
     if final is None:
         raise TimeoutError(f"{label} did not settle within {timeout_seconds:.0f}s")
     sampler.maybe_sample(force=True)
-    disk_after = disk_io_snapshot(disk_number)
+    disk_after = disk_io_snapshot(disk_counter_key)
     shared = client.request(
         "GET",
         "/shared-files?offset=0&limit=1",
@@ -986,8 +655,11 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
         ) as connection:
             for key, query in {
                 "knownFiles": "SELECT COUNT(*) FROM known_files",
-                "activeShareSources": "SELECT COUNT(*) FROM shared_file_sources",
+                "shareSourceRows": "SELECT COUNT(*) FROM shared_file_sources",
                 "activeShareTransfers": "SELECT COUNT(*) FROM transfers WHERE source_path_id IS NOT NULL AND removed_at_ms IS NULL",
+                "activeShareBytes": "SELECT coalesce(sum(known_files.size_bytes), 0) FROM transfers JOIN known_files ON known_files.id = transfers.known_file_id WHERE transfers.source_path_id IS NOT NULL AND transfers.removed_at_ms IS NULL",
+                "activeLongPathTransfers": "SELECT COUNT(*) FROM transfers JOIN local_paths ON local_paths.id = transfers.source_path_id WHERE transfers.removed_at_ms IS NULL AND length(local_paths.display_path) > 260",
+                "invalidActiveShareIntegrity": "SELECT COUNT(*) FROM transfers JOIN known_files ON known_files.id = transfers.known_file_id WHERE transfers.source_path_id IS NOT NULL AND transfers.removed_at_ms IS NULL AND (known_files.completed != 1 OR known_files.md4_hashset_acquired != 1 OR known_files.aich_hashset_acquired != 1 OR known_files.aich_root IS NULL OR length(known_files.aich_root) != 20)",
                 "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_ms IS NULL",
                 "scanFailures": "SELECT COUNT(*) FROM shared_file_scan_failures",
             }.items():
@@ -1000,6 +672,30 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
         "transferRootFileCount": transfer_file_count,
         "rowCounts": counts,
     }
+
+
+def storage_acceptance(
+    snapshot: dict[str, object],
+    *,
+    expected_active: int,
+    expected_bytes: int,
+    expected_minimum_long: int,
+    require_known_exact: bool = False,
+) -> dict[str, bool]:
+    counts = (
+        snapshot.get("rowCounts") if isinstance(snapshot.get("rowCounts"), dict) else {}
+    )
+    checks = {
+        "databaseActiveShares": counts.get("activeShareTransfers") == expected_active,
+        "databaseActiveBytes": counts.get("activeShareBytes") == expected_bytes,
+        "databaseHashIntegrity": counts.get("invalidActiveShareIntegrity") == 0,
+        "databaseLongPathShares": int(counts.get("activeLongPathTransfers") or 0)
+        >= expected_minimum_long,
+        "databaseScanFailures": counts.get("scanFailures") == 0,
+    }
+    if require_known_exact:
+        checks["databaseKnownFiles"] = counts.get("knownFiles") == expected_active
+    return checks
 
 
 def start_daemon(
@@ -1105,17 +801,376 @@ def rest_summary(clients: list[RestClient]) -> dict[str, object]:
     }
 
 
+def _normalized_path_key(path: str | Path) -> str:
+    logical = storage.logical_path(path)
+    normalized = os.path.normpath(os.path.abspath(os.fspath(logical)))
+    return os.path.normcase(normalized)
+
+
+def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
+    """Read active watcher-probe identities without returning paths to reports."""
+
+    database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    if not database.is_file():
+        return {}
+    with sqlite3.connect(
+        f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5
+    ) as connection:
+        rows = connection.execute(
+            """
+            SELECT lower(hex(known_files.ed2k_hash)), known_files.display_name,
+                   known_files.size_bytes, known_files.completed,
+                   known_files.md4_hashset_acquired,
+                   known_files.aich_hashset_acquired,
+                   length(known_files.aich_root), local_paths.display_path,
+                   transfers.source_mtime_ms
+            FROM known_files
+            JOIN transfers ON transfers.known_file_id = known_files.id
+            JOIN local_paths ON local_paths.id = transfers.source_path_id
+            WHERE known_files.display_name GLOB 'watch-probe-*.bin'
+              AND transfers.removed_at_ms IS NULL
+            """
+        ).fetchall()
+    return {
+        _normalized_path_key(str(row[7])): {
+            "hash": str(row[0]),
+            "name": str(row[1]),
+            "sizeBytes": int(row[2]),
+            "completed": int(row[3]),
+            "md4Acquired": int(row[4]),
+            "aichAcquired": int(row[5]),
+            "aichRootBytes": int(row[6] or 0),
+            "sourceMtimeMs": row[8],
+            "sourcePath": str(row[7]),
+        }
+        for row in rows
+    }
+
+
+def _expected_watcher_paths(
+    fixture_root: Path, *, renamed: bool
+) -> dict[str, dict[str, object]]:
+    expected: dict[str, dict[str, object]] = {}
+    for index in range(fixture.WATCHER_FILE_COUNT):
+        path = fixture_root / fixture.watcher_relative_file(index, renamed=renamed)
+        expected[_normalized_path_key(path)] = {
+            "sizeBytes": fixture.watcher_size_for_index(index),
+            "pathClass": "long"
+            if index >= fixture.WATCHER_FILE_COUNT - fixture.WATCHER_LONG_PATH_COUNT
+            else "normal",
+        }
+    return expected
+
+
+def _watcher_row_evidence(
+    rows: dict[str, dict[str, object]],
+    expected: dict[str, dict[str, object]],
+    *,
+    previous_hashes: dict[str, str] | None = None,
+    require_changed_hashes: bool = False,
+    require_same_hashes: bool = False,
+) -> tuple[dict[str, object], bool]:
+    actual_keys = set(rows)
+    expected_keys = set(expected)
+    invalid_integrity = sum(
+        1
+        for key, row in rows.items()
+        if key not in expected
+        or row["sizeBytes"] != expected[key]["sizeBytes"]
+        or row["completed"] != 1
+        or row["md4Acquired"] != 1
+        or row["aichAcquired"] != 1
+        or row["aichRootBytes"] != 20
+        or row["sourceMtimeMs"] is None
+    )
+    normal_count = sum(
+        1
+        for key in actual_keys & expected_keys
+        if expected[key]["pathClass"] == "normal"
+    )
+    long_count = sum(
+        1 for key in actual_keys & expected_keys if expected[key]["pathClass"] == "long"
+    )
+    current_hashes = {key: str(row["hash"]) for key, row in rows.items()}
+    hash_transition_ok = True
+    if previous_hashes is not None:
+        comparable = expected_keys & set(previous_hashes) & set(current_hashes)
+        if require_changed_hashes:
+            hash_transition_ok = len(comparable) == len(expected_keys) and all(
+                previous_hashes[key] != current_hashes[key] for key in comparable
+            )
+        elif require_same_hashes:
+            # Renames change path keys. Content identity is therefore compared as sets.
+            hash_transition_ok = set(previous_hashes.values()) == set(
+                current_hashes.values()
+            )
+    evidence = {
+        "activeCount": len(rows),
+        "normalPathCount": normal_count,
+        "longPathCount": long_count,
+        "totalBytes": sum(int(row["sizeBytes"]) for row in rows.values()),
+        "missingPathCount": len(expected_keys - actual_keys),
+        "unexpectedPathCount": len(actual_keys - expected_keys),
+        "invalidIntegrityCount": invalid_integrity,
+        "hashTransitionOk": hash_transition_ok,
+    }
+    ok = actual_keys == expected_keys and invalid_integrity == 0 and hash_transition_ok
+    return evidence, ok
+
+
+def _sample_watcher_rest(
+    client: RestClient,
+    rows: dict[str, dict[str, object]],
+    expected: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    """Verify a bounded 20+20 normal/long sample without paginating 100k rows."""
+
+    selected: list[tuple[str, dict[str, object]]] = []
+    for path_class in ("normal", "long"):
+        candidates = sorted(
+            (
+                (key, rows[key])
+                for key in set(rows) & set(expected)
+                if expected[key]["pathClass"] == path_class
+            ),
+            key=lambda item: str(item[1]["hash"]),
+        )
+        selected.extend(candidates[:20])
+    failures = 0
+    for key, row in selected:
+        data = client.request(
+            "GET",
+            f"/shared-files/{row['hash']}",
+            timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+        )
+        source_path = data.get("sourcePath")
+        if (
+            str(data.get("hash") or "").casefold() != str(row["hash"]).casefold()
+            or int(data.get("sizeBytes") or -1) != int(row["sizeBytes"])
+            or not isinstance(source_path, str)
+            or _normalized_path_key(source_path) != key
+        ):
+            failures += 1
+    return {
+        "sampleCount": len(selected),
+        "failureCount": failures,
+        "normalSampleCount": min(
+            20, sum(1 for value in expected.values() if value["pathClass"] == "normal")
+        ),
+        "longSampleCount": min(
+            20, sum(1 for value in expected.values() if value["pathClass"] == "long")
+        ),
+    }
+
+
+class WatcherConvergenceError(TimeoutError):
+    """A strict watcher failure carrying only sanitized phase evidence."""
+
+    def __init__(self, phase_report: dict[str, object]) -> None:
+        self.phase_report = phase_report
+        super().__init__(
+            f"{phase_report['label']} did not converge within its phase timeout"
+        )
+
+
+def run_watcher_phase(
+    *,
+    label: str,
+    action: Callable[[], dict[str, int]],
+    expected_paths: dict[str, dict[str, object]],
+    expected_catalog_total: int,
+    client: RestClient,
+    process: subprocess.Popen[str],
+    sampler: ProcessSampler,
+    profile_dir: Path,
+    disk_counter_key: str | int | None,
+    timeout_seconds: float,
+    poll_seconds: float,
+    previous_hashes: dict[str, str] | None = None,
+    require_changed_hashes: bool = False,
+    require_same_hashes: bool = False,
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Apply one live mutation and wait for REST plus SQLite convergence."""
+
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    process_start = len(sampler.samples)
+    disk_before = disk_io_snapshot(disk_counter_key)
+    operation = action()
+    final_rows: dict[str, dict[str, object]] = {}
+    final_evidence, _ = _watcher_row_evidence(
+        {},
+        expected_paths,
+        previous_hashes=previous_hashes,
+        require_changed_hashes=require_changed_hashes,
+        require_same_hashes=require_same_hashes,
+    )
+    shared_total: int | None = None
+    converged = False
+    class_convergence: dict[str, float | None] = {"normal": None, "long": None}
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"emulebb-rust exited during {label} with code {process.returncode}"
+            )
+        sampler.maybe_sample()
+        try:
+            shared = client.request(
+                "GET",
+                "/shared-files?offset=0&limit=1",
+                timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+            )
+            shared_total = int(shared.get("total") or 0)
+            rows = _watcher_database_rows(profile_dir)
+            evidence, rows_ok = _watcher_row_evidence(
+                rows,
+                expected_paths,
+                previous_hashes=previous_hashes,
+                require_changed_hashes=require_changed_hashes,
+                require_same_hashes=require_same_hashes,
+            )
+            final_rows = rows
+            final_evidence = evidence
+            for path_class in class_convergence:
+                if class_convergence[path_class] is not None:
+                    continue
+                if expected_paths:
+                    class_expected = {
+                        key: value
+                        for key, value in expected_paths.items()
+                        if value["pathClass"] == path_class
+                    }
+                    class_rows = {
+                        key: value
+                        for key, value in rows.items()
+                        if key in class_expected
+                    }
+                    class_previous = (
+                        {
+                            key: value
+                            for key, value in previous_hashes.items()
+                            if ("watcher-long-segment" in key) == (path_class == "long")
+                        }
+                        if previous_hashes is not None
+                        else None
+                    )
+                    _, class_ok = _watcher_row_evidence(
+                        class_rows,
+                        class_expected,
+                        previous_hashes=class_previous,
+                        require_changed_hashes=require_changed_hashes,
+                        require_same_hashes=require_same_hashes,
+                    )
+                else:
+                    class_ok = not rows
+                if class_ok:
+                    class_convergence[path_class] = round(time.monotonic() - started, 3)
+            if shared_total == expected_catalog_total and rows_ok:
+                converged = True
+                break
+        except sqlite3.OperationalError:
+            pass
+        time.sleep(poll_seconds)
+    sampler.maybe_sample(force=True)
+    disk_after = disk_io_snapshot(disk_counter_key)
+    rest_sample = (
+        _sample_watcher_rest(client, final_rows, expected_paths)
+        if converged and expected_paths
+        else {
+            "sampleCount": 0,
+            "failureCount": 0,
+            "normalSampleCount": 0,
+            "longSampleCount": 0,
+        }
+    )
+    elapsed = time.monotonic() - started
+    storage_snapshot = profile_storage_snapshot(profile_dir)
+    acceptance_checks = {
+        "converged": converged,
+        "catalogTotal": shared_total == expected_catalog_total,
+        "exactPaths": final_evidence["missingPathCount"] == 0
+        and final_evidence["unexpectedPathCount"] == 0,
+        "metadataIntegrity": final_evidence["invalidIntegrityCount"] == 0,
+        "hashTransition": final_evidence["hashTransitionOk"] is True,
+        "restIdentitySample": rest_sample["failureCount"] == 0,
+    } | storage_acceptance(
+        storage_snapshot,
+        expected_active=expected_catalog_total,
+        expected_bytes=PRODUCTION_SPEC.total_bytes
+        + sum(int(value["sizeBytes"]) for value in expected_paths.values()),
+        expected_minimum_long=fixture.baseline_long_path_count()
+        + sum(1 for value in expected_paths.values() if value["pathClass"] == "long"),
+    )
+    report = {
+        "label": label,
+        "elapsedSeconds": round(elapsed, 3),
+        "operation": operation,
+        "sharedFilesTotal": shared_total,
+        "database": final_evidence,
+        "restIdentitySample": rest_sample,
+        "throughput": {
+            "filesPerSecond": round(operation["fileCount"] / elapsed, 3),
+            "mibPerSecond": round(operation["totalBytes"] / MIB / elapsed, 3),
+        },
+        "pathClassConvergenceSeconds": class_convergence,
+        "process": sampler.summary(process_start),
+        "physicalDiskIoDelta": counter_delta(disk_before, disk_after),
+        "storage": storage_snapshot,
+        "acceptance": {
+            "ok": converged and all(acceptance_checks.values()),
+            "checks": acceptance_checks,
+        },
+    }
+    if not converged:
+        raise WatcherConvergenceError(report)
+    return report, {key: str(row["hash"]) for key, row in final_rows.items()}
+
+
+def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
+    marker_counts = {
+        "watcherRegistrations": 0,
+        "autoShared": 0,
+        "autoRemoved": 0,
+        "watcherErrors": 0,
+    }
+    error_markers = (
+        "failed to auto-share monitored file",
+        "failed to auto-remove monitored file",
+        "shared-directory watcher reported an error",
+        "failed to create shared-directory watcher",
+        "failed to watch shared directory",
+    )
+    for path in log_paths:
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            marker_counts["watcherRegistrations"] += int(
+                "watching shared directory for auto-pickup" in line
+            )
+            marker_counts["autoShared"] += int("auto-shared monitored file" in line)
+            marker_counts["autoRemoved"] += int(
+                "auto-removed monitored file from shared catalog" in line
+            )
+            marker_counts["watcherErrors"] += int(
+                any(marker in line for marker in error_markers)
+            )
+    return marker_counts
+
+
 def run_campaign(
     paths: HarnessPaths, args: argparse.Namespace
 ) -> tuple[Path, dict[str, object]]:
-    """Run initial, warm/no-change, and 1%-mutation phases against one profile."""
+    """Run initial scan, watcher lifecycle, reload, and persistence phases."""
 
     manifest = load_prepared_manifest(paths)
+    # A terminated prior run may have left only harness-owned probe files behind.
+    storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
+    storage.remove_tree(paths.scenario_root / "watcher-staging")
     restored = {"fileCount": 0, "totalBytes": 0}
-    if manifest.get("contentGeneration") == "mutation-v1":
+    if manifest.get("contentGeneration") == "mutation-v2":
         restored = restore_fixture_baseline(paths.fixture_root)
-        update_fixture_generation(paths, "base-v1")
-    elif manifest.get("contentGeneration") != "base-v1":
+        update_fixture_generation(paths, "base-v2")
+    elif manifest.get("contentGeneration") != "base-v2":
         raise RuntimeError(
             "fixture content generation is unknown; rerun prepare after cleanup"
         )
@@ -1133,8 +1188,26 @@ def run_campaign(
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     run_root = paths.runs_root / run_id
     profile_dir = run_root / "profile"
-    run_root.mkdir(parents=True, exist_ok=False)
+    staging_root = paths.scenario_root / "watcher-staging"
+    if storage.is_directory(run_root):
+        raise RuntimeError("generated run directory already exists")
+    storage.make_directories(run_root)
     report_path = paths.reports_root / f"rust-shared-library-io-{run_id}.json"
+    mount_path = str(target.get("mountPath") or paths.output_root.anchor)
+    storage_targets = [
+        storage.StorageTarget(
+            role="ssdBaseline",
+            root=paths.fixture_root,
+            disk_number=target.get("diskNumber"),
+            counter_key=target.get("counterKey"),
+            media_type=str(target.get("mediaType") or "Unspecified"),
+            bus_type=str(target.get("busType") or ""),
+            friendly_name=str(target.get("friendlyName") or ""),
+            mount_path=Path(mount_path),
+            expected_file_count=PRODUCTION_SPEC.file_count,
+            expected_bytes=PRODUCTION_SPEC.total_bytes,
+        )
+    ]
     report: dict[str, object] = {
         "schema": REPORT_SCHEMA,
         "status": "running",
@@ -1152,21 +1225,15 @@ def run_campaign(
         },
         "fixture": validation,
         "preRunBaselineRestore": restored,
-        "targetDisk": {
-            "diskNumber": target.get("diskNumber"),
-            "mediaType": target.get("mediaType"),
-            "busType": target.get("busType"),
-            "friendlyName": target.get("friendlyName"),
-            "mountPointFingerprint": path_fingerprint(
-                Path(str(target.get("mountPath")))
-            ),
-        },
+        "targetRoots": [item.sanitized(path_fingerprint) for item in storage_targets],
         "diskInventory": sanitized_disk_inventory(inventory),
         "phases": [],
+        "watcherLifecycle": [],
     }
     process: subprocess.Popen[str] | None = None
     client: RestClient | None = None
     clients: list[RestClient] = []
+    log_paths: list[Path] = []
     overall_started = time.monotonic()
     overall_deadline = overall_started + args.timeout_seconds
 
@@ -1178,10 +1245,14 @@ def run_campaign(
             )
         return remaining
 
+    def watcher_timeout() -> float:
+        return min(args.watcher_timeout_seconds, remaining_seconds())
+
     try:
-        port = choose_loopback_port()
+        initial_log = run_root / "initial.log"
+        log_paths.append(initial_log)
         process, client, sampler = start_daemon(
-            paths, profile_dir, run_root / "initial.log", port
+            paths, profile_dir, initial_log, choose_loopback_port()
         )
         clients.append(client)
         client.request(
@@ -1197,7 +1268,7 @@ def run_campaign(
             client=client,
             process=process,
             sampler=sampler,
-            disk_number=target.get("diskNumber"),
+            disk_counter_key=target.get("counterKey"),
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
@@ -1216,14 +1287,95 @@ def run_campaign(
                 "newCount": PRODUCTION_SPEC.file_count,
             },
         )
+        initial["acceptance"]["checks"].update(
+            storage_acceptance(
+                initial["storage"],
+                expected_active=PRODUCTION_SPEC.file_count,
+                expected_bytes=PRODUCTION_SPEC.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(),
+                require_known_exact=True,
+            )
+        )
+        initial["acceptance"]["ok"] = all(initial["acceptance"]["checks"].values())
         report["phases"].append(initial)
+
+        report["watcherStaging"] = fixture.stage_watcher_cohort(staging_root)
+        created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
+        renamed_paths = _expected_watcher_paths(paths.fixture_root, renamed=True)
+        created, created_hashes = run_watcher_phase(
+            label="watcherCreate",
+            action=lambda: fixture.install_watcher_cohort(
+                staging_root, paths.fixture_root
+            ),
+            expected_paths=created_paths,
+            expected_catalog_total=PRODUCTION_SPEC.file_count
+            + fixture.WATCHER_FILE_COUNT,
+            client=client,
+            process=process,
+            sampler=sampler,
+            profile_dir=profile_dir,
+            disk_counter_key=target.get("counterKey"),
+            timeout_seconds=watcher_timeout(),
+            poll_seconds=args.watcher_poll_seconds,
+        )
+        report["watcherLifecycle"].append(created)
+        modified, modified_hashes = run_watcher_phase(
+            label="watcherModify",
+            action=lambda: fixture.modify_watcher_cohort(paths.fixture_root),
+            expected_paths=created_paths,
+            expected_catalog_total=PRODUCTION_SPEC.file_count
+            + fixture.WATCHER_FILE_COUNT,
+            client=client,
+            process=process,
+            sampler=sampler,
+            profile_dir=profile_dir,
+            disk_counter_key=target.get("counterKey"),
+            timeout_seconds=watcher_timeout(),
+            poll_seconds=args.watcher_poll_seconds,
+            previous_hashes=created_hashes,
+            require_changed_hashes=True,
+        )
+        report["watcherLifecycle"].append(modified)
+        renamed, renamed_hashes = run_watcher_phase(
+            label="watcherRename",
+            action=lambda: fixture.rename_watcher_cohort(paths.fixture_root),
+            expected_paths=renamed_paths,
+            expected_catalog_total=PRODUCTION_SPEC.file_count
+            + fixture.WATCHER_FILE_COUNT,
+            client=client,
+            process=process,
+            sampler=sampler,
+            profile_dir=profile_dir,
+            disk_counter_key=target.get("counterKey"),
+            timeout_seconds=watcher_timeout(),
+            poll_seconds=args.watcher_poll_seconds,
+            previous_hashes=modified_hashes,
+            require_same_hashes=True,
+        )
+        report["watcherLifecycle"].append(renamed)
+        deleted, _ = run_watcher_phase(
+            label="watcherDelete",
+            action=lambda: fixture.delete_watcher_cohort(paths.fixture_root),
+            expected_paths={},
+            expected_catalog_total=PRODUCTION_SPEC.file_count,
+            client=client,
+            process=process,
+            sampler=sampler,
+            profile_dir=profile_dir,
+            disk_counter_key=target.get("counterKey"),
+            timeout_seconds=watcher_timeout(),
+            poll_seconds=args.watcher_poll_seconds,
+            previous_hashes=renamed_hashes,
+        )
+        report["watcherLifecycle"].append(deleted)
         report["initialShutdown"] = stop_daemon(process, client)
         process = None
         client = None
 
-        port = choose_loopback_port()
+        restart_log = run_root / "restart.log"
+        log_paths.append(restart_log)
         process, client, sampler = start_daemon(
-            paths, profile_dir, run_root / "restart.log", port
+            paths, profile_dir, restart_log, choose_loopback_port()
         )
         clients.append(client)
         warm_shared = client.request(
@@ -1237,6 +1389,7 @@ def run_campaign(
         report["warmRestart"] = {
             "sharedFilesTotal": warm_shared.get("total"),
             "hashingCount": warm_dirs.get("hashingCount"),
+            "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
         }
 
@@ -1246,7 +1399,7 @@ def run_campaign(
             client=client,
             process=process,
             sampler=sampler,
-            disk_number=target.get("diskNumber"),
+            disk_counter_key=target.get("counterKey"),
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
@@ -1265,20 +1418,27 @@ def run_campaign(
                 "newCount": 0,
             },
         )
+        no_change["acceptance"]["checks"].update(
+            storage_acceptance(
+                no_change["storage"],
+                expected_active=PRODUCTION_SPEC.file_count,
+                expected_bytes=PRODUCTION_SPEC.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(),
+            )
+        )
+        no_change["acceptance"]["ok"] = all(no_change["acceptance"]["checks"].values())
         report["phases"].append(no_change)
-
-        # Mutate with the watcher stopped so the explicit reload owns all 1,000
-        # changed-file hashes instead of racing live filesystem notifications.
         report["preMutationShutdown"] = stop_daemon(process, client)
         process = None
         client = None
 
         mutation = mutate_fixture(paths.fixture_root)
-        update_fixture_generation(paths, "mutation-v1")
+        update_fixture_generation(paths, "mutation-v2")
         report["mutation"] = mutation
-        port = choose_loopback_port()
+        mutation_log = run_root / "mutation.log"
+        log_paths.append(mutation_log)
         process, client, sampler = start_daemon(
-            paths, profile_dir, run_root / "mutation.log", port
+            paths, profile_dir, mutation_log, choose_loopback_port()
         )
         clients.append(client)
         client.request("POST", "/shared-directories/operations/reload", {})
@@ -1287,7 +1447,7 @@ def run_campaign(
             client=client,
             process=process,
             sampler=sampler,
-            disk_number=target.get("diskNumber"),
+            disk_counter_key=target.get("counterKey"),
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
@@ -1307,37 +1467,109 @@ def run_campaign(
                 "newCount": 0,
             },
         )
+        changed["acceptance"]["checks"].update(
+            storage_acceptance(
+                changed["storage"],
+                expected_active=PRODUCTION_SPEC.file_count,
+                expected_bytes=PRODUCTION_SPEC.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(),
+            )
+        )
+        changed["acceptance"]["ok"] = all(changed["acceptance"]["checks"].values())
         report["phases"].append(changed)
+        report["mutationShutdown"] = stop_daemon(process, client)
+        process = None
+        client = None
+
+        final_log = run_root / "final-restart.log"
+        log_paths.append(final_log)
+        process, client, _ = start_daemon(
+            paths, profile_dir, final_log, choose_loopback_port()
+        )
+        clients.append(client)
+        final_shared = client.request(
+            "GET",
+            "/shared-files?offset=0&limit=1",
+            timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+        )
+        final_dirs = client.request(
+            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        )
+        report["finalRestart"] = {
+            "sharedFilesTotal": final_shared.get("total"),
+            "hashingCount": final_dirs.get("hashingCount"),
+            "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
+            "storage": profile_storage_snapshot(profile_dir),
+        }
         report["finalShutdown"] = stop_daemon(process, client)
         process = None
         client = None
-        report["finalStorage"] = profile_storage_snapshot(profile_dir)
 
         rest = rest_summary(clients)
+        logs = watcher_log_summary(log_paths)
         report["rest"] = rest
+        report["watcherLogs"] = logs
         warm = report["warmRestart"]
+        final = report["finalRestart"]
         phase_results = [phase["acceptance"]["ok"] for phase in report["phases"]]
+        watcher_results = [
+            phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]
+        ]
         global_checks = {
             "fixtureExact": validation["ok"] is True,
+            "longPathBaselineExact": validation["longPathFileCount"]
+            == fixture.baseline_long_path_count(),
             "warmRestartCatalog": warm["sharedFilesTotal"]
             == PRODUCTION_SPEC.file_count,
             "warmRestartIdle": int(warm["hashingCount"] or 0) == 0,
+            "warmRestartNoWatcherRows": int(warm["watcherActiveCount"]) == 0,
+            "warmRestartStorage": all(
+                storage_acceptance(
+                    warm["storage"],
+                    expected_active=PRODUCTION_SPEC.file_count,
+                    expected_bytes=PRODUCTION_SPEC.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(),
+                ).values()
+            ),
+            "finalRestartCatalog": final["sharedFilesTotal"]
+            == PRODUCTION_SPEC.file_count,
+            "finalRestartIdle": int(final["hashingCount"] or 0) == 0,
+            "finalRestartNoWatcherRows": int(final["watcherActiveCount"]) == 0,
+            "finalRestartStorage": all(
+                storage_acceptance(
+                    final["storage"],
+                    expected_active=PRODUCTION_SPEC.file_count,
+                    expected_bytes=PRODUCTION_SPEC.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(),
+                ).values()
+            ),
             "mutationExact": mutation
             == {
                 "fileCount": len(mutation_indices()),
                 "totalBytes": expected_mutation_bytes(),
             },
+            "watcherRegistered": int(logs["watcherRegistrations"]) > 0,
+            "noWatcherErrors": int(logs["watcherErrors"]) == 0,
             "noRestErrors": rest["errorCount"] == 0,
-            "statusLatency": float(rest["maxStatusLatencySeconds"])
-            < STATUS_LATENCY_LIMIT_SECONDS,
             "withinTimeout": time.monotonic() - overall_started <= args.timeout_seconds,
         }
         report["acceptance"] = {
-            "ok": all(phase_results) and all(global_checks.values()),
+            "ok": all(phase_results)
+            and all(watcher_results)
+            and all(global_checks.values()),
             "phaseResults": phase_results,
+            "watcherResults": watcher_results,
             "globalChecks": global_checks,
         }
         report["status"] = "passed" if report["acceptance"]["ok"] else "failed"
+    except WatcherConvergenceError as exc:
+        report["watcherLifecycle"].append(exc.phase_report)
+        report["status"] = "failed"
+        report["error"] = {
+            "type": type(exc).__name__,
+            "phase": exc.phase_report["label"],
+        }
+        raise
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = {"type": type(exc).__name__}
@@ -1345,7 +1577,10 @@ def run_campaign(
     finally:
         if process is not None:
             report["emergencyShutdown"] = stop_daemon(process, client)
+        storage.remove_tree(staging_root)
+        storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
         report["rest"] = rest_summary(clients)
+        report["watcherLogs"] = watcher_log_summary(log_paths)
         report["finishedAtUtc"] = utc_now()
         report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
         write_json(report_path, report)
@@ -1365,16 +1600,20 @@ def describe(paths: HarnessPaths) -> dict[str, object]:
         "fixture": fixture_manifest(
             PRODUCTION_SPEC, status="planned", disk_number=target.get("diskNumber")
         ),
-        "targetDisk": {
-            key: target.get(key)
-            for key in (
-                "diskNumber",
-                "mediaType",
-                "busType",
-                "friendlyName",
-                "mountPath",
-            )
-        },
+        "targetRoots": [
+            {"role": "ssdBaseline"}
+            | {
+                key: target.get(key)
+                for key in (
+                    "diskNumber",
+                    "counterKey",
+                    "mediaType",
+                    "busType",
+                    "friendlyName",
+                    "mountPath",
+                )
+            }
+        ],
         "physicalDisks": inventory,
         "commands": {
             "prepare": "python scripts/rust-shared-library-io.py prepare",
@@ -1399,7 +1638,7 @@ def cleanup(paths: HarnessPaths, *, confirmed: bool) -> dict[str, object]:
     owner = json.loads(paths.owner_path.read_text(encoding="utf-8"))
     if owner.get("schema") != OWNER_SCHEMA:
         raise RuntimeError("cleanup refused because the ownership marker is invalid")
-    shutil.rmtree(paths.scenario_root)
+    storage.remove_tree(paths.scenario_root)
     return {
         "status": "removed",
         "recoverable": False,
@@ -1423,6 +1662,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     run.add_argument("--poll-seconds", type=float, default=2.0)
+    run.add_argument(
+        "--watcher-timeout-seconds",
+        type=float,
+        default=DEFAULT_WATCHER_TIMEOUT_SECONDS,
+    )
+    run.add_argument(
+        "--watcher-poll-seconds",
+        type=float,
+        default=DEFAULT_WATCHER_POLL_SECONDS,
+    )
     run.add_argument("--allow-non-ssd", action="store_true")
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="remove only the owned fixture/profile tree"
@@ -1440,7 +1689,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "prepare":
             result = prepare_fixture(paths, allow_non_ssd=args.allow_non_ssd)
         elif args.command == "run":
-            if args.timeout_seconds <= 0 or args.poll_seconds <= 0:
+            if (
+                args.timeout_seconds <= 0
+                or args.poll_seconds <= 0
+                or args.watcher_timeout_seconds <= 0
+                or args.watcher_poll_seconds <= 0
+            ):
                 raise RuntimeError("timeouts and poll interval must be positive")
             report_path, report = run_campaign(paths, args)
             result = {
