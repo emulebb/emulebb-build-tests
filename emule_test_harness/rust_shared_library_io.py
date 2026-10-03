@@ -30,7 +30,7 @@ from .paths import (
     path_is_relative_to,
 )
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v3"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v4"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
@@ -997,7 +997,7 @@ def _sample_watcher_rest(
             f"/shared-files/{row['hash']}",
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
-        source_path = data.get("sourcePath")
+        source_path = data.get("path")
         if (
             str(data.get("hash") or "").casefold() != str(row["hash"]).casefold()
             or int(data.get("sizeBytes") or -1) != int(row["sizeBytes"])
@@ -1022,9 +1022,12 @@ class WatcherConvergenceError(TimeoutError):
 
     def __init__(self, phase_report: dict[str, object]) -> None:
         self.phase_report = phase_report
-        super().__init__(
-            f"{phase_report['label']} did not converge within its phase timeout"
+        reason = (
+            "did not converge within its phase timeout"
+            if not phase_report["acceptance"]["checks"]["converged"]
+            else "failed strict post-convergence acceptance"
         )
+        super().__init__(f"{phase_report['label']} {reason}")
 
 
 def run_watcher_phase(
@@ -1175,7 +1178,7 @@ def run_watcher_phase(
             "checks": acceptance_checks,
         },
     }
-    if not converged:
+    if not report["acceptance"]["ok"]:
         raise WatcherConvergenceError(report)
     return report, {key: str(row["hash"]) for key, row in final_rows.items()}
 

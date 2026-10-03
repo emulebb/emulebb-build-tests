@@ -310,6 +310,26 @@ def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) ->
 
 
 @pytest.mark.unit
+def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
+    path = tmp_path / "watch-probe-0000.bin"
+    key = subject._normalized_path_key(path)
+    rows = {key: {"hash": "a" * 32, "sizeBytes": 16}}
+    expected = {key: {"sizeBytes": 16, "pathClass": "normal"}}
+
+    class FakeClient:
+        def request(
+            self, method: str, route: str, **_kwargs: object
+        ) -> dict[str, object]:
+            assert method == "GET"
+            assert route == f"/shared-files/{'a' * 32}"
+            return {"hash": "a" * 32, "sizeBytes": 16, "path": str(path)}
+
+    sample = subject._sample_watcher_rest(FakeClient(), rows, expected)
+    assert sample["sampleCount"] == 1
+    assert sample["failureCount"] == 0
+
+
+@pytest.mark.unit
 def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     profile.mkdir()
