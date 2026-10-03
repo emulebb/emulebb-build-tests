@@ -13,7 +13,34 @@ from emule_test_harness.rust_soak_metadata_migration import (
     migrate_v19_to_v20,
     migrate_v20_to_v21,
     migrate_v21_to_v22,
+    migrate_v22_to_v23,
 )
+
+KNOWN_FILES_MEDIA_COLUMNS_FOR_TEST = (
+    "media_artist",
+    "media_album",
+    "media_title",
+    "media_length_seconds",
+    "media_bitrate_kbps",
+    "media_codec",
+    "media_extractor_version",
+)
+
+KNOWN_FILES_MEDIA_DDL_LINES = (
+    "    media_artist TEXT NOT NULL DEFAULT '',\n",
+    "    media_album TEXT NOT NULL DEFAULT '',\n",
+    "    media_title TEXT NOT NULL DEFAULT '',\n",
+    "    media_length_seconds INTEGER NOT NULL DEFAULT 0 CHECK(media_length_seconds >= 0),\n",
+    "    media_bitrate_kbps INTEGER NOT NULL DEFAULT 0 CHECK(media_bitrate_kbps >= 0),\n",
+    "    media_codec TEXT NOT NULL DEFAULT '',\n",
+    "    media_extractor_version INTEGER NOT NULL DEFAULT 0 CHECK(media_extractor_version >= 0),\n",
+)
+
+
+def schema_without_media_metadata(schema_sql: str) -> str:
+    for line in KNOWN_FILES_MEDIA_DDL_LINES:
+        schema_sql = schema_sql.replace(line, "")
+    return schema_sql
 
 
 def workspace_root() -> Path:
@@ -27,7 +54,9 @@ def rust_repo() -> Path:
 def make_v15_db(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
     with sqlite3.connect(path) as conn:
-        conn.executescript(rust_metadata._schema_sql(rust_repo()))
+        conn.executescript(
+            schema_without_media_metadata(rust_metadata._schema_sql(rust_repo()))
+        )
         conn.execute(
             "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 15, 0)",
             (schema_id,),
@@ -65,7 +94,7 @@ def make_v15_db(path: Path) -> None:
 
 def make_v16_db_with_old_priority_check(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = rust_metadata._schema_sql(rust_repo()).replace(
+    old_schema = schema_without_media_metadata(rust_metadata._schema_sql(rust_repo())).replace(
         "'auto', 'not-published', 'verylow', 'low', 'normal', 'high', 'release'",
         "'auto', 'verylow', 'low', 'normal', 'high', 'release'",
     )
@@ -219,6 +248,22 @@ def make_v21_db_without_extended_server_metadata(path: Path) -> None:
         conn.commit()
 
 
+def make_v22_db_without_media_metadata(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    old_schema = schema_without_media_metadata(rust_metadata._schema_sql(rust_repo()))
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_schema)
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 22, 0)",
+            (schema_id,),
+        )
+        conn.execute(
+            "INSERT INTO known_files(ed2k_hash, size_bytes, display_name, first_seen_ms, last_seen_ms, updated_at_ms) "
+            "VALUES (zeroblob(16), 1, 'sample.mp3', 0, 0, 0)"
+        )
+        conn.commit()
+
+
 def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
     db_path = tmp_path / "emulebb-rust-metadata.db"
     make_v15_db(db_path)
@@ -237,6 +282,7 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         "migrated-v19-to-v20",
         "migrated-v20-to-v21",
         "migrated-v21-to-v22",
+        "migrated-v22-to-v23",
     ]
     assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
@@ -383,4 +429,27 @@ def test_migrates_v21_extended_server_metadata_to_v22(tmp_path: Path) -> None:
         conn.execute(
             "UPDATE servers SET dynamic_host = 'server.example', auxiliary_ports = '4662,4663'"
         )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migrates_v22_media_metadata_to_v23(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v22_db_without_media_metadata(db_path)
+
+    result = migrate_v22_to_v23(
+        db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path
+    )
+
+    assert result["action"] == "migrated-v22-to-v23"
+    assert Path(str(result["backup"])).is_file()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 23
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(known_files)")]
+        assert set(KNOWN_FILES_MEDIA_COLUMNS_FOR_TEST).issubset(columns)
+        assert conn.execute(
+            "SELECT media_artist, media_album, media_title, media_length_seconds, "
+            "media_bitrate_kbps, media_codec, media_extractor_version FROM known_files"
+        ).fetchone() == ("", "", "", 0, 0, "", 0)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE known_files SET media_extractor_version = -1")
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

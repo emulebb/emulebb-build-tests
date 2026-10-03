@@ -24,6 +24,7 @@ V19_SCHEMA_VERSION = 19
 V20_SCHEMA_VERSION = 20
 V21_SCHEMA_VERSION = 21
 V22_SCHEMA_VERSION = 22
+V23_SCHEMA_VERSION = 23
 SCHEMA = "emulebb-build-tests.rust-soak-metadata-migration.v1"
 SHARED_ROOT_COLUMNS = (
     "id",
@@ -767,6 +768,119 @@ def migrate_v21_to_v22(
     }
 
 
+KNOWN_FILES_MEDIA_COLUMNS = {
+    "media_artist": "TEXT NOT NULL DEFAULT ''",
+    "media_album": "TEXT NOT NULL DEFAULT ''",
+    "media_title": "TEXT NOT NULL DEFAULT ''",
+    "media_length_seconds": (
+        "INTEGER NOT NULL DEFAULT 0 CHECK(media_length_seconds >= 0)"
+    ),
+    "media_bitrate_kbps": (
+        "INTEGER NOT NULL DEFAULT 0 CHECK(media_bitrate_kbps >= 0)"
+    ),
+    "media_codec": "TEXT NOT NULL DEFAULT ''",
+    "media_extractor_version": (
+        "INTEGER NOT NULL DEFAULT 0 CHECK(media_extractor_version >= 0)"
+    ),
+}
+
+
+def migrate_v22_to_v23(
+    *,
+    db_path: Path,
+    rust_repo: Path,
+    backup_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Add cached media metadata to the completed-file catalog."""
+
+    db_path = db_path.resolve()
+    rust_repo = rust_repo.resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"metadata database does not exist: {db_path}")
+
+    schema_id, current_version = rust_metadata._schema_marker(rust_repo)
+    if current_version < V23_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"this migration requires Rust schema {V23_SCHEMA_VERSION}+; current schema is {current_version}"
+        )
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        before_version = schema_marker(db_path, schema_id)
+        if before_version is None:
+            raise RuntimeError(f"metadata_schema row is missing for {schema_id}")
+        columns = table_columns(conn, "known_files")
+        known_file_count = int(
+            conn.execute("SELECT count(*) FROM known_files").fetchone()[0]
+        )
+    missing = [name for name in KNOWN_FILES_MEDIA_COLUMNS if name not in columns]
+
+    if before_version >= V23_SCHEMA_VERSION and not missing:
+        return {
+            "schema": SCHEMA,
+            "action": "noop-v23-shape-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "schemaVersion": before_version,
+            "knownFiles": known_file_count,
+        }
+    if before_version != V22_SCHEMA_VERSION:
+        raise RuntimeError(
+            "metadata DB is not the bounded v22 known-files shape "
+            f"(schemaVersion={before_version}, columns={columns})"
+        )
+    added_columns = [f"known_files.{column}" for column in missing]
+    if dry_run:
+        return {
+            "schema": SCHEMA,
+            "action": "would-migrate-v22-to-v23",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "fromSchemaVersion": V22_SCHEMA_VERSION,
+            "toSchemaVersion": V23_SCHEMA_VERSION,
+            "addedColumns": added_columns,
+            "knownFiles": known_file_count,
+        }
+
+    backup_path = backup_database(db_path, backup_dir, "v22-to-v23")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for column in missing:
+                conn.execute(
+                    f"ALTER TABLE known_files ADD COLUMN {column} "
+                    f"{KNOWN_FILES_MEDIA_COLUMNS[column]}"
+                )
+            conn.execute(
+                "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
+                (V23_SCHEMA_VERSION, schema_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_issues:
+            raise RuntimeError(
+                f"foreign key check failed after migration: {fk_issues[:5]}"
+            )
+        after_version = schema_marker(db_path, schema_id)
+        after_columns = table_columns(conn, "known_files")
+
+    return {
+        "schema": SCHEMA,
+        "action": "migrated-v22-to-v23",
+        "metadataDb": str(db_path),
+        "backup": str(backup_path),
+        "schemaId": schema_id,
+        "fromSchemaVersion": before_version,
+        "toSchemaVersion": after_version,
+        "addedColumns": added_columns,
+        "columns": after_columns,
+        "knownFiles": known_file_count,
+    }
+
+
 def migrate_to_current(
     *,
     db_path: Path,
@@ -827,6 +941,7 @@ def migrate_to_current(
         V19_SCHEMA_VERSION,
         V20_SCHEMA_VERSION,
         V21_SCHEMA_VERSION,
+        V22_SCHEMA_VERSION,
     ):
         raise RuntimeError(
             f"metadata DB schemaVersion={before_version} cannot be migrated to current {current_version}"
@@ -926,6 +1041,20 @@ def migrate_to_current(
             )
         )
 
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version == V21_SCHEMA_VERSION and current_version >= V22_SCHEMA_VERSION:
+        before_version = V22_SCHEMA_VERSION
+    if before_version == V22_SCHEMA_VERSION and current_version >= V23_SCHEMA_VERSION:
+        steps.append(
+            migrate_v22_to_v23(
+                db_path=db_path,
+                rust_repo=rust_repo,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+            )
+        )
+
     final_version = (
         schema_marker(db_path, schema_id) if not dry_run else current_version
     )
@@ -940,6 +1069,7 @@ def migrate_to_current(
             "noop-v20-shape-current",
             "noop-v21-shape-current",
             "noop-v22-shape-current",
+            "noop-v23-shape-current",
         )
         for step in steps
     ):
