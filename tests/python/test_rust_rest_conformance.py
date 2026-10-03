@@ -230,8 +230,8 @@ def test_rust_openapi_documents_all_supported_nat_backends() -> None:
 
     for component in ("NatSettings", "NatSettingsUpdate"):
         assert schemas[component]["properties"]["backendOrder"]["items"]["enum"] == [
+            "pcp_natpmp",
             "upnp_miniupnpc",
-            "upnp_igd",
         ]
 
 
