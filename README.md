@@ -135,6 +135,7 @@ Script inventory:
 | `scripts\emule-live-profile-common.py` | internal Python helper | maintained | compatibility facade for live-profile launch and trace helpers |
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
 | `scripts\fake-kad-trust-soak.py` | operator-facing live soak | maintained | long-running Kad search soak for fake-file risk and Kad trust telemetry |
+| `scripts\rust-shared-library-io.py` | operator-facing Rust I/O characterization | maintained | owned 100k-file SSD fixture, isolated no-network profile, warm/no-change and 1% mutation phases |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
@@ -293,6 +294,26 @@ Real-profile process monitor:
 - run it directly with `python scripts\live-process-monitor.py --configuration
   Release`, or through the aggregate runner with
   `--suite live-process-monitor`
+
+Rust 100k shared-library I/O characterization:
+
+- `python scripts\rust-shared-library-io.py describe` inventories physical
+  disks and prints the exact SSD fixture/report locations without creating the
+  fixture. It intentionally omits disk serial numbers.
+- `prepare` creates or resumes an owned 100,000-file, 10,485,760,000-byte tree
+  below `EMULEBB_WORKSPACE_OUTPUT_ROOT\profiles`. The tree has 100 top-level
+  directories, 100 leaves per top level, and 10 generic `.bin` files per leaf.
+  It refuses a non-SSD target unless `--allow-non-ssd` is explicitly supplied.
+- `run` uses a fresh isolated profile with ED2K, Kad, NAT, and automatic connect
+  disabled. It records best-effort initial-cache hashing, a warm restart plus
+  no-change reload, and an offline 1% mutation (1,000 files / 100 MiB) followed
+  by an incremental reload. No phase claims to be a cold-cache measurement.
+- Reports below `EMULEBB_WORKSPACE_OUTPUT_ROOT\reports\emulebb-rust\shared-library-io`
+  contain sanitized path fingerprints, reload/hash counters, REST latency,
+  process and physical-disk I/O, SQLite/WAL size, and transfer-directory counts.
+- The fixture is retained for follow-up disk testing. Only
+  `cleanup --confirm-delete` removes its owned fixture/profile tree; reports are
+  retained.
 
 Fake/Kad trust soak lane:
 
