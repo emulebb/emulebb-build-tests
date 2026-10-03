@@ -760,6 +760,7 @@ def run_dynamic_reload_phase(
     timeout_seconds: float,
     poll_seconds: float,
     expected_scanned: int | None = None,
+    checkpoint: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Run a reload whose real-media file count is intentionally unknown."""
 
@@ -799,8 +800,29 @@ def run_dynamic_reload_phase(
             *(int(value or 0) for value in progress["diskActiveCounts"]),
             0,
         )
-        if not observations or time.monotonic() - started >= len(observations) * 30:
+        captured_observation = (
+            not observations
+            or time.monotonic() - started >= len(observations) * 30
+        )
+        if captured_observation:
             observations.append(progress)
+            if checkpoint is not None:
+                disk_now = disk_io_snapshots(counter_keys)
+                checkpoint(
+                    {
+                        "label": label,
+                        "status": "running",
+                        "elapsedSeconds": round(time.monotonic() - started, 3),
+                        "progress": progress,
+                        "maxActiveHashCount": max_active,
+                        "maxPerDiskActiveCount": max_disk_active,
+                        "process": sampler.summary(process_start),
+                        "physicalDiskIoDeltas": disk_io_deltas(
+                            disk_before, disk_now
+                        ),
+                        "observations": observations[-20:],
+                    }
+                )
         count_ok = expected_scanned is None or scanned == expected_scanned
         if (
             saw_activity
@@ -2011,6 +2033,13 @@ def run_media_campaign(
             )
         return remaining
 
+    def checkpoint(phase: dict[str, object]) -> None:
+        report["inProgressPhase"] = phase
+        report["rest"] = rest_summary(clients)
+        report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+        write_json(report_path, report)
+
+    write_json(report_path, report)
     try:
         process, client, sampler = start_daemon(
             paths, profile_dir, run_root / "initial.log", choose_loopback_port()
@@ -2032,7 +2061,9 @@ def run_media_campaign(
             counter_keys=counter_keys,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            checkpoint=checkpoint,
         )
+        report.pop("inProgressPhase", None)
         initial["storage"] = profile_storage_snapshot(profile_dir)
         initial["acceptance"] = media_initial_acceptance(
             initial, expected_disk_count=len(counter_keys)
@@ -2071,7 +2102,9 @@ def run_media_campaign(
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
             expected_scanned=int(initial["progress"]["scannedCount"]),
+            checkpoint=checkpoint,
         )
+        report.pop("inProgressPhase", None)
         no_change["storage"] = profile_storage_snapshot(profile_dir)
         no_change["acceptance"] = media_no_change_acceptance(
             no_change, initial=initial
@@ -2101,6 +2134,9 @@ def run_media_campaign(
             ],
         }
         report["status"] = "passed" if report["acceptance"]["ok"] else "failed"
+    except KeyboardInterrupt:
+        report["status"] = "interrupted"
+        report["error"] = {"type": "KeyboardInterrupt"}
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = {"type": type(exc).__name__}
@@ -2146,7 +2182,7 @@ def inspect_partial_media_run(
 ) -> dict[str, object]:
     """Summarize the durable, path-free evidence left by an interrupted run."""
 
-    scenario_root, _ = media_campaign_paths(paths)
+    scenario_root, reports_root = media_campaign_paths(paths)
     runs_root = scenario_root / "runs"
     if run_id:
         run_root = runs_root / run_id
@@ -2190,6 +2226,23 @@ def inspect_partial_media_run(
     probe_errors = sum("reached probe limit" in line for line in log_lines)
     error_lines = sum(" ERROR " in line for line in log_lines)
     counts = snapshot["rowCounts"]
+    retained_report_path = (
+        reports_root / f"rust-shared-library-media-io-{resolved_run.name}.json"
+    )
+    retained_report: dict[str, object] = {}
+    if retained_report_path.is_file():
+        candidate = json.loads(retained_report_path.read_text(encoding="utf-8"))
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("schema") == MEDIA_REPORT_SCHEMA
+            and candidate.get("runId") == resolved_run.name
+        ):
+            retained_report = candidate
+    retained_progress = (
+        retained_report.get("inProgressPhase")
+        if isinstance(retained_report.get("inProgressPhase"), dict)
+        else None
+    )
     checks = {
         "hashesCommitted": int(hash_rows) > 0,
         "allKnownRowsHaveHashes": int(hash_rows) == int(counts.get("knownFiles") or 0),
@@ -2217,11 +2270,15 @@ def inspect_partial_media_run(
             "mediaProbeLimitErrorCount": probe_errors,
             "unexpectedErrorCount": error_lines - probe_errors,
         },
+        "retainedProgress": retained_progress,
         "checks": checks,
         "limitations": {
-            "cleanCompletion": False,
-            "liveProgressCountersRetained": False,
-            "perDiskIoDeltasRetained": False,
+            "cleanCompletion": retained_report.get("status") == "passed",
+            "liveProgressCountersRetained": retained_progress is not None,
+            "perDiskIoDeltasRetained": bool(
+                retained_progress
+                and isinstance(retained_progress.get("physicalDiskIoDeltas"), dict)
+            ),
         },
     }
 
@@ -2389,6 +2446,8 @@ def main(argv: list[str] | None = None) -> int:
         else:  # pragma: no cover - argparse enforces this
             raise RuntimeError(f"unsupported command: {args.command}")
         print(json.dumps(result, indent=2, sort_keys=True))
+        if result.get("status") == "interrupted":
+            return 130
         return 0 if result.get("status") not in {"failed"} else 1
     except (
         OSError,

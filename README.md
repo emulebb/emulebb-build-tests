@@ -339,7 +339,9 @@ Rust 100k shared-library I/O characterization:
 - `media-inspect [--run-id ID]` summarizes the durable hash/catalog evidence
   left by an operator-interrupted multi-HDD run. It distinguishes unique hashes
   from duplicate source paths and reports only aggregate counts, bytes, storage
-  integrity, and sanitized log classes.
+  integrity, and sanitized log classes. `media-run` checkpoints live progress,
+  process I/O, and cumulative per-disk deltas every 30 seconds, and Ctrl+C
+  records an explicit `interrupted` report before stopping the isolated daemon.
 
 Fake/Kad trust soak lane:
 

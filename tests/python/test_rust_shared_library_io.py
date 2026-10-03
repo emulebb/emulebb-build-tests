@@ -649,6 +649,19 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
             }
         },
     )
+    _, reports_root = subject.media_campaign_paths(paths)
+    subject.write_json(
+        reports_root / f"rust-shared-library-media-io-{run.name}.json",
+        {
+            "schema": subject.MEDIA_REPORT_SCHEMA,
+            "runId": run.name,
+            "status": "interrupted",
+            "inProgressPhase": {
+                "progress": {"hashedCount": 2},
+                "physicalDiskIoDeltas": {"physicaldrive1": {"read_bytes": 30}},
+            },
+        },
+    )
 
     result = subject.inspect_partial_media_run(paths, run.name)
 
@@ -656,3 +669,88 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
     assert result["committedHashes"] == {"fileCount": 2, "totalBytes": 30}
     assert result["checks"]["activeSourcesCoverHashes"] is True
     assert result["logs"]["unexpectedErrorCount"] == 0
+    assert result["retainedProgress"]["progress"]["hashedCount"] == 2
+    assert result["limitations"] == {
+        "cleanCompletion": False,
+        "liveProgressCountersRetained": True,
+        "perDiskIoDeltasRetained": True,
+    }
+
+
+@pytest.mark.unit
+def test_dynamic_reload_checkpoints_running_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def response(*, running: bool, started: int, scanned: int) -> dict[str, object]:
+        return {
+            "hashingCount": int(running),
+            "reloadProgress": {
+                "running": running,
+                "pending": False,
+                "scannedCount": scanned,
+                "startedAtMs": started,
+                "activeHashCount": int(running),
+                "disks": [{"activeCount": int(running)}],
+            },
+        }
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.directories = [
+                response(running=False, started=1, scanned=0),
+                response(running=True, started=2, scanned=4),
+                response(running=False, started=2, scanned=8),
+            ]
+
+        def request(self, _method: str, route: str, **_kwargs: object):
+            if route == "/shared-directories":
+                return self.directories.pop(0)
+            return {"total": 8}
+
+    class FakeProcess:
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    class FakeSampler:
+        samples: list[dict[str, object]] = []
+
+        @staticmethod
+        def maybe_sample(*, force: bool = False) -> None:
+            del force
+
+        @staticmethod
+        def summary(_start_index: int = 0) -> dict[str, object]:
+            return {"sampleCount": 1}
+
+    snapshots = iter(
+        [
+            {"physicaldrive1": {"read_count": 1}},
+            {"physicaldrive1": {"read_count": 2}},
+            {"physicaldrive1": {"read_count": 3}},
+        ]
+    )
+    monkeypatch.setattr(subject, "disk_io_snapshots", lambda _keys: next(snapshots))
+    checkpoints: list[dict[str, object]] = []
+
+    phase = subject.run_dynamic_reload_phase(
+        label="test",
+        action=lambda: None,
+        client=FakeClient(),
+        process=FakeProcess(),
+        sampler=FakeSampler(),
+        counter_keys=["physicaldrive1"],
+        timeout_seconds=1,
+        poll_seconds=0.001,
+        expected_scanned=8,
+        checkpoint=checkpoints.append,
+    )
+
+    assert phase["progress"]["scannedCount"] == 8
+    assert checkpoints[0]["status"] == "running"
+    assert checkpoints[0]["progress"]["scannedCount"] == 4
+    assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {
+        "read_count": 1
+    }
