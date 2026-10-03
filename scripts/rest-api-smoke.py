@@ -371,6 +371,7 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getTransfer": (404,),
     "patchTransfer": (404,),
     "getTransferDetails": (404,),
+    "listTransferComments": (404,),
     "listTransferSources": (404,),
     "getTransferSource": (404,),
     "browseTransferSource": (404,),
