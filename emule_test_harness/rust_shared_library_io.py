@@ -1,4 +1,4 @@
-"""Deterministic 100k-file SSD I/O characterization for eMuleBB Rust."""
+"""SSD fixture and read-only multi-disk I/O characterization for eMuleBB Rust."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from .paths import (
 )
 
 REPORT_SCHEMA = "emulebb.rust-shared-library-io.v4"
+MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
@@ -38,6 +39,10 @@ DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
+DEFAULT_MEDIA_ROOTS_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "live-wire-emulebb-rust-sharedroots.local.txt"
+)
 
 
 @dataclass(frozen=True)
@@ -218,6 +223,96 @@ def target_disk(
     paths: HarnessPaths, inventory: list[dict[str, object]]
 ) -> dict[str, object]:
     return storage.target_disk(paths.scenario_root, paths.output_root, inventory)
+
+
+def load_media_roots(path: Path) -> list[Path]:
+    """Load private operator roots without publishing their names in reports."""
+
+    if not path.is_file():
+        raise RuntimeError(f"multi-HDD roots file is missing: {path}")
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8-sig").splitlines(), start=1
+    ):
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            raise RuntimeError(
+                f"multi-HDD root on line {line_number} must be absolute"
+            )
+        if not candidate.is_dir():
+            raise RuntimeError(
+                f"multi-HDD root on line {line_number} is not an existing directory"
+            )
+        resolved = candidate.resolve(strict=True)
+        key = os.path.normcase(str(resolved))
+        if key in seen:
+            raise RuntimeError(f"multi-HDD root on line {line_number} is duplicated")
+        seen.add(key)
+        roots.append(resolved)
+    if not roots:
+        raise RuntimeError("multi-HDD roots file contains no directories")
+    for index, root in enumerate(roots):
+        for other in roots[index + 1 :]:
+            if path_is_relative_to(root, other) or path_is_relative_to(other, root):
+                raise RuntimeError("multi-HDD roots must not overlap or nest")
+    return roots
+
+
+def media_storage_targets(
+    roots: list[Path], inventory: list[dict[str, object]], *, allow_non_hdd: bool
+) -> list[storage.StorageTarget]:
+    """Resolve private roots to distinct physical-disk evidence."""
+
+    targets: list[storage.StorageTarget] = []
+    for index, root in enumerate(roots):
+        target = storage.target_disk(root, Path(root.anchor), inventory)
+        media_type = str(target.get("mediaType") or "Unspecified")
+        if media_type.casefold() != "hdd" and not allow_non_hdd:
+            raise RuntimeError(
+                f"multi-HDD root {index + 1} resolved to {media_type!r}; "
+                "use --allow-non-hdd only for an intentional mixed-media run"
+            )
+        counter_key = target.get("counterKey")
+        if counter_key is None:
+            raise RuntimeError(
+                f"multi-HDD root {index + 1} has no physical-disk counter"
+            )
+        targets.append(
+            storage.StorageTarget(
+                role=f"mediaRoot{index + 1}",
+                root=root,
+                disk_number=target.get("diskNumber"),
+                counter_key=counter_key,
+                media_type=media_type,
+                bus_type=str(target.get("busType") or ""),
+                friendly_name=str(target.get("friendlyName") or ""),
+                mount_path=Path(str(target.get("mountPath") or root.anchor)),
+                expected_file_count=0,
+                expected_bytes=0,
+            )
+        )
+    return targets
+
+
+def distinct_counter_keys(
+    targets: list[storage.StorageTarget],
+) -> list[str | int]:
+    """Return stable physical counters in first-root order."""
+
+    result: list[str | int] = []
+    seen: set[str] = set()
+    for target in targets:
+        if target.counter_key is None:
+            continue
+        key = str(target.counter_key).casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(target.counter_key)
+    return result
 
 
 def prepare_fixture(
@@ -638,6 +733,107 @@ def wait_for_reload(
     }
 
 
+def disk_io_snapshots(
+    counter_keys: list[str | int],
+) -> dict[str, dict[str, int] | None]:
+    return {str(key): disk_io_snapshot(key) for key in counter_keys}
+
+
+def disk_io_deltas(
+    before: dict[str, dict[str, int] | None],
+    after: dict[str, dict[str, int] | None],
+) -> dict[str, dict[str, int] | None]:
+    return {
+        key: counter_delta(snapshot, after.get(key))
+        for key, snapshot in before.items()
+    }
+
+
+def run_dynamic_reload_phase(
+    *,
+    label: str,
+    action: Callable[[], object],
+    client: RestClient,
+    process: subprocess.Popen[str],
+    sampler: ProcessSampler,
+    counter_keys: list[str | int],
+    timeout_seconds: float,
+    poll_seconds: float,
+    expected_scanned: int | None = None,
+) -> dict[str, object]:
+    """Run a reload whose real-media file count is intentionally unknown."""
+
+    before_dirs = client.request(
+        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+    )
+    before_progress = compact_progress(before_dirs)
+    before_started = before_progress.get("startedAtMs")
+    disk_before = disk_io_snapshots(counter_keys)
+    process_start = len(sampler.samples)
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    action()
+    max_active = 0
+    max_disk_active = 0
+    observations: list[dict[str, object]] = []
+    final: dict[str, object] | None = None
+    saw_activity = False
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"emulebb-rust exited during {label} with code {process.returncode}"
+            )
+        sampler.maybe_sample()
+        data = client.request(
+            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        )
+        progress = compact_progress(data)
+        scanned = int(progress.get("scannedCount") or 0)
+        saw_activity = saw_activity or bool(progress.get("running")) or (
+            progress.get("startedAtMs") is not None
+            and progress.get("startedAtMs") != before_started
+        )
+        max_active = max(max_active, int(progress.get("activeHashCount") or 0))
+        max_disk_active = max(
+            max_disk_active,
+            *(int(value or 0) for value in progress["diskActiveCounts"]),
+            0,
+        )
+        if not observations or time.monotonic() - started >= len(observations) * 30:
+            observations.append(progress)
+        count_ok = expected_scanned is None or scanned == expected_scanned
+        if (
+            saw_activity
+            and count_ok
+            and progress.get("running") is False
+            and progress.get("pending") is False
+            and int(data.get("hashingCount") or 0) == 0
+        ):
+            final = progress
+            break
+        time.sleep(poll_seconds)
+    if final is None:
+        raise TimeoutError(f"{label} did not settle within {timeout_seconds:.0f}s")
+    sampler.maybe_sample(force=True)
+    disk_after = disk_io_snapshots(counter_keys)
+    shared = client.request(
+        "GET",
+        "/shared-files?offset=0&limit=1",
+        timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+    )
+    return {
+        "label": label,
+        "elapsedSeconds": round(time.monotonic() - started, 3),
+        "sharedFilesTotal": shared.get("total"),
+        "progress": final,
+        "maxActiveHashCount": max_active,
+        "maxPerDiskActiveCount": max_disk_active,
+        "process": sampler.summary(process_start),
+        "physicalDiskIoDeltas": disk_io_deltas(disk_before, disk_after),
+        "observations": observations[-20:],
+    }
+
+
 def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
     database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
     paths = (database, Path(str(database) + "-wal"), Path(str(database) + "-shm"))
@@ -829,6 +1025,89 @@ def phase_acceptance(
         )
     if "newCount" in expected:
         checks["newCount"] = progress.get("newCount") == expected["newCount"]
+    return {"ok": all(checks.values()), "checks": checks}
+
+
+def media_initial_acceptance(
+    phase: dict[str, object], *, expected_disk_count: int
+) -> dict[str, object]:
+    progress = phase.get("progress") if isinstance(phase.get("progress"), dict) else {}
+    storage_snapshot = (
+        phase.get("storage") if isinstance(phase.get("storage"), dict) else {}
+    )
+    counts = (
+        storage_snapshot.get("rowCounts")
+        if isinstance(storage_snapshot.get("rowCounts"), dict)
+        else {}
+    )
+    planned = int(progress.get("plannedHashCount") or 0)
+    hashed = int(progress.get("hashedCount") or 0)
+    failed = int(progress.get("failedHashCount") or 0)
+    shared_total = int(phase.get("sharedFilesTotal") or 0)
+    disk_deltas = (
+        phase.get("physicalDiskIoDeltas")
+        if isinstance(phase.get("physicalDiskIoDeltas"), dict)
+        else {}
+    )
+    checks = {
+        "scannedFiles": int(progress.get("scannedCount") or 0) > 0,
+        "plannedFiles": planned > 0,
+        "hashPlanCompleted": hashed + failed == planned,
+        "hashFailures": failed == 0,
+        "statFailures": int(progress.get("statFailedCount") or 0) == 0,
+        "skippedFailures": int(progress.get("skippedFailedCount") or 0) == 0,
+        "skippedIntake": int(progress.get("skippedIntakeCount") or 0) == 0,
+        "physicalDiskCount": progress.get("diskCount") == expected_disk_count,
+        "crossDiskConcurrency": int(phase.get("maxActiveHashCount") or 0) >= 2,
+        "boundedCrossDiskConcurrency": int(phase.get("maxActiveHashCount") or 0)
+        <= expected_disk_count,
+        "serializedPerDisk": int(phase.get("maxPerDiskActiveCount") or 0) <= 1,
+        "diskCountersAvailable": len(disk_deltas) == expected_disk_count
+        and all(isinstance(value, dict) for value in disk_deltas.values()),
+        "physicalReadsObserved": len(disk_deltas) == expected_disk_count
+        and all(
+            int(value.get("read_count") or 0) > 0
+            for value in disk_deltas.values()
+            if isinstance(value, dict)
+        ),
+        "catalogNonEmpty": shared_total > 0,
+        "databaseHasSources": int(counts.get("activeShareSources") or 0) > 0,
+        "databaseHashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0)
+        == 0,
+        "databaseScanFailures": int(counts.get("scanFailures") or 0) == 0,
+        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+    }
+    return {"ok": all(checks.values()), "checks": checks}
+
+
+def media_no_change_acceptance(
+    phase: dict[str, object], *, initial: dict[str, object]
+) -> dict[str, object]:
+    progress = phase.get("progress") if isinstance(phase.get("progress"), dict) else {}
+    initial_progress = (
+        initial.get("progress") if isinstance(initial.get("progress"), dict) else {}
+    )
+    checks = {
+        "catalogStable": phase.get("sharedFilesTotal") == initial.get("sharedFilesTotal"),
+        "scannedCountStable": progress.get("scannedCount")
+        == initial_progress.get("scannedCount"),
+        "noHashPlan": int(progress.get("plannedHashCount") or 0) == 0,
+        "noHashing": int(progress.get("hashedCount") or 0) == 0,
+        "noPayloadReadPlan": int(progress.get("plannedReadBytes") or 0) == 0,
+        "noPayloadRead": int(progress.get("completedReadBytes") or 0) == 0,
+        "allReused": progress.get("reusedCount") == progress.get("scannedCount"),
+        "noHashDisks": int(progress.get("diskCount") or 0) == 0,
+        "noFailures": all(
+            int(progress.get(field) or 0) == 0
+            for field in (
+                "failedHashCount",
+                "statFailedCount",
+                "skippedFailedCount",
+                "skippedIntakeCount",
+            )
+        ),
+        "serializedPerDisk": int(phase.get("maxPerDiskActiveCount") or 0) <= 1,
+    }
     return {"ok": all(checks.values()), "checks": checks}
 
 
@@ -1664,6 +1943,204 @@ def run_campaign(
     return report_path, report
 
 
+def media_campaign_paths(paths: HarnessPaths) -> tuple[Path, Path]:
+    scenario_root = paths.output_root / "profiles" / "emulebb-rust-shared-library-media-io"
+    reports_root = paths.output_root / "reports" / "emulebb-rust" / "shared-library-media-io"
+    if not path_is_relative_to(scenario_root, paths.output_root):
+        raise RuntimeError("multi-HDD profile root escaped EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    return scenario_root, reports_root
+
+
+def run_media_campaign(
+    paths: HarnessPaths, args: argparse.Namespace
+) -> tuple[Path, dict[str, object]]:
+    """Hash operator-selected media roots without mutating their contents."""
+
+    roots_file = Path(args.roots_file).resolve(strict=True)
+    roots = load_media_roots(roots_file)
+    inventory = physical_disk_inventory()
+    targets = media_storage_targets(
+        roots, inventory, allow_non_hdd=bool(args.allow_non_hdd)
+    )
+    counter_keys = distinct_counter_keys(targets)
+    if len(counter_keys) < args.minimum_disks:
+        raise RuntimeError(
+            f"multi-HDD run resolved only {len(counter_keys)} physical disks; "
+            f"at least {args.minimum_disks} are required"
+        )
+    if not paths.staged_executable.is_file():
+        raise RuntimeError(
+            f"staged emulebb-rust executable is missing: {paths.staged_executable}"
+        )
+    scenario_root, reports_root = media_campaign_paths(paths)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    run_root = scenario_root / "runs" / run_id
+    profile_dir = run_root / "profile"
+    report_path = reports_root / f"rust-shared-library-media-io-{run_id}.json"
+    if run_root.exists():
+        raise RuntimeError("generated multi-HDD run directory already exists")
+    storage.make_directories(run_root)
+    report: dict[str, object] = {
+        "schema": MEDIA_REPORT_SCHEMA,
+        "status": "running",
+        "runId": run_id,
+        "startedAtUtc": utc_now(),
+        "mode": "readOnlyExistingMedia",
+        "sourceRootCount": len(roots),
+        "physicalDiskCount": len(counter_keys),
+        "paths": {
+            "rootsFileFingerprint": path_fingerprint(roots_file),
+            "profileFingerprint": path_fingerprint(profile_dir),
+            "outputRootFingerprint": path_fingerprint(paths.output_root),
+        },
+        "targetRoots": [target.sanitized(path_fingerprint) for target in targets],
+        "diskInventory": sanitized_disk_inventory(inventory),
+        "phases": [],
+    }
+    process: subprocess.Popen[str] | None = None
+    client: RestClient | None = None
+    clients: list[RestClient] = []
+    started = time.monotonic()
+    deadline = started + args.timeout_seconds
+
+    def remaining_seconds() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"multi-HDD campaign exceeded the {args.timeout_seconds:.0f}s timeout"
+            )
+        return remaining
+
+    try:
+        process, client, sampler = start_daemon(
+            paths, profile_dir, run_root / "initial.log", choose_loopback_port()
+        )
+        clients.append(client)
+        initial = run_dynamic_reload_phase(
+            label="multiHddInitial",
+            action=lambda: client.request(
+                "PATCH",
+                "/shared-directories",
+                {
+                    "confirmReplaceRoots": True,
+                    "roots": [{"path": str(root) + os.sep} for root in roots],
+                },
+            ),
+            client=client,
+            process=process,
+            sampler=sampler,
+            counter_keys=counter_keys,
+            timeout_seconds=remaining_seconds(),
+            poll_seconds=args.poll_seconds,
+        )
+        initial["storage"] = profile_storage_snapshot(profile_dir)
+        initial["acceptance"] = media_initial_acceptance(
+            initial, expected_disk_count=len(counter_keys)
+        )
+        report["phases"].append(initial)
+        report["initialShutdown"] = stop_daemon(process, client)
+        process = None
+        client = None
+
+        process, client, sampler = start_daemon(
+            paths, profile_dir, run_root / "restart.log", choose_loopback_port()
+        )
+        clients.append(client)
+        warm_shared = client.request(
+            "GET",
+            "/shared-files?offset=0&limit=1",
+            timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
+        )
+        warm_dirs = client.request(
+            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        )
+        report["warmRestart"] = {
+            "sharedFilesTotal": warm_shared.get("total"),
+            "hashingCount": warm_dirs.get("hashingCount"),
+            "storage": profile_storage_snapshot(profile_dir),
+        }
+        no_change = run_dynamic_reload_phase(
+            label="multiHddNoChangeReload",
+            action=lambda: client.request(
+                "POST", "/shared-directories/operations/reload", {}
+            ),
+            client=client,
+            process=process,
+            sampler=sampler,
+            counter_keys=counter_keys,
+            timeout_seconds=remaining_seconds(),
+            poll_seconds=args.poll_seconds,
+            expected_scanned=int(initial["progress"]["scannedCount"]),
+        )
+        no_change["storage"] = profile_storage_snapshot(profile_dir)
+        no_change["acceptance"] = media_no_change_acceptance(
+            no_change, initial=initial
+        )
+        report["phases"].append(no_change)
+        report["finalShutdown"] = stop_daemon(process, client)
+        process = None
+        client = None
+
+        warm = report["warmRestart"]
+        global_checks = {
+            "readOnlyMode": report["mode"] == "readOnlyExistingMedia",
+            "initialAccepted": initial["acceptance"]["ok"] is True,
+            "warmCatalogStable": warm["sharedFilesTotal"]
+            == initial["sharedFilesTotal"],
+            "warmIdle": int(warm["hashingCount"] or 0) == 0,
+            "noChangeAccepted": no_change["acceptance"]["ok"] is True,
+            "noRestErrors": rest_summary(clients)["errorCount"] == 0,
+            "withinTimeout": time.monotonic() - started <= args.timeout_seconds,
+        }
+        report["acceptance"] = {
+            "ok": all(global_checks.values()),
+            "globalChecks": global_checks,
+            "phaseResults": [
+                initial["acceptance"]["ok"],
+                no_change["acceptance"]["ok"],
+            ],
+        }
+        report["status"] = "passed" if report["acceptance"]["ok"] else "failed"
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = {"type": type(exc).__name__}
+        raise
+    finally:
+        if process is not None:
+            report["emergencyShutdown"] = stop_daemon(process, client)
+        report["rest"] = rest_summary(clients)
+        report["finishedAtUtc"] = utc_now()
+        report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+        write_json(report_path, report)
+    return report_path, report
+
+
+def describe_media_roots(
+    paths: HarnessPaths, roots_file: Path, *, allow_non_hdd: bool
+) -> dict[str, object]:
+    roots_file = roots_file.resolve(strict=True)
+    roots = load_media_roots(roots_file)
+    inventory = physical_disk_inventory()
+    targets = media_storage_targets(roots, inventory, allow_non_hdd=allow_non_hdd)
+    counter_keys = distinct_counter_keys(targets)
+    _, reports_root = media_campaign_paths(paths)
+    return {
+        "schema": MEDIA_REPORT_SCHEMA,
+        "command": "media-describe",
+        "mode": "readOnlyExistingMedia",
+        "sourceRootCount": len(roots),
+        "physicalDiskCount": len(counter_keys),
+        "rootsFileFingerprint": path_fingerprint(roots_file),
+        "targetRoots": [target.sanitized(path_fingerprint) for target in targets],
+        "physicalDisks": sanitized_disk_inventory(inventory),
+        "reportDirectory": str(reports_root),
+        "stagedExecutable": str(paths.staged_executable),
+        "commands": {
+            "run": "python scripts/rust-shared-library-io.py media-run"
+        },
+    }
+
+
 def describe(paths: HarnessPaths) -> dict[str, object]:
     inventory = physical_disk_inventory()
     target = target_disk(paths, inventory)
@@ -1750,6 +2227,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WATCHER_POLL_SECONDS,
     )
     run.add_argument("--allow-non-ssd", action="store_true")
+    media_describe = subparsers.add_parser(
+        "media-describe",
+        help="resolve private existing media roots without scanning their contents",
+    )
+    media_describe.add_argument(
+        "--roots-file", type=Path, default=DEFAULT_MEDIA_ROOTS_FILE
+    )
+    media_describe.add_argument("--allow-non-hdd", action="store_true")
+    media_run = subparsers.add_parser(
+        "media-run",
+        help="run a read-only initial and no-change scan across existing media roots",
+    )
+    media_run.add_argument("--roots-file", type=Path, default=DEFAULT_MEDIA_ROOTS_FILE)
+    media_run.add_argument("--timeout-seconds", type=float, default=12 * 60 * 60)
+    media_run.add_argument("--poll-seconds", type=float, default=2.0)
+    media_run.add_argument("--minimum-disks", type=int, default=2)
+    media_run.add_argument("--allow-non-hdd", action="store_true")
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="remove only the owned fixture/profile tree"
     )
@@ -1774,6 +2268,25 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise RuntimeError("timeouts and poll interval must be positive")
             report_path, report = run_campaign(paths, args)
+            result = {
+                "status": report["status"],
+                "reportPath": str(report_path),
+                "reportFingerprint": path_fingerprint(report_path),
+            }
+        elif args.command == "media-describe":
+            result = describe_media_roots(
+                paths, args.roots_file, allow_non_hdd=args.allow_non_hdd
+            )
+        elif args.command == "media-run":
+            if (
+                args.timeout_seconds <= 0
+                or args.poll_seconds <= 0
+                or args.minimum_disks < 2
+            ):
+                raise RuntimeError(
+                    "media timeout/poll must be positive and minimum disks at least two"
+                )
+            report_path, report = run_media_campaign(paths, args)
             result = {
                 "status": report["status"],
                 "reportPath": str(report_path),

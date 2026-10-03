@@ -474,3 +474,133 @@ def test_parser_exposes_independent_watcher_timing() -> None:
     args = subject.build_parser().parse_args(["run"])
     assert args.watcher_timeout_seconds == 600
     assert args.watcher_poll_seconds == 0.5
+
+
+@pytest.mark.unit
+def test_media_roots_file_is_private_absolute_and_non_overlapping(tmp_path: Path) -> None:
+    first = tmp_path / "disk-a" / "library"
+    second = tmp_path / "disk-b" / "library"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    roots_file = tmp_path / "roots.local.txt"
+    roots_file.write_text(
+        f"# private roots\n{first}\n\n{second}\n", encoding="utf-8"
+    )
+
+    assert subject.load_media_roots(roots_file) == [
+        first.resolve(),
+        second.resolve(),
+    ]
+
+    roots_file.write_text(f"{first}\n{first / 'nested'}\n", encoding="utf-8")
+    (first / "nested").mkdir()
+    with pytest.raises(RuntimeError, match="overlap or nest"):
+        subject.load_media_roots(roots_file)
+
+
+@pytest.mark.unit
+def test_media_targets_deduplicate_physical_counters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = [tmp_path / name for name in ("one", "two", "three")]
+    for root in roots:
+        root.mkdir()
+    rows = iter(
+        [
+            {
+                "diskNumber": 1,
+                "counterKey": "physicaldrive1",
+                "mediaType": "HDD",
+                "busType": "SATA",
+                "friendlyName": "one",
+                "mountPath": str(tmp_path),
+            },
+            {
+                "diskNumber": 1,
+                "counterKey": "physicaldrive1",
+                "mediaType": "HDD",
+                "busType": "SATA",
+                "friendlyName": "one",
+                "mountPath": str(tmp_path),
+            },
+            {
+                "diskNumber": 2,
+                "counterKey": "physicaldrive2",
+                "mediaType": "HDD",
+                "busType": "SATA",
+                "friendlyName": "two",
+                "mountPath": str(tmp_path),
+            },
+        ]
+    )
+    monkeypatch.setattr(storage, "target_disk", lambda *_args: next(rows))
+
+    targets = subject.media_storage_targets(roots, [], allow_non_hdd=False)
+
+    assert subject.distinct_counter_keys(targets) == [
+        "physicaldrive1",
+        "physicaldrive2",
+    ]
+
+
+@pytest.mark.unit
+def test_media_initial_acceptance_requires_cross_disk_serial_hashing() -> None:
+    phase = {
+        "sharedFilesTotal": 90,
+        "maxActiveHashCount": 3,
+        "maxPerDiskActiveCount": 1,
+        "progress": {
+            "scannedCount": 100,
+            "plannedHashCount": 100,
+            "hashedCount": 100,
+            "failedHashCount": 0,
+            "statFailedCount": 0,
+            "skippedFailedCount": 0,
+            "skippedIntakeCount": 0,
+            "diskCount": 3,
+        },
+        "physicalDiskIoDeltas": {
+            f"physicaldrive{index}": {"read_count": 1} for index in range(3)
+        },
+        "storage": {
+            "rowCounts": {
+                "activeShareSources": 100,
+                "invalidActiveShareIntegrity": 0,
+                "scanFailures": 0,
+                "activeTransferRows": 0,
+            }
+        },
+    }
+
+    assert subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+    phase["maxPerDiskActiveCount"] = 2
+    assert not subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+
+
+@pytest.mark.unit
+def test_media_no_change_acceptance_requires_zero_payload_reads() -> None:
+    initial = {
+        "sharedFilesTotal": 90,
+        "progress": {"scannedCount": 100},
+    }
+    phase = {
+        "sharedFilesTotal": 90,
+        "maxPerDiskActiveCount": 0,
+        "progress": {
+            "scannedCount": 100,
+            "plannedHashCount": 0,
+            "hashedCount": 0,
+            "plannedReadBytes": 0,
+            "completedReadBytes": 0,
+            "reusedCount": 100,
+            "diskCount": 0,
+            "failedHashCount": 0,
+            "statFailedCount": 0,
+            "skippedFailedCount": 0,
+            "skippedIntakeCount": 0,
+        },
+    }
+
+    assert subject.media_no_change_acceptance(phase, initial=initial)["ok"]
+    phase["progress"]["completedReadBytes"] = 1
+    assert not subject.media_no_change_acceptance(phase, initial=initial)["ok"]

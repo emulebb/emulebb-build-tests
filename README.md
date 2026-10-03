@@ -324,6 +324,18 @@ Rust 100k shared-library I/O characterization:
 - The fixture is retained for follow-up disk testing. Only
   `cleanup --confirm-delete` removes its owned fixture/profile tree; reports are
   retained.
+- `media-describe` and `media-run` extend the same harness to an operator-owned
+  `live-wire-emulebb-rust-sharedroots.local.txt`. The file contains one absolute
+  existing directory per line and stays ignored. `media-run` is read-only with
+  respect to those directories: it uses a fresh isolated profile, measures the
+  initial hash across distinct physical disks, restarts, and measures a
+  metadata-only no-change reload. Reports fingerprint roots and record
+  per-physical-disk I/O without publishing local media paths.
+- Multi-HDD acceptance requires at least two resolved disks, concurrent hashing
+  across disks, no more than one active hash per disk, complete hash plans,
+  intact catalog rows, and a no-change reload with zero planned/read payload
+  bytes. Use `--roots-file` for another private roots list or `--minimum-disks`
+  to raise the topology requirement.
 
 Fake/Kad trust soak lane:
 
