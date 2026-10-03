@@ -604,3 +604,55 @@ def test_media_no_change_acceptance_requires_zero_payload_reads() -> None:
     assert subject.media_no_change_acceptance(phase, initial=initial)["ok"]
     phase["progress"]["completedReadBytes"] = 1
     assert not subject.media_no_change_acceptance(phase, initial=initial)["ok"]
+
+
+@pytest.mark.unit
+def test_partial_media_inspector_accepts_duplicate_source_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = harness_paths(tmp_path)
+    run = (
+        paths.output_root
+        / "profiles/emulebb-rust-shared-library-media-io/runs/20261003T000000Z-1"
+    )
+    profile = run / "profile"
+    profile.mkdir(parents=True)
+    database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE known_files (
+                size_bytes INTEGER, completed INTEGER,
+                md4_hashset_acquired INTEGER, aich_hashset_acquired INTEGER,
+                aich_root BLOB
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO known_files VALUES (?, 1, 1, 1, ?)",
+            [(10, bytes(20)), (20, bytes(20))],
+        )
+    (run / "initial.log").write_text(
+        "timestamp ERROR probe: reached probe limit of 1048576 bytes\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        subject,
+        "profile_storage_snapshot",
+        lambda _profile: {
+            "rowCounts": {
+                "knownFiles": 2,
+                "activeShareSources": 3,
+                "invalidActiveShareIntegrity": 0,
+                "scanFailures": 0,
+                "activeTransferRows": 0,
+            }
+        },
+    )
+
+    result = subject.inspect_partial_media_run(paths, run.name)
+
+    assert result["status"] == "healthyPartial"
+    assert result["committedHashes"] == {"fileCount": 2, "totalBytes": 30}
+    assert result["checks"]["activeSourcesCoverHashes"] is True
+    assert result["logs"]["unexpectedErrorCount"] == 0

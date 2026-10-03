@@ -2141,6 +2141,91 @@ def describe_media_roots(
     }
 
 
+def inspect_partial_media_run(
+    paths: HarnessPaths, run_id: str | None
+) -> dict[str, object]:
+    """Summarize the durable, path-free evidence left by an interrupted run."""
+
+    scenario_root, _ = media_campaign_paths(paths)
+    runs_root = scenario_root / "runs"
+    if run_id:
+        run_root = runs_root / run_id
+    else:
+        candidates = sorted(
+            (entry for entry in runs_root.iterdir() if entry.is_dir()),
+            key=lambda entry: entry.stat().st_mtime_ns,
+            reverse=True,
+        )
+        if not candidates:
+            raise RuntimeError("no retained multi-HDD run exists")
+        run_root = candidates[0]
+    resolved_run = run_root.resolve(strict=True)
+    if resolved_run.parent != runs_root.resolve(strict=True):
+        raise RuntimeError("partial inspection target escaped the managed runs root")
+    profile_dir = resolved_run / "profile"
+    database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    if not database.is_file():
+        raise RuntimeError("retained multi-HDD run has no metadata database")
+    snapshot = profile_storage_snapshot(profile_dir)
+    with sqlite3.connect(
+        f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
+    ) as connection:
+        hash_rows, hash_bytes = connection.execute(
+            """
+            SELECT COUNT(*), coalesce(sum(size_bytes), 0)
+            FROM known_files
+            WHERE completed = 1
+              AND md4_hashset_acquired = 1
+              AND aich_hashset_acquired = 1
+              AND aich_root IS NOT NULL
+              AND length(aich_root) = 20
+            """
+        ).fetchone()
+    log_path = resolved_run / "initial.log"
+    log_lines = (
+        log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if log_path.is_file()
+        else []
+    )
+    probe_errors = sum("reached probe limit" in line for line in log_lines)
+    error_lines = sum(" ERROR " in line for line in log_lines)
+    counts = snapshot["rowCounts"]
+    checks = {
+        "hashesCommitted": int(hash_rows) > 0,
+        "allKnownRowsHaveHashes": int(hash_rows) == int(counts.get("knownFiles") or 0),
+        "activeSourcesCoverHashes": int(counts.get("activeShareSources") or 0)
+        >= int(hash_rows),
+        "hashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0) == 0,
+        "scanFailures": int(counts.get("scanFailures") or 0) == 0,
+        "noUnexpectedErrors": error_lines == probe_errors,
+        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+    }
+    return {
+        "schema": MEDIA_REPORT_SCHEMA,
+        "command": "media-inspect",
+        "status": "healthyPartial" if all(checks.values()) else "partialWithErrors",
+        "runId": resolved_run.name,
+        "profileFingerprint": path_fingerprint(profile_dir),
+        "committedHashes": {
+            "fileCount": int(hash_rows),
+            "totalBytes": int(hash_bytes),
+        },
+        "storage": snapshot,
+        "logs": {
+            "lineCount": len(log_lines),
+            "errorCount": error_lines,
+            "mediaProbeLimitErrorCount": probe_errors,
+            "unexpectedErrorCount": error_lines - probe_errors,
+        },
+        "checks": checks,
+        "limitations": {
+            "cleanCompletion": False,
+            "liveProgressCountersRetained": False,
+            "perDiskIoDeltasRetained": False,
+        },
+    }
+
+
 def describe(paths: HarnessPaths) -> dict[str, object]:
     inventory = physical_disk_inventory()
     target = target_disk(paths, inventory)
@@ -2244,6 +2329,11 @@ def build_parser() -> argparse.ArgumentParser:
     media_run.add_argument("--poll-seconds", type=float, default=2.0)
     media_run.add_argument("--minimum-disks", type=int, default=2)
     media_run.add_argument("--allow-non-hdd", action="store_true")
+    media_inspect = subparsers.add_parser(
+        "media-inspect",
+        help="inspect durable path-free evidence from an interrupted media run",
+    )
+    media_inspect.add_argument("--run-id")
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="remove only the owned fixture/profile tree"
     )
@@ -2292,6 +2382,8 @@ def main(argv: list[str] | None = None) -> int:
                 "reportPath": str(report_path),
                 "reportFingerprint": path_fingerprint(report_path),
             }
+        elif args.command == "media-inspect":
+            result = inspect_partial_media_run(paths, args.run_id)
         elif args.command == "cleanup":
             result = cleanup(paths, confirmed=args.confirm_delete)
         else:  # pragma: no cover - argparse enforces this

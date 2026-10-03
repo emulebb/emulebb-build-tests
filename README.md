@@ -336,6 +336,10 @@ Rust 100k shared-library I/O characterization:
   intact catalog rows, and a no-change reload with zero planned/read payload
   bytes. Use `--roots-file` for another private roots list or `--minimum-disks`
   to raise the topology requirement.
+- `media-inspect [--run-id ID]` summarizes the durable hash/catalog evidence
+  left by an operator-interrupted multi-HDD run. It distinguishes unique hashes
+  from duplicate source paths and reports only aggregate counts, bytes, storage
+  integrity, and sanitized log classes.
 
 Fake/Kad trust soak lane:
 
