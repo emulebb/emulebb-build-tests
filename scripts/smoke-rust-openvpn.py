@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,7 +28,11 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import nat_live_matrix, vpn_transfer_completion
+from emule_test_harness import (
+    nat_live_matrix,
+    server_failure_accounting,
+    vpn_transfer_completion,
+)
 
 
 REQUIRED_PRIVATE_FILES = (
@@ -118,6 +124,55 @@ def request_json(
     if not isinstance(value, dict):
         raise RuntimeError(f"REST response from {url} was not an object")
     return value
+
+
+def container_request_json(
+    container: str,
+    url: str,
+    key: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    argv = [
+        "exec",
+        container,
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "20",
+        "--header",
+        f"X-API-Key: {key}",
+        "--request",
+        method,
+    ]
+    if payload is not None or method == "POST":
+        argv.extend(
+            (
+                "--header",
+                "Content-Type: application/json",
+                "--data",
+                json.dumps(payload or {}),
+            )
+        )
+    argv.append(url)
+    decoded = json.loads(docker(*argv).stdout)
+    if not isinstance(decoded, dict):
+        raise RuntimeError("container REST response was not an object")
+    return decoded
+
+
+def url_is_reachable(url: str, key: str) -> bool:
+    request = urllib.request.Request(url, headers={"X-API-Key": key})
+    try:
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 def response_data(payload: dict[str, object]) -> dict[str, object]:
@@ -411,6 +466,9 @@ def main() -> int:
             raise RuntimeError(f"VPN private root lacks {name}")
     if args.report.exists():
         raise RuntimeError("refusing to overwrite an existing report")
+    off_tunnel_pcap = args.report.with_suffix(".off-tunnel.pcap")
+    if off_tunnel_pcap.exists():
+        raise RuntimeError("refusing to overwrite an existing off-tunnel capture")
     expected_sha256 = (args.expected_executable_sha256 or "").lower()
     if expected_sha256 and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise RuntimeError("--expected-executable-sha256 must be a lowercase SHA-256 digest")
@@ -507,6 +565,14 @@ def main() -> int:
         rust = command(*compose, "ps", "--quiet", "emulebb-rust", env=env).stdout.strip()
         if not openvpn or not rust:
             raise RuntimeError("isolated OpenVPN/Rust containers were not created")
+        bridge_ip = docker(
+            "inspect",
+            "--format",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            openvpn,
+        ).stdout.strip()
+        ipaddress.IPv4Address(bridge_ip)
+        report["testBridgeIp"] = bridge_ip
         vpn_executable = docker("exec", openvpn, "readlink", "/proc/1/exe").stdout.strip()
         if vpn_executable != "/usr/sbin/openvpn":
             raise RuntimeError("VPN namespace is not owned by a plain OpenVPN process")
@@ -833,6 +899,223 @@ def main() -> int:
         )
         rust_logs = docker("logs", rust, check=False)
         report["searchLogSignals"] = search_log_signals(rust_logs.stdout + rust_logs.stderr)
+        before_tunnel_failure = request_json(api + "/servers", api_key)
+        report["serverBeforeTunnelFailure"] = (
+            server_failure_accounting.connected_server_snapshot(before_tunnel_failure)
+        )
+        logs_before_failure = container_logs(rust)
+        packet_filter = f"src host {bridge_ip} and ip and (tcp or udp)"
+        positive = docker(
+            "run",
+            "--rm",
+            "--network",
+            "host",
+            "--cap-add",
+            "NET_RAW",
+            args.capture_image,
+            "timeout",
+            "30",
+            "tcpdump",
+            "-n",
+            "-q",
+            "-e",
+            "-i",
+            "any",
+            "-c",
+            "1",
+            packet_filter,
+            timeout=50,
+            check=False,
+        )
+        if not [line for line in positive.stdout.splitlines() if line.strip()]:
+            raise RuntimeError(
+                "host packet sensor did not see plain-OpenVPN test egress: "
+                + positive.stderr[-500:]
+            )
+        report["captureSensorPositive"] = True
+
+        command(*compose, "stop", "--timeout", "10", "openvpn", env=env, timeout=45)
+        still_running = (
+            docker(
+                "inspect", "--format", "{{.State.Running}}", rust, check=False
+            ).stdout.strip()
+            == "true"
+        )
+        report["rustRunningAfterTunnelDown"] = still_running
+        if not still_running:
+            raise RuntimeError("Rust daemon stopped instead of remaining isolated")
+        interfaces = docker(
+            "run",
+            "--rm",
+            "--network",
+            f"container:{rust}",
+            args.capture_image,
+            "ip",
+            "-o",
+            "link",
+            "show",
+        )
+        remaining_interfaces = re.findall(r"\d+: ([^:]+):", interfaces.stdout)
+        report["remainingInterfaces"] = remaining_interfaces
+        if set(remaining_interfaces) - {"lo"}:
+            raise RuntimeError(
+                f"non-loopback interface remained after OpenVPN shutdown: {remaining_interfaces}"
+            )
+        if url_is_reachable("http://127.0.0.1:14712/api/v1/status", api_key):
+            raise RuntimeError("host-published REST remained reachable after OpenVPN shutdown")
+        report["hostRestIsolatedAfterTunnelDown"] = True
+        namespace_api = "http://127.0.0.1:4711/api/v1"
+        container_request_json(
+            rust,
+            namespace_api + "/servers/operations/disconnect",
+            api_key,
+            method="POST",
+            payload={},
+        )
+        container_request_json(
+            rust,
+            namespace_api + "/servers/operations/connect",
+            api_key,
+            method="POST",
+            payload={},
+        )
+        accounting_deadline = time.monotonic() + 45
+        evidence: dict[str, object] = {"passed": False}
+        while time.monotonic() < accounting_deadline:
+            fresh_logs = container_logs(rust)[len(logs_before_failure):]
+            evidence = server_failure_accounting.ignored_failure_log_evidence(
+                fresh_logs
+            )
+            if evidence["passed"]:
+                break
+            time.sleep(2)
+        report["classifiedFailureLogEvidence"] = evidence
+        if not evidence["passed"]:
+            raise RuntimeError(
+                "OpenVPN-down retry did not emit classified ignored-failure diagnostics"
+            )
+        after_tunnel_failure = container_request_json(
+            rust, namespace_api + "/servers", api_key
+        )
+        report["tunnelFailureAccounting"] = (
+            server_failure_accounting.compare_after_local_failure(
+                before_tunnel_failure,
+                after_tunnel_failure,
+            )
+        )
+        if not report["tunnelFailureAccounting"]["passed"]:
+            raise RuntimeError("OpenVPN tunnel failure changed ED2K server health")
+
+        off_tunnel_capture = docker(
+            "run",
+            "--rm",
+            "--network",
+            "host",
+            "--cap-add",
+            "NET_RAW",
+            "--volume",
+            capture_mount,
+            args.capture_image,
+            "timeout",
+            "45",
+            "tcpdump",
+            "-U",
+            "-n",
+            "-i",
+            "any",
+            "-c",
+            "1",
+            "-w",
+            f"/proof/{off_tunnel_pcap.name}",
+            packet_filter,
+            timeout=65,
+            check=False,
+        )
+        if off_tunnel_capture.returncode not in (0, 124):
+            raise RuntimeError("OpenVPN off-tunnel capture failed")
+        if not off_tunnel_pcap.is_file() or off_tunnel_pcap.stat().st_size < 24:
+            raise RuntimeError("OpenVPN off-tunnel capture was not a readable PCAP")
+        off_tunnel_count = decoded_packet_count(
+            capture_image=args.capture_image,
+            capture_mount=capture_mount,
+            pcap_name=off_tunnel_pcap.name,
+            packet_filter=packet_filter,
+        )
+        report["offTunnelPacketCount"] = off_tunnel_count
+        report["offTunnelPcap"] = str(off_tunnel_pcap)
+        report["offTunnelPcapBytes"] = off_tunnel_pcap.stat().st_size
+        if off_tunnel_count:
+            raise RuntimeError("off-tunnel IPv4 packet observed after OpenVPN shutdown")
+
+        command(*compose, "start", "openvpn", env=env, timeout=120)
+        recovery_deadline = time.monotonic() + 180
+        while time.monotonic() < recovery_deadline:
+            health = docker(
+                "inspect",
+                "--format",
+                "{{.State.Health.Status}}",
+                openvpn,
+                check=False,
+            ).stdout.strip()
+            if health == "healthy":
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError("plain OpenVPN tunnel did not recover")
+        # A service using network_mode: service:openvpn stays alive in the old
+        # loopback-only namespace when its owner is stopped.  Restart it after
+        # the owner is healthy so Docker joins the owner's new namespace while
+        # retaining the profile volume and durable server health.
+        command(*compose, "restart", "emulebb-rust", env=env, timeout=120)
+        report["rustRestartedForNamespaceRecovery"] = True
+        recovery_deadline = time.monotonic() + 120
+        while time.monotonic() < recovery_deadline:
+            if url_is_reachable(
+                "http://127.0.0.1:14712/api/v1/status", api_key
+            ):
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError("host REST did not recover in the restored OpenVPN namespace")
+        connect_deadline = time.monotonic() + 60
+        while time.monotonic() < connect_deadline:
+            try:
+                request_json(
+                    api + "/servers/operations/connect",
+                    api_key,
+                    method="POST",
+                    payload={},
+                    timeout=10,
+                )
+                break
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(2)
+        else:
+            raise RuntimeError("REST connect request did not recover with OpenVPN")
+        recovery_deadline = time.monotonic() + 240
+        while time.monotonic() < recovery_deadline:
+            try:
+                recovered_status = request_json(api + "/status", api_key)
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(3)
+                continue
+            recovered_connected, recovered_contacts = public_network_state(
+                recovered_status
+            )
+            if recovered_connected and recovered_contacts > 0:
+                break
+            time.sleep(3)
+        else:
+            raise RuntimeError("ED2K/Kad did not recover after OpenVPN restart")
+        report["tunnelRecovered"] = True
+        report["recoveryAccounting"] = (
+            server_failure_accounting.compare_after_local_failure(
+                before_tunnel_failure,
+                request_json(api + "/servers", api_key),
+            )
+        )
+        if not report["recoveryAccounting"]["passed"]:
+            raise RuntimeError("server health changed after OpenVPN recovery")
         completed = True
     except Exception as error:
         report["error"] = str(error)

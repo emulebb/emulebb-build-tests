@@ -13,6 +13,11 @@ from urllib.parse import urlsplit
 PCP_BACKEND = "pcp_natpmp"
 MINIUPNPC_BACKEND = "upnp_miniupnpc"
 PCP_PROTOCOLS = {"pcp_v2", "pcp_v1", "nat_pmp_v0"}
+# Match the established hide.me live-wire lane.  The provider IGD rejects the
+# classic eMule ports in some regions, while these fixed high ports remain below
+# the Linux/Windows dynamic ranges and are accepted by both NAT-PMP and UPnP.
+LIVE_ED2K_PORT = 41662
+LIVE_KAD_PORT = 41672
 
 
 def tunnel_ipv4(address_output: str) -> str:
@@ -100,7 +105,11 @@ def settings_patch(case: dict[str, Any]) -> dict[str, object]:
     """Builds one restart-required settings update with obfuscation disabled."""
 
     return {
-        "ed2k": {"obfuscationEnabled": False},
+        "ed2k": {
+            "obfuscationEnabled": False,
+            "listenPort": LIVE_ED2K_PORT,
+        },
+        "kad": {"listenPort": LIVE_KAD_PORT},
         "nat": {
             "enabled": True,
             "requireInitialMapping": False,

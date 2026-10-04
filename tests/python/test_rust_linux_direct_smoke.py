@@ -105,6 +105,17 @@ def test_server_connect_request_outlives_initial_upnp_reconcile(monkeypatch) -> 
     assert module.SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS > 20.0
 
 
+def test_native_upnp_can_force_miniupnpc_backend() -> None:
+    module = load_module()
+    args = module.build_parser().parse_args(
+        ["--native-windows", "--enable-upnp", "--nat-backend", "miniupnpc"]
+    )
+
+    assert args.native_windows
+    assert args.enable_upnp
+    assert args.nat_backend == "miniupnpc"
+
+
 def test_nat_matrix_uses_non_public_explicit_server(monkeypatch) -> None:
     module = load_module()
     retry_calls = []

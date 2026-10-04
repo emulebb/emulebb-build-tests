@@ -27,7 +27,11 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import nat_live_matrix, vpn_transfer_completion
+from emule_test_harness import (
+    nat_live_matrix,
+    server_failure_accounting,
+    vpn_transfer_completion,
+)
 
 
 def command(*argv: str, timeout: int = 60, check: bool = True,
@@ -59,6 +63,45 @@ def request_json(
     request = urllib.request.Request(url, headers=headers, data=body, method=method)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def container_request_json(
+    container: str,
+    url: str,
+    key: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    argv = [
+        "exec",
+        container,
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "20",
+        "--header",
+        f"X-API-Key: {key}",
+        "--request",
+        method,
+    ]
+    if payload is not None or method == "POST":
+        argv.extend(
+            (
+                "--header",
+                "Content-Type: application/json",
+                "--data",
+                json.dumps(payload or {}),
+            )
+        )
+    argv.append(url)
+    result = docker(*argv)
+    decoded = json.loads(result.stdout)
+    if not isinstance(decoded, dict):
+        raise RuntimeError("container REST response was not an object")
+    return decoded
 
 
 def response_data(payload: dict[str, object]) -> dict[str, object]:
@@ -137,7 +180,7 @@ def url_is_reachable(url: str, key: str) -> bool:
             return True
     except urllib.error.HTTPError:
         return True
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, TimeoutError, OSError):
         return False
 
 
@@ -381,6 +424,12 @@ def main() -> int:
                 timeout_seconds=args.transfer_timeout_seconds,
             )
 
+        before_tunnel_failure = request_json(api + "/servers", api_key)
+        report["serverBeforeTunnelFailure"] = (
+            server_failure_accounting.connected_server_snapshot(before_tunnel_failure)
+        )
+        logs_before_failure = container_logs(rust)
+
         packet_filter = f"src host {bridge_ip} and ip and (tcp or udp)"
         positive = docker(
             "run", "--rm", "--network", "host", "--cap-add", "NET_RAW",
@@ -418,6 +467,47 @@ def main() -> int:
         if url_is_reachable("http://127.0.0.1:14711/api/v1/status", api_key):
             raise RuntimeError("host-published REST remained reachable after Gluetun shutdown")
         report["hostRestIsolatedAfterTunnelDown"] = True
+        namespace_api = "http://127.0.0.1:4711/api/v1"
+        container_request_json(
+            rust,
+            namespace_api + "/servers/operations/disconnect",
+            api_key,
+            method="POST",
+            payload={},
+        )
+        container_request_json(
+            rust,
+            namespace_api + "/servers/operations/connect",
+            api_key,
+            method="POST",
+            payload={},
+        )
+        accounting_deadline = time.monotonic() + 45
+        evidence: dict[str, object] = {"passed": False}
+        while time.monotonic() < accounting_deadline:
+            accounting_logs = container_logs(rust)[len(logs_before_failure):]
+            evidence = server_failure_accounting.ignored_failure_log_evidence(
+                accounting_logs
+            )
+            if evidence["passed"]:
+                break
+            time.sleep(2)
+        report["classifiedFailureLogEvidence"] = evidence
+        if not evidence["passed"]:
+            raise RuntimeError(
+                "tunnel-down retry did not emit classified ignored-failure diagnostics"
+            )
+        after_tunnel_failure = container_request_json(
+            rust, namespace_api + "/servers", api_key
+        )
+        report["tunnelFailureAccounting"] = (
+            server_failure_accounting.compare_after_local_failure(
+                before_tunnel_failure,
+                after_tunnel_failure,
+            )
+        )
+        if not report["tunnelFailureAccounting"]["passed"]:
+            raise RuntimeError("Gluetun tunnel failure changed ED2K server health")
         capture_mount = f"{args.report.parent.resolve()}:/proof"
         capture = docker(
             "run", "--rm", "--network", "host", "--cap-add", "NET_RAW",
@@ -446,6 +536,71 @@ def main() -> int:
         report["offTunnelPcap"] = str(pcap)
         if report["offTunnelPacketCount"] != 0:
             raise RuntimeError("off-tunnel IPv4 packet observed after tunnel shutdown")
+        command(*compose, "start", "gluetun", env=env, timeout=120)
+        recovery_deadline = time.monotonic() + 180
+        while time.monotonic() < recovery_deadline:
+            health = docker(
+                "inspect",
+                "--format",
+                "{{.State.Health.Status}}",
+                gluetun,
+                check=False,
+            ).stdout.strip()
+            if health == "healthy":
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError("Gluetun tunnel did not recover")
+        # The Rust service deliberately survived in the old loopback-only
+        # namespace.  Restart only this project service so it rejoins the
+        # recovered Gluetun namespace with its persisted profile intact.
+        command(*compose, "restart", "emulebb-rust", env=env, timeout=120)
+        report["rustRestartedForNamespaceRecovery"] = True
+        recovery_deadline = time.monotonic() + 120
+        while time.monotonic() < recovery_deadline:
+            if url_is_reachable(
+                "http://127.0.0.1:14711/api/v1/status", api_key
+            ):
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError("host REST did not recover in the restored Gluetun namespace")
+        connect_deadline = time.monotonic() + 60
+        while time.monotonic() < connect_deadline:
+            try:
+                request_json(
+                    api + "/servers/operations/connect",
+                    api_key,
+                    method="POST",
+                    payload={},
+                    timeout=10,
+                )
+                break
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(2)
+        else:
+            raise RuntimeError("REST connect request did not recover with Gluetun")
+        recovery_deadline = time.monotonic() + 240
+        while time.monotonic() < recovery_deadline:
+            try:
+                recovered_status = request_json(api + "/status", api_key)
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(3)
+                continue
+            if public_network_ready(recovered_status):
+                break
+            time.sleep(3)
+        else:
+            raise RuntimeError("ED2K/Kad did not recover after Gluetun restart")
+        report["tunnelRecovered"] = True
+        report["recoveryAccounting"] = (
+            server_failure_accounting.compare_after_local_failure(
+                before_tunnel_failure,
+                request_json(api + "/servers", api_key),
+            )
+        )
+        if not report["recoveryAccounting"]["passed"]:
+            raise RuntimeError("server health changed after Gluetun recovery")
         evidence_checks_passed = True
     except Exception as error:
         report["error"] = str(error)

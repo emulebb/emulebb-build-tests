@@ -54,7 +54,11 @@ def test_matrix_cases_cover_default_isolated_and_forced_fallback() -> None:
     assert cases[0]["backendOrder"] == []
     assert cases[-1]["pcpServerIp"] == "192.0.2.1"
     assert nat_live_matrix.settings_patch(cases[0])["ed2k"] == {
-        "obfuscationEnabled": False
+        "obfuscationEnabled": False,
+        "listenPort": 41662,
+    }
+    assert nat_live_matrix.settings_patch(cases[0])["kad"] == {
+        "listenPort": 41672,
     }
 
 
@@ -187,4 +191,8 @@ def test_run_matrix_waits_for_each_initial_reconcile(monkeypatch) -> None:
 
     assert result["passed"] is True
     assert reads == [2, 2, 2, 2]
-    assert latest_patch["ed2k"] == {"obfuscationEnabled": False}
+    assert latest_patch["ed2k"] == {
+        "obfuscationEnabled": False,
+        "listenPort": 41662,
+    }
+    assert latest_patch["kad"] == {"listenPort": 41672}

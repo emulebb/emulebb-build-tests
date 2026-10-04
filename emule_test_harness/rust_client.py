@@ -79,6 +79,7 @@ def write_rust_profile(
     upload_active_slots: int | None = None,
     nat_enabled: bool | None = False,
     nat_require_initial_mapping: bool | None = None,
+    nat_backend_order: list[str] | None = None,
     replace_servers: bool = False,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
@@ -186,6 +187,8 @@ def write_rust_profile(
         nat_settings["enabled"] = nat_enabled
     if nat_require_initial_mapping is not None:
         nat_settings["requireInitialMapping"] = nat_require_initial_mapping
+    if nat_backend_order is not None:
+        nat_settings["backendOrder"] = list(nat_backend_order)
     if nat_settings:
         rust_metadata.replace_settings_section(metadata_path, "nat", nat_settings)
 

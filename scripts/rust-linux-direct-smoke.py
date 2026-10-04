@@ -2,9 +2,10 @@
 
 The runner creates a fresh external profile, configures no shared roots, leaves
 VPN Guard off, and stops the daemon after the observation window. Windows native
-mode binds REST to inherited X_LOCAL_IP and requires UPnP; the WSL mode binds to
-loopback. A transfer is allowed only when its exact hash, size, and SHA-256 are
-present in the operator's checked live-wire input allowlist.
+mode binds REST to inherited X_LOCAL_IP and can strictly verify either disabled
+NAT or forced MiniUPnP; the WSL mode binds to loopback. A transfer is allowed
+only when its exact hash, size, and SHA-256 are present in the operator's checked
+live-wire input allowlist.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.direct_safe_corpus import LINUX_PDF_TERMS, MAX_PDF_BYTES
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness import nat_live_matrix, rust_client
+from emule_test_harness import nat_live_matrix, rust_client, server_failure_accounting
 from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_profile,
@@ -313,6 +314,7 @@ def run_in_wsl(args: argparse.Namespace) -> int:
     )
     if args.enable_upnp:
         command.append("--enable-upnp")
+    command.extend(["--nat-backend", args.nat_backend])
     if args.nat_matrix:
         command.append("--nat-matrix")
     if args.complete_transfers:
@@ -383,6 +385,20 @@ def request_server_connect(base_url: str) -> dict[str, Any]:
         "/api/v1/servers/operations/connect",
         {},
         timeout_seconds=SERVER_CONNECT_REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+def request_server_disconnect(base_url: str) -> dict[str, Any]:
+    return post_json(base_url, "/api/v1/servers/operations/disconnect", {})
+
+
+def server_list(base_url: str) -> dict[str, Any]:
+    return retry_http_json(
+        "servers",
+        2,
+        base_url,
+        "/api/v1/servers",
+        api_key=API_KEY,
     )
 
 
@@ -597,6 +613,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-diagnostics", action="store_true", help="Use the diagnostics binary and require its packet dumps.")
     parser.add_argument("--enable-upnp", action="store_true", help="Require live UPnP discovery and TCP/UDP mappings.")
     parser.add_argument(
+        "--nat-backend",
+        choices=("auto", "miniupnpc"),
+        default="auto",
+        help="Select automatic NAT fallback or force the MiniUPnPc/IGD backend.",
+    )
+    parser.add_argument(
         "--nat-matrix",
         action="store_true",
         help="Run the capability-aware PCP/NAT-PMP and MiniUPnPc matrix.",
@@ -630,6 +652,10 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--require-completed-type requires --probe-count.")
     if args.require_stock_bytes and not (args.require_diagnostics or args.native_windows):
         raise RuntimeError("--require-stock-bytes requires diagnostics.")
+    if args.nat_backend != "auto" and not args.enable_upnp:
+        raise RuntimeError("an explicit --nat-backend requires --enable-upnp")
+    if args.nat_matrix and args.nat_backend != "auto":
+        raise RuntimeError("--nat-matrix cannot be combined with an explicit --nat-backend")
     workspace_root, output_root = require_environment()
     rust_repo = workspace_root / "repos" / "emulebb-rust"
     diagnostics_required = args.native_windows or args.require_diagnostics
@@ -670,6 +696,9 @@ def main(argv: list[str] | None = None) -> int:
         kad_bootstrap_min_routing_contacts=2,
         nat_enabled=args.enable_upnp,
         nat_require_initial_mapping=args.enable_upnp and not args.nat_matrix,
+        nat_backend_order=[nat_live_matrix.MINIUPNPC_BACKEND]
+        if args.nat_backend == "miniupnpc"
+        else None,
         initial_shared_directory_reload=False,
         vpn_guard_mode="off",
     )
@@ -684,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
         "runId": run_id,
         "networkMode": "direct",
         "vpnGuard": "off",
-        "upnp": {"requested": args.enable_upnp},
+        "upnp": {"requested": args.enable_upnp, "requestedBackend": args.nat_backend},
         "restLoopback": not args.native_windows,
         "diagnosticsRequired": diagnostics_required,
         "sharedRootCount": 0,
@@ -771,20 +800,24 @@ def main(argv: list[str] | None = None) -> int:
             nat = nat_status(base_url)
             report["upnp"] = {
                 "requested": True,
+                "requestedBackend": args.nat_backend,
                 "enabled": bool(nat.get("enabled")),
                 "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
                 "mappingCount": len(nat.get("mappings") or []),
                 "backend": nat.get("backend"),
+                "protocol": nat.get("protocol"),
                 "lastError": nat.get("lastError"),
             }
         else:
             nat = nat_status(base_url)
             report["upnp"] = {
                 "requested": False,
+                "requestedBackend": args.nat_backend,
                 "enabled": bool(nat.get("enabled")),
                 "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
                 "mappingCount": len(nat.get("mappings") or []),
                 "backend": nat.get("backend"),
+                "protocol": nat.get("protocol"),
                 "lastError": nat.get("lastError"),
             }
         retry_http_json(
@@ -852,20 +885,24 @@ def main(argv: list[str] | None = None) -> int:
             nat = nat_status(base_url)
             report["upnp"] = {
                 "requested": True,
+                "requestedBackend": args.nat_backend,
                 "enabled": bool(nat.get("enabled")),
                 "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
                 "mappingCount": len(nat.get("mappings") or []),
                 "backend": nat.get("backend"),
+                "protocol": nat.get("protocol"),
                 "lastError": nat.get("lastError"),
             }
         else:
             nat = nat_status(base_url)
             report["upnp"] = {
                 "requested": False,
+                "requestedBackend": args.nat_backend,
                 "enabled": bool(nat.get("enabled")),
                 "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
                 "mappingCount": len(nat.get("mappings") or []),
                 "backend": nat.get("backend"),
+                "protocol": nat.get("protocol"),
                 "lastError": nat.get("lastError"),
             }
         report["ed2k"] = {
@@ -877,6 +914,25 @@ def main(argv: list[str] | None = None) -> int:
             "connected": bool(final_kad.get("connected")),
             "contactCount": int(final_kad.get("contactCount") or 0),
         }
+        if args.native_windows:
+            before_disconnect = server_list(base_url)
+            report["intentionalDisconnectServer"] = (
+                server_failure_accounting.connected_server_snapshot(before_disconnect)
+            )
+            request_server_disconnect(base_url)
+            wait_until(
+                "ED2K intentional disconnect",
+                30.0,
+                lambda: not bool(status(base_url).get("ed2kConnected")),
+            )
+            report["intentionalDisconnectAccounting"] = (
+                server_failure_accounting.compare_after_local_failure(
+                    before_disconnect,
+                    server_list(base_url),
+                )
+            )
+            if not report["intentionalDisconnectAccounting"]["passed"]:
+                raise RuntimeError("intentional disconnect changed ED2K server health")
         connectivity_passed = (
             report["webuiReady"]
             and report["ed2k"]["connected"]
@@ -896,6 +952,13 @@ def main(argv: list[str] | None = None) -> int:
                     report["ed2k"]["highId"]
                     and report["upnp"]["gatewayDiscovered"]
                     and report["upnp"]["mappingCount"] >= 2
+                    and (
+                        args.nat_backend != "miniupnpc"
+                        or (
+                            report["upnp"]["backend"] == nat_live_matrix.MINIUPNPC_BACKEND
+                            and report["upnp"]["protocol"] == "upnp_igd"
+                        )
+                    )
                 )
             )
             and report["kad"]["running"]
@@ -927,6 +990,7 @@ def main(argv: list[str] | None = None) -> int:
                 nat = nat_status(base_url)
                 report["upnp"] = {
                     "requested": True,
+                    "requestedBackend": args.nat_backend,
                     "enabled": bool(nat.get("enabled")),
                     "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
                     "mappingCount": len(nat.get("mappings") or []),

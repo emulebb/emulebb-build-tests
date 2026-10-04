@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import urllib.request
+
 
 def load_module():
     script = Path(__file__).resolve().parents[2] / "scripts" / "smoke-rust-openvpn.py"
@@ -75,3 +77,27 @@ def test_openvpn_smoke_exposes_controlled_tunnel_delay() -> None:
 
     assert '"--tunnel-egress-delay-ms"' in script
     assert '"netem"' in script
+
+
+def test_openvpn_smoke_includes_tunnel_failure_accounting_and_recovery() -> None:
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "smoke-rust-openvpn.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"stop", "--timeout", "10", "openvpn"' in script
+    assert '"start", "openvpn"' in script
+    assert '"restart", "emulebb-rust"' in script
+    assert "rustRestartedForNamespaceRecovery" in script
+    assert "compare_after_local_failure" in script
+    assert "offTunnelPacketCount" in script
+
+
+def test_reachability_treats_connection_reset_as_not_ready(monkeypatch) -> None:
+    module = load_module()
+
+    def reset(*_args, **_kwargs):
+        raise ConnectionResetError(104, "reset")
+
+    monkeypatch.setattr(urllib.request, "urlopen", reset)
+
+    assert module.url_is_reachable("http://127.0.0.1:14712/status", "key") is False

@@ -235,6 +235,22 @@ def test_write_rust_profile_supports_best_effort_initial_nat_mapping(tmp_path: P
     assert setting_value(profile_dir, "nat", "requireInitialMapping") is False
 
 
+def test_write_rust_profile_can_force_miniupnpc_backend(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        nat_enabled=True,
+        nat_backend_order=["upnp_miniupnpc"],
+    )
+
+    assert setting_value(profile_dir, "nat", "backendOrder") == ["upnp_miniupnpc"]
+
+
 def test_write_rust_profile_supports_interface_and_ip_binding(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
