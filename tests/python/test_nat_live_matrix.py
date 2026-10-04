@@ -3,13 +3,38 @@ from __future__ import annotations
 from emule_test_harness import nat_live_matrix
 
 
+def test_vpn_address_gateway_and_igd_match_port_forward_helper_semantics() -> None:
+    assert (
+        nat_live_matrix.tunnel_ipv4(
+            "7: tun0 inet 10.46.56.2/24 scope global tun0\n"
+        )
+        == "10.46.56.2"
+    )
+    assert (
+        nat_live_matrix.tunnel_gateway(
+            "10.46.56.0/24 dev tun0 scope link src 10.46.56.2\n"
+            "10.46.56.1 dev tun0 scope link\n"
+        )
+        == "10.46.56.1"
+    )
+    assert (
+        nat_live_matrix.tunnel_gateway("default via 10.8.0.1 dev tun0\n")
+        == "10.8.0.1"
+    )
+    assert nat_live_matrix.igd_ipv4("http://10.255.255.250:1900/gateDesc.xml") == (
+        "10.255.255.250"
+    )
+
+
 def status(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
         "enabled": True,
         "gatewayDiscovered": False,
         "backend": None,
         "protocol": None,
+        "bindIp": None,
         "pcpServerIp": None,
+        "igdIp": None,
         "mappings": [],
         "lastError": None,
     }
@@ -30,6 +55,28 @@ def test_matrix_cases_cover_default_isolated_and_forced_fallback() -> None:
     assert cases[-1]["pcpServerIp"] == "192.0.2.1"
     assert nat_live_matrix.settings_patch(cases[0])["ed2k"] == {
         "obfuscationEnabled": False
+    }
+
+
+def test_vpn_matrix_pins_tunnel_gateway_and_explicit_igd() -> None:
+    cases = nat_live_matrix.matrix_cases(
+        bind_ip="10.8.0.2", pcp_server_ip="10.8.0.1", igd_ip="10.8.0.1"
+    )
+
+    assert cases[0]["pcpServerIp"] == "10.8.0.1"
+    assert cases[1]["pcpServerIp"] == "10.8.0.1"
+    assert cases[2]["pcpServerIp"] is None
+    assert all(case["bindIp"] == "10.8.0.2" for case in cases)
+    assert all(case["igdIp"] == "10.8.0.1" for case in cases)
+    assert nat_live_matrix.settings_patch(cases[1])["nat"] == {
+        "enabled": True,
+        "requireInitialMapping": False,
+        "backendOrder": ["pcp_natpmp"],
+        "bindIp": "10.8.0.2",
+        "pcpServerIp": "10.8.0.1",
+        "igdIp": "10.8.0.1",
+        "leaseDurationSecs": 86400,
+        "discoveryTimeoutSecs": 15,
     }
 
 
@@ -83,6 +130,22 @@ def test_unsupported_result_fails_when_fallback_attempt_is_missing() -> None:
 
     assert result["passed"] is False
     assert "upnp_miniupnpc" in result["failures"][0]
+
+
+def test_required_vpn_capability_rejects_clean_unsupported_result() -> None:
+    case = nat_live_matrix.matrix_cases()[1]
+    result = nat_live_matrix.evaluate_case(
+        case,
+        status(lastError="pcp_natpmp: unavailable"),
+        duration_seconds=3.0,
+        daemon_alive=True,
+        maximum_seconds=60.0,
+        require_supported=True,
+    )
+
+    assert result["capability"] == "unsupported"
+    assert result["passed"] is False
+    assert "required live NAT capability was unsupported" in result["failures"]
 
 
 def test_run_matrix_waits_for_each_initial_reconcile(monkeypatch) -> None:

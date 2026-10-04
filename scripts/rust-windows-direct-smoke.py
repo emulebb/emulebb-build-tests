@@ -1,4 +1,4 @@
-"""Windows-native direct/UPnP entrypoint for the shared Rust direct smoke runner."""
+"""Windows-native entrypoint for the shared Rust direct smoke runner."""
 
 from __future__ import annotations
 
@@ -15,4 +15,4 @@ direct_smoke = load_script_module("rust_direct_smoke_for_windows", "rust-linux-d
 
 
 if __name__ == "__main__":
-    raise SystemExit(direct_smoke.main(["--native-windows", "--enable-upnp", *sys.argv[1:]]))
+    raise SystemExit(direct_smoke.main(["--native-windows", *sys.argv[1:]]))

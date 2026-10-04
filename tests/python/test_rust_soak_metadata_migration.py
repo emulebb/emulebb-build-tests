@@ -14,6 +14,7 @@ from emule_test_harness.rust_soak_metadata_migration import (
     migrate_v20_to_v21,
     migrate_v21_to_v22,
     migrate_v22_to_v23,
+    migrate_v23_to_v24,
 )
 
 KNOWN_FILES_MEDIA_COLUMNS_FOR_TEST = (
@@ -43,6 +44,20 @@ def schema_without_media_metadata(schema_sql: str) -> str:
     return schema_sql
 
 
+def schema_without_final_rehash_gate(schema_sql: str) -> str:
+    schema_sql = schema_sql.replace(
+        "CHECK(visible_state IN ('completed', 'completing', 'downloading', 'queued'))",
+        "CHECK(visible_state IN ('completed', 'downloading', 'queued'))",
+    )
+    return schema_sql.replace(
+        "    -- Set after all parts verify and cleared only after the authoritative\n"
+        "    -- whole-file ED2K MD4 completion rehash succeeds or demotes bad parts.\n"
+        "    final_rehash_pending INTEGER NOT NULL DEFAULT 0\n"
+        "        CHECK(final_rehash_pending IN (0, 1)),\n",
+        "",
+    )
+
+
 def workspace_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
@@ -55,7 +70,11 @@ def make_v15_db(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
     with sqlite3.connect(path) as conn:
         conn.executescript(
-            schema_without_media_metadata(rust_metadata._schema_sql(rust_repo()))
+            schema_without_media_metadata(
+                schema_without_final_rehash_gate(
+                    rust_metadata._schema_sql(rust_repo())
+                )
+            )
         )
         conn.execute(
             "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 15, 0)",
@@ -94,7 +113,9 @@ def make_v15_db(path: Path) -> None:
 
 def make_v16_db_with_old_priority_check(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = schema_without_media_metadata(rust_metadata._schema_sql(rust_repo())).replace(
+    old_schema = schema_without_media_metadata(
+        schema_without_final_rehash_gate(rust_metadata._schema_sql(rust_repo()))
+    ).replace(
         "'auto', 'not-published', 'verylow', 'low', 'normal', 'high', 'release'",
         "'auto', 'verylow', 'low', 'normal', 'high', 'release'",
     )
@@ -132,7 +153,9 @@ def assert_known_files_accepts_not_published(db_path: Path) -> None:
 
 def make_v18_db_without_server_udp_metadata(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = rust_metadata._schema_sql(rust_repo())
+    old_schema = schema_without_final_rehash_gate(
+        rust_metadata._schema_sql(rust_repo())
+    )
     for line in (
         "    max_users INTEGER CHECK(max_users IS NULL OR max_users >= 0),\n",
         "    low_id_users INTEGER CHECK(low_id_users IS NULL OR low_id_users >= 0),\n",
@@ -162,7 +185,9 @@ def make_v18_db_without_server_udp_metadata(path: Path) -> None:
 
 def make_v19_db_without_source_connect_options(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = rust_metadata._schema_sql(rust_repo()).replace(
+    old_schema = schema_without_final_rehash_gate(
+        rust_metadata._schema_sql(rust_repo())
+    ).replace(
         "    connect_options INTEGER CHECK(connect_options IS NULL OR connect_options BETWEEN 0 AND 255),\n",
         "",
     )
@@ -198,7 +223,9 @@ def make_v19_db_without_source_connect_options(path: Path) -> None:
 
 def make_v20_db_without_source_file_descriptions(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = rust_metadata._schema_sql(rust_repo()).replace(
+    old_schema = schema_without_final_rehash_gate(
+        rust_metadata._schema_sql(rust_repo())
+    ).replace(
         "    file_comment TEXT NOT NULL DEFAULT '',\n", ""
     )
     old_schema = old_schema.replace(
@@ -232,7 +259,9 @@ def make_v20_db_without_source_file_descriptions(path: Path) -> None:
 
 def make_v21_db_without_extended_server_metadata(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = rust_metadata._schema_sql(rust_repo())
+    old_schema = schema_without_final_rehash_gate(
+        rust_metadata._schema_sql(rust_repo())
+    )
     old_schema = old_schema.replace("    dynamic_host TEXT NOT NULL DEFAULT '',\n", "")
     old_schema = old_schema.replace("    auxiliary_ports TEXT NOT NULL DEFAULT '',\n", "")
     with sqlite3.connect(path) as conn:
@@ -250,7 +279,9 @@ def make_v21_db_without_extended_server_metadata(path: Path) -> None:
 
 def make_v22_db_without_media_metadata(path: Path) -> None:
     schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
-    old_schema = schema_without_media_metadata(rust_metadata._schema_sql(rust_repo()))
+    old_schema = schema_without_media_metadata(
+        schema_without_final_rehash_gate(rust_metadata._schema_sql(rust_repo()))
+    )
     with sqlite3.connect(path) as conn:
         conn.executescript(old_schema)
         conn.execute(
@@ -261,6 +292,74 @@ def make_v22_db_without_media_metadata(path: Path) -> None:
             "INSERT INTO known_files(ed2k_hash, size_bytes, display_name, first_seen_ms, last_seen_ms, updated_at_ms) "
             "VALUES (zeroblob(16), 1, 'sample.mp3', 0, 0, 0)"
         )
+        conn.commit()
+
+
+def make_v23_db_without_final_rehash_gate(path: Path) -> None:
+    schema_id, _schema_version = rust_metadata._schema_marker(rust_repo())
+    old_schema = schema_without_final_rehash_gate(
+        rust_metadata._schema_sql(rust_repo())
+    )
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_schema)
+        conn.execute(
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, 23, 0)",
+            (schema_id,),
+        )
+        for path_id, display_path in (
+            (1, "C:/incoming/delivered.bin"),
+            (2, "C:/share/shared.bin"),
+        ):
+            conn.execute(
+                """
+                INSERT INTO local_paths(
+                    id, display_path, native_path, canonical_display_path,
+                    normalized_key, platform
+                ) VALUES (?, ?, ?, ?, ?, 'windows')
+                """,
+                (
+                    path_id,
+                    display_path,
+                    display_path.encode(),
+                    display_path,
+                    display_path.lower(),
+                ),
+            )
+        rows = (
+            (1, "pending.bin", 1, "completed", None, None, None, 50),
+            (2, "delivered.bin", 1, "completed", 1, None, None, 50),
+            (3, "shared.bin", 1, "completed", None, 2, None, 50),
+            (4, "incomplete.bin", 0, "downloading", None, None, None, None),
+            (5, "removed.bin", 1, "completed", None, None, 60, 50),
+        )
+        for row_id, name, completed, state, delivered, source, removed, completed_at in rows:
+            conn.execute(
+                """
+                INSERT INTO known_files(
+                    id, ed2k_hash, size_bytes, display_name, completed,
+                    first_seen_ms, last_seen_ms, updated_at_ms
+                ) VALUES (?, ?, 1, ?, ?, 0, 0, 0)
+                """,
+                (row_id, bytes([row_id]) * 16, name, completed),
+            )
+            conn.execute(
+                """
+                INSERT INTO transfers(
+                    id, known_file_id, visible_state, delivered_path_id,
+                    source_path_id, created_at_ms, updated_at_ms,
+                    completed_at_ms, removed_at_ms
+                ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                """,
+                (
+                    row_id,
+                    row_id,
+                    state,
+                    delivered,
+                    source,
+                    completed_at,
+                    removed,
+                ),
+            )
         conn.commit()
 
 
@@ -283,6 +382,7 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         "migrated-v20-to-v21",
         "migrated-v21-to-v22",
         "migrated-v22-to-v23",
+        "migrated-v23-to-v24",
     ]
     assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
@@ -453,3 +553,49 @@ def test_migrates_v22_media_metadata_to_v23(tmp_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("UPDATE known_files SET media_extractor_version = -1")
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migrates_v23_completion_gate_to_v24(tmp_path: Path) -> None:
+    db_path = tmp_path / "emulebb-rust-metadata.db"
+    make_v23_db_without_final_rehash_gate(db_path)
+
+    result = migrate_v23_to_v24(
+        db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path
+    )
+
+    assert result["action"] == "migrated-v23-to-v24"
+    assert result["undeliveredDownloadsPendingRehash"] == 1
+    backup = Path(str(result["backup"]))
+    assert backup.is_file()
+    with sqlite3.connect(backup) as conn:
+        assert "final_rehash_pending" not in {
+            row[1] for row in conn.execute("PRAGMA table_info(transfers)")
+        }
+        assert conn.execute(
+            "SELECT completed FROM known_files WHERE display_name = 'pending.bin'"
+        ).fetchone() == (1,)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT schema_version FROM metadata_schema").fetchone()[0] == 24
+        rows = {
+            name: (completed, state, pending, completed_at)
+            for name, completed, state, pending, completed_at in conn.execute(
+                """
+                SELECT known_files.display_name, known_files.completed,
+                       transfers.visible_state, transfers.final_rehash_pending,
+                       transfers.completed_at_ms
+                FROM known_files
+                JOIN transfers ON transfers.known_file_id = known_files.id
+                """
+            )
+        }
+        assert rows["pending.bin"] == (0, "completing", 1, None)
+        assert rows["delivered.bin"] == (1, "completed", 0, 50)
+        assert rows["shared.bin"] == (1, "completed", 0, 50)
+        assert rows["incomplete.bin"] == (0, "downloading", 0, None)
+        assert rows["removed.bin"] == (1, "completed", 0, 50)
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    second = migrate_v23_to_v24(
+        db_path=db_path, rust_repo=rust_repo(), backup_dir=tmp_path
+    )
+    assert second["action"] == "noop-v24-shape-current"

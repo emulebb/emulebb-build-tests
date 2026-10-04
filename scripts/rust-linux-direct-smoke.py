@@ -620,8 +620,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if audit["status"] == "passed" else 2
     if os.name == "nt" and not args.wsl_child and not args.native_windows:
         return run_in_wsl(args)
-    if args.native_windows and (os.name != "nt" or args.wsl_child or not args.enable_upnp):
-        raise RuntimeError("Native Windows direct mode requires Windows, --enable-upnp, and no WSL child mode.")
+    if args.native_windows and (os.name != "nt" or args.wsl_child):
+        raise RuntimeError("Native Windows direct mode requires Windows and no WSL child mode.")
     if args.connect_timeout_seconds <= 0 or args.observe_seconds < 0 or args.transfer_timeout_seconds <= 0:
         raise RuntimeError("timeouts must be non-negative and connection/transfer timeouts must be positive.")
     if not 0 <= args.probe_count <= 50 or (args.probe_count and args.complete_transfers):
@@ -777,6 +777,16 @@ def main(argv: list[str] | None = None) -> int:
                 "backend": nat.get("backend"),
                 "lastError": nat.get("lastError"),
             }
+        else:
+            nat = nat_status(base_url)
+            report["upnp"] = {
+                "requested": False,
+                "enabled": bool(nat.get("enabled")),
+                "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
+                "mappingCount": len(nat.get("mappings") or []),
+                "backend": nat.get("backend"),
+                "lastError": nat.get("lastError"),
+            }
         retry_http_json(
             "enable networks",
             2,
@@ -848,6 +858,16 @@ def main(argv: list[str] | None = None) -> int:
                 "backend": nat.get("backend"),
                 "lastError": nat.get("lastError"),
             }
+        else:
+            nat = nat_status(base_url)
+            report["upnp"] = {
+                "requested": False,
+                "enabled": bool(nat.get("enabled")),
+                "gatewayDiscovered": bool(nat.get("gatewayDiscovered")),
+                "mappingCount": len(nat.get("mappings") or []),
+                "backend": nat.get("backend"),
+                "lastError": nat.get("lastError"),
+            }
         report["ed2k"] = {
             "connected": bool(final_stats.get("ed2kConnected")),
             "highId": bool(final_stats.get("ed2kHighId")),
@@ -860,6 +880,15 @@ def main(argv: list[str] | None = None) -> int:
         connectivity_passed = (
             report["webuiReady"]
             and report["ed2k"]["connected"]
+            and (
+                args.enable_upnp
+                or (
+                    not report["upnp"]["enabled"]
+                    and not report["upnp"]["gatewayDiscovered"]
+                    and report["upnp"]["mappingCount"] == 0
+                    and report["upnp"]["backend"] is None
+                )
+            )
             and (
                 not args.enable_upnp
                 or args.nat_matrix

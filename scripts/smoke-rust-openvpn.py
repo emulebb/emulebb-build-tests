@@ -26,7 +26,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import nat_live_matrix
+from emule_test_harness import nat_live_matrix, vpn_transfer_completion
 
 
 REQUIRED_PRIVATE_FILES = (
@@ -66,6 +66,34 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def container_delivery_matches(
+    container: str, expected_size: int, expected_sha256: str
+) -> bool:
+    candidates = docker(
+        "exec",
+        container,
+        "find",
+        "/data/ed2k",
+        "-type",
+        "f",
+        "-size",
+        f"{expected_size}c",
+        "-print0",
+    ).stdout.split("\0")
+    for candidate in filter(None, candidates):
+        digest = docker(
+            "exec", container, "sha256sum", "--", candidate
+        ).stdout.split()[0].lower()
+        if digest == expected_sha256:
+            return True
+    return False
+
+
+def container_logs(container: str) -> str:
+    result = docker("logs", container)
+    return result.stdout + result.stderr
+
+
 def project_states() -> dict[str, str]:
     result = docker("compose", "ls", "--all", "--format", "json")
     return {row["Name"]: row["Status"] for row in json.loads(result.stdout)}
@@ -77,6 +105,7 @@ def request_json(
     *,
     method: str = "GET",
     payload: dict[str, object] | None = None,
+    timeout: float = 10,
 ) -> dict[str, object]:
     body = None
     headers = {"X-API-Key": key}
@@ -84,7 +113,7 @@ def request_json(
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, headers=headers, data=body, method=method)
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         value = json.load(response)
     if not isinstance(value, dict):
         raise RuntimeError(f"REST response from {url} was not an object")
@@ -310,6 +339,15 @@ def main() -> int:
     parser.add_argument("--compose", type=Path, required=True)
     parser.add_argument("--private-root", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--inputs", type=Path, default=REPO_ROOT / "live-wire-inputs.local.json"
+    )
+    parser.add_argument(
+        "--complete-transfer",
+        action="store_true",
+        help="Complete and SHA-256 verify the single exact allowlisted transfer.",
+    )
+    parser.add_argument("--transfer-timeout-seconds", type=float, default=3600.0)
     parser.add_argument("--image", default="ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1")
     parser.add_argument(
         "--openvpn-image",
@@ -350,6 +388,20 @@ def main() -> int:
         action="store_true",
         help="Run the capability-aware PCP/NAT-PMP and MiniUPnPc matrix.",
     )
+    parser.add_argument(
+        "--allow-unsupported-nat",
+        action="store_true",
+        help="Record unsupported live NAT backends without aborting later smoke phases.",
+    )
+    parser.add_argument(
+        "--vpn-gateway",
+        help="Explicit tun0 PCP/NAT-PMP gateway; otherwise discover it from the tun0 route table.",
+    )
+    parser.add_argument(
+        "--igd-url",
+        default=os.environ.get("HIDE_IGD_URL"),
+        help="Explicit VPN IGD URL or IPv4 address used for strict MiniUPnPc cases.",
+    )
     args = parser.parse_args()
 
     if not args.archive.is_file() or not args.compose.is_file():
@@ -368,6 +420,12 @@ def main() -> int:
         raise RuntimeError("--tunnel-egress-delay-ms must be between 1 and 5000")
     if not 1 <= args.repeat_searches <= 5:
         raise RuntimeError("--repeat-searches must be between 1 and 5")
+    if args.nat_matrix and not args.igd_url:
+        raise RuntimeError("--nat-matrix requires --igd-url (or HIDE_IGD_URL)")
+    if args.complete_transfer and not args.inputs.is_file():
+        raise RuntimeError("--complete-transfer requires an existing --inputs allowlist")
+    if args.transfer_timeout_seconds <= 0:
+        raise RuntimeError("--transfer-timeout-seconds must be positive")
     args.report.parent.mkdir(parents=True, exist_ok=True)
 
     project = f"emulebb-rust-openvpn-proof-{os.getpid()}"
@@ -466,14 +524,18 @@ def main() -> int:
         tun = docker("exec", openvpn, "ip", "-4", "-o", "addr", "show", "dev", "tun0")
         if not tun.stdout.strip():
             raise RuntimeError("plain OpenVPN did not create an IPv4 tun0")
-        tun_match = re.search(r"\binet (\d{1,3}(?:\.\d{1,3}){3})/", tun.stdout)
-        if not tun_match:
-            raise RuntimeError("plain OpenVPN tun0 did not expose a parseable IPv4 address")
-        tun_ip = tun_match.group(1)
+        tun_ip = nat_live_matrix.tunnel_ipv4(tun.stdout)
         route = docker("exec", openvpn, "ip", "-4", "route", "get", "1.1.1.1")
         if not re.search(r"\bdev tun0\b", route.stdout):
             raise RuntimeError("public IPv4 routing is not directed through tun0")
         route_table = docker("exec", openvpn, "ip", "-4", "route", "show").stdout
+        tun_route_table = docker(
+            "exec", openvpn, "ip", "-4", "route", "show", "dev", "tun0"
+        ).stdout
+        vpn_gateway = nat_live_matrix.tunnel_gateway(
+            tun_route_table, args.vpn_gateway
+        )
+        igd_ip = nat_live_matrix.igd_ipv4(args.igd_url) if args.igd_url else None
         report["literalDefaultRouteUsesTun0"] = bool(
             re.search(r"^default(?:\s+.*)?\s+dev tun0(?:\s|$)", route_table, re.MULTILINE)
         )
@@ -530,6 +592,7 @@ def main() -> int:
                     api_key,
                     method="PATCH",
                     payload=settings_patch,
+                    timeout=90,
                 )
             )
             if args.disable_protocol_obfuscation or args.nat_matrix:
@@ -559,7 +622,9 @@ def main() -> int:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Rust WebUI did not restart after settings update")
                 time.sleep(2)
-            persisted = response_data(request_json(api + "/app/settings", api_key))
+            persisted = response_data(
+                request_json(api + "/app/settings", api_key, timeout=90)
+            )
             if args.disable_protocol_obfuscation or args.nat_matrix:
                 persisted_ed2k = persisted.get("ed2k", {})
                 if not isinstance(persisted_ed2k, dict) or persisted_ed2k.get("obfuscationEnabled") is not False:
@@ -580,6 +645,7 @@ def main() -> int:
                     api_key,
                     method="PATCH",
                     payload=payload,
+                    timeout=90,
                 )
 
             def restart_for_nat() -> None:
@@ -606,11 +672,17 @@ def main() -> int:
             report["natMatrix"] = nat_live_matrix.run_matrix(
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
-                read_nat_status=lambda: request_json(api + "/nat", api_key),
+                read_nat_status=lambda: request_json(
+                    api + "/nat", api_key, timeout=90
+                ),
                 daemon_alive=lambda: docker(
                     "inspect", "--format", "{{.State.Running}}", rust, check=False
                 ).stdout.strip()
                 == "true",
+                bind_ip=tun_ip,
+                pcp_server_ip=vpn_gateway,
+                igd_ip=igd_ip,
+                require_supported=not args.allow_unsupported_nat,
             )
             if not report["natMatrix"]["passed"]:
                 raise RuntimeError("one or more capability-aware NAT matrix cases failed")
@@ -644,6 +716,26 @@ def main() -> int:
             ready = connected and kad_contacts > 0
         if not ready:
             raise RuntimeError("eD2K and Kad did not become ready through plain OpenVPN")
+
+        if args.complete_transfer:
+            transfer = vpn_transfer_completion.load_exact_transfer(args.inputs)
+            report["transferCompletion"] = vpn_transfer_completion.wait_for_completion(
+                row=transfer,
+                create_transfer=lambda payload: request_json(
+                    api + "/transfers",
+                    api_key,
+                    method="POST",
+                    payload=payload,
+                ),
+                read_transfer=lambda file_hash: response_data(
+                    request_json(api + f"/transfers/{file_hash}", api_key)
+                ),
+                verify_delivered_sha256=lambda size, digest: container_delivery_matches(
+                    rust, size, digest
+                ),
+                read_daemon_logs=lambda: container_logs(rust),
+                timeout_seconds=args.transfer_timeout_seconds,
+            )
 
         if args.tunnel_egress_delay_ms is not None:
             docker(

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 
 PCP_BACKEND = "pcp_natpmp"
@@ -12,35 +15,81 @@ MINIUPNPC_BACKEND = "upnp_miniupnpc"
 PCP_PROTOCOLS = {"pcp_v2", "pcp_v1", "nat_pmp_v0"}
 
 
-def matrix_cases(forced_pcp_server_ip: str = "192.0.2.1") -> tuple[dict[str, Any], ...]:
+def tunnel_ipv4(address_output: str) -> str:
+    match = re.search(r"\binet\s+([0-9.]+)/", address_output)
+    if not match:
+        raise RuntimeError("tun0 did not expose a parseable IPv4 address")
+    return str(ipaddress.IPv4Address(match.group(1)))
+
+
+def tunnel_gateway(route_output: str, configured_gateway: str | None = None) -> str:
+    if configured_gateway:
+        return str(ipaddress.IPv4Address(configured_gateway))
+    match = re.search(r"\bvia\s+([0-9.]+)", route_output)
+    if not match:
+        match = re.search(
+            r"(?m)^(\d{1,3}(?:\.\d{1,3}){3})\s+dev\s+tun0\s+scope\s+link(?:\s|$)",
+            route_output,
+        )
+    if not match:
+        raise RuntimeError("tun0 route table did not expose a PCP/NAT-PMP gateway")
+    return str(ipaddress.IPv4Address(match.group(1)))
+
+
+def igd_ipv4(igd_url_or_ip: str) -> str:
+    parsed = urlsplit(igd_url_or_ip)
+    candidate = parsed.hostname if parsed.scheme else igd_url_or_ip
+    if not candidate:
+        raise RuntimeError("IGD URL did not contain a host")
+    try:
+        return str(ipaddress.IPv4Address(candidate))
+    except ipaddress.AddressValueError as exc:
+        raise RuntimeError("IGD host must be an explicit IPv4 address") from exc
+
+
+def matrix_cases(
+    forced_pcp_server_ip: str = "192.0.2.1",
+    *,
+    bind_ip: str | None = None,
+    pcp_server_ip: str | None = None,
+    igd_ip: str | None = None,
+) -> tuple[dict[str, Any], ...]:
     """Returns the four required live NAT configurations in execution order."""
 
     return (
         {
             "name": "default-auto",
             "backendOrder": [],
-            "pcpServerIp": None,
+            "bindIp": bind_ip,
+            "pcpServerIp": pcp_server_ip,
+            "igdIp": igd_ip,
             "expectedBackends": [PCP_BACKEND, MINIUPNPC_BACKEND],
             "attemptedBackends": [PCP_BACKEND, MINIUPNPC_BACKEND],
         },
         {
             "name": "pcp-only",
             "backendOrder": [PCP_BACKEND],
-            "pcpServerIp": None,
+            "bindIp": bind_ip,
+            "pcpServerIp": pcp_server_ip,
+            "igdIp": igd_ip,
             "expectedBackends": [PCP_BACKEND],
             "attemptedBackends": [PCP_BACKEND],
         },
         {
             "name": "miniupnpc-only",
             "backendOrder": [MINIUPNPC_BACKEND],
+            "bindIp": bind_ip,
             "pcpServerIp": None,
+            "igdIp": igd_ip,
             "expectedBackends": [MINIUPNPC_BACKEND],
             "attemptedBackends": [MINIUPNPC_BACKEND],
         },
         {
             "name": "forced-pcp-failure-miniupnpc-fallback",
             "backendOrder": [PCP_BACKEND, MINIUPNPC_BACKEND],
+            "bindIp": bind_ip,
             "pcpServerIp": forced_pcp_server_ip,
+            "igdIp": igd_ip,
             "expectedBackends": [MINIUPNPC_BACKEND],
             "attemptedBackends": [PCP_BACKEND, MINIUPNPC_BACKEND],
         },
@@ -56,8 +105,16 @@ def settings_patch(case: dict[str, Any]) -> dict[str, object]:
             "enabled": True,
             "requireInitialMapping": False,
             "backendOrder": list(case["backendOrder"]),
+            "bindIp": case["bindIp"],
             "pcpServerIp": case["pcpServerIp"],
-            "discoveryTimeoutSecs": 2,
+            "igdIp": case["igdIp"],
+            # Match hide-port-forward's proven finite UPnP retry lease.
+            "leaseDurationSecs": 86400,
+            # Match the proven hide-port-forward helper's command budget. The
+            # VPN gateway first rejects PCP v2, then the native client retries
+            # as NAT-PMP v0; a two-second budget can expire after the successful
+            # fallback response has arrived but before the flow settles.
+            "discoveryTimeoutSecs": 15,
         },
     }
 
@@ -76,6 +133,7 @@ def evaluate_case(
     duration_seconds: float,
     daemon_alive: bool,
     maximum_seconds: float,
+    require_supported: bool = False,
 ) -> dict[str, Any]:
     """Classifies supported and cleanly unsupported live-network outcomes."""
 
@@ -89,7 +147,9 @@ def evaluate_case(
     result: dict[str, Any] = {
         "name": case["name"],
         "backendOrder": list(case["backendOrder"]),
+        "bindIp": case["bindIp"],
         "pcpServerIp": case["pcpServerIp"],
+        "igdIp": case["igdIp"],
         "durationSeconds": round(duration_seconds, 3),
         "daemonAlive": daemon_alive,
         "enabled": bool(status.get("enabled")),
@@ -110,6 +170,10 @@ def evaluate_case(
         failures.append("NAT status did not remain enabled")
     if status.get("pcpServerIp") != case["pcpServerIp"]:
         failures.append("status did not report the configured PCP server override")
+    if status.get("bindIp") != case["bindIp"]:
+        failures.append("status did not report the configured NAT bind address")
+    if status.get("igdIp") != case["igdIp"]:
+        failures.append("status did not report the configured IGD address")
 
     supported = (
         result["gatewayDiscovered"]
@@ -134,6 +198,8 @@ def evaluate_case(
             )
         if backend is not None or mappings:
             failures.append("partial mapping state remained after an unsupported result")
+        if require_supported:
+            failures.append("required live NAT capability was unsupported")
         result["capability"] = "unsupported"
 
     result["passed"] = not failures
@@ -149,12 +215,21 @@ def run_matrix(
     read_nat_status: Callable[[], dict[str, Any]],
     daemon_alive: Callable[[], bool],
     forced_pcp_server_ip: str = "192.0.2.1",
+    bind_ip: str | None = None,
+    pcp_server_ip: str | None = None,
+    igd_ip: str | None = None,
+    require_supported: bool = False,
     maximum_case_seconds: float = 60.0,
 ) -> dict[str, Any]:
     """Runs all four configurations, restarting between restart-required updates."""
 
     results = []
-    for case in matrix_cases(forced_pcp_server_ip):
+    for case in matrix_cases(
+        forced_pcp_server_ip,
+        bind_ip=bind_ip,
+        pcp_server_ip=pcp_server_ip,
+        igd_ip=igd_ip,
+    ):
         started = time.monotonic()
         updated = _response_data(apply_settings(settings_patch(case)))
         ed2k = updated.get("ed2k") or {}
@@ -165,6 +240,10 @@ def run_matrix(
             raise RuntimeError("settings update did not retain the requested NAT backend order")
         if nat.get("pcpServerIp") != case["pcpServerIp"]:
             raise RuntimeError("settings update did not retain the PCP server override")
+        if nat.get("bindIp") != case["bindIp"]:
+            raise RuntimeError("settings update did not retain the NAT bind address")
+        if nat.get("igdIp") != case["igdIp"]:
+            raise RuntimeError("settings update did not retain the IGD address")
         restart_daemon()
         status_payload = read_nat_status()
         while (
@@ -181,11 +260,12 @@ def run_matrix(
                 duration_seconds=time.monotonic() - started,
                 daemon_alive=daemon_alive(),
                 maximum_seconds=maximum_case_seconds,
+                require_supported=require_supported,
             )
         )
 
     return {
-        "schema": "emulebb.rust-nat-live-matrix.v1",
+        "schema": "emulebb.rust-nat-live-matrix.v2",
         "protocolObfuscationEnabled": False,
         "caseCount": len(results),
         "supportedCount": sum(row["capability"] == "supported" for row in results),

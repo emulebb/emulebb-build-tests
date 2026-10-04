@@ -25,6 +25,7 @@ V20_SCHEMA_VERSION = 20
 V21_SCHEMA_VERSION = 21
 V22_SCHEMA_VERSION = 22
 V23_SCHEMA_VERSION = 23
+V24_SCHEMA_VERSION = 24
 SCHEMA = "emulebb-build-tests.rust-soak-metadata-migration.v1"
 SHARED_ROOT_COLUMNS = (
     "id",
@@ -224,6 +225,11 @@ def migrate_v15_to_v16(
 def current_known_files_table_sql(rust_repo: Path, table_name: str) -> str:
     ddl = extract_create_table(rust_metadata._schema_sql(rust_repo), "known_files")
     return ddl.replace("CREATE TABLE known_files", f"CREATE TABLE {table_name}", 1)
+
+
+def current_transfers_table_sql(rust_repo: Path, table_name: str) -> str:
+    ddl = extract_create_table(rust_metadata._schema_sql(rust_repo), "transfers")
+    return ddl.replace("CREATE TABLE transfers", f"CREATE TABLE {table_name}", 1)
 
 
 def current_imported_known_files_sql(rust_repo: Path) -> str:
@@ -881,6 +887,183 @@ def migrate_v22_to_v23(
     }
 
 
+def migrate_v23_to_v24(
+    *,
+    db_path: Path,
+    rust_repo: Path,
+    backup_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Install the durable final-rehash gate for undelivered downloads."""
+
+    db_path = db_path.resolve()
+    rust_repo = rust_repo.resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"metadata database does not exist: {db_path}")
+
+    schema_id, current_version = rust_metadata._schema_marker(rust_repo)
+    if current_version < V24_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"this migration requires Rust schema {V24_SCHEMA_VERSION}+; current schema is {current_version}"
+        )
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        before_version = schema_marker(db_path, schema_id)
+        if before_version is None:
+            raise RuntimeError(f"metadata_schema row is missing for {schema_id}")
+        columns = table_columns(conn, "transfers")
+        table_sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transfers'"
+        ).fetchone()
+        table_sql = str(table_sql_row[0]) if table_sql_row else ""
+        transfer_count = int(conn.execute("SELECT count(*) FROM transfers").fetchone()[0])
+        pending_count = int(
+            conn.execute(
+                """
+                SELECT count(*)
+                FROM transfers
+                JOIN known_files ON known_files.id = transfers.known_file_id
+                WHERE known_files.completed = 1
+                  AND transfers.delivered_path_id IS NULL
+                  AND transfers.source_path_id IS NULL
+                  AND transfers.removed_at_ms IS NULL
+                """
+            ).fetchone()[0]
+        )
+    has_gate = "final_rehash_pending" in columns
+    allows_completing = "'completing'" in table_sql
+
+    if before_version >= V24_SCHEMA_VERSION and has_gate and allows_completing:
+        return {
+            "schema": SCHEMA,
+            "action": "noop-v24-shape-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "schemaVersion": before_version,
+            "transfers": transfer_count,
+        }
+    if before_version != V23_SCHEMA_VERSION or has_gate or allows_completing:
+        raise RuntimeError(
+            "metadata DB is not the bounded v23 transfer shape "
+            f"(schemaVersion={before_version}, columns={columns})"
+        )
+    if dry_run:
+        return {
+            "schema": SCHEMA,
+            "action": "would-migrate-v23-to-v24",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "fromSchemaVersion": V23_SCHEMA_VERSION,
+            "toSchemaVersion": V24_SCHEMA_VERSION,
+            "transfers": transfer_count,
+            "undeliveredDownloadsPendingRehash": pending_count,
+        }
+
+    backup_path = backup_database(db_path, backup_dir, "v23-to-v24")
+    temp_table = "transfers_v24_migrating"
+    create_temp_sql = current_transfers_table_sql(rust_repo, temp_table)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {temp_table}")
+            conn.execute(create_temp_sql)
+            conn.execute(
+                f"""
+                INSERT INTO {temp_table}(
+                    id, known_file_id, visible_state, final_rehash_pending,
+                    control_state, category_id, download_priority, target_path_id,
+                    payload_directory, delivered_path_id, source_path_id,
+                    source_mtime_ms, created_at_ms, updated_at_ms,
+                    completed_at_ms, removed_at_ms
+                )
+                SELECT
+                    transfers.id,
+                    transfers.known_file_id,
+                    CASE
+                        WHEN known_files.completed = 1
+                         AND transfers.delivered_path_id IS NULL
+                         AND transfers.source_path_id IS NULL
+                         AND transfers.removed_at_ms IS NULL
+                        THEN 'completing'
+                        ELSE transfers.visible_state
+                    END,
+                    CASE
+                        WHEN known_files.completed = 1
+                         AND transfers.delivered_path_id IS NULL
+                         AND transfers.source_path_id IS NULL
+                         AND transfers.removed_at_ms IS NULL
+                        THEN 1
+                        ELSE 0
+                    END,
+                    transfers.control_state,
+                    transfers.category_id,
+                    transfers.download_priority,
+                    transfers.target_path_id,
+                    transfers.payload_directory,
+                    transfers.delivered_path_id,
+                    transfers.source_path_id,
+                    transfers.source_mtime_ms,
+                    transfers.created_at_ms,
+                    transfers.updated_at_ms,
+                    CASE
+                        WHEN known_files.completed = 1
+                         AND transfers.delivered_path_id IS NULL
+                         AND transfers.source_path_id IS NULL
+                         AND transfers.removed_at_ms IS NULL
+                        THEN NULL
+                        ELSE transfers.completed_at_ms
+                    END,
+                    transfers.removed_at_ms
+                FROM transfers
+                JOIN known_files ON known_files.id = transfers.known_file_id
+                """
+            )
+            conn.execute(
+                f"""
+                UPDATE known_files
+                SET completed = 0
+                WHERE id IN (
+                    SELECT known_file_id
+                    FROM {temp_table}
+                    WHERE final_rehash_pending = 1
+                )
+                """
+            )
+            conn.execute("DROP TABLE transfers")
+            conn.execute(f"ALTER TABLE {temp_table} RENAME TO transfers")
+            conn.execute(
+                "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
+                (V24_SCHEMA_VERSION, schema_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+        fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_issues:
+            raise RuntimeError(
+                f"foreign key check failed after migration: {fk_issues[:5]}"
+            )
+        after_version = schema_marker(db_path, schema_id)
+        after_columns = table_columns(conn, "transfers")
+
+    return {
+        "schema": SCHEMA,
+        "action": "migrated-v23-to-v24",
+        "metadataDb": str(db_path),
+        "backup": str(backup_path),
+        "schemaId": schema_id,
+        "fromSchemaVersion": before_version,
+        "toSchemaVersion": after_version,
+        "addedColumns": ["transfers.final_rehash_pending"],
+        "transfers": transfer_count,
+        "undeliveredDownloadsPendingRehash": pending_count,
+        "columns": after_columns,
+    }
+
+
 def migrate_to_current(
     *,
     db_path: Path,
@@ -942,6 +1125,7 @@ def migrate_to_current(
         V20_SCHEMA_VERSION,
         V21_SCHEMA_VERSION,
         V22_SCHEMA_VERSION,
+        V23_SCHEMA_VERSION,
     ):
         raise RuntimeError(
             f"metadata DB schemaVersion={before_version} cannot be migrated to current {current_version}"
@@ -1055,6 +1239,20 @@ def migrate_to_current(
             )
         )
 
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version == V22_SCHEMA_VERSION and current_version >= V23_SCHEMA_VERSION:
+        before_version = V23_SCHEMA_VERSION
+    if before_version == V23_SCHEMA_VERSION and current_version >= V24_SCHEMA_VERSION:
+        steps.append(
+            migrate_v23_to_v24(
+                db_path=db_path,
+                rust_repo=rust_repo,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+            )
+        )
+
     final_version = (
         schema_marker(db_path, schema_id) if not dry_run else current_version
     )
@@ -1070,6 +1268,7 @@ def migrate_to_current(
             "noop-v21-shape-current",
             "noop-v22-shape-current",
             "noop-v23-shape-current",
+            "noop-v24-shape-current",
         )
         for step in steps
     ):
