@@ -7,6 +7,7 @@ import pytest
 
 from emule_test_harness import rust_metadata
 from emule_test_harness.rust_soak_metadata_migration import (
+    build_parser,
     migrate_to_current,
     migrate_v16_to_v17,
     migrate_v18_to_v19,
@@ -403,6 +404,13 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert_known_files_accepts_not_published(db_path)
+
+
+def test_cli_marks_migration_as_internal_harness_only() -> None:
+    description = build_parser().description or ""
+
+    assert "test and soak profiles" in description
+    assert "not a supported end-user migration" in description
 
 
 def test_migrates_v16_known_files_priority_constraint_to_v17(tmp_path: Path) -> None:

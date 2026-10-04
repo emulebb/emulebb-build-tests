@@ -14,6 +14,10 @@ Everything below is this repo's local deltas only:
   implementation modules stay under `emule_test_harness` with snake_case names.
 - New reusable harness helpers should include succinct docstrings or comments
   when their behavior is not obvious.
+- Rust metadata schema-evolution helpers are internal infrastructure for
+  persisted test and soak profiles only. Keep them explicit, bounded to known
+  schemas, and backup-first. They are not a supported end-user migration or
+  recovery path and must not be presented in product-facing guidance.
 - For `emulebb-rust` public-network live tests, prefer WSL2 + Docker with the
   plain OpenVPN lane in `scripts/smoke-rust-openvpn.py`. Use the Gluetun lane or
   Windows hide.me only when the scenario specifically requires that topology.

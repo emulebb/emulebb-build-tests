@@ -1,4 +1,7 @@
-"""Migrate the persisted Rust soak metadata DB to the current Rust schema."""
+"""Evolve an internal persisted Rust test/soak DB to the current schema.
+
+This harness command is not a supported end-user migration or recovery path.
+"""
 
 from __future__ import annotations
 

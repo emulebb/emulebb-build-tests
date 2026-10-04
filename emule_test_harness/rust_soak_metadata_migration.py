@@ -1,8 +1,9 @@
-"""One-off Rust soak metadata migrations outside the Rust product.
+"""Internal test/soak profile schema evolution outside the Rust product.
 
-These helpers are for operator-owned persistent soak profiles only. The Rust
-client itself stays current-schema-only and must not carry legacy schema
-branches or in-product migrations.
+These helpers preserve harness-owned persistent test and soak profiles to speed
+engineering validation. They are not a supported end-user migration or recovery
+path. The Rust client itself stays current-schema-only and must require end users
+with an incompatible schema to create an entirely fresh profile.
 """
 
 from __future__ import annotations
