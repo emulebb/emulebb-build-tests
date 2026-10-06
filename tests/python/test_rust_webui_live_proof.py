@@ -3,6 +3,18 @@ from __future__ import annotations
 from emule_test_harness import rust_webui_live_proof
 
 
+def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
+    write_script = rust_webui_live_proof.browser_api_key_write_script('stale "key"')
+    read_script = rust_webui_live_proof.browser_api_key_read_script()
+
+    assert write_script == (
+        'sessionStorage.setItem("emulebb.webui.apiKey", "stale \\"key\\"");'
+    )
+    assert read_script == '() => sessionStorage.getItem("emulebb.webui.apiKey")'
+    assert "localStorage" not in write_script
+    assert "localStorage" not in read_script
+
+
 def test_select_filtered_live_pdf_enforces_safe_shape_and_prefers_sources() -> None:
     selected = rust_webui_live_proof.select_filtered_live_pdf(
         [

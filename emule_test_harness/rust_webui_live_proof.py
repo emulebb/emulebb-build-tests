@@ -22,6 +22,7 @@ DEFAULT_API_KEY = "converged-soak"
 DEFAULT_STEADY_SECONDS = 18.0
 DEFAULT_TAB_WAIT_SECONDS = 1.5
 DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO = 0.25
+WEBUI_API_KEY_STORAGE_KEY = "emulebb.webui.apiKey"
 TAB_LABELS = (
     "Overview",
     "Transfers",
@@ -38,6 +39,21 @@ TAB_LABELS = (
     "Diagnostics",
     "Logs",
 )
+
+
+def browser_api_key_write_script(api_key: str) -> str:
+    """Return a script that seeds the WebUI's tab-scoped credential store."""
+
+    return (
+        f"sessionStorage.setItem({json.dumps(WEBUI_API_KEY_STORAGE_KEY)}, "
+        f"{json.dumps(api_key)});"
+    )
+
+
+def browser_api_key_read_script() -> str:
+    """Return a script that reads the WebUI's tab-scoped credential store."""
+
+    return f"() => sessionStorage.getItem({json.dumps(WEBUI_API_KEY_STORAGE_KEY)})"
 
 
 def _primary_nav_item(page, label: str):
@@ -1301,9 +1317,7 @@ def run_webui_live_proof(
             page.on("request", lambda request: recorder.record_url(request.url))
             try:
                 initial_api_key = "stale-package-proof-key" if verify_stale_key_recovery else api_key
-                page.add_init_script(
-                    f"localStorage.setItem('emulebb.webui.apiKey', {json.dumps(initial_api_key)});"
-                )
+                page.add_init_script(browser_api_key_write_script(initial_api_key))
                 page.goto(base_url, wait_until="domcontentloaded", timeout=int(timeout_seconds * 1000))
                 if verify_stale_key_recovery:
                     page.get_by_role("heading", name="Connect to the local daemon").wait_for(
@@ -1318,9 +1332,7 @@ def run_webui_live_proof(
                     page.get_by_text("API key verified", exact=True).wait_for(
                         timeout=int(timeout_seconds * 1000)
                     )
-                    stored_api_key = page.evaluate(
-                        "() => localStorage.getItem('emulebb.webui.apiKey')"
-                    )
+                    stored_api_key = page.evaluate(browser_api_key_read_script())
                     if stored_api_key != api_key:
                         raise RuntimeError("Rust WebUI did not persist the verified API key")
                     expected_auth_paths = {"/api/v1/app", "/api/v1/capabilities"}
