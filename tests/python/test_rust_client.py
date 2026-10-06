@@ -70,7 +70,7 @@ def test_private_profile_settings_restrict_existing_file(tmp_path: Path) -> None
     settings_path.write_text("stale\n", encoding="utf-8")
     settings_path.chmod(0o644)
 
-    rust_client._write_private_text(settings_path, 'apiKey = "new-key"\n')
+    rust_client.write_private_text(settings_path, 'apiKey = "new-key"\n')
 
     assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
     assert settings_path.read_text(encoding="utf-8") == 'apiKey = "new-key"\n'

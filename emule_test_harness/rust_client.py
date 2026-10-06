@@ -15,7 +15,7 @@ RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
 RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
 
 
-def _write_private_text(path: Path, contents: str) -> None:
+def write_private_text(path: Path, contents: str) -> None:
     """Write credential-bearing text with owner-only POSIX permissions."""
 
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
@@ -116,7 +116,7 @@ def write_rust_profile(
         rust_metadata.replace_settings_section(metadata_path, "core", core_settings)
 
     lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
-    _write_private_text(settings_path, "\n".join(lines))
+    write_private_text(settings_path, "\n".join(lines))
 
     daemon_settings: dict[str, object] = {}
     if incoming_dir is not None:

@@ -25,7 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.rust_webui_live_proof import run_webui_live_proof
+from emule_test_harness.rust_client import write_private_text  # noqa: E402
+from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
 
 API_KEY = "native-package-smoke"
 WEBUI_TITLE = "eMuleBB WebUI"
@@ -58,6 +59,13 @@ def _available_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+def _write_profile(profile: Path, port: int) -> None:
+    write_private_text(
+        profile / "emulebb-rust-settings.toml",
+        f'[rest]\nbindAddr = "127.0.0.1:{port}"\napiKey = "{API_KEY}"\n',
+    )
 
 
 def _request(
@@ -100,10 +108,7 @@ def _smoke_binary(
     profile.mkdir()
     incoming.mkdir()
     port = _available_port()
-    (profile / "emulebb-rust-settings.toml").write_text(
-        f'[rest]\nbindAddr = "127.0.0.1:{port}"\napiKey = "{API_KEY}"\n',
-        encoding="utf-8",
-    )
+    _write_profile(profile, port)
     base_url = f"http://127.0.0.1:{port}"
     log_path = temp_root / "daemon.log"
     with log_path.open("w", encoding="utf-8") as log:
