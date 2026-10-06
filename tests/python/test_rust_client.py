@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+import stat
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,21 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert metadata_path(profile_dir).is_file()
     assert setting_value(profile_dir, "core", "autoConnect") is False
     assert setting_value(profile_dir, "nat", "enabled") is False
+    if os.name == "posix":
+        mode = stat.S_IMODE((profile_dir / rust_client.RUST_PROFILE_SETTINGS_FILE).stat().st_mode)
+        assert mode == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_private_profile_settings_restrict_existing_file(tmp_path: Path) -> None:
+    settings_path = tmp_path / rust_client.RUST_PROFILE_SETTINGS_FILE
+    settings_path.write_text("stale\n", encoding="utf-8")
+    settings_path.chmod(0o644)
+
+    rust_client._write_private_text(settings_path, 'apiKey = "new-key"\n')
+
+    assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
+    assert settings_path.read_text(encoding="utf-8") == 'apiKey = "new-key"\n'
 
 
 def test_write_rust_profile_can_preserve_consumer_auto_connect_default(tmp_path: Path) -> None:

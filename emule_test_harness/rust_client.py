@@ -15,6 +15,22 @@ RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
 RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
 
 
+def _write_private_text(path: Path, contents: str) -> None:
+    """Write credential-bearing text with owner-only POSIX permissions."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        if os.name == "posix":
+            os.fchmod(descriptor, 0o600)
+        os.ftruncate(descriptor, 0)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            descriptor = -1
+            handle.write(contents)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def get_required_cargo_target_dir() -> Path:
     """Returns the caller-provided canonical Cargo target directory."""
 
@@ -100,7 +116,7 @@ def write_rust_profile(
         rust_metadata.replace_settings_section(metadata_path, "core", core_settings)
 
     lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
-    settings_path.write_text("\n".join(lines), encoding="utf-8")
+    _write_private_text(settings_path, "\n".join(lines))
 
     daemon_settings: dict[str, object] = {}
     if incoming_dir is not None:
