@@ -29,7 +29,7 @@ from emule_test_harness import rust_client, rust_metadata, rust_rest_conformance
 from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root  # noqa: E402
 from emule_test_harness.vm_guest_profiles import http_json, wait_until  # noqa: E402
 
-API_KEY = "rust-rest-openapi-ci"
+API_KEY = "rust-rest-openapi-ci-secret-0001"
 REST_ADDR = "127.0.0.1"
 
 

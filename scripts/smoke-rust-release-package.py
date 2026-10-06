@@ -28,7 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness.rust_client import write_private_text  # noqa: E402
 from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
 
-API_KEY = "native-package-smoke"
+API_KEY = "native-package-smoke-secret-0001"
 WEBUI_TITLE = "eMuleBB WebUI"
 PANEL_ROUTES = {
     "overview": "/api/v1/status",

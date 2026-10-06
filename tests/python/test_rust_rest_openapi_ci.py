@@ -26,6 +26,15 @@ def test_staged_executable_uses_host_suffix(tmp_path: Path) -> None:
     assert module.staged_executable(tmp_path) == tmp_path / "tools" / "emulebb-rust" / "bin" / expected
 
 
+def test_api_key_meets_daemon_production_validation() -> None:
+    module = load_module()
+
+    assert len(module.API_KEY.encode("utf-8")) >= 32
+    assert module.API_KEY.isascii()
+    assert module.API_KEY.isprintable()
+    assert not any(character.isspace() for character in module.API_KEY)
+
+
 def test_source_revision_prefers_ci_revision(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
