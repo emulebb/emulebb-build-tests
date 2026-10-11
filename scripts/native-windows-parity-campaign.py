@@ -145,6 +145,7 @@ def deterministic_commands(local_address: str, mfc_diagnostics: Path) -> tuple[t
             "--diagnostics",
             "--lan-bind-addr", local_address,
             "--p2p-bind-interface-address", local_address,
+            "--app-exe", str(mfc_diagnostics),
             "--client2-app-exe", str(mfc_diagnostics),
         ),
     )

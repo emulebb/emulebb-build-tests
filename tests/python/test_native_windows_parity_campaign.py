@@ -70,3 +70,8 @@ def test_deterministic_stage_runs_oracle_and_both_full_protocol_matrices() -> No
         for command in rendered
         if "protocol-combinations.py" in command
     )
+    assert all(
+        "--app-exe mfc-diag.exe" in command
+        for command in rendered
+        if "protocol-combinations.py" in command
+    )
