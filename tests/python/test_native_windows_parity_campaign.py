@@ -65,3 +65,8 @@ def test_deterministic_stage_runs_oracle_and_both_full_protocol_matrices() -> No
     assert any("local-ed2k-protocol-combinations.py" in command for command in rendered)
     assert any("local-ed2k-rust-protocol-combinations.py" in command for command in rendered)
     assert all("--case" not in command for command in rendered)
+    assert all(
+        "--client2-app-exe mfc-diag.exe" in command
+        for command in rendered
+        if "protocol-combinations.py" in command
+    )
