@@ -7,6 +7,11 @@ import pytest
 from emule_test_harness import soak_launch
 
 
+def test_soak_api_keys_meet_current_rust_secret_length() -> None:
+    assert len(soak_launch.RUST_API_KEY.encode("utf-8")) >= 32
+    assert len(soak_launch.MFC_API_KEY.encode("utf-8")) >= 32
+
+
 def test_rust_stats_connected_requires_ed2k() -> None:
     assert soak_launch.rust_stats_connected({"ed2kConnected": True}, require_kad=False) is True
     assert soak_launch.rust_stats_connected({"ed2kConnected": False}, require_kad=False) is False

@@ -42,8 +42,8 @@ MFC_SERVER_UDP_PORT = 43673
 # Compatibility aliases for older helper imports.
 ED2K_PORT = RUST_ED2K_PORT
 KAD_PORT = RUST_KAD_PORT
-RUST_API_KEY = "converged-soak"
-MFC_API_KEY = "converged-soak-mfc"
+RUST_API_KEY = "converged-soak-rust-api-key-0001"
+MFC_API_KEY = "converged-soak-mfc-api-key-00001"
 DEFAULT_UPLOAD_LIMIT_KIBPS = 3072
 DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
 

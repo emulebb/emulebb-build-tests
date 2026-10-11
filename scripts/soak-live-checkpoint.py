@@ -36,9 +36,9 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import diag_event_diff, mfc_diag_adapter, packet_trace_diff  # noqa: E402
 
 RUST_BASE = "http://192.168.1.210:4731"
-RUST_KEY = "converged-soak"
+RUST_KEY = "converged-soak-rust-api-key-0001"
 MFC_BASE = "http://192.168.1.210:4732"
-MFC_KEY = "converged-soak-mfc"
+MFC_KEY = "converged-soak-mfc-api-key-00001"
 OUTPUT_ROOT = Path(os.environ["EMULEBB_WORKSPACE_OUTPUT_ROOT"]) if os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT") else None
 # Sentinel "since" that keeps every record — used to load a full (unwindowed) trace
 # for the cumulative Kad opcode-coverage signal.
