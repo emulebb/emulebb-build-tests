@@ -399,6 +399,15 @@ def _resolve_native_capture_interface(local_address: str, override: str | None):
     return resolve_capture_interface(inventory, hints)
 
 
+def _select_linux_document_term(terms: tuple[str, ...]) -> str:
+    matches = [term for term in terms if "linux" in term.casefold().split()]
+    if not matches:
+        raise RuntimeError(
+            "Native parity inputs must include the requested Linux document search term."
+        )
+    return matches[0]
+
+
 def _fixture_rows(fixtures: tuple[object, ...]) -> list[dict[str, object]]:
     return [
         {
@@ -528,10 +537,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"Native parity shared path index {index} is not an existing directory.")
         forbidden_roots = native_config.forbidden_roots
         native_fixtures = _fixture_rows(links)
-        linux_terms = [term for term in inputs.document_terms if term.casefold() == "linux"]
-        if not linux_terms:
-            raise RuntimeError("Native parity inputs must include the requested Linux document search term.")
-        search_terms = [linux_terms[0]]
+        search_terms = [_select_linux_document_term(inputs.document_terms)]
         shared_roots = [{"path": path, "recursive": True} for path in shared_paths]
         input_summary = summarize_native_parity_inputs(links, shared_paths, forbidden_roots)
 

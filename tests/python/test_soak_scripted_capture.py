@@ -122,3 +122,10 @@ def test_connectivity_state_normalizes_rust_and_mfc_firewall_signals() -> None:
 
     assert rust["matchesExpectedCase"] is True
     assert mfc["matchesExpectedCase"] is True
+
+
+def test_linux_document_term_selection_accepts_operator_phrase() -> None:
+    module = _load_capture()
+    assert module._select_linux_document_term(("public linux documents", "other")) == (
+        "public linux documents"
+    )
