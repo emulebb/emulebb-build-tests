@@ -239,6 +239,14 @@ def test_bring_up_mfc_enables_diagnostic_rest_for_direct_profile(tmp_path: Path,
             return None
 
         @staticmethod
+        def apply_section_preferences(
+            _config_dir: Path,
+            _section: str,
+            _values: tuple[tuple[str, str], ...],
+        ) -> None:
+            return None
+
+        @staticmethod
         def apply_p2p_bind_interface_override(_config_dir: Path, _interface_name: str) -> None:
             return None
 
@@ -1127,6 +1135,14 @@ def _bring_up_mfc_pref_calls(
             pref_calls.append((config_dir_arg, values))
 
         @staticmethod
+        def apply_section_preferences(
+            _config_dir: Path,
+            _section: str,
+            _values: tuple[tuple[str, str], ...],
+        ) -> None:
+            return None
+
+        @staticmethod
         def apply_private_harness_obfuscation(_config_dir: Path, _enabled: bool) -> None:
             return None
 
@@ -1196,6 +1212,22 @@ def test_bring_up_mfc_secure_ident_off_writes_zero(
     flattened = [pair for _dir, values in pref_calls for pair in values]
     assert ("SecureIdent", "0") in flattened
     assert ("SecureIdent", "1") not in flattened
+
+
+def test_bring_up_mfc_accepts_direct_bind_and_disables_nat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pref_calls = _bring_up_mfc_pref_calls(
+        tmp_path,
+        monkeypatch,
+        p2p_bind_ip="192.0.2.10",
+        p2p_bind_interface=None,
+        nat_enabled=False,
+    )
+    flattened = [pair for _dir, values in pref_calls for pair in values]
+    assert ("BindAddr", "192.0.2.10") in flattened
+    assert ("BindInterface", "") in flattened
+    assert ("OpenPortsOnStartUp", "0") in flattened
 
 
 def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:

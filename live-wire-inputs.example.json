@@ -55,6 +55,15 @@
       }
     ]
   },
+  "native_parity": {
+    "ed2k_links_file": "live-wire.local.ed2k-links-fixtures.txt",
+    "shared_paths_file": "live-wire.local.ed2k-paths-fixtures.txt",
+    "capture_interface": "auto",
+    "forbidden_roots": [
+      "C:\\example\\retired-client-binaries",
+      "C:\\example\\retired-client-incoming"
+    ]
+  },
   "local_package_install": {
     "target_path": "%EMULEBB_LOCAL_INSTALL_PATH%",
     "import_profile_dir": "%EMULEBB_LOCAL_TEST_PROFILE_PATH%",

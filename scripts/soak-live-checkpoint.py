@@ -22,6 +22,7 @@ import collections
 import datetime
 import glob
 import json
+import os
 import shutil
 import sys
 import time
@@ -38,12 +39,10 @@ RUST_BASE = "http://192.168.1.210:4731"
 RUST_KEY = "converged-soak"
 MFC_BASE = "http://192.168.1.210:4732"
 MFC_KEY = "converged-soak-mfc"
-RUST_PROFILE_DUMP = Path(r"C:\var\build\emulebb_out\soak\rust-profile\packet-dump")
-MFC_LOGS = Path(r"F:\M\H06T01\dldz\EMULE_BIN\logs")
+OUTPUT_ROOT = Path(os.environ["EMULEBB_WORKSPACE_OUTPUT_ROOT"]) if os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT") else None
 # Sentinel "since" that keeps every record — used to load a full (unwindowed) trace
 # for the cumulative Kad opcode-coverage signal.
 _EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
-MONITOR_HB = Path(r"C:\var\build\emulebb_out\soak\parity-monitor\upload-parity-monitor.heartbeat.txt")
 
 DIAG_EVENTS = ("anti_flood_ban", "repeat_block_request", "repeat_file_request", "source_count", "reask_sent")
 
@@ -86,11 +85,12 @@ def heartbeat(args: argparse.Namespace) -> bool:
           f"high={rust.get('ed2kHighId')} kadfw={rust.get('kadFirewalled')} actDl={rust.get('activeDownloads')} reach={'y' if rust else 'n'}")
     print(f"MFC  up={mfc.get('uploadSpeedKiBps')}KiB/s upl={mfc.get('activeUploads')} sUp={mb/1e9:.2f}GB reach={'y' if mfc else 'n'}")
     print(f"ratio={mb/rb:.2f}" if rb else "ratio=n/a")
-    try:
-        print("monitor:", MONITOR_HB.read_text().strip())
-    except Exception as exc:
-        print("monitor: unreadable", exc)
-    diag = _newest(args.rust_dump, "emulebb-rust-diag-*.jsonl")
+    if args.monitor_heartbeat:
+        try:
+            print("monitor:", args.monitor_heartbeat.read_text().strip())
+        except Exception as exc:
+            print("monitor: unreadable", exc)
+    diag = _newest(args.rust_dump, "emulebb-rust-diag-*.jsonl") if args.rust_dump else None
     if diag:
         counts: collections.Counter[str] = collections.Counter()
         for line in open(diag, encoding="utf-8", errors="ignore"):
@@ -98,7 +98,7 @@ def heartbeat(args: argparse.Namespace) -> bool:
                 if f'"{event}"' in line:
                     counts[event] += 1
         print("diag:", dict(counts))
-    udp = glob.glob(str(args.rust_dump / "*client-udp*"))
+    udp = glob.glob(str(args.rust_dump / "*client-udp*")) if args.rust_dump else []
     ping = ack = 0
     for path in udp:
         for line in open(path, encoding="utf-8", errors="ignore"):
@@ -107,7 +107,8 @@ def heartbeat(args: argparse.Namespace) -> bool:
             elif '"OP_REASKACK"' in line:
                 ack += 1
     print(f"reask-transport: OP_REASKFILEPING={ping} OP_REASKACK={ack} clientUdpDumps={len(udp)}")
-    print("disk: C %.0fGB F %.0fGB" % (shutil.disk_usage("C:\\").free / 1e9, shutil.disk_usage("F:\\").free / 1e9))
+    if args.output_root:
+        print("disk: output-root %.0fGB" % (shutil.disk_usage(args.output_root).free / 1e9))
     return True
 
 
@@ -154,7 +155,7 @@ def divergence(args: argparse.Namespace) -> None:
         mfc_diag_files = [Path(args.mfc_diag)]
     else:
         mfc_diag_files = [
-            Path(p) for p in glob.glob(str(MFC_LOGS / "emulebb-diagnostics-diag*.log"))
+            Path(p) for p in glob.glob(str(args.mfc_logs / "emulebb-diagnostics-diag*.log"))
             if datetime.datetime.fromtimestamp(Path(p).stat().st_mtime, datetime.timezone.utc) >= since
         ]
     print("\n=== cross-client divergence (via diag_event_diff / packet_trace_diff) ===")
@@ -167,7 +168,11 @@ def divergence(args: argparse.Namespace) -> None:
         # log (different names/shape) that never reaches the converged diag stream.
         # Adapt + window those into the diag_event_v1 bad_peer envelope so the
         # bad_peer surface is actually diffed (otherwise it is invisible on MFC).
-        mfc_bad_peer_files = mfc_diag_adapter.find_mfc_bad_peer_logs(MFC_LOGS)
+        mfc_bad_peer_files = (
+            mfc_diag_adapter.find_mfc_bad_peer_logs(args.mfc_logs)
+            if args.mfc_logs
+            else []
+        )
         mt += _windowed_diag_trace(
             lambda path: mfc_diag_adapter.bad_peer_events_as_diag_v1([path]),
             mfc_bad_peer_files,
@@ -281,7 +286,7 @@ def divergence(args: argparse.Namespace) -> None:
     else:
         mfc_pkt_files = [
             Path(p)
-            for p in glob.glob(str(MFC_LOGS / "emulebb-diagnostics-packet*.log"))
+            for p in glob.glob(str(args.mfc_logs / "emulebb-diagnostics-packet*.log"))
             if datetime.datetime.fromtimestamp(Path(p).stat().st_mtime, datetime.timezone.utc) >= since
         ]
     if rust_pkt_files and mfc_pkt_files:
@@ -308,7 +313,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-key", default=RUST_KEY)
     parser.add_argument("--mfc-base", default=MFC_BASE)
     parser.add_argument("--mfc-key", default=MFC_KEY)
-    parser.add_argument("--rust-dump", type=Path, default=RUST_PROFILE_DUMP, help="Rust packet-dump directory.")
+    default_rust_dump = OUTPUT_ROOT / "soak" / "rust-profile" / "packet-dump" if OUTPUT_ROOT else None
+    default_monitor = OUTPUT_ROOT / "soak" / "parity-monitor" / "upload-parity-monitor.heartbeat.txt" if OUTPUT_ROOT else None
+    parser.add_argument("--rust-dump", type=Path, default=default_rust_dump, help="Rust packet-dump directory.")
+    parser.add_argument("--mfc-logs", type=Path, help="Active MFC profile logs directory (required for --diff unless both MFC trace overrides are supplied).")
+    parser.add_argument("--monitor-heartbeat", type=Path, default=default_monitor)
+    parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT, help="Output root used only for free-space reporting.")
     parser.add_argument("--diff", action="store_true", help="Also run the cross-client divergence report.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
@@ -322,7 +332,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.diff and args.rust_dump is None:
+        parser.error("--diff requires --rust-dump when EMULEBB_WORKSPACE_OUTPUT_ROOT is unset")
+    if args.diff and args.mfc_logs is None and not (args.mfc_diag and args.mfc_packet):
+        parser.error("--diff requires --mfc-logs unless --mfc-diag and --mfc-packet are both supplied")
     up = heartbeat(args)
     if args.diff and up:
         divergence(args)

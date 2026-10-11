@@ -27,10 +27,16 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, packet_trace_diff, secident_audit, soak_action_diff
-from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness import diag_event_diff, packet_trace_diff, secident_audit, soak_action_diff  # noqa: E402
+from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 
 DIAG_SCHEMA = "diag_event_v1"
+CAMPAIGN_EXIT_CODES = {
+    "parity": 0,
+    "divergence": 1,
+    "harness-failure": 2,
+    "inconclusive-external": 3,
+}
 
 
 def _load_recording(zip_path: Path) -> dict[str, Any]:
@@ -106,6 +112,7 @@ def _action_windows(markers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             slot["t0"] = stamp
         elif marker.get("marker") == "end":
             slot["t1"] = stamp
+            slot["status"] = marker.get("status")
     return windows
 
 
@@ -123,8 +130,8 @@ def _diff_one_action(
     import datetime
 
     def pad(win: dict[str, Any]) -> tuple[datetime.datetime, datetime.datetime] | None:
-        t0 = win.get("t0") or win.get("t1")
-        t1 = win.get("t1") or win.get("t0")
+        t0 = win.get("t0")
+        t1 = win.get("t1")
         if t0 is None or t1 is None:
             return None
         return (
@@ -136,6 +143,10 @@ def _diff_one_action(
     mfc_span = pad(mfc_win)
     if rust_span is None or mfc_span is None:
         return {"kind": kind, "method": method, "verdict": "no-window", "conformant": False,
+                "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
+                "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
+    if rust_win.get("status") == "error" or mfc_win.get("status") == "error":
+        return {"kind": kind, "method": method, "verdict": "action-error", "conformant": False,
                 "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
                 "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
     r0, r1 = rust_span
@@ -174,7 +185,7 @@ def _diff_one_action(
         "kind": kind,
         "method": method,
         "verdict": verdict,
-        "conformant": bool(conf["conformant"]),
+        "conformant": bool(conf["conformant"] and rust_total > 0 and mfc_total > 0),
         # Per-family oracle-conformance gate (rust ⊇ oracle on families present on
         # both sides) — the reported per-action diag gate. The old strict
         # record-identity match is retained as `diagStrictMatchOk`, which is
@@ -188,6 +199,172 @@ def _diff_one_action(
         "rustRecords": {"packets": len(rust_pkt), "diag": len(rust_diag)},
         "mfcRecords": {"packets": len(mfc_pkt), "diag": len(mfc_diag)},
     }
+
+
+def _action_error_count(recording: dict[str, Any]) -> int:
+    """Count explicitly failed action results while tolerating legacy metadata."""
+
+    rows = recording.get("meta", {}).get("actionResults")
+    if not isinstance(rows, list):
+        return 0
+    return sum(
+        1
+        for row in rows
+        if isinstance(row, dict) and str(row.get("status") or "").casefold() != "ok"
+    )
+
+
+def _completion_rows(
+    meta: dict[str, Any],
+) -> tuple[bool, int | None, dict[str, tuple[int, str]] | None]:
+    """Read opt-in native completion evidence without returning digest-bearing output."""
+
+    section = meta.get("nativeCompletionEvidence")
+    if not isinstance(section, dict) or section.get("required") is not True:
+        return False, None, None
+    expected_count = section.get("expectedCount")
+    if (
+        not isinstance(expected_count, int)
+        or isinstance(expected_count, bool)
+        or expected_count <= 0
+    ):
+        return True, None, None
+    files = section.get("files")
+    if not isinstance(files, list):
+        return True, expected_count, None
+    rows: dict[str, tuple[int, str]] = {}
+    for item in files:
+        if not isinstance(item, dict):
+            return True, expected_count, None
+        action_id = str(item.get("actionId") or "")
+        size = item.get("sizeBytes")
+        sha256 = str(item.get("sha256") or "").casefold()
+        if (
+            not action_id
+            or action_id in rows
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or item.get("sizeVerified") is not True
+            or item.get("ed2kVerified") is not True
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+        ):
+            return True, expected_count, None
+        rows[action_id] = (size, sha256)
+    return True, expected_count, rows
+
+
+def _compare_native_completions(
+    rust_meta: dict[str, Any], mfc_meta: dict[str, Any]
+) -> dict[str, Any]:
+    """Compare opted-in completion proofs and emit counts/booleans, never digests."""
+
+    rust_required, rust_expected, rust_rows = _completion_rows(rust_meta)
+    mfc_required, mfc_expected, mfc_rows = _completion_rows(mfc_meta)
+    if not rust_required and not mfc_required:
+        return {"required": False, "ok": None, "expectedCount": None, "matchedCount": 0, "findings": []}
+
+    findings: list[str] = []
+    if not rust_required or not mfc_required:
+        findings.append("recording-opt-in-mismatch")
+    if rust_expected is None or rust_rows is None:
+        findings.append("rust-completion-evidence-invalid")
+    if mfc_expected is None or mfc_rows is None:
+        findings.append("mfc-completion-evidence-invalid")
+    if findings:
+        return {"required": True, "ok": False, "expectedCount": None, "matchedCount": 0, "findings": findings}
+
+    assert rust_expected is not None and mfc_expected is not None
+    assert rust_rows is not None and mfc_rows is not None
+    if rust_expected != mfc_expected:
+        findings.append("expected-count-mismatch")
+    expected_count = rust_expected if rust_expected == mfc_expected else None
+    if len(rust_rows) != rust_expected:
+        findings.append("rust-completion-count-mismatch")
+    if len(mfc_rows) != mfc_expected:
+        findings.append("mfc-completion-count-mismatch")
+    if rust_rows.keys() != mfc_rows.keys():
+        findings.append("completion-action-set-mismatch")
+    common = rust_rows.keys() & mfc_rows.keys()
+    if any(rust_rows[action_id][0] != mfc_rows[action_id][0] for action_id in common):
+        findings.append("completion-size-mismatch")
+    if any(rust_rows[action_id][1] != mfc_rows[action_id][1] for action_id in common):
+        findings.append("completion-sha256-mismatch")
+    return {
+        "required": True,
+        "ok": not findings,
+        "expectedCount": expected_count,
+        "matchedCount": len(common),
+        "findings": findings,
+    }
+
+
+def _campaign_verdict(
+    *,
+    per_action: list[dict[str, Any]],
+    missing_action_count: int,
+    action_error_count: int,
+    completion: dict[str, Any],
+    scenario_mismatch: bool,
+    conformance_ok: bool,
+    kad_coverage_ok: bool,
+    secident_dead: bool,
+    external_inconclusive: bool,
+) -> dict[str, Any]:
+    """Adjudicate one campaign with harness failures taking precedence."""
+
+    findings: list[str] = []
+    if not per_action:
+        findings.append("no-common-actions")
+    if missing_action_count:
+        findings.append("missing-actions")
+    if action_error_count or any(row.get("verdict") == "action-error" for row in per_action):
+        findings.append("action-errors")
+    if scenario_mismatch:
+        findings.append("scenario-mismatch")
+    if any(row.get("verdict") == "no-window" for row in per_action):
+        findings.append("missing-action-windows")
+    if (
+        any(row.get("verdict") in {"no-traffic", "one-sided"} for row in per_action)
+        and not external_inconclusive
+    ):
+        findings.append("missing-action-traffic")
+    completion_findings = set(completion.get("findings") or [])
+    completion_content_divergence = bool(
+        completion_findings & {"completion-size-mismatch", "completion-sha256-mismatch"}
+    )
+    completion_incomplete = bool(
+        completion_findings
+        and completion_findings
+        <= {"rust-completion-count-mismatch", "mfc-completion-count-mismatch"}
+    )
+    if (
+        completion.get("required")
+        and completion.get("ok") is not True
+        and not completion_content_divergence
+        and not (external_inconclusive and completion_incomplete)
+    ):
+        findings.append("completion-evidence-failed")
+    if findings:
+        verdict = "harness-failure"
+    else:
+        divergence = (
+            not conformance_ok
+            or not kad_coverage_ok
+            or secident_dead
+            or completion_content_divergence
+            or any(
+                row.get("verdict") == "divergence" or row.get("coverageOk") is False
+                for row in per_action
+            )
+        )
+        if divergence:
+            verdict = "divergence"
+        elif external_inconclusive:
+            verdict = "inconclusive-external"
+        else:
+            verdict = "parity"
+    return {"verdict": verdict, "exitCode": CAMPAIGN_EXIT_CODES[verdict], "findings": findings}
 
 
 def _declared_secident(meta: dict[str, Any]) -> bool | None:
@@ -242,19 +419,28 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("pass --campaign or both --rust and --mfc")
         return 2
     if not rust_zip or not rust_zip.exists() or not mfc_zip or not mfc_zip.exists():
-        print(f"missing recordings (rust={rust_zip} mfc={mfc_zip})")
-        return 1
+        print(f"harness-failure: missing recordings (rust={rust_zip} mfc={mfc_zip})")
+        return CAMPAIGN_EXIT_CODES["harness-failure"]
 
-    rust = _load_recording(rust_zip)
-    mfc = _load_recording(mfc_zip)
+    try:
+        rust = _load_recording(rust_zip)
+        mfc = _load_recording(mfc_zip)
+    except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+        print(f"harness-failure: could not load recordings ({type(exc).__name__})")
+        return CAMPAIGN_EXIT_CODES["harness-failure"]
     print(f"rust recording: {rust_zip.name}  obf={rust['meta'].get('obfuscation')}  diag={len(rust['diag'])} pkt={len(rust['packets'])}")
     print(f"mfc  recording: {mfc_zip.name}  obf={mfc['meta'].get('obfuscation')}  diag={len(mfc['diag'])} pkt={len(mfc['packets'])}")
-    if rust["meta"].get("obfuscation") != mfc["meta"].get("obfuscation"):
-        print("  !! WARNING: obfuscation scenario differs between the two recordings")
+    scenario_mismatch = any(
+        rust["meta"].get(key) != mfc["meta"].get(key)
+        for key in ("obfuscation", "scenario")
+    )
+    if scenario_mismatch:
+        print("  !! WARNING: scenario metadata differs between the two recordings")
 
     rust_windows = _action_windows(rust["markers"])
     mfc_windows = _action_windows(mfc["markers"])
     common = [a for a in rust_windows if a in mfc_windows]
+    missing_action_count = len(set(rust_windows) ^ set(mfc_windows))
 
     print("\n== per-action parity ==")
     per_action: list[dict[str, Any]] = []
@@ -325,8 +511,37 @@ def main(argv: list[str] | None = None) -> int:
                 "check the profile SecureIdent pref / cryptkey provisioning."
             )
     verdicts = {r["verdict"] for r in per_action}
-    all_parity = verdicts <= {"conformant", "no-traffic"}
-    print(f"  per-action verdicts: {sorted(verdicts)}  -> {'PARITY' if all_parity else 'REVIEW'}")
+    completion = _compare_native_completions(rust["meta"], mfc["meta"])
+    action_error_count = _action_error_count(rust) + _action_error_count(mfc)
+    secident_dead = any(
+        row["verdict"] == "secident-dead" for row in secident_report.values()
+    )
+    external_inconclusive = any(
+        side["meta"].get("externalInconclusive") is True for side in (rust, mfc)
+    )
+    adjudication = _campaign_verdict(
+        per_action=per_action,
+        missing_action_count=missing_action_count,
+        action_error_count=action_error_count,
+        completion=completion,
+        scenario_mismatch=scenario_mismatch,
+        conformance_ok=bool(conf["conformant"]),
+        kad_coverage_ok=bool(kad_cov["oracleOk"]),
+        secident_dead=secident_dead,
+        external_inconclusive=external_inconclusive,
+    )
+    all_parity = adjudication["verdict"] == "parity"
+    print(f"  per-action verdicts: {sorted(verdicts)}")
+    if completion["required"]:
+        print(
+            "  native completions: "
+            f"ok={completion['ok']} expected={completion['expectedCount']} "
+            f"matched={completion['matchedCount']} findings={completion['findings']}"
+        )
+    print(
+        f"  campaign verdict: {adjudication['verdict']} "
+        f"exit={adjudication['exitCode']} findings={adjudication['findings']}"
+    )
 
     report = {
         "schema": "soak_offline_diff_v1",
@@ -344,12 +559,16 @@ def main(argv: list[str] | None = None) -> int:
         "secidentDead": [
             name for name, row in secident_report.items() if row["verdict"] == "secident-dead"
         ],
+        "nativeCompletionComparison": completion,
+        "campaignVerdict": adjudication["verdict"],
+        "exitCode": adjudication["exitCode"],
+        "campaignFindings": adjudication["findings"],
         "allParity": all_parity,
     }
     out_path = rust_zip.parent / f"offline-diff-{rust_zip.stem}-vs-{mfc_zip.stem}.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"\nreport: {out_path}")
-    return 0
+    return int(adjudication["exitCode"])
 
 
 if __name__ == "__main__":

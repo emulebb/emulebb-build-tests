@@ -126,6 +126,9 @@ Script inventory:
 | `scripts\stock-protocol-oracle-proof.py` | stock protocol oracle gate | maintained | validates complete binary/state coverage and pinned stock-source anchors; the overnight form also executes all five Rust packages containing cited proof selectors |
 | `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust route, query, body, Settings section-resource metadata, and section-resource response shapes against the Rust OpenAPI artifact |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
+| `scripts\native-windows-parity-campaign.py` | native Rust/MFC parity runner | maintained | fresh builds, protocol/state oracle stages, then sequential direct UPnP and forced-firewalled diagnostics captures |
+| `scripts\soak-scripted-capture.py` | capture-then-diff recorder | maintained | VPN solo capture by default; the policy-bounded `--route direct` mode adds isolated profiles, PCAPNG, path audits, exact completion verification, and owned firewall rules |
+| `scripts\soak-offline-diff.py` | capture-then-diff adjudicator | maintained | correlates opaque actions and emits parity, divergence, harness-failure, or external-inconclusive verdicts |
 | `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB MFC/Rust cross-client transfers and records optional eMuleAI readiness |
 | `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through required UPnP TCP/UDP mappings, public server/Kad imports, independent disconnect/reconnect, a rendered-UI synthetic shared-tree reload with eD2K offer and acknowledged Kad keyword/source publishing, safe PDF-only searches, received bytes from a sourced PDF below 5 MiB, visible Stop and confirmed Delete actions, restart persistence, and pass-clean/fail-retain disposal |
@@ -222,7 +225,16 @@ Live Arr environment:
 - `live-wire-inputs.example.json` is the tracked schema example; copy its shape into the ignored local file and replace the placeholder values with operator-owned current inputs; `target_path` may persist `%EMULEBB_LOCAL_INSTALL_PATH%` and `import_profile_dir` may persist `%EMULEBB_LOCAL_TEST_PROFILE_PATH%`
 - auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
 - persisted live reports redact exact runtime terms, movie titles, magnets, and real transfer hashes, keeping counts, indexes, sizes, and presence flags instead
-- all launched live eMule profiles apply the workspace live-network policy: P2P `BindInterface=hide.me`, empty P2P `BindAddr`, and main P2P `UPnP` enabled
+- ordinary live eMule profiles apply the workspace live-network policy: P2P `BindInterface=hide.me`, empty P2P `BindAddr`, and main P2P `UPnP` enabled; only the policy-bounded native parity campaign uses inherited `X_LOCAL_IP` directly
+
+Native Windows Rust/MFC parity campaign:
+
+- put exact download links and share roots in the two ignored `live-wire.local.*-fixtures.txt` files and configure only their filenames, capture selection, and forbidden roots under `native_parity` in ignored `live-wire-inputs.local.json`
+- run `python scripts\native-windows-parity-campaign.py`; by default it creates fresh Rust regular/diagnostics and MFC Debug/Release/diagnostics builds, runs the tracked protocol/state oracle plus both four-case protocol matrices, then records Rust and MFC sequentially in UPnP and forced-firewalled direct-route cases
+- each direct recording uses a fresh profile, a dynamically resolved Npcap adapter, one bounded PCAPNG, converged diagnostics dumps, filtered server/global/Kad Linux PDF searches, approved shares, and every exact eD2K fixture
+- completed payloads are never opened or executed; size and eD2K are verified locally, SHA-256 is compared across clients, and retained summaries expose only counts and booleans
+- configured forbidden legacy roots are checked against every selected campaign path, process command/executable, and open handle before, during, and after each client; any finding is a harness failure
+- firewall rules have unique campaign-owned names and are removed on every exit path; fresh UPnP profiles request mapping removal during clean shutdown
 
 Terminology:
 

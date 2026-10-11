@@ -101,12 +101,12 @@ def test_parse_live_wire_inputs_keeps_mfc_profile_optional() -> None:
 
 def test_parse_live_wire_inputs_reads_optional_mfc_profile_dir() -> None:
     with_profile = payload()
-    with_profile["mfc_profile"] = {"profile_dir": " f:\\M\\H06T01\\dldz\\EMULE_BIN "}
+    with_profile["mfc_profile"] = {"profile_dir": " Q:\\Retired\\ClientProfile "}
     with_profile["rust_profile"] = {"profile_dir": " c:\\profiles\\rust-live "}
 
     inputs = live_wire_inputs.parse_live_wire_inputs(with_profile)
 
-    assert inputs.mfc_profile_dir == Path("f:\\M\\H06T01\\dldz\\EMULE_BIN").expanduser()
+    assert inputs.mfc_profile_dir == Path("Q:\\Retired\\ClientProfile").expanduser()
     assert inputs.rust_profile_dir == Path("c:\\profiles\\rust-live").expanduser()
 
 

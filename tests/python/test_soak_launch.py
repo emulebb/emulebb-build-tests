@@ -116,6 +116,62 @@ def test_bring_up_rust_cleans_process_on_connection_timeout(tmp_path: Path, monk
     assert launched["handle"].closed is True
 
 
+def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeypatch) -> None:
+    class FakeRustMod:
+        @staticmethod
+        def get_stats(_base_url: str) -> dict[str, object]:
+            return {"ed2kConnected": True, "ed2kHighId": True}
+
+        @staticmethod
+        def import_server_met(_base_url: str, _server_met_url: str) -> None:
+            return None
+
+        @staticmethod
+        def share_directories(_base_url: str, _shared_roots: list[object]) -> None:
+            return None
+
+    captured: dict[str, object] = {}
+
+    def fake_write(*_args, **kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(soak_launch, "write_rust_profile", fake_write)
+    monkeypatch.setattr(
+        soak_launch,
+        "start_rust_client_executable_with_output",
+        lambda *_args: type("FakeProcess", (), {"pid": 5151})(),
+    )
+    monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
+
+    result = soak_launch.bring_up_rust(
+        rust_mod=FakeRustMod(),
+        exe_path=tmp_path / "emulebb-rust-diagnostics.exe",
+        bind_ip="192.0.2.10",
+        rest_addr="192.0.2.10",
+        rest_port=4731,
+        profile_dir=tmp_path / "profile",
+        packet_dump_dir=tmp_path / "profile" / "packet-dump",
+        incoming_dir=tmp_path / "profile" / "incoming",
+        bootstrap_nodes=[],
+        shared_roots=[],
+        server_met_url="",
+        server_endpoint=soak_launch.OPERATOR_SERVER,
+        obfuscation=True,
+        timeouts={"rest": 1.0, "connect": 1.0},
+        p2p_bind_ip="192.0.2.10",
+        p2p_bind_interface=None,
+        nat_enabled=False,
+    )
+
+    assert captured["p2p_bind_ip"] == "192.0.2.10"
+    assert captured["p2p_bind_interface"] is None
+    assert captured["nat_enabled"] is False
+    result["logHandle"].close()
+
+
 def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeypatch) -> None:
     class FakeRustMod:
         share_calls = 0

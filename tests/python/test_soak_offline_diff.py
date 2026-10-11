@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
@@ -167,10 +168,192 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
 def test_no_window_result_carries_gate_keys() -> None:
     mod = _load_offline_diff()
     rust, mfc = _sides([], [])
-    result = mod._diff_one_action("search", rust, mfc, {"kind": "search"}, {"kind": "search"}, lead=1.0, settle=1.0)
+    incomplete = {"kind": "search", "t0": _window()["t0"]}
+    result = mod._diff_one_action(
+        "search", rust, mfc, incomplete, _window(), lead=1.0, settle=1.0
+    )
     assert result["verdict"] == "no-window"
     assert result["diagFamilyOk"] is False
     assert result["diagStrictMatchOk"] is False
+
+
+def test_no_traffic_is_not_conformant() -> None:
+    mod = _load_offline_diff()
+    rust, mfc = _sides([], [])
+
+    result = mod._diff_one_action(
+        "search", rust, mfc, _window(), _window(), lead=1.0, settle=1.0
+    )
+
+    assert result["verdict"] == "no-traffic"
+    assert result["conformant"] is False
+
+
+def test_end_marker_action_error_fails_action_without_diffing() -> None:
+    mod = _load_offline_diff()
+    rust, mfc = _sides([], [])
+    rust_window = {**_window(), "status": "error"}
+
+    result = mod._diff_one_action(
+        "search", rust, mfc, rust_window, _window(), lead=1.0, settle=1.0
+    )
+
+    assert result["verdict"] == "action-error"
+    assert result["conformant"] is False
+
+
+def _completion_meta(*, digest: str, size: int = 3, expected_count: int = 1) -> dict:
+    return {
+        "nativeCompletionEvidence": {
+            "required": True,
+            "expectedCount": expected_count,
+            "files": [
+                {
+                    "actionId": "action-0001",
+                    "sizeBytes": size,
+                    "sizeVerified": True,
+                    "ed2kVerified": True,
+                    "sha256": digest,
+                }
+            ],
+        }
+    }
+
+
+def test_native_completion_comparison_is_opt_in_for_old_recordings() -> None:
+    mod = _load_offline_diff()
+    result = mod._compare_native_completions({}, {})
+    assert result == {
+        "required": False,
+        "ok": None,
+        "expectedCount": None,
+        "matchedCount": 0,
+        "findings": [],
+    }
+
+
+def test_native_completion_comparison_matches_without_emitting_digest() -> None:
+    mod = _load_offline_diff()
+    digest = "a" * 64
+
+    result = mod._compare_native_completions(
+        _completion_meta(digest=digest), _completion_meta(digest=digest)
+    )
+
+    assert result["ok"] is True
+    assert result["matchedCount"] == 1
+    assert digest not in json.dumps(result)
+
+
+def test_native_completion_comparison_reports_digest_mismatch_without_values() -> None:
+    mod = _load_offline_diff()
+    rust_digest = "a" * 64
+    mfc_digest = "b" * 64
+
+    result = mod._compare_native_completions(
+        _completion_meta(digest=rust_digest), _completion_meta(digest=mfc_digest)
+    )
+
+    assert result["ok"] is False
+    assert result["findings"] == ["completion-sha256-mismatch"]
+    emitted = json.dumps(result)
+    assert rust_digest not in emitted and mfc_digest not in emitted
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_verdict", "expected_exit"),
+    [
+        ({}, "parity", 0),
+        ({"conformance_ok": False}, "divergence", 1),
+        ({"missing_action_count": 1}, "harness-failure", 2),
+        ({"external_inconclusive": True}, "inconclusive-external", 3),
+    ],
+)
+def test_campaign_verdict_taxonomy_and_exit_codes(
+    overrides: dict, expected_verdict: str, expected_exit: int
+) -> None:
+    mod = _load_offline_diff()
+    inputs = {
+        "per_action": [{"verdict": "conformant", "coverageOk": True}],
+        "missing_action_count": 0,
+        "action_error_count": 0,
+        "completion": {"required": False, "ok": None},
+        "scenario_mismatch": False,
+        "conformance_ok": True,
+        "kad_coverage_ok": True,
+        "secident_dead": False,
+        "external_inconclusive": False,
+    }
+    inputs.update(overrides)
+
+    result = mod._campaign_verdict(**inputs)
+
+    assert result["verdict"] == expected_verdict
+    assert result["exitCode"] == expected_exit
+
+
+def test_action_errors_and_required_completion_failure_are_harness_failures() -> None:
+    mod = _load_offline_diff()
+    recording = {"meta": {"actionResults": [{"actionId": "action-0001", "status": "error"}]}}
+    assert mod._action_error_count(recording) == 1
+
+    result = mod._campaign_verdict(
+        per_action=[{"verdict": "conformant", "coverageOk": True}],
+        missing_action_count=0,
+        action_error_count=1,
+        completion={"required": True, "ok": False},
+        scenario_mismatch=False,
+        conformance_ok=True,
+        kad_coverage_ok=True,
+        secident_dead=False,
+        external_inconclusive=False,
+    )
+    assert result["verdict"] == "harness-failure"
+    assert set(result["findings"]) == {"action-errors", "completion-evidence-failed"}
+
+
+def test_external_completion_shortfall_is_inconclusive_not_pass_or_harness_failure() -> None:
+    mod = _load_offline_diff()
+    result = mod._campaign_verdict(
+        per_action=[{"verdict": "conformant", "coverageOk": True}],
+        missing_action_count=0,
+        action_error_count=0,
+        completion={
+            "required": True,
+            "ok": False,
+            "findings": ["rust-completion-count-mismatch", "mfc-completion-count-mismatch"],
+        },
+        scenario_mismatch=False,
+        conformance_ok=True,
+        kad_coverage_ok=True,
+        secident_dead=False,
+        external_inconclusive=True,
+    )
+
+    assert result["verdict"] == "inconclusive-external"
+    assert result["exitCode"] == 3
+
+
+def test_completed_payload_digest_mismatch_is_protocol_divergence() -> None:
+    mod = _load_offline_diff()
+    result = mod._campaign_verdict(
+        per_action=[{"verdict": "conformant", "coverageOk": True}],
+        missing_action_count=0,
+        action_error_count=0,
+        completion={
+            "required": True,
+            "ok": False,
+            "findings": ["completion-sha256-mismatch"],
+        },
+        scenario_mismatch=False,
+        conformance_ok=True,
+        kad_coverage_ok=True,
+        secident_dead=False,
+        external_inconclusive=False,
+    )
+
+    assert result["verdict"] == "divergence"
+    assert result["exitCode"] == 1
 
 
 def test_declared_secident_reads_recorded_campaign_state() -> None:

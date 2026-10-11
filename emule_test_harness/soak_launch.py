@@ -678,6 +678,9 @@ def bring_up_rust(
     kad_port: int = RUST_KAD_PORT,
     enable_udp_reask: bool = True,
     publish_emule_rust_identity: bool = False,
+    p2p_bind_ip: str | None = None,
+    p2p_bind_interface: str | None = "hide.me",
+    nat_enabled: bool = True,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
     enable_packet_dump: bool = True,
@@ -705,8 +708,8 @@ def bring_up_rust(
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=RUST_API_KEY,
-        p2p_bind_ip=None,
-        p2p_bind_interface="hide.me",
+        p2p_bind_ip=p2p_bind_ip,
+        p2p_bind_interface=p2p_bind_interface,
         ed2k_port=ed2k_port,
         kad_port=kad_port,
         server_endpoint=server_endpoint,
@@ -715,7 +718,7 @@ def bring_up_rust(
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_udp_reask,
         publish_emule_rust_identity=publish_emule_rust_identity,
-        nat_enabled=True,
+        nat_enabled=nat_enabled,
         nat_require_initial_mapping=False,
         replace_servers=replace_servers,
         vpn_guard_mode=vpn_guard_mode,
@@ -803,6 +806,8 @@ def bring_up_rust(
         "process": process,
         "logHandle": handle,
         "baseUrl": base_url,
+        "profileDir": profile_dir,
+        "incomingDir": incoming_dir,
         "packetDumpDir": packet_dump_dir,
         "sharedDirectoriesApplied": apply_shared_directories,
     }
@@ -828,6 +833,9 @@ def bring_up_mfc(
     ed2k_port: int = MFC_ED2K_PORT,
     kad_port: int = MFC_KAD_PORT,
     server_udp_port: int = MFC_SERVER_UDP_PORT,
+    p2p_bind_ip: str | None = None,
+    p2p_bind_interface: str | None = "hide.me",
+    nat_enabled: bool = True,
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
     secure_ident: bool = True,
@@ -851,6 +859,7 @@ def bring_up_mfc(
         config_dir = Path(str(profile["config_dir"]))
         profile_base = Path(str(profile["profile_base"]))
         packet_dump_dir = Path(str(profile["log_dir"]))
+        incoming_dir = Path(str(profile["incoming_dir"]))
         replace_shared_roots = True
     else:
         profile_base = direct_profile_dir
@@ -859,6 +868,7 @@ def bring_up_mfc(
             raise RuntimeError(f"Direct MFC profile is missing config/preferences.ini: {config_dir}")
         packet_dump_dir = profile_base / "logs"
         packet_dump_dir.mkdir(parents=True, exist_ok=True)
+        incoming_dir = None
         replace_shared_roots = False
 
     rest_smoke.configure_webserver_profile(
@@ -876,7 +886,31 @@ def bring_up_mfc(
         kad_port=kad_port,
         server_udp_port=server_udp_port,
     )
-    rest_smoke.apply_p2p_bind_interface_override(config_dir, "hide.me")
+    resolved_bind_ip = (p2p_bind_ip or "").strip()
+    resolved_bind_interface = (p2p_bind_interface or "").strip()
+    if resolved_bind_ip and resolved_bind_interface:
+        raise ValueError("MFC P2P binding accepts an address or interface, not both.")
+    if resolved_bind_interface:
+        rest_smoke.apply_p2p_bind_interface_override(config_dir, resolved_bind_interface)
+    elif resolved_bind_ip:
+        live_common.apply_emule_preferences(
+            config_dir,
+            (("BindAddr", resolved_bind_ip), ("BindInterface", "")),
+        )
+    else:
+        raise ValueError("MFC P2P binding requires an address or interface.")
+    live_common.apply_emule_preferences(
+        config_dir,
+        (("OpenPortsOnStartUp", "1" if nat_enabled else "0"),),
+    )
+    live_common.apply_section_preferences(
+        config_dir,
+        "UPnP",
+        (
+            ("EnableUPnP", "1" if nat_enabled else "0"),
+            ("CloseUPnPOnExit", "1" if nat_enabled else "0"),
+        ),
+    )
     # VPN Guard on the MFC profile: Block fails the P2P plane closed on bind loss
     # and the CIDR allowlist validates the public exit (workspace Live Test
     # Network Policy; parity with the rust [vpnGuard] config).
@@ -911,33 +945,45 @@ def bring_up_mfc(
     )
 
     app = live_common.launch_app(exe_path, profile_base)
-    rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
-    wait_for_mfc_core_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
     try:
-        patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
-    except RuntimeError as exc:
-        log(f"MFC upload cap REST patch skipped after persisted profile cap: {type(exc).__name__}")
+        rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
+        wait_for_mfc_core_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
+        try:
+            patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
+        except RuntimeError as exc:
+            log(f"MFC upload cap REST patch skipped after persisted profile cap: {type(exc).__name__}")
 
-    connect_operator_server(
-        base_url,
-        MFC_API_KEY,
-        description="MFC server connect",
-        endpoint=server_endpoint,
-    )
-    rest_smoke.observe_server_connect_attempt(base_url, MFC_API_KEY, min(timeouts["connect"], 120.0))
-    rest_smoke.http_request(
-        base_url, "/api/v1/kad/operations/start", method="POST", api_key=MFC_API_KEY, json_body={}
-    )
-    if replace_shared_roots:
-        roots_payload = {
-            "confirmReplaceRoots": True,
-            "roots": [normalize_shared_root_entry(root) for root in shared_roots],
-        }
-        shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
+        connect_operator_server(
+            base_url,
+            MFC_API_KEY,
+            description="MFC server connect",
+            endpoint=server_endpoint,
+        )
+        rest_smoke.observe_server_connect_attempt(base_url, MFC_API_KEY, min(timeouts["connect"], 120.0))
+        rest_smoke.http_request(
+            base_url, "/api/v1/kad/operations/start", method="POST", api_key=MFC_API_KEY, json_body={}
+        )
+        if replace_shared_roots:
+            roots_payload = {
+                "confirmReplaceRoots": True,
+                "roots": [normalize_shared_root_entry(root) for root in shared_roots],
+            }
+            shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
+    except Exception:
+        try:
+            live_common.close_app_cleanly(app)
+        except Exception:
+            try:
+                app.kill()
+            except Exception:
+                pass
+        raise
     log(f"MFC diagnostics GUI up - REST {base_url}, profile {profile_base}")
     return {
         "app": app,
         "baseUrl": base_url,
+        "profileDir": profile_base,
+        "incomingDir": incoming_dir,
         "packetDumpDir": packet_dump_dir,
         "secureIdent": secure_ident,
     }

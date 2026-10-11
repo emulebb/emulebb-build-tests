@@ -18,6 +18,7 @@ sensitive is committed. Be-gentle: small spaced action set, single pass.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -33,14 +34,33 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import scripted_actions, soak_launch
-from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
-from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
-from emule_test_harness.live_wire_inputs import load_live_wire_inputs
-from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.rust_client import stop_process_tree
-from emule_test_harness.soak_launch import (
+from emule_test_harness import converged_live_wire as clw  # noqa: E402
+from emule_test_harness import scripted_actions, soak_launch  # noqa: E402
+from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
+from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
+from emule_test_harness.live_wire_inputs import load_live_wire_inputs  # noqa: E402
+from emule_test_harness.native_parity_inputs import (  # noqa: E402
+    audit_open_handles,
+    audit_process_references,
+    load_ed2k_link_fixture,
+    load_native_parity_config,
+    load_shared_path_fixture,
+    summarize_native_parity_inputs,
+    summarize_path_audit,
+    validate_campaign_paths,
+)
+from emule_test_harness.native_windows_network import (  # noqa: E402
+    CaptureInterfaceHints,
+    ManagedDumpcapCapture,
+    WindowsInboundBlockRules,
+    discover_capture_interfaces,
+    make_tshark_protocol_summary_hook,
+    resolve_capture_interface,
+    resolve_windows_adapter_hints,
+)
+from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness.rust_client import stop_process_tree  # noqa: E402
+from emule_test_harness.soak_launch import (  # noqa: E402
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
     MFC_API_KEY,
@@ -60,6 +80,18 @@ from emule_test_harness.soak_launch import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--client", required=True, choices=("rust", "mfc"), help="Which client to capture (solo).")
+    parser.add_argument(
+        "--route",
+        choices=("vpn", "direct"),
+        default="vpn",
+        help="P2P route. direct activates the bounded native-Windows parity policy.",
+    )
+    parser.add_argument(
+        "--connectivity",
+        choices=("upnp", "firewalled"),
+        default="upnp",
+        help="Direct-route inbound connectivity case.",
+    )
     parser.add_argument("--campaign", default=None, help="Report subfolder name (default: UTC timestamp).")
     parser.add_argument("--inputs", help="live-wire-inputs.local.json. Default: repo-root copy.")
     parser.add_argument("--rest-port", type=int, default=None, help="REST port (default 4731 rust / 4732 mfc).")
@@ -87,6 +119,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
     parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
+    parser.add_argument(
+        "--download-timeout-seconds",
+        type=float,
+        default=14400.0,
+        help="One total deadline for all native-parity fixture downloads.",
+    )
+    parser.add_argument(
+        "--capture-interface",
+        default=None,
+        help="dumpcap device override; direct mode otherwise resolves X_LOCAL_IP dynamically.",
+    )
+    parser.add_argument("--capture-max-size-kib", type=int, default=2_000_000)
     parser.add_argument(
         "--skip-actions",
         action="store_true",
@@ -319,9 +363,125 @@ def pack_recording(report_dir: Path) -> Path:
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for path in report_dir.rglob("*"):
             if path.is_file():
+                relative = path.relative_to(report_dir)
+                # Fresh native profiles can contain completed operator fixtures.
+                # They stay in the campaign output tree for local inspection but
+                # are never duplicated into the retained recording archive.
+                if relative.parts and relative.parts[0] in ("rust-profile", "mfc-profile"):
+                    continue
                 zf.write(path, path.relative_to(report_dir.parent))
     shutil.rmtree(report_dir, ignore_errors=True)
     return archive
+
+
+def _require_clean_legacy_audit(forbidden_roots: tuple[str, ...]) -> dict[str, object]:
+    """Audit forbidden roots without retaining paths, PIDs, or process names."""
+
+    process_result = audit_process_references(forbidden_roots)
+    handle_result = audit_open_handles(forbidden_roots)
+    if not process_result.available or not handle_result.available:
+        raise RuntimeError("Native parity legacy-root auditing is unavailable.")
+    if process_result.findings or handle_result.findings:
+        raise RuntimeError("A configured forbidden legacy root is still referenced or open.")
+    return {
+        "processes": summarize_path_audit(process_result),
+        "handles": summarize_path_audit(handle_result),
+    }
+
+
+def _resolve_native_capture_interface(local_address: str, override: str | None):
+    inventory = discover_capture_interfaces()
+    hints = (
+        CaptureInterfaceHints(device=override)
+        if override and override.casefold() != "auto"
+        else resolve_windows_adapter_hints(local_address)
+    )
+    return resolve_capture_interface(inventory, hints)
+
+
+def _fixture_rows(fixtures: tuple[object, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "name": fixture.name,
+            "size": fixture.size,
+            "hash": fixture.ed2k_hash,
+            "link": fixture.ed2k_link,
+        }
+        for fixture in fixtures
+    ]
+
+
+def _verify_native_downloads(
+    *,
+    actions: list[scripted_actions.ScriptedAction],
+    fixtures: list[dict[str, object]],
+    incoming_dir: Path,
+    timeout_seconds: float,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Wait for all fixtures under one total deadline and return local/private evidence."""
+
+    deadline = time.monotonic() + timeout_seconds
+    download_actions = [action for action in actions if action.kind == "download"]
+    if len(download_actions) != len(fixtures):
+        raise RuntimeError("Native parity download action/fixture count mismatch.")
+    private_evidence: list[dict[str, object]] = []
+    public_summary: list[dict[str, object]] = []
+    for action, fixture in zip(download_actions, fixtures, strict=True):
+        remaining = max(0.0, deadline - time.monotonic())
+        candidate = incoming_dir / str(fixture["name"])
+        try:
+            verification = scripted_actions.wait_for_completed_file(
+                lambda candidate=candidate: candidate if candidate.is_file() else None,
+                expected_size=int(fixture["size"]),
+                expected_ed2k_hash=str(fixture["hash"]),
+                timeout_seconds=remaining,
+                interval_seconds=2.0,
+            )
+        except RuntimeError:
+            public_summary.append({"actionId": action.id, "status": "incomplete"})
+            private_evidence.append({"actionId": action.id, "status": "incomplete"})
+            continue
+        public_summary.append({"actionId": action.id, **verification.sanitized_result()})
+        private_evidence.append(
+            {
+                "actionId": action.id,
+                "status": "verified",
+                "sizeBytes": verification.size_bytes,
+                "sizeVerified": True,
+                "ed2kVerified": True,
+                "ed2kHash": verification.ed2k_hash,
+                "sha256": verification.sha256,
+            }
+        )
+    return private_evidence, public_summary
+
+
+def _connectivity_state(client: str, payload: dict, expected_case: str) -> dict[str, object]:
+    """Normalize the two REST shapes into a retained state-machine assertion."""
+
+    data = _status_data(payload)
+    if client == "rust":
+        connected = bool(data.get("ed2kConnected"))
+        high_id = data.get("ed2kHighId")
+        kad_firewalled = data.get("kadFirewalled")
+    else:
+        servers = data.get("servers") if isinstance(data.get("servers"), dict) else {}
+        kad = data.get("kad") if isinstance(data.get("kad"), dict) else {}
+        current = servers.get("currentServer") if isinstance(servers.get("currentServer"), dict) else {}
+        connected = bool(servers.get("connected") or current.get("connected"))
+        high_id = connected and not bool(servers.get("lowId"))
+        kad_firewalled = kad.get("firewalled")
+    if expected_case == "upnp":
+        matches = connected and high_id is True and kad_firewalled is not True
+    else:
+        matches = connected and (high_id is False or kad_firewalled is True)
+    return {
+        "connected": connected,
+        "ed2kHighId": high_id,
+        "kadFirewalled": kad_firewalled,
+        "expectedCase": expected_case,
+        "matchesExpectedCase": matches,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -332,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--hold-seconds must be >= 0.")
     if args.hold_poll_seconds <= 0:
         raise RuntimeError("--hold-poll-seconds must be > 0.")
+    if args.download_timeout_seconds <= 0:
+        raise RuntimeError("--download-timeout-seconds must be > 0.")
     client = args.client
     api_key = RUST_API_KEY if client == "rust" else MFC_API_KEY
     rest_port = args.rest_port or (4731 if client == "rust" else 4732)
@@ -351,9 +513,32 @@ def main(argv: list[str] | None = None) -> int:
     search_terms = [term.strip() for term in args.search_terms.split(",") if term.strip()]
     download_terms = [term.strip() for term in args.download_terms.split(",") if term.strip()]
 
+    native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
+    native_fixtures: list[dict[str, object]] = []
+    forbidden_roots: tuple[str, ...] = ()
+    input_summary: dict[str, int] | None = None
+    if native_config is not None:
+        if args.skip_actions or args.no_shared_roots:
+            raise RuntimeError("Direct native parity requires searches, downloads, and shared roots.")
+        args.fresh_profile = True
+        links = load_ed2k_link_fixture(native_config.ed2k_links_file)
+        shared_paths = load_shared_path_fixture(native_config.shared_paths_file)
+        for index, shared_path in enumerate(shared_paths):
+            if not Path(shared_path).is_dir():
+                raise RuntimeError(f"Native parity shared path index {index} is not an existing directory.")
+        forbidden_roots = native_config.forbidden_roots
+        native_fixtures = _fixture_rows(links)
+        linux_terms = [term for term in inputs.document_terms if term.casefold() == "linux"]
+        if not linux_terms:
+            raise RuntimeError("Native parity inputs must include the requested Linux document search term.")
+        search_terms = [linux_terms[0]]
+        shared_roots = [{"path": path, "recursive": True} for path in shared_paths]
+        input_summary = summarize_native_parity_inputs(links, shared_paths, forbidden_roots)
+
     mods = soak_launch.load_helper_modules("capture")
     rust_mod = mods["rust"]
-    shared_roots = [] if args.no_shared_roots else rust_mod.load_shared_roots(inputs_path)
+    if native_config is None:
+        shared_roots = [] if args.no_shared_roots else rust_mod.load_shared_roots(inputs_path)
 
     soak_root = output_root / "soak"
     campaign = args.campaign or _utc_stamp()
@@ -366,8 +551,11 @@ def main(argv: list[str] | None = None) -> int:
     exe = rust_exe if client == "rust" else mfc_exe
 
     log(f"scripted capture: client={client} campaign={campaign} report={report_dir}")
-    vpn = ensure_vpn_ready(exe, name=f"eMuleBB {client}")
-    bind_ip = str(vpn["bindIp"])
+    if native_config is None:
+        vpn = ensure_vpn_ready(exe, name=f"eMuleBB {client}")
+        bind_ip = str(vpn["bindIp"])
+    else:
+        bind_ip = rest_addr
     bootstrap_nodes = fetch_bootstrap_endpoints(args.nodes_url, limit=40)
     timeouts = {"rest": 60.0, "connect": 240.0}
 
@@ -375,6 +563,57 @@ def main(argv: list[str] | None = None) -> int:
     base_url = ""
     dump_dir: Path = report_dir / "dumps"
     results_meta: dict = {}
+    completion_evidence: list[dict[str, object]] = []
+    completion_summary: list[dict[str, object]] = []
+    connectivity_state: dict[str, object] | None = None
+    legacy_audits: dict[str, object] = {}
+    capture = None
+    capture_result = None
+    network_stack = contextlib.ExitStack()
+    if native_config is not None:
+        validate_campaign_paths(
+            {
+                "inputs": inputs_path,
+                "download_fixture": native_config.ed2k_links_file,
+                "share_fixture": native_config.shared_paths_file,
+                "selected_executable": exe,
+                "report": report_dir,
+                **{f"share_{index}": path["path"] for index, path in enumerate(shared_roots)},
+            },
+            forbidden_roots,
+        )
+        legacy_audits["before"] = _require_clean_legacy_audit(forbidden_roots)
+        capture_interface = _resolve_native_capture_interface(
+            rest_addr,
+            args.capture_interface or native_config.capture_interface,
+        )
+        if args.connectivity == "firewalled":
+            tcp_ports = (args.rust_ed2k_port,) if client == "rust" else (args.mfc_ed2k_port,)
+            udp_ports = (
+                (args.rust_kad_port,)
+                if client == "rust"
+                else (args.mfc_kad_port, args.mfc_server_udp_port)
+            )
+            network_stack.enter_context(
+                WindowsInboundBlockRules(
+                    case_id=f"{client}-{args.connectivity}",
+                    tcp_ports=tcp_ports,
+                    udp_ports=udp_ports,
+                )
+            )
+        try:
+            capture = network_stack.enter_context(
+                ManagedDumpcapCapture(
+                    output_path=report_dir / "native-capture.pcapng",
+                    capture_filter=f"host {rest_addr} and not tcp port {rest_port}",
+                    interface=capture_interface,
+                    maximum_size_kib=args.capture_max_size_kib,
+                    summary_hook=make_tshark_protocol_summary_hook(),
+                )
+            )
+        except BaseException:
+            network_stack.close()
+            raise
     run_start = time.time()
     try:
         if client == "rust":
@@ -388,6 +627,9 @@ def main(argv: list[str] | None = None) -> int:
                 server_met_url=args.server_met_url, server_endpoint=OPERATOR_SERVER,
                 obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
+                p2p_bind_ip=rest_addr if native_config is not None else None,
+                p2p_bind_interface=None if native_config is not None else "hide.me",
+                nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
@@ -402,10 +644,26 @@ def main(argv: list[str] | None = None) -> int:
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
                 secure_ident=args.secident == "on",
+                p2p_bind_ip=rest_addr if native_config is not None else None,
+                p2p_bind_interface=None if native_config is not None else "hide.me",
+                nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
         base_url = handles["baseUrl"]
+        if native_config is not None:
+            incoming_dir = handles.get("incomingDir")
+            if incoming_dir is None:
+                raise RuntimeError("Fresh native profile did not expose its incoming directory.")
+            validate_campaign_paths(
+                {
+                    "profile": handles["profileDir"],
+                    "incoming": incoming_dir,
+                    "diagnostics": handles["packetDumpDir"],
+                },
+                forbidden_roots,
+            )
+            legacy_audits["running"] = _require_clean_legacy_audit(forbidden_roots)
 
         kad_ok = ensure_kad(base_url, api_key)
         log(f"{client} up: {base_url}  operator={OPERATOR_SERVER}  kad={kad_ok}")
@@ -422,24 +680,53 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 # Resolve well-sourced download fixtures once per campaign (reused by both solo
                 # runs so rust and mfc fetch the SAME sourced files).
-                download_fixtures = campaign_fixtures(
-                    campaign_dir=report_dir.parent, base_url=base_url, api_key=api_key,
-                    explicit_hashes=args.fixture_hashes, download_terms=download_terms, count=args.fixture_count,
+                download_fixtures = (
+                    native_fixtures
+                    if native_config is not None
+                    else campaign_fixtures(
+                        campaign_dir=report_dir.parent,
+                        base_url=base_url,
+                        api_key=api_key,
+                        explicit_hashes=args.fixture_hashes,
+                        download_terms=download_terms,
+                        count=args.fixture_count,
+                    )
                 )
                 log(f"resolved {len(download_fixtures)} sourced download fixture(s)")
                 actions = scripted_actions.default_action_set(
-                    search_terms, download_fixtures, methods=tuple(args.search_methods.split(","))
+                    search_terms,
+                    download_fixtures,
+                    methods=tuple(args.search_methods.split(",")),
+                    search_options=(
+                        {"type": "doc", "extension": "pdf", "minAvailability": 1}
+                        if native_config is not None
+                        else None
+                    ),
                 )
                 log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
                 results = scripted_actions.execute_action_set(
                     actions, scripted_actions.make_rest_runner(base_url, api_key), _write,
                     spacing_seconds=args.spacing_seconds,
                 )
+                if native_config is not None:
+                    completion_evidence, completion_summary = _verify_native_downloads(
+                        actions=actions,
+                        fixtures=download_fixtures,
+                        incoming_dir=Path(handles["incomingDir"]),
+                        timeout_seconds=args.download_timeout_seconds,
+                    )
         if args.skip_actions:
             log("actions skipped; no post-action settle")
         else:
             log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
             time.sleep(args.settle_seconds)
+        if native_config is not None:
+            status_path = "/api/v1/stats" if client == "rust" else "/api/v1/status"
+            connectivity_state = _connectivity_state(
+                client,
+                _http(base_url, api_key, status_path),
+                args.connectivity,
+            )
         hold_result = None
         if args.hold_seconds > 0:
             hold_result = observe_operator_hold(
@@ -461,6 +748,7 @@ def main(argv: list[str] | None = None) -> int:
             "client": client, "campaign": campaign, "baseUrl": base_url,
             "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
             "restPort": rest_port, "obfuscation": obfuscation,
+            "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
             "sharedRootsEnabled": not args.no_shared_roots,
             # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
@@ -470,13 +758,38 @@ def main(argv: list[str] | None = None) -> int:
                 "applied": args.secident if client == "mfc" else "always-on",
             },
             "actionResults": results,
+            "nativeInputSummary": input_summary,
+            "nativeCompletionSummary": completion_summary,
+            "connectivityState": connectivity_state,
+            "nativeCompletionEvidence": (
+                {
+                    "required": True,
+                    "expectedCount": len(native_fixtures),
+                    "files": [row for row in completion_evidence if row.get("status") == "verified"],
+                }
+                if native_config is not None
+                else None
+            ),
+            "externalInconclusive": bool(
+                native_config is not None
+                and (
+                    any(row.get("status") != "verified" for row in completion_evidence)
+                    or any(
+                        result.get("status") == "ok"
+                        and isinstance(result.get("outcome"), dict)
+                        and result["outcome"].get("resultCount") == 0
+                        for result in results
+                    )
+                    or not bool(connectivity_state and connectivity_state["matchesExpectedCase"])
+                )
+            ),
             "hold": hold_result,
             "runStartEpoch": run_start,
             "runEndEpoch": time.time(),
         }
     finally:
-        if handles is not None:
-            if client == "rust" and handles.get("process") is not None:
+        try:
+            if handles is not None and client == "rust" and handles.get("process") is not None:
                 try:
                     _http(base_url, api_key, "/api/v1/app/shutdown", "POST", {}, timeout=5.0)
                 except Exception:  # noqa: BLE001
@@ -488,7 +801,7 @@ def main(argv: list[str] | None = None) -> int:
                     handles["logHandle"].close()
                 except Exception:  # noqa: BLE001
                     pass
-            elif client == "mfc" and handles.get("app") is not None:
+            elif handles is not None and client == "mfc" and handles.get("app") is not None:
                 try:
                     mods["live_common"].close_app_cleanly(handles["app"])
                 except Exception:  # noqa: BLE001
@@ -497,8 +810,30 @@ def main(argv: list[str] | None = None) -> int:
                     except Exception:  # noqa: BLE001
                         pass
             # MFC persists + flushes its logs on the clean save-and-exit; give it a moment.
-            if client == "mfc":
+            if handles is not None and client == "mfc":
                 time.sleep(6.0)
+        finally:
+            try:
+                if capture is not None:
+                    capture_result = capture.stop()
+            finally:
+                network_stack.close()
+
+    if native_config is not None:
+        legacy_audits["after"] = _require_clean_legacy_audit(forbidden_roots)
+        results_meta["legacyRootAudits"] = legacy_audits
+        if capture_result is None:
+            raise RuntimeError("Native capture did not produce a validated result.")
+        results_meta["nativeCapture"] = {
+            "created": True,
+            "byteCount": capture_result.byte_count,
+            "summaryCreated": capture_result.tshark_summary is not None,
+        }
+        if capture_result.tshark_summary is not None:
+            (report_dir / "capture-protocol-summary.txt").write_text(
+                capture_result.tshark_summary,
+                encoding="utf-8",
+            )
 
     # Gather AFTER shutdown: rust batches diag/packet writes (the REST-starvation fix),
     # so the buffered action-window records only hit disk on the graceful teardown flush.
@@ -513,6 +848,10 @@ def main(argv: list[str] | None = None) -> int:
         log(f"recording dumps in place (post-flush): {in_place} file(s)")
     archive = pack_recording(report_dir)
     log(f"recording packed: {archive}")
+    if any(result.get("status") != "ok" for result in results_meta.get("actionResults", [])):
+        return 2
+    if results_meta.get("externalInconclusive") is True:
+        return 3
     return 0
 
 

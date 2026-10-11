@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
 
 from emule_test_harness import scripted_actions as sa
@@ -38,7 +42,52 @@ def test_default_action_set_one_search_per_method_plus_downloads() -> None:
     assert [a.params["method"] for a in actions[:3]] == ["server", "global", "kad"]
     # round-robins the terms across the methods
     assert [a.params["query"] for a in actions[:3]] == ["ubuntu", "debian", "ubuntu"]
-    assert actions[3].id == "download-" + ("b" * 32)[:8]
+    assert [action.id for action in actions] == [
+        "action-0001",
+        "action-0002",
+        "action-0003",
+        "action-0004",
+    ]
+
+
+def test_default_action_set_applies_document_filter_to_every_search() -> None:
+    actions = sa.default_action_set(
+        ["linux"],
+        [],
+        methods=("server", "global", "kad"),
+        search_options={"type": "doc", "extension": "pdf", "minAvailability": 1},
+    )
+
+    assert all(action.params["query"] == "linux" for action in actions)
+    assert all(action.params["type"] == "doc" for action in actions)
+    assert all(action.params["extension"] == "pdf" for action in actions)
+    assert all(action.params["minAvailability"] == 1 for action in actions)
+
+
+def test_execute_action_set_redacts_private_inputs_from_retained_results() -> None:
+    private_hash = "0123456789abcdef0123456789abcdef"
+    actions = sa.default_action_set(
+        ["private linux documents"],
+        [{"hash": private_hash, "name": "private-title.pdf", "size": 10}],
+        methods=("server",),
+    )
+    markers: list[dict] = []
+
+    def runner(action: sa.ScriptedAction) -> dict:
+        if action.kind == "search":
+            return {"query": action.params["query"], "message": "PRIVATE LINUX DOCUMENTS done"}
+        return {
+            "hash": action.params["hash"],
+            "message": f"private-title.pdf {private_hash[:8]} added",
+        }
+
+    results = sa.execute_action_set(actions, runner, markers.append, sleep=lambda _s: None)
+    retained = json.dumps({"markers": markers, "results": results}).casefold()
+    assert "private linux documents" not in retained
+    assert "private-title.pdf" not in retained
+    assert private_hash not in retained
+    assert private_hash[:8] not in retained
+    assert [result["actionId"] for result in results] == ["action-0001", "action-0002"]
 
 
 def test_execute_action_set_emits_begin_end_markers_and_spaces() -> None:
@@ -87,3 +136,66 @@ def test_execute_action_set_isolates_a_failing_action() -> None:
     assert [r["status"] for r in results] == ["error", "ok"]
     end_markers = [m for m in markers if m["marker"] == "end"]
     assert end_markers[0]["status"] == "error" and "boom" in end_markers[0]["outcome"]["error"]
+
+
+def test_verify_completed_file_checks_size_ed2k_and_computes_sha256(tmp_path: Path) -> None:
+    payload = tmp_path / "completed.bin"
+    payload.write_bytes(b"abc")
+
+    result = sa.verify_completed_file(
+        payload,
+        expected_size=3,
+        expected_ed2k_hash="a448017aaf21d8525fc10ae87aa6729d",
+    )
+
+    assert result.sha256 == hashlib.sha256(b"abc").hexdigest()
+    assert result.sanitized_result() == {
+        "status": "verified",
+        "sizeBytes": 3,
+        "sizeVerified": True,
+        "ed2kVerified": True,
+        "sha256Computed": True,
+    }
+
+
+def test_verify_completed_file_rejects_wrong_hash_without_exposing_it(tmp_path: Path) -> None:
+    payload = tmp_path / "completed.bin"
+    payload.write_bytes(b"abc")
+
+    with pytest.raises(RuntimeError, match="eD2K hash does not match") as error:
+        sa.verify_completed_file(payload, expected_size=3, expected_ed2k_hash="0" * 32)
+
+    assert "0" * 8 not in str(error.value)
+
+
+def test_wait_for_completed_file_accepts_client_specific_locator(tmp_path: Path) -> None:
+    payload = tmp_path / "client-incoming" / "completed.bin"
+    payload.parent.mkdir()
+    payload.write_bytes(b"abc")
+    probes = iter([None, None, payload])
+    clock_values = iter([0.0, 0.0, 0.5, 1.0])
+    slept: list[float] = []
+
+    result = sa.wait_for_completed_file(
+        lambda: next(probes),
+        expected_size=3,
+        expected_ed2k_hash="a448017aaf21d8525fc10ae87aa6729d",
+        timeout_seconds=2.0,
+        interval_seconds=0.5,
+        sleep=slept.append,
+        monotonic=lambda: next(clock_values),
+    )
+
+    assert result.path == payload.resolve()
+    assert slept == [0.5, 0.5]
+
+
+def test_verify_matching_sha256_returns_only_sanitized_parity_proof(tmp_path: Path) -> None:
+    digest = "a" * 64
+    first = sa.CompletedFileVerification(tmp_path / "first", 3, "1" * 32, digest)
+    second = sa.CompletedFileVerification(tmp_path / "second", 3, "1" * 32, digest)
+
+    result = sa.verify_matching_sha256([first, second])
+
+    assert result == {"fileCount": 2, "sha256Matched": True}
+    assert digest not in json.dumps(result)
