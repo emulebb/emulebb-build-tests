@@ -247,6 +247,7 @@ def run_protocol_case(
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            ed2k_address=p2p_address,
             exe_override=str(ed2k_exe),
             protocol_obfuscation=case.server_protocol_obfuscation,
             server_udp=case.server_udp,

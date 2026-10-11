@@ -93,6 +93,7 @@ def test_protocol_cases_reuse_shared_goed2k_launcher() -> None:
 
     assert "goed2k.prepare_ed2k_server_binary(" in script_text
     assert "goed2k.launch_ed2k_server(" in script_text
+    assert "ed2k_address=p2p_address" in script_text
     assert "goed2k.resolve_ed2k_server_exe(" not in script_text
     assert "goed2k.build_ed2k_server_binary(" not in script_text
     assert "goed2k.start_ed2k_server(" not in script_text
