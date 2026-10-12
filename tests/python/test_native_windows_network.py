@@ -414,12 +414,16 @@ def test_upnp_mapping_audit_verifies_tcp_and_udp_target_local_address() -> None:
         }
     )
 
+    def factory(address: str) -> FakeUpnpClient:
+        client.multicastif = address
+        return client
+
     audit = verify_upnp_port_mappings(
         "192.0.2.18",
         tcp_ports=(4662,),
         udp_ports=(4672,),
         expected_mapped=True,
-        client_factory=lambda: client,
+        client_factory=factory,
         discovery_delay_ms=350,
     )
 
@@ -450,7 +454,7 @@ def test_upnp_mapping_audit_requires_exact_ports_absent(case_name: str) -> None:
         tcp_ports=(4662,),
         udp_ports=(4672,),
         expected_mapped=False,
-        client_factory=lambda: client,
+        client_factory=lambda _address: client,
     )
 
     assert case_name
@@ -472,7 +476,7 @@ def test_upnp_mapping_audit_rejects_missing_or_foreign_mapping_without_leaking_t
             tcp_ports=(4662,),
             udp_ports=(4672,),
             expected_mapped=True,
-            client_factory=lambda: client,
+            client_factory=lambda _address: client,
         )
 
     assert raised.value.audit.observed_status == "mismatched"
@@ -492,7 +496,7 @@ def test_upnp_mapping_audit_rejects_any_mapping_when_absence_is_required() -> No
             tcp_ports=(4662,),
             udp_ports=(4672,),
             expected_mapped=False,
-            client_factory=lambda: client,
+            client_factory=lambda _address: client,
         )
 
     assert raised.value.audit.present_count == 1
@@ -505,20 +509,20 @@ def test_upnp_mapping_audit_requires_gateway_and_valid_inputs() -> None:
             "192.0.2.18",
             tcp_ports=(4662,),
             expected_mapped=True,
-            client_factory=lambda: FakeUpnpClient({}, discovered_count=0),
+            client_factory=lambda _address: FakeUpnpClient({}, discovered_count=0),
         )
     with pytest.raises(ValueError, match="X_LOCAL_IP"):
         verify_upnp_port_mappings(
             "not-an-address",
             tcp_ports=(4662,),
             expected_mapped=True,
-            client_factory=lambda: FakeUpnpClient({}),
+            client_factory=lambda _address: FakeUpnpClient({}),
         )
     with pytest.raises(ValueError, match="at least one"):
         verify_upnp_port_mappings(
             "192.0.2.18",
             expected_mapped=False,
-            client_factory=lambda: FakeUpnpClient({}),
+            client_factory=lambda _address: FakeUpnpClient({}),
         )
 
 

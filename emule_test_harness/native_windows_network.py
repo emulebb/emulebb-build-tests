@@ -33,7 +33,7 @@ class MiniupnpcClient(Protocol):
     def getspecificportmapping(self, external_port: int, protocol: str) -> object: ...
 
 
-MiniupnpcFactory = Callable[[], MiniupnpcClient]
+MiniupnpcFactory = Callable[[str], MiniupnpcClient]
 
 PCAPNG_MINIMUM_BYTES = 28
 _DUMPCAP_INTERFACE_RE = re.compile(r"^\s*(?P<index>\d+)\.\s+(?P<device>\S+)(?:\s+\((?P<description>.*)\))?\s*$")
@@ -152,14 +152,14 @@ def run_checked(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(tuple(command), check=True, capture_output=True, text=True)
 
 
-def create_miniupnpc_client() -> MiniupnpcClient:
+def create_miniupnpc_client(local_address: str) -> MiniupnpcClient:
     """Creates the optional miniupnpc client with a clear missing-tool error."""
 
     try:
         import miniupnpc
     except ImportError as error:
         raise RuntimeError("miniupnpc is required for native UPnP mapping audits") from error
-    return miniupnpc.UPnP()
+    return miniupnpc.UPnP(localport=0, multicastif=local_address)
 
 
 def start_background_process(command: Sequence[str]) -> subprocess.Popen[bytes]:
@@ -452,9 +452,8 @@ def verify_upnp_port_mappings(
     if not expected:
         raise ValueError("at least one TCP or UDP port is required")
 
-    client = client_factory()
+    client = client_factory(normalized_address)
     client.discoverdelay = discovery_delay_ms
-    client.multicastif = normalized_address
     discovered_count = client.discover()
     if discovered_count <= 0:
         raise RuntimeError("miniupnpc did not discover a UPnP gateway")
