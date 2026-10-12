@@ -615,13 +615,24 @@ def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
     return len(files)
 
 
-def _shared_runtime_state(client: str, payload: dict[str, object]) -> tuple[int, int]:
-    data = _status_data(payload)
+def _shared_runtime_state(
+    client: str,
+    status_payload: dict[str, object],
+    inventory_payload: dict[str, object],
+) -> tuple[int, int]:
+    data = _status_data(status_payload)
     if client == "mfc":
         runtime = data.get("runtimeDiagnostics")
         data = runtime if isinstance(runtime, dict) else {}
+    inventory = _status_data(inventory_payload)
     try:
-        return int(data.get("sharedFileCount") or 0), int(data.get("sharedHashingCount") or 0)
+        if isinstance(inventory, dict):
+            advertised = int(inventory.get("total") or len(inventory.get("items") or []))
+        elif isinstance(inventory, list):
+            advertised = len(inventory)
+        else:
+            raise TypeError
+        return advertised, int(data.get("sharedHashingCount") or 0)
     except (TypeError, ValueError) as exc:
         raise RuntimeError("Client returned invalid shared-inventory counters.") from exc
 
@@ -644,7 +655,13 @@ def _wait_for_shared_inventory(
     latest = (0, 0)
     status_path = "/api/v1/stats" if client == "rust" else "/api/v1/status"
     while True:
-        latest = _shared_runtime_state(client, _http(base_url, api_key, status_path))
+        status_payload = _http(base_url, api_key, status_path)
+        inventory_payload = _http(
+            base_url,
+            api_key,
+            "/api/v1/shared-files?offset=0&limit=1",
+        )
+        latest = _shared_runtime_state(client, status_payload, inventory_payload)
         advertised, hashing = latest
         if advertised >= expected_count and hashing == 0:
             return {

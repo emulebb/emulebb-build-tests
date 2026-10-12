@@ -153,7 +153,9 @@ def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
     replies = iter(
         [
             {"data": {"runtimeDiagnostics": {"sharedFileCount": 1, "sharedHashingCount": 1}}},
+            {"data": {"items": [{}], "total": 1, "offset": 0, "limit": 1}},
             {"data": {"runtimeDiagnostics": {"sharedFileCount": 2, "sharedHashingCount": 0}}},
+            {"data": {"items": [{}], "total": 2, "offset": 0, "limit": 1}},
         ]
     )
     monkeypatch.setattr(module, "_http", lambda *_args, **_kwargs: next(replies))
@@ -173,6 +175,25 @@ def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
         "advertisedFileCount": 2,
         "hashingFileCount": 0,
     }
+
+
+def test_rust_shared_state_uses_paged_inventory_total() -> None:
+    module = _load_capture()
+
+    advertised, hashing = module._shared_runtime_state(
+        "rust",
+        {
+            "data": {
+                "sharedFilesReady": True,
+                "sharedFilesComplete": False,
+                "sharedHashingCount": 4,
+            }
+        },
+        {"data": {"items": [{}], "total": 46, "offset": 0, "limit": 1}},
+    )
+
+    assert advertised == 46
+    assert hashing == 4
 
 
 def test_mapping_state_wait_retains_only_sanitized_counts(
