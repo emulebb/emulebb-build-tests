@@ -32,6 +32,8 @@ class MiniupnpcClient(Protocol):
 
     def getspecificportmapping(self, external_port: int, protocol: str) -> object: ...
 
+    def deleteportmapping(self, external_port: int, protocol: str) -> object: ...
+
 
 MiniupnpcFactory = Callable[[str], MiniupnpcClient]
 
@@ -144,6 +146,42 @@ class UpnpMappingAuditError(RuntimeError):
             f"present={audit.present_count}/{audit.expected_count}"
         )
         self.audit = audit
+
+
+@dataclass(frozen=True)
+class UpnpMappingCleanup:
+    """Endpoint-free result from removing exact local campaign mappings."""
+
+    expected_count: int
+    removed_count: int
+    already_absent_count: int
+    foreign_target_count: int
+    failed_count: int
+    passed: bool
+
+    def sanitized_counts(self) -> dict[str, int | bool]:
+        """Returns only counts suitable for retained teardown evidence."""
+
+        return {
+            "expectedCount": self.expected_count,
+            "removedCount": self.removed_count,
+            "alreadyAbsentCount": self.already_absent_count,
+            "foreignTargetCount": self.foreign_target_count,
+            "failedCount": self.failed_count,
+            "passed": self.passed,
+        }
+
+
+class UpnpMappingCleanupError(RuntimeError):
+    """Carries sanitized counts when exact local mapping cleanup is unsafe or fails."""
+
+    def __init__(self, cleanup: UpnpMappingCleanup) -> None:
+        super().__init__(
+            "UPnP mapping cleanup failed: "
+            f"removed={cleanup.removed_count}/{cleanup.expected_count} "
+            f"foreign={cleanup.foreign_target_count} failed={cleanup.failed_count}"
+        )
+        self.cleanup = cleanup
 
 
 def run_checked(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -425,6 +463,25 @@ def make_tshark_frame_inspection_hook(
     return inspect
 
 
+def _mapping_has_exact_internal_target(
+    mapping: object,
+    *,
+    local_address: str,
+    port: int,
+) -> bool:
+    """Return whether one gateway row targets the exact local campaign socket."""
+
+    target = mapping[0] if isinstance(mapping, (tuple, list)) and mapping else None
+    internal_port = mapping[1] if isinstance(mapping, (tuple, list)) and len(mapping) > 1 else None
+    return (
+        isinstance(target, str)
+        and target.strip() == local_address
+        and not isinstance(internal_port, bool)
+        and isinstance(internal_port, (int, str))
+        and str(internal_port).strip() == str(port)
+    )
+
+
 def verify_upnp_port_mappings(
     local_address: str,
     *,
@@ -467,17 +524,13 @@ def verify_upnp_port_mappings(
         if mapping is None:
             continue
         present_count += 1
-        target = mapping[0] if isinstance(mapping, (tuple, list)) and mapping else None
-        internal_port = mapping[1] if isinstance(mapping, (tuple, list)) and len(mapping) > 1 else None
         # WHY: a gateway can return the queried external port redirected to a
         # different internal service; address-only matching would falsely
         # claim that the product owns the exact mapping under test.
-        exact_internal_target = (
-            isinstance(target, str)
-            and target.strip() == normalized_address
-            and not isinstance(internal_port, bool)
-            and isinstance(internal_port, (int, str))
-            and str(internal_port).strip() == str(port)
+        exact_internal_target = _mapping_has_exact_internal_target(
+            mapping,
+            local_address=normalized_address,
+            port=port,
         )
         if exact_internal_target:
             matching_local_count += 1
@@ -507,6 +560,79 @@ def verify_upnp_port_mappings(
     if not passed:
         raise UpnpMappingAuditError(audit)
     return audit
+
+
+def remove_exact_local_upnp_port_mappings(
+    local_address: str,
+    *,
+    tcp_ports: Sequence[int] = (),
+    udp_ports: Sequence[int] = (),
+    client_factory: MiniupnpcFactory = create_miniupnpc_client,
+    discovery_delay_ms: int = 200,
+) -> UpnpMappingCleanup:
+    """Remove only mappings that target the exact local campaign sockets.
+
+    Callers must separately establish ownership (absent before launch and exact-local
+    while active). A mapping to another host or internal port is never deleted.
+    """
+
+    try:
+        normalized_address = str(ipaddress.IPv4Address(local_address))
+    except ipaddress.AddressValueError as error:
+        raise ValueError("X_LOCAL_IP must be a valid IPv4 address") from error
+    if discovery_delay_ms <= 0:
+        raise ValueError("discovery_delay_ms must be positive")
+    expected = tuple(("TCP", port) for port in _normalize_ports(tcp_ports)) + tuple(
+        ("UDP", port) for port in _normalize_ports(udp_ports)
+    )
+    if not expected:
+        raise ValueError("at least one TCP or UDP port is required")
+
+    client = client_factory(normalized_address)
+    client.discoverdelay = discovery_delay_ms
+    discovered_count = client.discover()
+    if discovered_count <= 0:
+        raise RuntimeError("miniupnpc did not discover a UPnP gateway")
+    client.selectigd()
+
+    removed_count = 0
+    already_absent_count = 0
+    foreign_target_count = 0
+    failed_count = 0
+    for protocol, port in expected:
+        mapping = client.getspecificportmapping(port, protocol)
+        if mapping is None:
+            already_absent_count += 1
+            continue
+        if not _mapping_has_exact_internal_target(
+            mapping,
+            local_address=normalized_address,
+            port=port,
+        ):
+            foreign_target_count += 1
+            continue
+        try:
+            deleted = client.deleteportmapping(port, protocol)
+        except Exception:  # noqa: BLE001 - retain only a sanitized failure count
+            failed_count += 1
+            continue
+        if deleted is False:
+            failed_count += 1
+        else:
+            removed_count += 1
+
+    passed = foreign_target_count == 0 and failed_count == 0
+    cleanup = UpnpMappingCleanup(
+        expected_count=len(expected),
+        removed_count=removed_count,
+        already_absent_count=already_absent_count,
+        foreign_target_count=foreign_target_count,
+        failed_count=failed_count,
+        passed=passed,
+    )
+    if not passed:
+        raise UpnpMappingCleanupError(cleanup)
+    return cleanup
 
 
 class ManagedDumpcapCapture:

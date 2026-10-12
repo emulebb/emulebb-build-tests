@@ -14,11 +14,13 @@ from emule_test_harness.native_windows_network import (
     CaptureSizeLimitReachedError,
     ManagedDumpcapCapture,
     UpnpMappingAuditError,
+    UpnpMappingCleanupError,
     WindowsInboundBlockRules,
     discover_capture_interfaces,
     make_tshark_frame_inspection_hook,
     make_tshark_protocol_summary_hook,
     parse_dumpcap_interfaces,
+    remove_exact_local_upnp_port_mappings,
     resolve_capture_interface,
     resolve_windows_adapter_hints,
     validate_capture,
@@ -62,6 +64,7 @@ class FakeUpnpClient:
         self.multicastif = ""
         self.selected = False
         self.queries: list[tuple[int, str]] = []
+        self.deletions: list[tuple[int, str]] = []
 
     def discover(self) -> int:
         return self.discovered_count
@@ -72,6 +75,11 @@ class FakeUpnpClient:
     def getspecificportmapping(self, external_port: int, protocol: str) -> object:
         self.queries.append((external_port, protocol))
         return self.mappings.get((external_port, protocol))
+
+    def deleteportmapping(self, external_port: int, protocol: str) -> bool:
+        self.deletions.append((external_port, protocol))
+        self.mappings.pop((external_port, protocol), None)
+        return True
 
 
 def completed(command: Sequence[str], *, stdout: str = "") -> subprocess.CompletedProcess[str]:
@@ -547,6 +555,56 @@ def test_upnp_mapping_audit_requires_gateway_and_valid_inputs() -> None:
             expected_mapped=False,
             client_factory=lambda _address: FakeUpnpClient({}),
         )
+
+
+def test_upnp_mapping_cleanup_removes_only_exact_local_targets() -> None:
+    client = FakeUpnpClient(
+        {
+            (4662, "TCP"): ("192.0.2.18", 4662, "private description", True, "", 0),
+            (4672, "UDP"): ("192.0.2.18", 4672, "private description", True, "", 0),
+        }
+    )
+
+    cleanup = remove_exact_local_upnp_port_mappings(
+        "192.0.2.18",
+        tcp_ports=(4662,),
+        udp_ports=(4672,),
+        client_factory=lambda _address: client,
+    )
+
+    assert client.deletions == [(4662, "TCP"), (4672, "UDP")]
+    assert cleanup.sanitized_counts() == {
+        "expectedCount": 2,
+        "removedCount": 2,
+        "alreadyAbsentCount": 0,
+        "foreignTargetCount": 0,
+        "failedCount": 0,
+        "passed": True,
+    }
+    assert "192.0.2.18" not in str(cleanup.sanitized_counts())
+    assert "private description" not in str(cleanup.sanitized_counts())
+
+
+def test_upnp_mapping_cleanup_refuses_foreign_or_wrong_internal_targets() -> None:
+    client = FakeUpnpClient(
+        {
+            (4662, "TCP"): ("198.51.100.9", 4662, "foreign", True, "", 0),
+            (4672, "UDP"): ("192.0.2.18", 54321, "wrong port", True, "", 0),
+        }
+    )
+
+    with pytest.raises(UpnpMappingCleanupError) as raised:
+        remove_exact_local_upnp_port_mappings(
+            "192.0.2.18",
+            tcp_ports=(4662,),
+            udp_ports=(4672,),
+            client_factory=lambda _address: client,
+        )
+
+    assert client.deletions == []
+    assert raised.value.cleanup.foreign_target_count == 2
+    assert "198.51.100.9" not in str(raised.value)
+    assert "54321" not in str(raised.value)
 
 
 def test_firewall_owner_adds_unique_blocks_and_always_cleans_up() -> None:

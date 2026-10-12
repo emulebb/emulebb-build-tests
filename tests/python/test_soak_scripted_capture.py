@@ -602,6 +602,15 @@ def test_post_run_audits_attempt_every_invariant_after_failures(
     module = _load_capture()
     calls: list[str] = []
 
+    class Cleanup:
+        @staticmethod
+        def sanitized_counts() -> dict[str, object]:
+            return {"removedCount": 2, "passed": True}
+
+    def cleanup(*_args: object, **_kwargs: object) -> Cleanup:
+        calls.append("cleanup")
+        return Cleanup()
+
     def mapping(**_kwargs: object) -> dict[str, object]:
         calls.append("mapping")
         raise RuntimeError("private mapping detail")
@@ -619,6 +628,7 @@ def test_post_run_audits_attempt_every_invariant_after_failures(
         return ()
 
     monkeypatch.setattr(module, "_wait_for_mapping_state", mapping)
+    monkeypatch.setattr(module, "remove_exact_local_upnp_port_mappings", cleanup)
     monkeypatch.setattr(module, "_require_no_other_clients", clients)
     monkeypatch.setattr(module, "_require_clean_legacy_audit", legacy)
     monkeypatch.setattr(module, "fingerprint_forbidden_roots", fingerprints)
@@ -641,13 +651,18 @@ def test_post_run_audits_attempt_every_invariant_after_failures(
         client_audits={},
         legacy_audits={},
         results_meta=results,
+        remove_owned_upnp_mappings=True,
     )
 
-    assert calls == ["mapping", "clients", "legacy", "fingerprints"]
+    assert calls == ["cleanup", "mapping", "clients", "legacy", "fingerprints"]
     assert [(stage, type(error).__name__) for stage, error in failures] == [
         ("upnp-absence-audit", "RuntimeError"),
         ("client-process-audit", "RuntimeError"),
     ]
+    assert results["upnpMappingAudits"]["cleanup"] == {
+        "removedCount": 2,
+        "passed": True,
+    }
     assert results["legacyRootMetadataAudit"] == {"passed": True}
 
 

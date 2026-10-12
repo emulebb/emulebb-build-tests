@@ -62,10 +62,12 @@ from emule_test_harness.native_windows_network import (  # noqa: E402
     CaptureInterfaceHints,
     ManagedDumpcapCapture,
     UpnpMappingAuditError,
+    UpnpMappingCleanupError,
     WindowsInboundBlockRules,
     discover_capture_interfaces,
     make_tshark_frame_inspection_hook,
     make_tshark_protocol_summary_hook,
+    remove_exact_local_upnp_port_mappings,
     resolve_capture_interface,
     resolve_windows_adapter_hints,
     verify_upnp_port_mappings,
@@ -874,10 +876,24 @@ def _run_post_run_safety_audits(
     client_audits: dict[str, object],
     legacy_audits: dict[str, object],
     results_meta: dict[str, object],
+    remove_owned_upnp_mappings: bool,
 ) -> list[tuple[str, Exception]]:
     """Attempt every post-run invariant and return sanitized failure taxonomy."""
 
     failures: list[tuple[str, Exception]] = []
+    if remove_owned_upnp_mappings:
+        try:
+            cleanup = remove_exact_local_upnp_port_mappings(
+                local_address,
+                tcp_ports=tcp_ports,
+                udp_ports=udp_ports,
+            )
+            upnp_audits["cleanup"] = cleanup.sanitized_counts()
+        except UpnpMappingCleanupError as error:
+            upnp_audits["cleanup"] = error.cleanup.sanitized_counts()
+            failures.append(("upnp-owned-mapping-cleanup", error))
+        except Exception as error:  # noqa: BLE001 - absence audit must still run
+            failures.append(("upnp-owned-mapping-cleanup", error))
     try:
         upnp_audits["after"] = _wait_for_mapping_state(
             local_address=local_address,
@@ -1599,6 +1615,11 @@ def main(argv: list[str] | None = None) -> int:
                     client_audits=client_audits,
                     legacy_audits=legacy_audits,
                     results_meta=results_meta,
+                    remove_owned_upnp_mappings=bool(
+                        args.connectivity == "upnp"
+                        and upnp_audits.get("before", {}).get("passed")
+                        and upnp_audits.get("active", {}).get("passed")
+                    ),
                 )
             )
         _preserve_post_run_failures(primary_error, post_run_failures)
