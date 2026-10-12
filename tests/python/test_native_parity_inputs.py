@@ -9,13 +9,18 @@ import pytest
 from emule_test_harness.native_parity_inputs import (
     PathAuditResult,
     ProcessSnapshot,
+    audit_client_processes,
     audit_open_handles,
     audit_process_references,
+    compare_forbidden_root_fingerprints,
+    fingerprint_forbidden_roots,
     find_handle_executable,
     load_ed2k_link_fixture,
     load_forbidden_roots_from_config,
     load_native_parity_config,
     load_shared_path_fixture,
+    summarize_client_process_audit,
+    summarize_forbidden_root_metadata_audit,
     summarize_native_parity_inputs,
     summarize_path_audit,
     validate_campaign_paths,
@@ -186,6 +191,82 @@ def test_process_audit_detects_executable_and_embedded_command_line_references()
         "finding_count": 2,
         "finding_sources": {"process_command_line": 1, "process_executable": 1},
     }
+
+
+def test_client_process_audit_finds_rust_and_mfc_and_allows_owned_pid() -> None:
+    processes = (
+        ProcessSnapshot(
+            pid=10,
+            name="emulebb-rust-diagnostics.exe",
+            executable="C:\\Campaign\\emulebb-rust-diagnostics.exe",
+        ),
+        ProcessSnapshot(pid=20, name="eMule.exe", executable="D:\\Apps\\eMule.exe"),
+        ProcessSnapshot(pid=30, name="emulebb.exe", executable="D:\\Apps\\emulebb.exe"),
+        ProcessSnapshot(pid=40, name="python.exe", command_line=("python", "emulebb-rust.py")),
+    )
+
+    result = audit_client_processes(processes=processes, allowed_pids=(30,))
+
+    assert result.available is True
+    assert result.inspected_count == 4
+    assert [(finding.pid, finding.client_family) for finding in result.findings] == [
+        (10, "rust"),
+        (20, "mfc"),
+    ]
+    summary = summarize_client_process_audit(result)
+    assert summary == {
+        "available": True,
+        "inspected_count": 4,
+        "finding_count": 2,
+        "client_families": {"mfc": 1, "rust": 1},
+    }
+    rendered = json.dumps(summary)
+    for sensitive in ("10", "20", "Campaign", "Apps", "emulebb-rust-diagnostics.exe", "eMule.exe"):
+        assert sensitive not in rendered
+
+
+def test_forbidden_root_fingerprint_detects_changes_without_exposing_paths(tmp_path: Path) -> None:
+    protected = tmp_path / "operator-private-root"
+    protected.mkdir()
+    nested = protected / "private-name"
+    nested.mkdir()
+    payload = nested / "sensitive-title.part"
+    payload.write_bytes(b"before")
+
+    before = fingerprint_forbidden_roots((str(protected),))
+    unchanged = fingerprint_forbidden_roots((str(protected),))
+    unchanged_audit = compare_forbidden_root_fingerprints(before, unchanged)
+    assert unchanged_audit.changed_root_indices == ()
+
+    payload.write_bytes(b"after-write")
+    after = fingerprint_forbidden_roots((str(protected),))
+    audit = compare_forbidden_root_fingerprints(before, after)
+
+    assert before[0].entry_count == 2
+    assert before[0].directory_count == 1
+    assert before[0].file_count == 1
+    assert audit.changed_root_indices == (0,)
+    summary = summarize_forbidden_root_metadata_audit(audit)
+    assert summary == {
+        "inspected_count": 1,
+        "changed_root_count": 1,
+        "changed_root_indices": [0],
+    }
+    rendered = json.dumps(summary)
+    for sensitive in (str(protected), "operator-private-root", "private-name", "sensitive-title"):
+        assert sensitive not in rendered
+
+
+def test_forbidden_root_fingerprint_detects_missing_root_appearing(tmp_path: Path) -> None:
+    protected = tmp_path / "initially-missing"
+
+    before = fingerprint_forbidden_roots((str(protected),))
+    assert before[0].exists is False
+    protected.mkdir()
+    after = fingerprint_forbidden_roots((str(protected),))
+
+    assert after[0].exists is True
+    assert compare_forbidden_root_fingerprints(before, after).changed_root_indices == (0,)
 
 
 def test_handle_audit_is_optional_and_sanitizes_summary(tmp_path: Path) -> None:

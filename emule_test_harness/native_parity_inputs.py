@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import ntpath
 import os
 import re
 import shutil
+import stat
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +20,13 @@ ED2K_HASH_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 AICH_HASH_RE = re.compile(r"^[A-Z2-7]{32}$", re.IGNORECASE)
 HANDLE_PROCESS_RE = re.compile(r"^\s*(?P<name>.+?)\s+pid:\s*(?P<pid>\d+)\s+", re.IGNORECASE)
 NATIVE_PARITY_SECTION = "native_parity"
+CLIENT_PROCESS_STEMS = {
+    "emule": "mfc",
+    "emulebb": "mfc",
+    "emulebb-diagnostics": "mfc",
+    "emulebb-rust": "rust",
+    "emulebb-rust-diagnostics": "rust",
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,43 @@ class PathAuditResult:
     available: bool
     inspected_count: int
     findings: tuple[PathAuditFinding, ...]
+
+
+@dataclass(frozen=True)
+class ClientProcessFinding:
+    """One running eMuleBB client, retained without its path or command line."""
+
+    pid: int
+    client_family: str
+
+
+@dataclass(frozen=True)
+class ClientProcessAuditResult:
+    """Results from the pre-existing native client process guard."""
+
+    available: bool
+    inspected_count: int
+    findings: tuple[ClientProcessFinding, ...]
+
+
+@dataclass(frozen=True)
+class RootMetadataFingerprint:
+    """Path-free metadata fingerprint for one indexed forbidden root."""
+
+    root_index: int
+    exists: bool
+    entry_count: int
+    file_count: int
+    directory_count: int
+    digest: str
+
+
+@dataclass(frozen=True)
+class RootMetadataAuditResult:
+    """Before/after comparison of indexed forbidden-root fingerprints."""
+
+    inspected_count: int
+    changed_root_indices: tuple[int, ...]
 
 
 class RunCallable(Protocol):
@@ -287,7 +333,7 @@ def audit_process_references(
     normalized_roots = tuple(normalize_windows_path(root, field="forbidden root") for root in forbidden_roots)
     if processes is None:
         try:
-            processes = _iter_process_snapshots()
+            processes = tuple(_iter_process_snapshots())
         except ImportError:
             return PathAuditResult(available=False, inspected_count=0, findings=())
 
@@ -315,6 +361,66 @@ def audit_process_references(
                     )
                 )
     return PathAuditResult(available=True, inspected_count=inspected_count, findings=tuple(findings))
+
+
+def audit_client_processes(
+    *,
+    processes: Iterable[ProcessSnapshot] | None = None,
+    allowed_pids: Iterable[int] = (),
+) -> ClientProcessAuditResult:
+    """Finds pre-existing Rust or MFC clients, excluding campaign-owned PIDs."""
+
+    if processes is None:
+        try:
+            processes = tuple(_iter_process_snapshots())
+        except ImportError:
+            return ClientProcessAuditResult(available=False, inspected_count=0, findings=())
+
+    allowed = {int(pid) for pid in allowed_pids}
+    findings: list[ClientProcessFinding] = []
+    inspected_count = 0
+    for process in processes:
+        inspected_count += 1
+        if process.pid in allowed:
+            continue
+        family = _client_process_family(process)
+        if family is not None:
+            findings.append(ClientProcessFinding(pid=process.pid, client_family=family))
+    return ClientProcessAuditResult(
+        available=True,
+        inspected_count=inspected_count,
+        findings=tuple(findings),
+    )
+
+
+def fingerprint_forbidden_roots(
+    forbidden_roots: Sequence[str | os.PathLike[str]],
+) -> tuple[RootMetadataFingerprint, ...]:
+    """Fingerprints root and descendant metadata without retaining path names."""
+
+    fingerprints: list[RootMetadataFingerprint] = []
+    for root_index, raw_root in enumerate(forbidden_roots):
+        normalized = normalize_windows_path(raw_root, field="forbidden root")
+        try:
+            fingerprints.append(_fingerprint_forbidden_root(Path(normalized), root_index=root_index))
+        except OSError:
+            # WHY: Native parity must fail closed if a protected root cannot be
+            # inventoried, but the exception must not disclose an operator path.
+            raise RuntimeError(f"Could not fingerprint forbidden root index {root_index}.") from None
+    return tuple(fingerprints)
+
+
+def compare_forbidden_root_fingerprints(
+    before: Sequence[RootMetadataFingerprint],
+    after: Sequence[RootMetadataFingerprint],
+) -> RootMetadataAuditResult:
+    """Reports changed root indices without disclosing roots or entry names."""
+
+    before_by_index = _fingerprints_by_index(before, snapshot="before")
+    after_by_index = _fingerprints_by_index(after, snapshot="after")
+    indices = sorted(before_by_index.keys() | after_by_index.keys())
+    changed = tuple(index for index in indices if before_by_index.get(index) != after_by_index.get(index))
+    return RootMetadataAuditResult(inspected_count=len(indices), changed_root_indices=changed)
 
 
 def find_handle_executable(explicit_path: Path | None = None) -> Path | None:
@@ -399,6 +505,30 @@ def summarize_path_audit(result: PathAuditResult) -> dict[str, object]:
     }
 
 
+def summarize_client_process_audit(result: ClientProcessAuditResult) -> dict[str, object]:
+    """Summarizes client processes without PIDs, names, paths, or arguments."""
+
+    families: dict[str, int] = {}
+    for finding in result.findings:
+        families[finding.client_family] = families.get(finding.client_family, 0) + 1
+    return {
+        "available": result.available,
+        "inspected_count": result.inspected_count,
+        "finding_count": len(result.findings),
+        "client_families": dict(sorted(families.items())),
+    }
+
+
+def summarize_forbidden_root_metadata_audit(result: RootMetadataAuditResult) -> dict[str, object]:
+    """Summarizes protected-root changes using stable indices only."""
+
+    return {
+        "inspected_count": result.inspected_count,
+        "changed_root_count": len(result.changed_root_indices),
+        "changed_root_indices": list(result.changed_root_indices),
+    }
+
+
 def _iter_process_snapshots() -> Iterable[ProcessSnapshot]:
     import psutil  # type: ignore[import-not-found]
 
@@ -413,6 +543,110 @@ def _iter_process_snapshots() -> Iterable[ProcessSnapshot]:
             )
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
+
+
+def _client_process_family(process: ProcessSnapshot) -> str | None:
+    candidates = (process.executable, process.name)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        name = ntpath.basename(candidate).casefold()
+        stem = name[:-4] if name.endswith(".exe") else name
+        family = CLIENT_PROCESS_STEMS.get(stem)
+        if family is not None:
+            return family
+    return None
+
+
+def _fingerprint_forbidden_root(root: Path, *, root_index: int) -> RootMetadataFingerprint:
+    digest = hashlib.sha256()
+    if not root.exists() and not root.is_symlink():
+        digest.update(b"missing\0")
+        return RootMetadataFingerprint(
+            root_index=root_index,
+            exists=False,
+            entry_count=0,
+            file_count=0,
+            directory_count=0,
+            digest=digest.hexdigest(),
+        )
+
+    root_metadata = root.stat(follow_symlinks=False)
+    _update_metadata_digest(digest, ".", "root", root_metadata)
+    if not stat.S_ISDIR(root_metadata.st_mode) or root.is_symlink() or _path_is_junction(root):
+        return RootMetadataFingerprint(
+            root_index=root_index,
+            exists=True,
+            entry_count=0,
+            file_count=1,
+            directory_count=0,
+            digest=digest.hexdigest(),
+        )
+
+    entry_count = 0
+    file_count = 0
+    directory_count = 0
+    pending: list[tuple[Path, str]] = [(root, "")]
+    while pending:
+        directory, relative_parent = pending.pop()
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name.casefold())
+        for entry in entries:
+            relative = ntpath.join(relative_parent, entry.name) if relative_parent else entry.name
+            metadata = entry.stat(follow_symlinks=False)
+            entry_path = Path(entry.path)
+            is_link = entry.is_symlink()
+            is_junction = _path_is_junction(entry_path)
+            is_directory = stat.S_ISDIR(metadata.st_mode) and not is_link and not is_junction
+            kind = "directory" if is_directory else "junction" if is_junction else "link" if is_link else "file"
+            _update_metadata_digest(digest, relative, kind, metadata)
+            entry_count += 1
+            if is_directory:
+                directory_count += 1
+                pending.append((entry_path, relative))
+            else:
+                file_count += 1
+    return RootMetadataFingerprint(
+        root_index=root_index,
+        exists=True,
+        entry_count=entry_count,
+        file_count=file_count,
+        directory_count=directory_count,
+        digest=digest.hexdigest(),
+    )
+
+
+def _update_metadata_digest(digest: Any, relative: str, kind: str, metadata: os.stat_result) -> None:
+    fields = (
+        relative.replace("/", "\\").casefold(),
+        kind,
+        str(metadata.st_mode),
+        str(metadata.st_size),
+        str(metadata.st_mtime_ns),
+        str(metadata.st_ctime_ns),
+    )
+    for field in fields:
+        encoded = field.encode("utf-8", errors="surrogatepass")
+        digest.update(len(encoded).to_bytes(8, byteorder="big"))
+        digest.update(encoded)
+
+
+def _path_is_junction(path: Path) -> bool:
+    check = getattr(path, "is_junction", None)
+    return bool(check()) if check is not None else False
+
+
+def _fingerprints_by_index(
+    fingerprints: Sequence[RootMetadataFingerprint],
+    *,
+    snapshot: str,
+) -> dict[int, RootMetadataFingerprint]:
+    indexed: dict[int, RootMetadataFingerprint] = {}
+    for fingerprint in fingerprints:
+        if fingerprint.root_index in indexed:
+            raise RuntimeError(f"Duplicate root index in {snapshot} metadata fingerprints.")
+        indexed[fingerprint.root_index] = fingerprint
+    return indexed
 
 
 def _text_references_windows_root(value: str, root: str) -> bool:

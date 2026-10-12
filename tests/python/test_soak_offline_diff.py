@@ -260,11 +260,41 @@ def test_native_completion_comparison_reports_digest_mismatch_without_values() -
     assert rust_digest not in emitted and mfc_digest not in emitted
 
 
+def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> None:
+    mod = _load_offline_diff()
+    recording = {
+        "nativeCaptureSizes": [4096],
+        "meta": {
+            "nativeCapture": {
+                "created": True,
+                "fileByteCount": 4096,
+                "frameCount": 12,
+                "relevantFrameCount": 9,
+                "capturedByteCount": 2048,
+                "sizeLimitReached": False,
+            }
+        },
+    }
+
+    assert mod._native_capture_evidence(recording) == {
+        "ok": True,
+        "frameCount": 12,
+        "relevantFrameCount": 9,
+        "capturedByteCount": 2048,
+        "findings": [],
+    }
+    recording["meta"]["nativeCapture"]["frameCount"] = 0
+    result = mod._native_capture_evidence(recording)
+    assert result["ok"] is False
+    assert "native-capture-no-frames" in result["findings"]
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_verdict", "expected_exit"),
     [
         ({}, "parity", 0),
         ({"conformance_ok": False}, "divergence", 1),
+        ({"state_machine_ok": False}, "divergence", 1),
         ({"missing_action_count": 1}, "harness-failure", 2),
         ({"external_inconclusive": True}, "inconclusive-external", 3),
     ],
@@ -321,7 +351,11 @@ def test_external_completion_shortfall_is_inconclusive_not_pass_or_harness_failu
         completion={
             "required": True,
             "ok": False,
-            "findings": ["rust-completion-count-mismatch", "mfc-completion-count-mismatch"],
+            "findings": [
+                "rust-completion-count-mismatch",
+                "completion-action-set-mismatch",
+                "completion-incomplete",
+            ],
         },
         scenario_mismatch=False,
         conformance_ok=True,
@@ -332,6 +366,58 @@ def test_external_completion_shortfall_is_inconclusive_not_pass_or_harness_failu
 
     assert result["verdict"] == "inconclusive-external"
     assert result["exitCode"] == 3
+
+
+def test_invalid_completed_payload_is_divergence() -> None:
+    mod = _load_offline_diff()
+    result = mod._campaign_verdict(
+        per_action=[{"verdict": "conformant", "coverageOk": True}],
+        missing_action_count=0,
+        action_error_count=0,
+        completion={"required": True, "ok": False, "findings": ["completion-invalid"]},
+        scenario_mismatch=False,
+        conformance_ok=True,
+        kad_coverage_ok=True,
+        secident_dead=False,
+        external_inconclusive=False,
+    )
+
+    assert result["verdict"] == "divergence"
+    assert result["exitCode"] == 1
+
+
+def test_native_action_contract_rejects_symmetric_missing_action() -> None:
+    mod = _load_offline_diff()
+    markers: list[dict] = []
+    results: list[dict] = []
+    methods = ("server", "global", "kad")
+    for index in range(1, 5):
+        action_id = f"action-{index:04d}"
+        kind = "search" if index <= 3 else "download"
+        extra = {"method": methods[index - 1]} if kind == "search" else {}
+        markers.append({"actionId": action_id, "kind": kind, "marker": "begin", **extra})
+        markers.append(
+            {
+                "actionId": action_id,
+                "kind": kind,
+                "marker": "end",
+                "terminal": kind == "download",
+                **extra,
+            }
+        )
+        results.append({"actionId": action_id, "status": "ok"})
+    recording = {
+        "markers": markers,
+        "meta": {
+            "nativeInputSummary": {"ed2k_link_count": 1},
+            "actionResults": results,
+        },
+    }
+
+    assert mod._native_action_contract(recording)["ok"] is True
+    recording["markers"] = [row for row in markers if row["actionId"] != "action-0002"]
+    recording["meta"]["actionResults"] = results[:1] + results[2:]
+    assert mod._native_action_contract(recording)["ok"] is False
 
 
 def test_completed_payload_digest_mismatch_is_protocol_divergence() -> None:

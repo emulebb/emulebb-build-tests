@@ -55,6 +55,7 @@ def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_p
     (incoming / "private.pdf").write_bytes(b"abc")
     action = ScriptedAction("action-0004", "download", {})
 
+    markers: list[dict[str, object]] = []
     private, summary = module._verify_native_downloads(
         actions=[action],
         fixtures=[
@@ -66,6 +67,7 @@ def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_p
         ],
         incoming_dir=incoming,
         timeout_seconds=1.0,
+        marker_writer=markers.append,
     )
 
     assert private[0]["status"] == "verified"
@@ -81,6 +83,17 @@ def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_p
         }
     ]
     assert "private.pdf" not in str(summary)
+    assert markers == [
+        {
+            "schema": "scripted_action_marker_v1",
+            "marker": "end",
+            "actionId": "action-0004",
+            "kind": "download",
+            "terminal": True,
+            "status": "verified",
+            "ts_utc": markers[0]["ts_utc"],
+        }
+    ]
 
 
 def test_recording_archive_excludes_fresh_profiles_and_includes_capture(tmp_path: Path) -> None:
@@ -92,13 +105,107 @@ def test_recording_archive_excludes_fresh_profiles_and_includes_capture(tmp_path
     (report / "dumps" / "diag.jsonl").write_text("{}\n", encoding="utf-8")
     (report / "native-capture.pcapng").write_bytes(b"capture")
 
-    archive = module.pack_recording(report)
+    private_evidence = report / "completion-private.json"
+    private_evidence.write_text('{"private": true}', encoding="utf-8")
+    archive = module.pack_recording(
+        report,
+        incoming_dir=report / "rust-profile" / "incoming",
+        private_evidence_path=private_evidence,
+    )
 
     with zipfile.ZipFile(archive) as zipped:
         names = zipped.namelist()
     assert any(name.endswith("native-capture.pcapng") for name in names)
     assert any(name.endswith("dumps/diag.jsonl") for name in names)
     assert not any("rust-profile" in name for name in names)
+    assert not any("completion-private" in name for name in names)
+    retained = tmp_path / "rust-case-downloaded-payloads" / "private.pdf"
+    assert retained.read_bytes() == b"payload"
+    assert (retained.parent / "completion-private.json").is_file()
+
+
+def test_recording_retains_nested_mfc_incoming_payloads(tmp_path: Path) -> None:
+    module = _load_capture()
+    report = tmp_path / "mfc-case"
+    incoming = report / "mfc-profile" / "profiles" / "converged-soak" / "incoming"
+    incoming.mkdir(parents=True)
+    (incoming / "private.pdf").write_bytes(b"payload")
+    (report / "results.json").write_text("{}", encoding="utf-8")
+
+    module.pack_recording(report, incoming_dir=incoming)
+
+    retained = tmp_path / "mfc-case-downloaded-payloads" / "private.pdf"
+    assert retained.read_bytes() == b"payload"
+
+
+def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_capture()
+    shared = tmp_path / "shared"
+    (shared / "nested").mkdir(parents=True)
+    (shared / "one.bin").write_bytes(b"1")
+    (shared / "nested" / "two.bin").write_bytes(b"2")
+    assert module._approved_shared_file_count(
+        [{"path": str(shared), "recursive": True}]
+    ) == 2
+
+    replies = iter(
+        [
+            {"data": {"runtimeDiagnostics": {"sharedFileCount": 1, "sharedHashingCount": 1}}},
+            {"data": {"runtimeDiagnostics": {"sharedFileCount": 2, "sharedHashingCount": 0}}},
+        ]
+    )
+    monkeypatch.setattr(module, "_http", lambda *_args, **_kwargs: next(replies))
+    ticks = iter((0.0, 0.0, 1.0))
+    result = module._wait_for_shared_inventory(
+        client="mfc",
+        base_url="http://127.0.0.1:1",
+        api_key="test",
+        expected_count=2,
+        timeout_seconds=5.0,
+        sleep=lambda _seconds: None,
+        monotonic=lambda: next(ticks),
+    )
+    assert result == {
+        "ready": True,
+        "expectedFileCount": 2,
+        "advertisedFileCount": 2,
+        "hashingFileCount": 0,
+    }
+
+
+def test_mapping_state_wait_retains_only_sanitized_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+
+    class Audit:
+        @staticmethod
+        def sanitized_counts() -> dict[str, object]:
+            return {
+                "expectedMapped": True,
+                "expectedCount": 2,
+                "presentCount": 2,
+                "matchingLocalCount": 2,
+                "foreignTargetCount": 0,
+                "missingCount": 0,
+                "observedStatus": "mapped",
+                "passed": True,
+            }
+
+    monkeypatch.setattr(module, "verify_upnp_port_mappings", lambda *_args, **_kwargs: Audit())
+    result = module._wait_for_mapping_state(
+        local_address="192.0.2.10",
+        tcp_ports=(4662,),
+        udp_ports=(4672,),
+        expected_mapped=True,
+        timeout_seconds=1.0,
+    )
+
+    assert result["available"] is True
+    assert result["passed"] is True
+    assert "192.0.2.10" not in str(result)
 
 
 def test_connectivity_state_normalizes_rust_and_mfc_firewall_signals() -> None:

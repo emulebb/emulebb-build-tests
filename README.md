@@ -231,10 +231,11 @@ Native Windows Rust/MFC parity campaign:
 
 - put exact download links and share roots in the two ignored `live-wire.local.*-fixtures.txt` files and configure only their filenames, capture selection, and forbidden roots under `native_parity` in ignored `live-wire-inputs.local.json`
 - run `python scripts\native-windows-parity-campaign.py`; by default it creates fresh Rust regular/diagnostics and MFC Debug/Release/diagnostics builds, runs the tracked protocol/state oracle plus both four-case protocol matrices, then records Rust and MFC sequentially in UPnP and forced-firewalled direct-route cases
-- each direct recording uses a fresh profile, a dynamically resolved Npcap adapter, one bounded PCAPNG, converged diagnostics dumps, filtered server/global/Kad Linux PDF searches, approved shares, and every exact eD2K fixture
-- completed payloads are never opened or executed; size and eD2K are verified locally, SHA-256 is compared across clients, and retained summaries expose only counts and booleans
-- configured forbidden legacy roots are checked against every selected campaign path, process command/executable, and open handle before, during, and after each client; any finding is a harness failure
-- firewall rules have unique campaign-owned names and are removed on every exit path; fresh UPnP profiles request mapping removal during clean shutdown
+- each direct recording uses a fresh profile, a dynamically resolved Npcap adapter, one bounded PCAPNG, converged diagnostics dumps, filtered server/global/Kad Linux PDF searches, approved shares, and every exact eD2K fixture; PCAP acceptance requires Tshark-readable frames and rejects premature or size-limit capture termination
+- approved roots must finish hashing and advertise every locally counted file before actions proceed; download action windows stay open through terminal byte/hash verification
+- completed payloads are never opened or executed; size and eD2K are verified locally, SHA-256 is compared privately across all four Rust/MFC and UPnP/firewalled copies, and retained summaries expose only counts and booleans; downloaded payloads remain outside the ZIP for local re-verification
+- configured forbidden legacy roots are checked against every selected campaign path, process command/executable, open handle, and before/after metadata fingerprint; unrelated pre-existing eMuleBB/eMule clients are rejected
+- firewall rules have unique campaign-owned names and are removed on every exit path; exact campaign ports must be absent before launch, present during UPnP, absent during the forced-firewalled case, and absent again after clean shutdown
 
 Terminology:
 

@@ -28,6 +28,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Callable
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
@@ -40,11 +41,16 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E40
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
+    audit_client_processes,
     audit_open_handles,
     audit_process_references,
+    compare_forbidden_root_fingerprints,
+    fingerprint_forbidden_roots,
     load_ed2k_link_fixture,
     load_native_parity_config,
     load_shared_path_fixture,
+    summarize_client_process_audit,
+    summarize_forbidden_root_metadata_audit,
     summarize_native_parity_inputs,
     summarize_path_audit,
     validate_campaign_paths,
@@ -52,11 +58,14 @@ from emule_test_harness.native_parity_inputs import (  # noqa: E402
 from emule_test_harness.native_windows_network import (  # noqa: E402
     CaptureInterfaceHints,
     ManagedDumpcapCapture,
+    UpnpMappingAuditError,
     WindowsInboundBlockRules,
     discover_capture_interfaces,
+    make_tshark_frame_inspection_hook,
     make_tshark_protocol_summary_hook,
     resolve_capture_interface,
     resolve_windows_adapter_hints,
+    verify_upnp_port_mappings,
 )
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.rust_client import stop_process_tree  # noqa: E402
@@ -126,11 +135,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="One total deadline for all native-parity fixture downloads.",
     )
     parser.add_argument(
+        "--share-ready-timeout-seconds",
+        type=float,
+        default=1800.0,
+        help="Deadline for approved shared roots to finish hashing and become advertised.",
+    )
+    parser.add_argument(
         "--capture-interface",
         default=None,
         help="dumpcap device override; direct mode otherwise resolves X_LOCAL_IP dynamically.",
     )
     parser.add_argument("--capture-max-size-kib", type=int, default=2_000_000)
+    parser.add_argument(
+        "--upnp-audit-timeout-seconds",
+        type=float,
+        default=120.0,
+        help="Deadline for exact-port UPnP mapping state and cleanup checks.",
+    )
     parser.add_argument(
         "--skip-actions",
         action="store_true",
@@ -356,17 +377,35 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
     return copied
 
 
-def pack_recording(report_dir: Path) -> Path:
-    """Zip the recording dir (dumps are text → compress well) and drop the loose dumps."""
+def pack_recording(
+    report_dir: Path,
+    *,
+    incoming_dir: Path | None = None,
+    private_evidence_path: Path | None = None,
+) -> Path:
+    """Pack public evidence while retaining downloaded payloads outside the archive."""
 
     archive = report_dir.with_suffix(".zip")
+    payload_dir = report_dir.with_name(f"{report_dir.name}-downloaded-payloads")
+    if incoming_dir is not None:
+        resolved_report = report_dir.resolve()
+        resolved_incoming = incoming_dir.resolve()
+        if not resolved_incoming.is_relative_to(resolved_report):
+            raise RuntimeError("Native incoming directory is outside the bounded report tree.")
+        if resolved_incoming.is_dir() and any(path.is_file() for path in resolved_incoming.rglob("*")):
+            if payload_dir.exists():
+                raise RuntimeError("Downloaded payload retention directory already exists.")
+            resolved_incoming.replace(payload_dir)
+    if private_evidence_path is not None and private_evidence_path.is_file():
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        private_evidence_path.replace(payload_dir / "completion-private.json")
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for path in report_dir.rglob("*"):
             if path.is_file():
                 relative = path.relative_to(report_dir)
-                # Fresh native profiles can contain completed operator fixtures.
-                # They stay in the campaign output tree for local inspection but
-                # are never duplicated into the retained recording archive.
+                # Fresh profiles may contain private configuration and partial
+                # payloads. Downloaded incoming payloads were moved to the sibling
+                # retention directory; no profile content enters the archive.
                 if relative.parts and relative.parts[0] in ("rust-profile", "mfc-profile"):
                     continue
                 zf.write(path, path.relative_to(report_dir.parent))
@@ -387,6 +426,76 @@ def _require_clean_legacy_audit(forbidden_roots: tuple[str, ...]) -> dict[str, o
         "processes": summarize_path_audit(process_result),
         "handles": summarize_path_audit(handle_result),
     }
+
+
+def _require_no_other_clients(*, allowed_pids: tuple[int, ...] = ()) -> dict[str, object]:
+    result = audit_client_processes(allowed_pids=allowed_pids)
+    if not result.available:
+        raise RuntimeError("Native parity client-process auditing is unavailable.")
+    if result.findings:
+        raise RuntimeError("Another eMuleBB/eMule client process is active.")
+    return summarize_client_process_audit(result)
+
+
+def _owned_process_ids(client: str, handles: dict[str, object]) -> tuple[int, ...]:
+    if client == "rust":
+        process = handles.get("process")
+        pid = getattr(process, "pid", None)
+    else:
+        app = handles.get("app")
+        pid = getattr(app, "process", None)
+        pid = pid() if callable(pid) else pid
+    return (int(pid),) if isinstance(pid, int) and pid > 0 else ()
+
+
+def _client_mapping_ports(client: str, args: argparse.Namespace) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    if client == "rust":
+        return (args.rust_ed2k_port,), (args.rust_kad_port,)
+    return (args.mfc_ed2k_port,), (args.mfc_kad_port,)
+
+
+def _wait_for_mapping_state(
+    *,
+    local_address: str,
+    tcp_ports: tuple[int, ...],
+    udp_ports: tuple[int, ...],
+    expected_mapped: bool,
+    timeout_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, object]:
+    """Poll exact campaign ports and retain only endpoint-free UPnP evidence."""
+
+    deadline = monotonic() + timeout_seconds
+    latest: dict[str, object] = {
+        "expectedMapped": expected_mapped,
+        "expectedCount": len(tcp_ports) + len(udp_ports),
+        "observedStatus": "unavailable",
+        "passed": False,
+    }
+    while True:
+        try:
+            audit = verify_upnp_port_mappings(
+                local_address,
+                tcp_ports=tcp_ports,
+                udp_ports=udp_ports,
+                expected_mapped=expected_mapped,
+            )
+            return {"available": True, **audit.sanitized_counts()}
+        except UpnpMappingAuditError as exc:
+            latest = {"available": True, **exc.audit.sanitized_counts()}
+        except RuntimeError:
+            latest = {
+                "available": False,
+                "expectedMapped": expected_mapped,
+                "expectedCount": len(tcp_ports) + len(udp_ports),
+                "observedStatus": "unavailable",
+                "passed": False,
+            }
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return latest
+        sleep(min(2.0, remaining))
 
 
 def _resolve_native_capture_interface(local_address: str, override: str | None):
@@ -426,6 +535,7 @@ def _verify_native_downloads(
     fixtures: list[dict[str, object]],
     incoming_dir: Path,
     timeout_seconds: float,
+    marker_writer: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Wait for all fixtures under one total deadline and return local/private evidence."""
 
@@ -447,8 +557,21 @@ def _verify_native_downloads(
                 interval_seconds=2.0,
             )
         except RuntimeError:
-            public_summary.append({"actionId": action.id, "status": "incomplete"})
-            private_evidence.append({"actionId": action.id, "status": "incomplete"})
+            status = "invalid" if candidate.is_file() else "incomplete"
+            public_summary.append({"actionId": action.id, "status": status})
+            private_evidence.append({"actionId": action.id, "status": status})
+            if marker_writer is not None:
+                marker_writer(
+                    {
+                        "schema": scripted_actions.MARKER_SCHEMA,
+                        "marker": "end",
+                        "actionId": action.id,
+                        "kind": "download",
+                        "terminal": True,
+                        "status": status,
+                        "ts_utc": scripted_actions.utc_now_iso(),
+                    }
+                )
             continue
         public_summary.append({"actionId": action.id, **verification.sanitized_result()})
         private_evidence.append(
@@ -462,7 +585,83 @@ def _verify_native_downloads(
                 "sha256": verification.sha256,
             }
         )
+        if marker_writer is not None:
+            marker_writer(
+                {
+                    "schema": scripted_actions.MARKER_SCHEMA,
+                    "marker": "end",
+                    "actionId": action.id,
+                    "kind": "download",
+                    "terminal": True,
+                    "status": "verified",
+                    "ts_utc": scripted_actions.utc_now_iso(),
+                }
+            )
     return private_evidence, public_summary
+
+
+def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
+    """Count distinct regular files under the approved roots without retaining paths."""
+
+    files: set[str] = set()
+    for root in shared_roots:
+        path = Path(str(root["path"]))
+        try:
+            for candidate in path.rglob("*"):
+                if candidate.is_file():
+                    files.add(str(candidate.resolve()).casefold())
+        except OSError as exc:
+            raise RuntimeError("Could not enumerate an approved shared root.") from exc
+    return len(files)
+
+
+def _shared_runtime_state(client: str, payload: dict[str, object]) -> tuple[int, int]:
+    data = _status_data(payload)
+    if client == "mfc":
+        runtime = data.get("runtimeDiagnostics")
+        data = runtime if isinstance(runtime, dict) else {}
+    try:
+        return int(data.get("sharedFileCount") or 0), int(data.get("sharedHashingCount") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Client returned invalid shared-inventory counters.") from exc
+
+
+def _wait_for_shared_inventory(
+    *,
+    client: str,
+    base_url: str,
+    api_key: str,
+    expected_count: int,
+    timeout_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, object]:
+    """Wait until every approved local file is hashed and advertised."""
+
+    if expected_count <= 0:
+        return {"ready": False, "expectedFileCount": expected_count, "advertisedFileCount": 0}
+    deadline = monotonic() + timeout_seconds
+    latest = (0, 0)
+    status_path = "/api/v1/stats" if client == "rust" else "/api/v1/status"
+    while True:
+        latest = _shared_runtime_state(client, _http(base_url, api_key, status_path))
+        advertised, hashing = latest
+        if advertised >= expected_count and hashing == 0:
+            return {
+                "ready": True,
+                "expectedFileCount": expected_count,
+                "advertisedFileCount": advertised,
+                "hashingFileCount": hashing,
+            }
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return {
+                "ready": False,
+                "expectedFileCount": expected_count,
+                "advertisedFileCount": advertised,
+                "hashingFileCount": hashing,
+            }
+        sleep(min(2.0, remaining))
 
 
 def _connectivity_state(client: str, payload: dict, expected_case: str) -> dict[str, object]:
@@ -503,6 +702,10 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--hold-poll-seconds must be > 0.")
     if args.download_timeout_seconds <= 0:
         raise RuntimeError("--download-timeout-seconds must be > 0.")
+    if args.share_ready_timeout_seconds <= 0:
+        raise RuntimeError("--share-ready-timeout-seconds must be > 0.")
+    if args.upnp_audit_timeout_seconds <= 0:
+        raise RuntimeError("--upnp-audit-timeout-seconds must be > 0.")
     client = args.client
     api_key = RUST_API_KEY if client == "rust" else MFC_API_KEY
     rest_port = args.rest_port or (4731 if client == "rust" else 4732)
@@ -572,7 +775,13 @@ def main(argv: list[str] | None = None) -> int:
     completion_evidence: list[dict[str, object]] = []
     completion_summary: list[dict[str, object]] = []
     connectivity_state: dict[str, object] | None = None
+    sharing_state: dict[str, object] | None = None
     legacy_audits: dict[str, object] = {}
+    client_audits: dict[str, object] = {}
+    forbidden_root_fingerprints_before = ()
+    upnp_audits: dict[str, object] = {}
+    network_audit_failure = False
+    mapping_tcp_ports, mapping_udp_ports = _client_mapping_ports(client, args)
     capture = None
     capture_result = None
     network_stack = contextlib.ExitStack()
@@ -588,7 +797,18 @@ def main(argv: list[str] | None = None) -> int:
             },
             forbidden_roots,
         )
+        client_audits["before"] = _require_no_other_clients()
         legacy_audits["before"] = _require_clean_legacy_audit(forbidden_roots)
+        forbidden_root_fingerprints_before = fingerprint_forbidden_roots(forbidden_roots)
+        upnp_audits["before"] = _wait_for_mapping_state(
+            local_address=rest_addr,
+            tcp_ports=mapping_tcp_ports,
+            udp_ports=mapping_udp_ports,
+            expected_mapped=False,
+            timeout_seconds=args.upnp_audit_timeout_seconds,
+        )
+        if not upnp_audits["before"].get("passed"):
+            raise RuntimeError("Campaign ports are not proven free of stale UPnP mappings.")
         capture_interface = _resolve_native_capture_interface(
             rest_addr,
             args.capture_interface or native_config.capture_interface,
@@ -608,12 +828,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         try:
+            relevant_udp_ports = (*mapping_udp_ports, 1900)
+            if client == "mfc":
+                relevant_udp_ports = (*relevant_udp_ports, args.mfc_server_udp_port)
             capture = network_stack.enter_context(
                 ManagedDumpcapCapture(
                     output_path=report_dir / "native-capture.pcapng",
                     capture_filter=f"host {rest_addr} and not tcp port {rest_port}",
                     interface=capture_interface,
                     maximum_size_kib=args.capture_max_size_kib,
+                    inspection_hook=make_tshark_frame_inspection_hook(
+                        relevant_tcp_ports=(
+                            *mapping_tcp_ports,
+                            int(OPERATOR_SERVER.rsplit(":", 1)[1]),
+                        ),
+                        relevant_udp_ports=relevant_udp_ports,
+                    ),
                     summary_hook=make_tshark_protocol_summary_hook(),
                 )
             )
@@ -669,10 +899,39 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 forbidden_roots,
             )
+            owned_pids = _owned_process_ids(client, handles)
+            if not owned_pids:
+                raise RuntimeError("Could not identify the campaign-owned client process.")
+            client_audits["running"] = _require_no_other_clients(allowed_pids=owned_pids)
             legacy_audits["running"] = _require_clean_legacy_audit(forbidden_roots)
 
         kad_ok = ensure_kad(base_url, api_key)
         log(f"{client} up: {base_url}  operator={OPERATOR_SERVER}  kad={kad_ok}")
+
+        if native_config is not None:
+            upnp_audits["active"] = _wait_for_mapping_state(
+                local_address=rest_addr,
+                tcp_ports=mapping_tcp_ports,
+                udp_ports=mapping_udp_ports,
+                expected_mapped=args.connectivity == "upnp",
+                timeout_seconds=args.upnp_audit_timeout_seconds,
+            )
+
+        if native_config is not None:
+            expected_shared_files = _approved_shared_file_count(shared_roots)
+            sharing_state = _wait_for_shared_inventory(
+                client=client,
+                base_url=base_url,
+                api_key=api_key,
+                expected_count=expected_shared_files,
+                timeout_seconds=args.share_ready_timeout_seconds,
+            )
+            log(
+                "shared inventory: "
+                f"ready={sharing_state['ready']} "
+                f"advertised={sharing_state['advertisedFileCount']}/"
+                f"{sharing_state['expectedFileCount']}"
+            )
 
         markers_path = report_dir / "markers.jsonl"
         with markers_path.open("w", encoding="utf-8") as fh:
@@ -720,6 +979,7 @@ def main(argv: list[str] | None = None) -> int:
                         fixtures=download_fixtures,
                         incoming_dir=Path(handles["incomingDir"]),
                         timeout_seconds=args.download_timeout_seconds,
+                        marker_writer=_write,
                     )
         if args.skip_actions:
             log("actions skipped; no post-action settle")
@@ -751,8 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         results_meta = {
-            "client": client, "campaign": campaign, "baseUrl": base_url,
-            "operator": OPERATOR_SERVER, "kadConnected": kad_ok,
+            "client": client, "campaign": campaign, "kadConnected": kad_ok,
             "restPort": rest_port, "obfuscation": obfuscation,
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
@@ -766,12 +1025,14 @@ def main(argv: list[str] | None = None) -> int:
             "actionResults": results,
             "nativeInputSummary": input_summary,
             "nativeCompletionSummary": completion_summary,
+            "nativeSharingState": sharing_state,
+            "upnpMappingAudits": upnp_audits,
             "connectivityState": connectivity_state,
             "nativeCompletionEvidence": (
                 {
                     "required": True,
                     "expectedCount": len(native_fixtures),
-                    "files": [row for row in completion_evidence if row.get("status") == "verified"],
+                    "files": [row for row in completion_summary if row.get("status") == "verified"],
                 }
                 if native_config is not None
                 else None
@@ -779,7 +1040,9 @@ def main(argv: list[str] | None = None) -> int:
             "externalInconclusive": bool(
                 native_config is not None
                 and (
-                    any(row.get("status") != "verified" for row in completion_evidence)
+                    any(row.get("status") == "incomplete" for row in completion_evidence)
+                    or not bool(sharing_state and sharing_state.get("ready"))
+                    or not bool(upnp_audits.get("active", {}).get("passed"))
                     or any(
                         result.get("status") == "ok"
                         and isinstance(result.get("outcome"), dict)
@@ -826,13 +1089,38 @@ def main(argv: list[str] | None = None) -> int:
                 network_stack.close()
 
     if native_config is not None:
+        upnp_audits["after"] = _wait_for_mapping_state(
+            local_address=rest_addr,
+            tcp_ports=mapping_tcp_ports,
+            udp_ports=mapping_udp_ports,
+            expected_mapped=False,
+            timeout_seconds=args.upnp_audit_timeout_seconds,
+        )
+        if not upnp_audits["after"].get("passed"):
+            network_audit_failure = True
+        if args.connectivity == "firewalled" and not upnp_audits.get("active", {}).get("passed"):
+            active_status = upnp_audits.get("active", {}).get("observedStatus")
+            network_audit_failure = network_audit_failure or active_status != "unavailable"
+        results_meta["upnpMappingAudits"] = upnp_audits
+        client_audits["after"] = _require_no_other_clients()
         legacy_audits["after"] = _require_clean_legacy_audit(forbidden_roots)
+        metadata_audit = compare_forbidden_root_fingerprints(
+            forbidden_root_fingerprints_before,
+            fingerprint_forbidden_roots(forbidden_roots),
+        )
+        if metadata_audit.changed_root_indices:
+            raise RuntimeError("A configured forbidden legacy root changed during the campaign.")
+        results_meta["clientProcessAudits"] = client_audits
         results_meta["legacyRootAudits"] = legacy_audits
+        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(
+            metadata_audit
+        )
         if capture_result is None:
             raise RuntimeError("Native capture did not produce a validated result.")
         results_meta["nativeCapture"] = {
             "created": True,
             "byteCount": capture_result.byte_count,
+            **capture_result.sanitized_counts(),
             "summaryCreated": capture_result.tshark_summary is not None,
         }
         if capture_result.tshark_summary is not None:
@@ -845,6 +1133,20 @@ def main(argv: list[str] | None = None) -> int:
     # so the buffered action-window records only hit disk on the graceful teardown flush.
     if results_meta:
         (report_dir / "results.json").write_text(json.dumps(results_meta, indent=2), encoding="utf-8")
+    private_completion_path = None
+    if native_config is not None:
+        private_completion_path = report_dir / "completion-private.json"
+        private_completion_path.write_text(
+            json.dumps(
+                {
+                    "required": True,
+                    "expectedCount": len(native_fixtures),
+                    "files": [row for row in completion_evidence if row.get("status") == "verified"],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     dumps_dest = report_dir / "dumps"
     if dump_dir.resolve() != dumps_dest.resolve():
         copied = gather_recording(dump_dir, dumps_dest, run_start)  # MFC: external profile logs
@@ -852,10 +1154,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         in_place = len(list(dumps_dest.glob("*"))) if dumps_dest.exists() else 0
         log(f"recording dumps in place (post-flush): {in_place} file(s)")
-    archive = pack_recording(report_dir)
+    archive = pack_recording(
+        report_dir,
+        incoming_dir=(Path(handles["incomingDir"]) if native_config is not None and handles else None),
+        private_evidence_path=private_completion_path,
+    )
     log(f"recording packed: {archive}")
     if any(result.get("status") != "ok" for result in results_meta.get("actionResults", [])):
         return 2
+    if network_audit_failure:
+        return 2
+    completion_rows = results_meta.get("nativeCompletionSummary") or []
+    if any(row.get("status") == "invalid" for row in completion_rows):
+        return 1
     if results_meta.get("externalInconclusive") is True:
         return 3
     return 0

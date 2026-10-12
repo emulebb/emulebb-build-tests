@@ -9,15 +9,20 @@ from typing import Sequence
 import pytest
 
 from emule_test_harness.native_windows_network import (
+    CaptureFrameStats,
     CaptureInterfaceHints,
+    CaptureSizeLimitReachedError,
     ManagedDumpcapCapture,
+    UpnpMappingAuditError,
     WindowsInboundBlockRules,
     discover_capture_interfaces,
+    make_tshark_frame_inspection_hook,
     make_tshark_protocol_summary_hook,
     parse_dumpcap_interfaces,
     resolve_capture_interface,
     resolve_windows_adapter_hints,
     validate_capture,
+    verify_upnp_port_mappings,
 )
 
 
@@ -47,6 +52,26 @@ class FakeCaptureProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = 1
+
+
+class FakeUpnpClient:
+    def __init__(self, mappings: dict[tuple[int, str], object], *, discovered_count: int = 1) -> None:
+        self.mappings = mappings
+        self.discovered_count = discovered_count
+        self.discoverdelay = 0
+        self.multicastif = ""
+        self.selected = False
+        self.queries: list[tuple[int, str]] = []
+
+    def discover(self) -> int:
+        return self.discovered_count
+
+    def selectigd(self) -> None:
+        self.selected = True
+
+    def getspecificportmapping(self, external_port: int, protocol: str) -> object:
+        self.queries.append((external_port, protocol))
+        return self.mappings.get((external_port, protocol))
 
 
 def completed(command: Sequence[str], *, stdout: str = "") -> subprocess.CompletedProcess[str]:
@@ -176,6 +201,9 @@ def test_managed_capture_starts_stops_validates_and_summarizes(tmp_path: Path) -
         dumpcap_path="dumpcap.exe",
         maximum_size_kib=8192,
         process_factory=factory,
+        inspection_hook=lambda path: CaptureFrameStats(
+            frame_count=3, relevant_frame_count=2, captured_byte_count=144
+        ),
         summary_hook=summary,
     )
 
@@ -194,6 +222,16 @@ def test_managed_capture_starts_stops_validates_and_summarizes(tmp_path: Path) -
     assert process.signals == [getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)]
     assert not process.terminated
     assert result.byte_count == 64
+    assert result.frame_count == 3
+    assert result.relevant_frame_count == 2
+    assert result.captured_byte_count == 144
+    assert result.sanitized_counts() == {
+        "fileByteCount": 64,
+        "frameCount": 3,
+        "relevantFrameCount": 2,
+        "capturedByteCount": 144,
+        "sizeLimitReached": False,
+    }
     assert result.tshark_summary == "protocol hierarchy"
     assert summarized == [capture_path.resolve()]
 
@@ -212,6 +250,9 @@ def test_managed_capture_stops_child_when_body_raises(tmp_path: Path) -> None:
             capture_filter="udp",
             interface="2",
             process_factory=factory,
+            inspection_hook=lambda path: CaptureFrameStats(
+                frame_count=1, relevant_frame_count=1, captured_byte_count=60
+            ),
         ):
             raise RuntimeError("campaign failed")
 
@@ -258,6 +299,227 @@ def test_tshark_summary_hook_uses_injected_command(tmp_path: Path) -> None:
 
     assert hook(capture_path) == "protocol hierarchy"
     assert commands == [("tshark.exe", "-r", str(capture_path), "-q", "-z", "io,phs")]
+
+
+def test_tshark_frame_inspection_returns_sanitized_counts(tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(tuple(command))
+        return completed(command, stdout="60\n128\n72\n")
+
+    capture_path = tmp_path / "capture.pcapng"
+    hook = make_tshark_frame_inspection_hook(tshark_path="tshark.exe", run_command=runner)
+
+    assert hook(capture_path) == CaptureFrameStats(
+        frame_count=3, relevant_frame_count=3, captured_byte_count=260
+    )
+    assert commands == [
+        (
+            "tshark.exe",
+            "-n",
+            "-r",
+            str(capture_path),
+            "-T",
+            "fields",
+            "-e",
+            "frame.cap_len",
+            "-e",
+            "tcp.srcport",
+            "-e",
+            "tcp.dstport",
+            "-e",
+            "udp.srcport",
+            "-e",
+            "udp.dstport",
+            "-E",
+            "separator=,",
+        )
+    ]
+
+
+def test_tshark_frame_inspection_rejects_header_only_capture(tmp_path: Path) -> None:
+    hook = make_tshark_frame_inspection_hook(
+        run_command=lambda command: completed(command, stdout=""),
+    )
+
+    with pytest.raises(RuntimeError, match="contains no frames"):
+        hook(tmp_path / "header-only.pcapng")
+
+
+def test_tshark_frame_inspection_counts_only_campaign_ports(tmp_path: Path) -> None:
+    hook = make_tshark_frame_inspection_hook(
+        relevant_tcp_ports=(4661, 4662),
+        relevant_udp_ports=(1900, 4672),
+        run_command=lambda command: completed(
+            command,
+            stdout="60,50000,443,,\n72,,,4672,53\n80,50001,80,,\n",
+        ),
+    )
+
+    assert hook(tmp_path / "capture.pcapng") == CaptureFrameStats(
+        frame_count=3,
+        relevant_frame_count=1,
+        captured_byte_count=212,
+    )
+
+
+def test_tshark_frame_inspection_propagates_truncated_capture_failure(tmp_path: Path) -> None:
+    def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(2, tuple(command), stderr="appears to have been cut short")
+
+    hook = make_tshark_frame_inspection_hook(run_command=runner)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        hook(tmp_path / "truncated.pcapng")
+
+
+def test_managed_capture_rejects_size_limit_autostop_with_counts(tmp_path: Path) -> None:
+    capture_path = tmp_path / "limited.pcapng"
+    process = FakeCaptureProcess()
+
+    def factory(command: Sequence[str]) -> FakeCaptureProcess:
+        capture_path.write_bytes(b"x" * 64)
+        return process
+
+    capture = ManagedDumpcapCapture(
+        output_path=capture_path,
+        capture_filter="udp",
+        interface="2",
+        maximum_size_kib=8,
+        process_factory=factory,
+        inspection_hook=lambda path: CaptureFrameStats(
+            frame_count=2, relevant_frame_count=2, captured_byte_count=120
+        ),
+    ).start()
+    process.returncode = 0
+
+    with pytest.raises(CaptureSizeLimitReachedError) as raised:
+        capture.stop()
+
+    assert raised.value.result.sanitized_counts() == {
+        "fileByteCount": 64,
+        "frameCount": 2,
+        "relevantFrameCount": 2,
+        "capturedByteCount": 120,
+        "sizeLimitReached": True,
+    }
+
+
+def test_upnp_mapping_audit_verifies_tcp_and_udp_target_local_address() -> None:
+    client = FakeUpnpClient(
+        {
+            (4662, "TCP"): ("192.0.2.18", 4662, "private description", True, "", 0),
+            (4672, "UDP"): ("192.0.2.18", 4672, "private description", True, "", 0),
+        }
+    )
+
+    audit = verify_upnp_port_mappings(
+        "192.0.2.18",
+        tcp_ports=(4662,),
+        udp_ports=(4672,),
+        expected_mapped=True,
+        client_factory=lambda: client,
+        discovery_delay_ms=350,
+    )
+
+    assert client.discoverdelay == 350
+    assert client.multicastif == "192.0.2.18"
+    assert client.selected
+    assert client.queries == [(4662, "TCP"), (4672, "UDP")]
+    assert audit.sanitized_counts() == {
+        "expectedMapped": True,
+        "expectedCount": 2,
+        "presentCount": 2,
+        "matchingLocalCount": 2,
+        "foreignTargetCount": 0,
+        "missingCount": 0,
+        "observedStatus": "mapped",
+        "passed": True,
+    }
+    assert "192.0.2.18" not in str(audit.sanitized_counts())
+    assert "private description" not in str(audit.sanitized_counts())
+
+
+@pytest.mark.parametrize("case_name", ["after-shutdown", "firewalled"])
+def test_upnp_mapping_audit_requires_exact_ports_absent(case_name: str) -> None:
+    client = FakeUpnpClient({})
+
+    audit = verify_upnp_port_mappings(
+        "192.0.2.18",
+        tcp_ports=(4662,),
+        udp_ports=(4672,),
+        expected_mapped=False,
+        client_factory=lambda: client,
+    )
+
+    assert case_name
+    assert audit.observed_status == "absent"
+    assert audit.present_count == 0
+    assert audit.passed
+
+
+def test_upnp_mapping_audit_rejects_missing_or_foreign_mapping_without_leaking_target() -> None:
+    client = FakeUpnpClient(
+        {
+            (4662, "TCP"): ("198.51.100.9", 4662, "foreign private description", True, "", 0),
+        }
+    )
+
+    with pytest.raises(UpnpMappingAuditError) as raised:
+        verify_upnp_port_mappings(
+            "192.0.2.18",
+            tcp_ports=(4662,),
+            udp_ports=(4672,),
+            expected_mapped=True,
+            client_factory=lambda: client,
+        )
+
+    assert raised.value.audit.observed_status == "mismatched"
+    assert raised.value.audit.foreign_target_count == 1
+    assert raised.value.audit.missing_count == 1
+    assert "198.51.100.9" not in str(raised.value)
+    assert "foreign private description" not in str(raised.value)
+    assert "198.51.100.9" not in str(raised.value.audit.sanitized_counts())
+
+
+def test_upnp_mapping_audit_rejects_any_mapping_when_absence_is_required() -> None:
+    client = FakeUpnpClient({(4662, "TCP"): ("192.0.2.18", 4662, "description", True, "", 0)})
+
+    with pytest.raises(UpnpMappingAuditError) as raised:
+        verify_upnp_port_mappings(
+            "192.0.2.18",
+            tcp_ports=(4662,),
+            udp_ports=(4672,),
+            expected_mapped=False,
+            client_factory=lambda: client,
+        )
+
+    assert raised.value.audit.present_count == 1
+    assert not raised.value.audit.passed
+
+
+def test_upnp_mapping_audit_requires_gateway_and_valid_inputs() -> None:
+    with pytest.raises(RuntimeError, match="did not discover"):
+        verify_upnp_port_mappings(
+            "192.0.2.18",
+            tcp_ports=(4662,),
+            expected_mapped=True,
+            client_factory=lambda: FakeUpnpClient({}, discovered_count=0),
+        )
+    with pytest.raises(ValueError, match="X_LOCAL_IP"):
+        verify_upnp_port_mappings(
+            "not-an-address",
+            tcp_ports=(4662,),
+            expected_mapped=True,
+            client_factory=lambda: FakeUpnpClient({}),
+        )
+    with pytest.raises(ValueError, match="at least one"):
+        verify_upnp_port_mappings(
+            "192.0.2.18",
+            expected_mapped=False,
+            client_factory=lambda: FakeUpnpClient({}),
+        )
 
 
 def test_firewall_owner_adds_unique_blocks_and_always_cleans_up() -> None:

@@ -11,12 +11,29 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 
 Command = tuple[str, ...]
 CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 ProcessFactory = Callable[[Sequence[str]], subprocess.Popen[bytes]]
 CaptureSummaryHook = Callable[[Path], str]
+CaptureInspectionHook = Callable[[Path], "CaptureFrameStats"]
+
+
+class MiniupnpcClient(Protocol):
+    """Subset of miniupnpc used for read-only mapping audits."""
+
+    discoverdelay: int
+    multicastif: str
+
+    def discover(self) -> int: ...
+
+    def selectigd(self) -> None: ...
+
+    def getspecificportmapping(self, external_port: int, protocol: str) -> object: ...
+
+
+MiniupnpcFactory = Callable[[], MiniupnpcClient]
 
 PCAPNG_MINIMUM_BYTES = 28
 _DUMPCAP_INTERFACE_RE = re.compile(r"^\s*(?P<index>\d+)\.\s+(?P<device>\S+)(?:\s+\((?P<description>.*)\))?\s*$")
@@ -53,13 +70,96 @@ class CaptureResult:
 
     output_path: Path
     byte_count: int
+    frame_count: int
+    relevant_frame_count: int
+    captured_byte_count: int
+    size_limit_reached: bool
     tshark_summary: str | None
+
+    def sanitized_counts(self) -> dict[str, int | bool]:
+        """Returns endpoint-free metrics suitable for retained diff evidence."""
+
+        return {
+            "fileByteCount": self.byte_count,
+            "frameCount": self.frame_count,
+            "relevantFrameCount": self.relevant_frame_count,
+            "capturedByteCount": self.captured_byte_count,
+            "sizeLimitReached": self.size_limit_reached,
+        }
+
+
+@dataclass(frozen=True)
+class CaptureFrameStats:
+    """Sanitized frame totals parsed from a completed capture."""
+
+    frame_count: int
+    relevant_frame_count: int
+    captured_byte_count: int
+
+
+class CaptureSizeLimitReachedError(RuntimeError):
+    """Reports a capture stopped by or at its configured size boundary."""
+
+    def __init__(self, result: CaptureResult) -> None:
+        super().__init__("capture reached its configured size limit before managed teardown")
+        self.result = result
+
+
+@dataclass(frozen=True)
+class UpnpMappingAudit:
+    """Endpoint-free result for exact-port UPnP mapping verification."""
+
+    expected_mapped: bool
+    expected_count: int
+    present_count: int
+    matching_local_count: int
+    foreign_target_count: int
+    missing_count: int
+    observed_status: str
+    passed: bool
+
+    def sanitized_counts(self) -> dict[str, int | bool | str]:
+        """Returns only counts and status suitable for retained evidence."""
+
+        return {
+            "expectedMapped": self.expected_mapped,
+            "expectedCount": self.expected_count,
+            "presentCount": self.present_count,
+            "matchingLocalCount": self.matching_local_count,
+            "foreignTargetCount": self.foreign_target_count,
+            "missingCount": self.missing_count,
+            "observedStatus": self.observed_status,
+            "passed": self.passed,
+        }
+
+
+class UpnpMappingAuditError(RuntimeError):
+    """Carries sanitized mapping counts when an expected state is not met."""
+
+    def __init__(self, audit: UpnpMappingAudit) -> None:
+        expected = "mapped" if audit.expected_mapped else "absent"
+        super().__init__(
+            "UPnP mapping audit failed: "
+            f"expected={expected} observed={audit.observed_status} "
+            f"present={audit.present_count}/{audit.expected_count}"
+        )
+        self.audit = audit
 
 
 def run_checked(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     """Runs one external command and raises when it fails."""
 
     return subprocess.run(tuple(command), check=True, capture_output=True, text=True)
+
+
+def create_miniupnpc_client() -> MiniupnpcClient:
+    """Creates the optional miniupnpc client with a clear missing-tool error."""
+
+    try:
+        import miniupnpc
+    except ImportError as error:
+        raise RuntimeError("miniupnpc is required for native UPnP mapping audits") from error
+    return miniupnpc.UPnP()
 
 
 def start_background_process(command: Sequence[str]) -> subprocess.Popen[bytes]:
@@ -254,6 +354,151 @@ def make_tshark_protocol_summary_hook(
     return summarize
 
 
+def make_tshark_frame_inspection_hook(
+    *,
+    tshark_path: str = "tshark",
+    run_command: CommandRunner = run_checked,
+    relevant_tcp_ports: Sequence[int] = (),
+    relevant_udp_ports: Sequence[int] = (),
+) -> CaptureInspectionHook:
+    """Returns a strict parser/count hook that also validates pcap readability."""
+
+    tcp_ports = set(_normalize_ports(relevant_tcp_ports))
+    udp_ports = set(_normalize_ports(relevant_udp_ports))
+
+    def inspect(capture_path: Path) -> CaptureFrameStats:
+        result = run_command(
+            (
+                tshark_path,
+                "-n",
+                "-r",
+                str(capture_path),
+                "-T",
+                "fields",
+                "-e",
+                "frame.cap_len",
+                "-e",
+                "tcp.srcport",
+                "-e",
+                "tcp.dstport",
+                "-e",
+                "udp.srcport",
+                "-e",
+                "udp.dstport",
+                "-E",
+                "separator=,",
+            )
+        )
+        captured_lengths: list[int] = []
+        relevant_frame_count = 0
+        for line_number, line in enumerate(result.stdout.splitlines(), start=1):
+            value = line.strip()
+            if not value:
+                continue
+            fields = value.split(",")
+            try:
+                captured_length = int(fields[0], 10)
+            except ValueError as error:
+                raise RuntimeError(f"tshark returned an invalid frame length on line {line_number}") from error
+            if captured_length < 0:
+                raise RuntimeError(f"tshark returned a negative frame length on line {line_number}")
+            captured_lengths.append(captured_length)
+            if not tcp_ports and not udp_ports:
+                relevant_frame_count += 1
+                continue
+            port_fields = fields[1:5] + [""] * max(0, 5 - len(fields))
+            try:
+                observed_tcp = {int(value) for value in port_fields[:2] if value}
+                observed_udp = {int(value) for value in port_fields[2:4] if value}
+            except ValueError as error:
+                raise RuntimeError(f"tshark returned an invalid port on line {line_number}") from error
+            if observed_tcp & tcp_ports or observed_udp & udp_ports:
+                relevant_frame_count += 1
+        if not captured_lengths:
+            raise RuntimeError("capture contains no frames")
+        return CaptureFrameStats(
+            frame_count=len(captured_lengths),
+            relevant_frame_count=relevant_frame_count,
+            captured_byte_count=sum(captured_lengths),
+        )
+
+    return inspect
+
+
+def verify_upnp_port_mappings(
+    local_address: str,
+    *,
+    tcp_ports: Sequence[int] = (),
+    udp_ports: Sequence[int] = (),
+    expected_mapped: bool,
+    client_factory: MiniupnpcFactory = create_miniupnpc_client,
+    discovery_delay_ms: int = 200,
+) -> UpnpMappingAudit:
+    """Verifies exact TCP/UDP mappings without retaining endpoint details.
+
+    Use ``expected_mapped=True`` while the UPnP client is active. Use
+    ``expected_mapped=False`` after shutdown and throughout firewalled cases.
+    """
+
+    try:
+        normalized_address = str(ipaddress.IPv4Address(local_address))
+    except ipaddress.AddressValueError as error:
+        raise ValueError("X_LOCAL_IP must be a valid IPv4 address") from error
+    if discovery_delay_ms <= 0:
+        raise ValueError("discovery_delay_ms must be positive")
+    expected = tuple(("TCP", port) for port in _normalize_ports(tcp_ports)) + tuple(
+        ("UDP", port) for port in _normalize_ports(udp_ports)
+    )
+    if not expected:
+        raise ValueError("at least one TCP or UDP port is required")
+
+    client = client_factory()
+    client.discoverdelay = discovery_delay_ms
+    client.multicastif = normalized_address
+    discovered_count = client.discover()
+    if discovered_count <= 0:
+        raise RuntimeError("miniupnpc did not discover a UPnP gateway")
+    client.selectigd()
+
+    present_count = 0
+    matching_local_count = 0
+    foreign_target_count = 0
+    for protocol, port in expected:
+        mapping = client.getspecificportmapping(port, protocol)
+        if mapping is None:
+            continue
+        present_count += 1
+        target = mapping[0] if isinstance(mapping, (tuple, list)) and mapping else None
+        if isinstance(target, str) and target.strip() == normalized_address:
+            matching_local_count += 1
+        else:
+            foreign_target_count += 1
+
+    missing_count = len(expected) - present_count
+    if present_count == 0:
+        observed_status = "absent"
+    elif matching_local_count == len(expected) and foreign_target_count == 0:
+        observed_status = "mapped"
+    elif foreign_target_count:
+        observed_status = "mismatched"
+    else:
+        observed_status = "partial"
+    passed = observed_status == ("mapped" if expected_mapped else "absent")
+    audit = UpnpMappingAudit(
+        expected_mapped=expected_mapped,
+        expected_count=len(expected),
+        present_count=present_count,
+        matching_local_count=matching_local_count,
+        foreign_target_count=foreign_target_count,
+        missing_count=missing_count,
+        observed_status=observed_status,
+        passed=passed,
+    )
+    if not passed:
+        raise UpnpMappingAuditError(audit)
+    return audit
+
+
 class ManagedDumpcapCapture:
     """Owns dumpcap readiness, graceful teardown, validation, and summarization."""
 
@@ -269,6 +514,7 @@ class ManagedDumpcapCapture:
         stop_timeout_seconds: float = 10.0,
         minimum_bytes: int = PCAPNG_MINIMUM_BYTES,
         process_factory: ProcessFactory = start_background_process,
+        inspection_hook: CaptureInspectionHook | None = None,
         summary_hook: CaptureSummaryHook | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -288,7 +534,9 @@ class ManagedDumpcapCapture:
         self.readiness_timeout_seconds = readiness_timeout_seconds
         self.stop_timeout_seconds = stop_timeout_seconds
         self.minimum_bytes = minimum_bytes
+        self.maximum_size_kib = maximum_size_kib
         self._process_factory = process_factory
+        self._inspection_hook = inspection_hook or make_tshark_frame_inspection_hook()
         self._summary_hook = summary_hook
         self._monotonic = monotonic
         self._sleep = sleep
@@ -334,10 +582,38 @@ class ManagedDumpcapCapture:
             return self._result
         if self._process is None:
             raise RuntimeError("capture session has not been started")
+        return_code_before_stop = self._process.poll()
         self._stop_process()
         byte_count = validate_capture(self.output_path, minimum_bytes=self.minimum_bytes)
+        frame_stats = self._inspection_hook(self.output_path)
+        if frame_stats.frame_count <= 0:
+            raise RuntimeError("capture contains no frames")
+        if frame_stats.relevant_frame_count <= 0:
+            raise RuntimeError("capture contains no campaign-relevant frames")
+        if frame_stats.captured_byte_count < 0:
+            raise RuntimeError("capture has an invalid captured-byte count")
         summary = self._summary_hook(self.output_path) if self._summary_hook is not None else None
-        self._result = CaptureResult(self.output_path, byte_count, summary)
+        configured_size_bytes = self.maximum_size_kib * 1024 if self.maximum_size_kib is not None else None
+        size_limit_reached = bool(
+            configured_size_bytes is not None
+            and (return_code_before_stop == 0 or byte_count >= configured_size_bytes)
+        )
+        result = CaptureResult(
+            output_path=self.output_path,
+            byte_count=byte_count,
+            frame_count=frame_stats.frame_count,
+            relevant_frame_count=frame_stats.relevant_frame_count,
+            captured_byte_count=frame_stats.captured_byte_count,
+            size_limit_reached=size_limit_reached,
+            tshark_summary=summary,
+        )
+        if return_code_before_stop is not None and return_code_before_stop != 0:
+            raise RuntimeError(f"dumpcap exited before managed teardown (exit code {return_code_before_stop})")
+        if return_code_before_stop == 0 and self.maximum_size_kib is None:
+            raise RuntimeError("dumpcap exited before managed teardown")
+        if size_limit_reached:
+            raise CaptureSizeLimitReachedError(result)
+        self._result = result
         return self._result
 
     def _stop_process(self) -> None:

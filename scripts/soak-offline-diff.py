@@ -46,9 +46,13 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
     diag: list[dict[str, Any]] = []
     packets: list[dict[str, Any]] = []
     meta: dict[str, Any] = {}
+    native_capture_sizes: list[int] = []
     with zipfile.ZipFile(zip_path) as zf:
         for name in zf.namelist():
             lower = name.lower()
+            if lower.endswith("native-capture.pcapng"):
+                native_capture_sizes.append(zf.getinfo(name).file_size)
+                continue
             if lower.endswith("markers.jsonl"):
                 for line in zf.read(name).decode("utf-8", "replace").splitlines():
                     line = line.strip()
@@ -76,7 +80,52 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
                     diag.append(record)
                 else:
                     packets.append(record)
-    return {"markers": markers, "diag": diag, "packets": packets, "meta": meta}
+    return {
+        "markers": markers,
+        "diag": diag,
+        "packets": packets,
+        "meta": meta,
+        "nativeCaptureSizes": native_capture_sizes,
+    }
+
+
+def _native_capture_evidence(recording: dict[str, Any]) -> dict[str, Any]:
+    """Validate retained frame counts against the packed native capture entry."""
+
+    sizes = recording.get("nativeCaptureSizes")
+    section = recording.get("meta", {}).get("nativeCapture")
+    findings: list[str] = []
+    if not isinstance(sizes, list) or len(sizes) != 1:
+        findings.append("native-capture-entry-count")
+        packed_size = 0
+    else:
+        packed_size = sizes[0] if isinstance(sizes[0], int) else 0
+    if not isinstance(section, dict):
+        findings.append("native-capture-metadata-missing")
+        section = {}
+    frame_count = section.get("frameCount")
+    relevant_frame_count = section.get("relevantFrameCount")
+    captured_bytes = section.get("capturedByteCount")
+    file_bytes = section.get("fileByteCount")
+    if not isinstance(frame_count, int) or frame_count <= 0:
+        findings.append("native-capture-no-frames")
+    if not isinstance(relevant_frame_count, int) or relevant_frame_count <= 0:
+        findings.append("native-capture-no-relevant-frames")
+    if not isinstance(captured_bytes, int) or captured_bytes <= 0:
+        findings.append("native-capture-no-captured-bytes")
+    if section.get("sizeLimitReached") is not False:
+        findings.append("native-capture-size-limit")
+    if not isinstance(file_bytes, int) or file_bytes < 28 or file_bytes != packed_size:
+        findings.append("native-capture-size-mismatch")
+    return {
+        "ok": not findings,
+        "frameCount": frame_count if isinstance(frame_count, int) else 0,
+        "relevantFrameCount": (
+            relevant_frame_count if isinstance(relevant_frame_count, int) else 0
+        ),
+        "capturedByteCount": captured_bytes if isinstance(captured_bytes, int) else 0,
+        "findings": findings,
+    }
 
 
 _SEARCH_ACTION_ID_METHOD = re.compile(r"^search-(?P<method>[a-z]+)-")
@@ -114,6 +163,72 @@ def _action_windows(markers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             slot["t1"] = stamp
             slot["status"] = marker.get("status")
     return windows
+
+
+def _native_action_contract(recording: dict[str, Any]) -> dict[str, Any]:
+    """Require the complete native action set, including terminal download markers."""
+
+    summary = recording.get("meta", {}).get("nativeInputSummary")
+    if not isinstance(summary, dict):
+        return {"required": False, "ok": True, "expectedCount": None, "findings": []}
+    download_count = summary.get("ed2k_link_count")
+    if not isinstance(download_count, int) or isinstance(download_count, bool) or download_count <= 0:
+        return {
+            "required": True,
+            "ok": False,
+            "expectedCount": None,
+            "findings": ["native-action-count-invalid"],
+        }
+    expected_count = 3 + download_count
+    expected_ids = {f"action-{index:04d}" for index in range(1, expected_count + 1)}
+    marker_ids = {
+        str(row.get("actionId"))
+        for row in recording.get("markers", [])
+        if isinstance(row, dict) and row.get("actionId")
+    }
+    results = recording.get("meta", {}).get("actionResults")
+    result_ids = {
+        str(row.get("actionId"))
+        for row in results
+        if isinstance(row, dict) and row.get("actionId")
+    } if isinstance(results, list) else set()
+    findings: list[str] = []
+    if marker_ids != expected_ids:
+        findings.append("native-marker-action-set-mismatch")
+    if result_ids != expected_ids:
+        findings.append("native-result-action-set-mismatch")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for marker in recording.get("markers", []):
+        if isinstance(marker, dict) and marker.get("actionId"):
+            grouped.setdefault(str(marker["actionId"]), []).append(marker)
+    for action_id in expected_ids:
+        rows = grouped.get(action_id, [])
+        if not any(row.get("marker") == "begin" for row in rows):
+            findings.append("native-action-begin-missing")
+            break
+        if not any(row.get("marker") == "end" for row in rows):
+            findings.append("native-action-end-missing")
+            break
+    search_methods = {
+        str(row.get("method"))
+        for action_id in ("action-0001", "action-0002", "action-0003")
+        for row in grouped.get(action_id, [])
+        if row.get("marker") == "begin" and row.get("method")
+    }
+    if search_methods != {"server", "global", "kad"}:
+        findings.append("native-search-method-set-mismatch")
+    for index in range(4, expected_count + 1):
+        rows = grouped.get(f"action-{index:04d}", [])
+        if not any(row.get("marker") == "end" and row.get("terminal") is True for row in rows):
+            findings.append("native-download-terminal-marker-missing")
+            break
+    return {
+        "required": True,
+        "ok": not findings,
+        "expectedCount": expected_count,
+        "findings": sorted(set(findings)),
+    }
 
 
 def _diff_one_action(
@@ -157,6 +272,14 @@ def _diff_one_action(
     mfc_diag = soak_action_diff.slice_trace(mfc["diag"], m0, m1)
 
     diag_diff = diag_event_diff.diff_traces(rust_diag, mfc_diag)
+    sched_rows = [
+        row for row in diag_diff.get("families", []) if row.get("family") == "sched"
+    ]
+    state_machine_ok = all(row.get("ok") is True for row in sched_rows) if sched_rows else None
+    state_machine_totals = {
+        key: sum(int(row.get("totals", {}).get(key) or 0) for row in sched_rows)
+        for key in ("sharedKeys", "matchedKeys", "transitionDivergences", "invariantViolations")
+    }
     packet_diff = packet_trace_diff.diff_traces(rust_pkt, mfc_pkt) if (rust_pkt or mfc_pkt) else None
     action_coverage = soak_action_diff.build_action_coverage(
         kind,
@@ -180,7 +303,11 @@ def _diff_one_action(
         # never true - transition sequences differ. The real parity signal is oracle
         # CONFORMANCE (rust's diag is a superset of the oracle's) over the action window.
         # The strict family-match + server-channel opcode gate are informational only.
-        verdict = "conformant" if conf["conformant"] else "divergence"
+        verdict = (
+            "conformant"
+            if conf["conformant"] and state_machine_ok is not False
+            else "divergence"
+        )
     return {
         "kind": kind,
         "method": method,
@@ -194,6 +321,8 @@ def _diff_one_action(
         "diagFamilyOk": bool(family_gate["ok"]),
         "diagFamilyGate": family_gate,
         "diagStrictMatchOk": bool(diag_diff.get("ok")),
+        "stateMachineOk": state_machine_ok,
+        "stateMachineTotals": state_machine_totals,
         "coverageOk": action_coverage.get("ok"),
         "conformanceViolations": conf.get("bodyKeyViolations") or conf.get("violations") or [],
         "rustRecords": {"packets": len(rust_pkt), "diag": len(rust_diag)},
@@ -216,7 +345,7 @@ def _action_error_count(recording: dict[str, Any]) -> int:
 
 def _completion_rows(
     meta: dict[str, Any],
-) -> tuple[bool, int | None, dict[str, tuple[int, str]] | None]:
+) -> tuple[bool, int | None, dict[str, tuple[int, str | None]] | None]:
     """Read opt-in native completion evidence without returning digest-bearing output."""
 
     section = meta.get("nativeCompletionEvidence")
@@ -232,13 +361,14 @@ def _completion_rows(
     files = section.get("files")
     if not isinstance(files, list):
         return True, expected_count, None
-    rows: dict[str, tuple[int, str]] = {}
+    rows: dict[str, tuple[int, str | None]] = {}
     for item in files:
         if not isinstance(item, dict):
             return True, expected_count, None
         action_id = str(item.get("actionId") or "")
         size = item.get("sizeBytes")
-        sha256 = str(item.get("sha256") or "").casefold()
+        raw_sha256 = item.get("sha256")
+        sha256 = str(raw_sha256).casefold() if raw_sha256 is not None else None
         if (
             not action_id
             or action_id in rows
@@ -247,11 +377,27 @@ def _completion_rows(
             or size < 0
             or item.get("sizeVerified") is not True
             or item.get("ed2kVerified") is not True
-            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or (sha256 is not None and re.fullmatch(r"[0-9a-f]{64}", sha256) is None)
         ):
             return True, expected_count, None
         rows[action_id] = (size, sha256)
     return True, expected_count, rows
+
+
+def _completion_statuses(meta: dict[str, Any]) -> dict[str, str] | None:
+    rows = meta.get("nativeCompletionSummary")
+    if not isinstance(rows, list):
+        return None
+    statuses: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        action_id = str(row.get("actionId") or "")
+        status = str(row.get("status") or "")
+        if not action_id or action_id in statuses or status not in {"verified", "incomplete", "invalid"}:
+            return None
+        statuses[action_id] = status
+    return statuses
 
 
 def _compare_native_completions(
@@ -276,6 +422,21 @@ def _compare_native_completions(
 
     assert rust_expected is not None and mfc_expected is not None
     assert rust_rows is not None and mfc_rows is not None
+    rust_statuses = _completion_statuses(rust_meta)
+    mfc_statuses = _completion_statuses(mfc_meta)
+    if rust_statuses is None and len(rust_rows) == rust_expected:
+        rust_statuses = dict.fromkeys(rust_rows, "verified")
+    if mfc_statuses is None and len(mfc_rows) == mfc_expected:
+        mfc_statuses = dict.fromkeys(mfc_rows, "verified")
+    if rust_statuses is None:
+        findings.append("rust-completion-summary-invalid")
+    if mfc_statuses is None:
+        findings.append("mfc-completion-summary-invalid")
+    for statuses in (rust_statuses or {}, mfc_statuses or {}):
+        if "invalid" in statuses.values():
+            findings.append("completion-invalid")
+        if "incomplete" in statuses.values():
+            findings.append("completion-incomplete")
     if rust_expected != mfc_expected:
         findings.append("expected-count-mismatch")
     expected_count = rust_expected if rust_expected == mfc_expected else None
@@ -288,13 +449,19 @@ def _compare_native_completions(
     common = rust_rows.keys() & mfc_rows.keys()
     if any(rust_rows[action_id][0] != mfc_rows[action_id][0] for action_id in common):
         findings.append("completion-size-mismatch")
-    if any(rust_rows[action_id][1] != mfc_rows[action_id][1] for action_id in common):
+    comparable_digests = [
+        action_id
+        for action_id in common
+        if rust_rows[action_id][1] is not None and mfc_rows[action_id][1] is not None
+    ]
+    if any(rust_rows[action_id][1] != mfc_rows[action_id][1] for action_id in comparable_digests):
         findings.append("completion-sha256-mismatch")
     return {
         "required": True,
         "ok": not findings,
         "expectedCount": expected_count,
         "matchedCount": len(common),
+        "digestComparedCount": len(comparable_digests),
         "findings": findings,
     }
 
@@ -310,6 +477,9 @@ def _campaign_verdict(
     kad_coverage_ok: bool,
     secident_dead: bool,
     external_inconclusive: bool,
+    capture_evidence_ok: bool = True,
+    action_contract_ok: bool = True,
+    state_machine_ok: bool = True,
 ) -> dict[str, Any]:
     """Adjudicate one campaign with harness failures taking precedence."""
 
@@ -322,6 +492,10 @@ def _campaign_verdict(
         findings.append("action-errors")
     if scenario_mismatch:
         findings.append("scenario-mismatch")
+    if not capture_evidence_ok:
+        findings.append("native-capture-evidence-failed")
+    if not action_contract_ok:
+        findings.append("native-action-contract-failed")
     if any(row.get("verdict") == "no-window" for row in per_action):
         findings.append("missing-action-windows")
     if (
@@ -331,12 +505,18 @@ def _campaign_verdict(
         findings.append("missing-action-traffic")
     completion_findings = set(completion.get("findings") or [])
     completion_content_divergence = bool(
-        completion_findings & {"completion-size-mismatch", "completion-sha256-mismatch"}
+        completion_findings
+        & {"completion-size-mismatch", "completion-sha256-mismatch", "completion-invalid"}
     )
     completion_incomplete = bool(
         completion_findings
         and completion_findings
-        <= {"rust-completion-count-mismatch", "mfc-completion-count-mismatch"}
+        <= {
+            "rust-completion-count-mismatch",
+            "mfc-completion-count-mismatch",
+            "completion-action-set-mismatch",
+            "completion-incomplete",
+        }
     )
     if (
         completion.get("required")
@@ -351,6 +531,7 @@ def _campaign_verdict(
         divergence = (
             not conformance_ok
             or not kad_coverage_ok
+            or not state_machine_ok
             or secident_dead
             or completion_content_divergence
             or any(
@@ -512,10 +693,24 @@ def main(argv: list[str] | None = None) -> int:
             )
     verdicts = {r["verdict"] for r in per_action}
     completion = _compare_native_completions(rust["meta"], mfc["meta"])
+    capture_evidence = {
+        "rust": _native_capture_evidence(rust),
+        "mfc": _native_capture_evidence(mfc),
+    }
+    action_contract = {
+        "rust": _native_action_contract(rust),
+        "mfc": _native_action_contract(mfc),
+    }
     action_error_count = _action_error_count(rust) + _action_error_count(mfc)
     secident_dead = any(
         row["verdict"] == "secident-dead" for row in secident_report.values()
     )
+    state_machine_rows = [
+        row.get("stateMachineOk")
+        for row in per_action
+        if row.get("stateMachineOk") is not None
+    ]
+    state_machine_ok = bool(state_machine_rows) and all(state_machine_rows)
     external_inconclusive = any(
         side["meta"].get("externalInconclusive") is True for side in (rust, mfc)
     )
@@ -529,6 +724,9 @@ def main(argv: list[str] | None = None) -> int:
         kad_coverage_ok=bool(kad_cov["oracleOk"]),
         secident_dead=secident_dead,
         external_inconclusive=external_inconclusive,
+        capture_evidence_ok=all(row["ok"] for row in capture_evidence.values()),
+        action_contract_ok=all(row["ok"] for row in action_contract.values()),
+        state_machine_ok=state_machine_ok,
     )
     all_parity = adjudication["verdict"] == "parity"
     print(f"  per-action verdicts: {sorted(verdicts)}")
@@ -560,6 +758,12 @@ def main(argv: list[str] | None = None) -> int:
             name for name, row in secident_report.items() if row["verdict"] == "secident-dead"
         ],
         "nativeCompletionComparison": completion,
+        "nativeCaptureEvidence": capture_evidence,
+        "nativeActionContract": action_contract,
+        "stateMachineValidation": {
+            "observedActionCount": len(state_machine_rows),
+            "ok": state_machine_ok,
+        },
         "campaignVerdict": adjudication["verdict"],
         "exitCode": adjudication["exitCode"],
         "campaignFindings": adjudication["findings"],
