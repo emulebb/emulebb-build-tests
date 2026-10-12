@@ -370,6 +370,8 @@ def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
         "advertisedFileCount": 2,
         "hashingFileCount": 0,
         "identitySetMatched": True,
+        "pollReadErrorCount": 0,
+        "maxConsecutivePollReadErrors": 0,
     }
 
 
@@ -431,6 +433,115 @@ def test_shared_inventory_reader_pages_and_retains_only_identity_set(
         "/api/v1/shared-files?offset=0&limit=1",
         "/api/v1/shared-files?offset=1&limit=1",
     ]
+
+
+def test_shared_inventory_wait_retries_a_growing_catalog_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    expected = frozenset({("1" * 32, 10)})
+    replies = iter(
+        [
+            {"data": {"sharedHashingCount": 1}},
+            {
+                "data": {
+                    "items": [{"hash": "1" * 32, "sizeBytes": 10}],
+                    "total": 0,
+                }
+            },
+            {"data": {"sharedHashingCount": 0}},
+            {
+                "data": {
+                    "items": [{"hash": "1" * 32, "sizeBytes": 10}],
+                    "total": 1,
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(module, "_http", lambda *_args, **_kwargs: next(replies))
+    ticks = iter((0.0, 0.0))
+
+    result = module._wait_for_shared_inventory(
+        client="rust",
+        base_url="http://127.0.0.1:1",
+        api_key="test",
+        expected_identities=expected,
+        timeout_seconds=5.0,
+        sleep=lambda _seconds: None,
+        monotonic=lambda: next(ticks),
+    )
+
+    assert result == {
+        "ready": True,
+        "expectedFileCount": 1,
+        "advertisedFileCount": 1,
+        "hashingFileCount": 0,
+        "identitySetMatched": True,
+        "pollReadErrorCount": 1,
+        "maxConsecutivePollReadErrors": 1,
+    }
+
+
+def test_shared_inventory_wait_bounds_persistently_incoherent_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    expected = frozenset({("1" * 32, 10)})
+
+    def request(_base_url: str, _api_key: str, path: str) -> dict[str, object]:
+        if path == "/api/v1/stats":
+            return {"data": {"sharedHashingCount": 1}}
+        return {
+            "data": {
+                "items": [{"hash": "1" * 32, "sizeBytes": 10}],
+                "total": 0,
+            }
+        }
+
+    monkeypatch.setattr(module, "_http", request)
+    monkeypatch.setattr(
+        module, "MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS", 2
+    )
+
+    with pytest.raises(module.SharedInventoryPollingError):
+        module._wait_for_shared_inventory(
+            client="rust",
+            base_url="http://127.0.0.1:1",
+            api_key="test",
+            expected_identities=expected,
+            timeout_seconds=5.0,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: 0.0,
+        )
+
+
+def test_shared_inventory_wait_fails_fast_on_malformed_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    replies = iter(
+        [
+            {"data": {"sharedHashingCount": 1}},
+            {
+                "data": {
+                    "items": [{"hash": "invalid", "sizeBytes": 10}],
+                    "total": 1,
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(module, "_http", lambda *_args, **_kwargs: next(replies))
+
+    with pytest.raises(RuntimeError, match="invalid shared-file identity"):
+        module._wait_for_shared_inventory(
+            client="rust",
+            base_url="http://127.0.0.1:1",
+            api_key="test",
+            expected_identities=frozenset({("1" * 32, 10)}),
+            timeout_seconds=5.0,
+            sleep=lambda _seconds: pytest.fail("malformed identity was retried"),
+            monotonic=lambda: 0.0,
+        )
 
 
 def test_rust_shared_state_uses_paged_inventory_total() -> None:

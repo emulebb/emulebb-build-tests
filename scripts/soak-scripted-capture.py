@@ -88,6 +88,8 @@ from emule_test_harness.soak_launch import (  # noqa: E402
     log,
 )
 
+MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS = 15
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -777,6 +779,14 @@ class SharedInventorySafetyError(RuntimeError):
     """The client advertised content outside the operator-approved share set."""
 
 
+class SharedInventorySnapshotError(RuntimeError):
+    """One inventory read raced a concurrently growing shared catalog."""
+
+
+class SharedInventoryPollingError(RuntimeError):
+    """The client repeatedly failed to provide a coherent inventory snapshot."""
+
+
 class PostRunSafetyError(RuntimeError):
     """One or more teardown or post-run safety checks failed."""
 
@@ -1004,18 +1014,26 @@ def _read_shared_inventory_identities(
         if total is None:
             total = page_total
         elif page_total != total:
-            raise RuntimeError("Client shared-inventory total changed during paging.")
+            raise SharedInventorySnapshotError(
+                "Client shared-inventory total changed during paging."
+            )
         if not rows:
             if offset != total:
-                raise RuntimeError("Client shared inventory ended before its reported total.")
+                raise SharedInventorySnapshotError(
+                    "Client shared inventory ended before its reported total."
+                )
             break
         identities.extend(_shared_file_identity(row) for row in rows)
         offset += len(rows)
         if offset > total:
-            raise RuntimeError("Client shared inventory exceeded its reported total.")
+            raise SharedInventorySnapshotError(
+                "Client shared inventory exceeded its reported total."
+            )
     assert total is not None
     if offset != total:
-        raise RuntimeError("Client shared inventory did not match its reported total.")
+        raise SharedInventorySnapshotError(
+            "Client shared inventory did not match its reported total."
+        )
     identity_set = frozenset(identities)
     if len(identity_set) != len(identities):
         raise SharedInventorySafetyError("Client shared inventory contains duplicate identities.")
@@ -1061,22 +1079,65 @@ def _wait_for_shared_inventory(
         raise RuntimeError("Native parity requires at least one approved shared file.")
     deadline = monotonic() + timeout_seconds
     status_path = "/api/v1/stats" if client == "rust" else "/api/v1/status"
+    read_error_count = 0
+    consecutive_read_errors = 0
+    max_consecutive_read_errors_observed = 0
+    valid_poll_seen = False
+    advertised = 0
+    hashing = 0
+    identity_set_matched = False
     while True:
-        status_payload = _http(base_url, api_key, status_path)
-        identities, advertised = _read_shared_inventory_identities(base_url, api_key)
-        data = _status_data(status_payload)
-        if client == "mfc":
-            runtime = data.get("runtimeDiagnostics")
-            data = runtime if isinstance(runtime, dict) else {}
         try:
+            status_payload = _http(base_url, api_key, status_path)
+            identities, advertised = _read_shared_inventory_identities(base_url, api_key)
+            data = _status_data(status_payload)
+            if client == "mfc":
+                runtime = data.get("runtimeDiagnostics")
+                data = runtime if isinstance(runtime, dict) else {}
             hashing = int(data.get("sharedHashingCount") or 0)
-        except (AttributeError, TypeError, ValueError):
-            raise RuntimeError("Client returned an invalid shared hashing count.") from None
-        unexpected = identities - expected_identities
-        if unexpected or advertised > expected_count:
-            raise SharedInventorySafetyError(
-                "Client advertised content outside the approved shared identity set."
+            unexpected = identities - expected_identities
+            if unexpected or advertised > expected_count:
+                raise SharedInventorySafetyError(
+                    "Client advertised content outside the approved shared identity set."
+                )
+        except SharedInventorySafetyError:
+            raise
+        except (json.JSONDecodeError, OSError, SharedInventorySnapshotError) as error:
+            # The rows and live catalog count are not one atomic snapshot while a
+            # background hash pass is publishing files. Retry that growth race and
+            # transient REST reads boundedly, but never retry a safety mismatch.
+            read_error_count += 1
+            consecutive_read_errors += 1
+            max_consecutive_read_errors_observed = max(
+                max_consecutive_read_errors_observed, consecutive_read_errors
             )
+            if (
+                consecutive_read_errors
+                >= MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS
+            ):
+                raise SharedInventoryPollingError(
+                    "Client repeatedly returned incoherent shared-inventory snapshots."
+                ) from error
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                if not valid_poll_seen:
+                    raise SharedInventoryPollingError(
+                        "Client did not return a coherent shared-inventory snapshot."
+                    ) from error
+                return {
+                    "ready": False,
+                    "expectedFileCount": expected_count,
+                    "advertisedFileCount": advertised,
+                    "hashingFileCount": hashing,
+                    "identitySetMatched": identity_set_matched,
+                    "pollReadErrorCount": read_error_count,
+                    "maxConsecutivePollReadErrors": max_consecutive_read_errors_observed,
+                }
+            sleep(min(2.0, remaining))
+            continue
+        valid_poll_seen = True
+        consecutive_read_errors = 0
+        identity_set_matched = identities == expected_identities
         if identities == expected_identities and advertised == expected_count and hashing == 0:
             return {
                 "ready": True,
@@ -1084,6 +1145,8 @@ def _wait_for_shared_inventory(
                 "advertisedFileCount": advertised,
                 "hashingFileCount": hashing,
                 "identitySetMatched": True,
+                "pollReadErrorCount": read_error_count,
+                "maxConsecutivePollReadErrors": max_consecutive_read_errors_observed,
             }
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -1092,7 +1155,9 @@ def _wait_for_shared_inventory(
                 "expectedFileCount": expected_count,
                 "advertisedFileCount": advertised,
                 "hashingFileCount": hashing,
-                "identitySetMatched": identities == expected_identities,
+                "identitySetMatched": identity_set_matched,
+                "pollReadErrorCount": read_error_count,
+                "maxConsecutivePollReadErrors": max_consecutive_read_errors_observed,
             }
         sleep(min(2.0, remaining))
 
