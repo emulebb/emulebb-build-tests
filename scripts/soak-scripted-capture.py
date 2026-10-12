@@ -2,8 +2,9 @@
 
 Brings up ONE client (rust OR mfc) on the persisted profile, ensures operator +
 Kad, runs the identical scripted action set (``scripted_actions``) with begin/end
-markers, packs the run's diag + packet dumps + markers into a compressed recording
-under ``$OUTPUT_ROOT/soak/reports/<campaign>/``, then tears the client down.
+markers, packs sanitized results and markers into a compressed recording under
+``$OUTPUT_ROOT/soak/reports/<campaign>/``, retains raw diagnostics in a private
+artifact sibling, then tears the client down.
 
 Run it once per client (``--client rust`` then ``--client mfc``) — SEQUENTIALLY,
 never simultaneously: two HighID clients on one hide.me egress IP share a
@@ -22,7 +23,9 @@ import contextlib
 import datetime
 import json
 import os
+import re
 import shutil
+import stat
 import sys
 import time
 import urllib.request
@@ -196,6 +199,24 @@ def _utc_stamp() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _campaign_leaf(value: str | None) -> str:
+    """Return one retention-safe report leaf, never a caller-controlled path."""
+
+    if value is None:
+        return _utc_stamp()
+    if (
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is None
+        or value in {".", ".."}
+        or ".." in value
+        or value.rstrip(". ") != value
+    ):
+        raise RuntimeError("--campaign must be one safe report-directory leaf.")
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
+    if value.split(".", 1)[0].upper() in reserved:
+        raise RuntimeError("--campaign must be one safe report-directory leaf.")
+    return value
+
+
 def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: object = None, timeout: float = 20.0) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"X-API-Key": api_key}
@@ -357,23 +378,55 @@ def campaign_fixtures(
 
 
 def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
-    """Copy diag + packet dump files touched at/after ``since`` into ``dest``."""
+    """Copy current diag/dump files without flattening or hiding I/O failures."""
 
-    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        dump_info = dump_dir.stat()
+        resolved_dump = dump_dir.resolve(strict=True)
+        resolved_dest = dest.resolve()
+    except OSError:
+        raise RuntimeError("Could not inspect the diagnostic dump source.") from None
+    if not stat.S_ISDIR(dump_info.st_mode):
+        raise RuntimeError("The diagnostic dump source is not a directory.")
+    if resolved_dest == resolved_dump or resolved_dest.is_relative_to(resolved_dump):
+        raise RuntimeError("The recording destination must be outside the diagnostic dump source.")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        candidates = list(dump_dir.rglob("*"))
+    except OSError:
+        raise RuntimeError("Could not enumerate the diagnostic dump source.") from None
     copied = 0
-    for path in dump_dir.rglob("*"):
-        if not path.is_file():
+    for path in candidates:
+        try:
+            source_info = path.stat()
+        except OSError:
+            raise RuntimeError("Could not inspect a diagnostic dump entry.") from None
+        if not stat.S_ISREG(source_info.st_mode):
             continue
         name = path.name.lower()
         if not (name.endswith(".jsonl") or name.endswith(".log")):
             continue
-        if path.stat().st_mtime < since:
+        if source_info.st_mtime < since:
             continue
+        relative = path.relative_to(dump_dir)
+        target = dest / relative
         try:
-            shutil.copy2(path, dest / path.name)
-            copied += 1
-        except Exception:  # noqa: BLE001
-            continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise RuntimeError("Could not inspect a diagnostic recording destination.") from None
+        else:
+            raise RuntimeError("Diagnostic recording destination collision detected.")
+        try:
+            shutil.copy2(path, target)
+            copied_info = target.stat()
+        except OSError:
+            raise RuntimeError("Could not copy a diagnostic dump entry.") from None
+        if copied_info.st_size != source_info.st_size:
+            raise RuntimeError("A copied diagnostic dump entry has an unexpected size.")
+        copied += 1
     return copied
 
 
@@ -383,33 +436,128 @@ def pack_recording(
     incoming_dir: Path | None = None,
     private_evidence_path: Path | None = None,
 ) -> Path:
-    """Pack public evidence while retaining downloaded payloads outside the archive."""
+    """Pack sanitized evidence and move all private/raw artifacts beside it."""
 
     archive = report_dir.with_suffix(".zip")
-    payload_dir = report_dir.with_name(f"{report_dir.name}-downloaded-payloads")
+    partial_archive = archive.with_suffix(f"{archive.suffix}.partial")
+    artifact_dir = report_dir.with_name(f"{report_dir.name}-private-artifacts")
+    if archive.exists() or partial_archive.exists():
+        raise RuntimeError("Recording archive destination already exists.")
+    try:
+        artifact_dir.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        raise RuntimeError("Could not inspect the private artifact destination.") from None
+    else:
+        raise RuntimeError("Private artifact destination already exists.")
+
+    private_moves: list[tuple[Path, Path, str]] = []
     if incoming_dir is not None:
         resolved_report = report_dir.resolve()
         resolved_incoming = incoming_dir.resolve()
         if not resolved_incoming.is_relative_to(resolved_report):
             raise RuntimeError("Native incoming directory is outside the bounded report tree.")
-        if resolved_incoming.is_dir() and any(path.is_file() for path in resolved_incoming.rglob("*")):
-            if payload_dir.exists():
-                raise RuntimeError("Downloaded payload retention directory already exists.")
-            resolved_incoming.replace(payload_dir)
-    if private_evidence_path is not None and private_evidence_path.is_file():
-        payload_dir.mkdir(parents=True, exist_ok=True)
-        private_evidence_path.replace(payload_dir / "completion-private.json")
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for path in report_dir.rglob("*"):
-            if path.is_file():
-                relative = path.relative_to(report_dir)
-                # Fresh profiles may contain private configuration and partial
-                # payloads. Downloaded incoming payloads were moved to the sibling
-                # retention directory; no profile content enters the archive.
-                if relative.parts and relative.parts[0] in ("rust-profile", "mfc-profile"):
+        if not resolved_incoming.is_dir():
+            raise RuntimeError("Native incoming directory is missing.")
+        try:
+            incoming_entries = list(resolved_incoming.rglob("*"))
+            incoming_has_files = any(stat.S_ISREG(path.stat().st_mode) for path in incoming_entries)
+        except OSError:
+            raise RuntimeError("Could not inspect the native incoming directory.") from None
+        if incoming_has_files:
+            private_moves.append(
+                (resolved_incoming, artifact_dir / "downloaded-payloads", "downloaded payloads")
+            )
+    if private_evidence_path is not None:
+        if not private_evidence_path.is_file():
+            raise RuntimeError("Private completion evidence is missing.")
+        if not private_evidence_path.resolve().is_relative_to(report_dir.resolve()):
+            raise RuntimeError("Private completion evidence is outside the bounded report tree.")
+        private_moves.append(
+            (private_evidence_path, artifact_dir / "completion-private.json", "completion evidence")
+        )
+    for source, destination, label in (
+        (report_dir / "dumps", artifact_dir / "dumps", "diagnostic dumps"),
+        (
+            report_dir / "native-capture.pcapng",
+            artifact_dir / "native-capture.pcapng",
+            "native packet capture",
+        ),
+    ):
+        try:
+            source.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise RuntimeError(f"Could not inspect the {label}.") from None
+        private_moves.append((source, destination, label))
+
+    if private_moves:
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=False)
+        except OSError:
+            raise RuntimeError("Could not create the private artifact directory.") from None
+        for source, destination, label in private_moves:
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise RuntimeError(f"Could not inspect the private {label} destination.") from None
+            else:
+                raise RuntimeError(f"Private {label} destination already exists.")
+            try:
+                source.replace(destination)
+            except OSError:
+                raise RuntimeError(f"Could not retain the private {label}.") from None
+
+    try:
+        with zipfile.ZipFile(
+            partial_archive,
+            "x",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+        ) as zf:
+            classification = {
+                "schema": "emulebb_recording_evidence_classification_v1",
+                "archiveClassification": "sanitized-report",
+                "privateArtifactsSibling": f"{report_dir.name}-private-artifacts",
+            }
+            zf.writestr(
+                f"{report_dir.name}/evidence-classification.json",
+                json.dumps(classification, indent=2),
+            )
+            # Only explicitly sanitized products are published in the report ZIP.
+            for relative, required in (
+                (Path("results.json"), True),
+                (Path("markers.jsonl"), True),
+                (Path("capture-protocol-summary.txt"), False),
+            ):
+                path = report_dir / relative
+                try:
+                    product_info = path.stat()
+                except FileNotFoundError:
+                    if required:
+                        raise RuntimeError("A required sanitized recording product is missing.") from None
                     continue
-                zf.write(path, path.relative_to(report_dir.parent))
-    shutil.rmtree(report_dir, ignore_errors=True)
+                except OSError:
+                    raise RuntimeError("Could not inspect a sanitized recording product.") from None
+                if not stat.S_ISREG(product_info.st_mode):
+                    raise RuntimeError("A sanitized recording product is not a regular file.")
+                zf.write(path, Path(report_dir.name) / relative)
+        partial_archive.replace(archive)
+    except Exception:  # noqa: BLE001 - every archive failure must remove the partial file
+        try:
+            partial_archive.unlink(missing_ok=True)
+        except OSError:
+            raise RuntimeError("Recording failed and its partial archive could not be removed.") from None
+        raise RuntimeError("Could not create the sanitized recording archive.") from None
+    try:
+        shutil.rmtree(report_dir)
+    except OSError:
+        raise RuntimeError("Recording archive was created but its source tree could not be removed.") from None
     return archive
 
 
@@ -452,6 +600,31 @@ def _client_mapping_ports(client: str, args: argparse.Namespace) -> tuple[tuple[
     if client == "rust":
         return (args.rust_ed2k_port,), (args.rust_kad_port,)
     return (args.mfc_ed2k_port,), (args.mfc_kad_port,)
+
+
+def _native_capture_filter(
+    *,
+    local_address: str,
+    rest_port: int,
+    tcp_ports: tuple[int, ...],
+    udp_ports: tuple[int, ...],
+) -> str:
+    """Build a host-scoped BPF for only the campaign's protocol ports."""
+
+    unique_tcp = tuple(sorted(set(tcp_ports)))
+    unique_udp = tuple(sorted(set(udp_ports)))
+    relevant = [
+        *(f"tcp port {port}" for port in unique_tcp),
+        *(f"udp port {port}" for port in unique_udp),
+    ]
+    if not relevant:
+        raise RuntimeError("Native capture requires at least one protocol port.")
+    if any(port <= 0 or port > 65535 for port in (*unique_tcp, *unique_udp, rest_port)):
+        raise RuntimeError("Native capture received an invalid port.")
+    if rest_port in unique_tcp:
+        raise RuntimeError("The REST port overlaps a captured protocol port.")
+    protocol_filter = " or ".join(relevant)
+    return f"host {local_address} and not tcp port {rest_port} and ({protocol_filter})"
 
 
 def _wait_for_mapping_state(
@@ -600,19 +773,253 @@ def _verify_native_downloads(
     return private_evidence, public_summary
 
 
-def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
-    """Count distinct regular files under the approved roots without retaining paths."""
+class SharedInventorySafetyError(RuntimeError):
+    """The client advertised content outside the operator-approved share set."""
 
-    files: set[str] = set()
+
+class PostRunSafetyError(RuntimeError):
+    """One or more teardown or post-run safety checks failed."""
+
+    def __init__(self, failures: list[tuple[str, Exception]]) -> None:
+        self.failures = tuple((stage, type(error).__name__) for stage, error in failures)
+        summary = ", ".join(f"{stage}:{error_type}" for stage, error_type in self.failures)
+        super().__init__(f"Post-run safety failures: {summary}")
+
+
+def _preserve_post_run_failures(
+    primary_error: BaseException | None,
+    failures: list[tuple[str, Exception]],
+) -> None:
+    """Keep a primary failure while attaching endpoint-free cleanup taxonomy."""
+
+    if not failures:
+        return
+    if primary_error is not None:
+        add_note = getattr(primary_error, "add_note", None)
+        if callable(add_note):
+            for stage, error in failures:
+                add_note(f"Additional post-run failure: {stage}:{type(error).__name__}")
+        return
+    raise PostRunSafetyError(failures)
+
+
+def _teardown_client(
+    *,
+    client: str,
+    handles: dict[str, object] | None,
+    mods: dict[str, object],
+    base_url: str,
+    api_key: str,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[tuple[str, Exception]]:
+    """Stop one client and return every sanitized teardown failure."""
+
+    failures: list[tuple[str, Exception]] = []
+    if handles is not None and client == "rust" and handles.get("process") is not None:
+        try:
+            _http(base_url, api_key, "/api/v1/app/shutdown", "POST", {}, timeout=5.0)
+        except Exception as error:  # noqa: BLE001 - bounded forced stop remains the fallback
+            failures.append(("rust-clean-teardown", error))
+        try:
+            sleep(8.0)
+        except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
+            failures.append(("rust-shutdown-settle", error))
+        try:
+            process = handles["process"]
+            if process.poll() is None:
+                stop_process_tree(process)
+        except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
+            failures.append(("rust-process-teardown", error))
+        try:
+            handles["logHandle"].close()
+        except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
+            failures.append(("rust-log-close", error))
+    elif handles is not None and client == "mfc" and handles.get("app") is not None:
+        app = handles["app"]
+        try:
+            mods["live_common"].close_app_cleanly(app)
+        except Exception as error:  # noqa: BLE001 - fallback kill must not hide teardown failure
+            failures.append(("mfc-clean-teardown", error))
+            try:
+                app.kill()
+            except Exception as kill_error:  # noqa: BLE001 - always retain failed fallback kill
+                failures.append(("mfc-forced-teardown", kill_error))
+    if handles is not None and client == "mfc":
+        try:
+            sleep(6.0)
+        except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
+            failures.append(("mfc-shutdown-settle", error))
+    return failures
+
+
+def _run_post_run_safety_audits(
+    *,
+    local_address: str,
+    tcp_ports: tuple[int, ...],
+    udp_ports: tuple[int, ...],
+    timeout_seconds: float,
+    forbidden_roots: tuple[str, ...],
+    forbidden_root_fingerprints_before: tuple[object, ...],
+    upnp_audits: dict[str, object],
+    client_audits: dict[str, object],
+    legacy_audits: dict[str, object],
+    results_meta: dict[str, object],
+) -> list[tuple[str, Exception]]:
+    """Attempt every post-run invariant and return sanitized failure taxonomy."""
+
+    failures: list[tuple[str, Exception]] = []
+    try:
+        upnp_audits["after"] = _wait_for_mapping_state(
+            local_address=local_address,
+            tcp_ports=tcp_ports,
+            udp_ports=udp_ports,
+            expected_mapped=False,
+            timeout_seconds=timeout_seconds,
+        )
+        if not upnp_audits["after"].get("passed"):
+            raise RuntimeError("Campaign UPnP mappings remain after teardown.")
+    except Exception as error:  # noqa: BLE001 - remaining audits must still run
+        failures.append(("upnp-absence-audit", error))
+    try:
+        client_audits["after"] = _require_no_other_clients()
+    except Exception as error:  # noqa: BLE001 - remaining audits must still run
+        failures.append(("client-process-audit", error))
+    try:
+        legacy_audits["after"] = _require_clean_legacy_audit(forbidden_roots)
+    except Exception as error:  # noqa: BLE001 - remaining audits must still run
+        failures.append(("forbidden-root-reference-audit", error))
+    try:
+        metadata_audit = compare_forbidden_root_fingerprints(
+            forbidden_root_fingerprints_before,
+            fingerprint_forbidden_roots(forbidden_roots),
+        )
+        if metadata_audit.changed_root_indices:
+            raise RuntimeError("A configured forbidden legacy root changed during the campaign.")
+        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(
+            metadata_audit
+        )
+    except Exception as error:  # noqa: BLE001 - this is the final independent audit
+        failures.append(("forbidden-root-metadata-audit", error))
+    results_meta["upnpMappingAudits"] = upnp_audits
+    results_meta["clientProcessAudits"] = client_audits
+    results_meta["legacyRootAudits"] = legacy_audits
+    return failures
+
+
+def _approved_shared_files(shared_roots: list[dict[str, object]]) -> tuple[Path, ...]:
+    """Enumerate distinct regular files without returning roots in diagnostics."""
+
+    files: dict[str, Path] = {}
     for root in shared_roots:
         path = Path(str(root["path"]))
         try:
-            for candidate in path.rglob("*"):
-                if candidate.is_file():
-                    files.add(str(candidate.resolve()).casefold())
-        except OSError as exc:
-            raise RuntimeError("Could not enumerate an approved shared root.") from exc
-    return len(files)
+            resolved_root = path.resolve(strict=True)
+            candidates = path.rglob("*") if bool(root.get("recursive", True)) else path.iterdir()
+            for candidate in candidates:
+                candidate_info = candidate.stat()
+                if not stat.S_ISREG(candidate_info.st_mode):
+                    continue
+                resolved = candidate.resolve(strict=True)
+                if not resolved.is_relative_to(resolved_root):
+                    raise RuntimeError("An approved shared root contains an escaping file link.")
+                files[os.path.normcase(str(resolved))] = resolved
+        except RuntimeError:
+            raise
+        except OSError:
+            raise RuntimeError("Could not enumerate an approved shared root.") from None
+    return tuple(files[key] for key in sorted(files))
+
+
+def _approved_shared_file_identities(
+    shared_roots: list[dict[str, object]],
+) -> frozenset[tuple[str, int]]:
+    """Hash every approved file into a private, in-memory eD2K identity set."""
+
+    files = _approved_shared_files(shared_roots)
+    identities: set[tuple[str, int]] = set()
+    for path in files:
+        try:
+            before = path.stat()
+            size_bytes, ed2k_hash, _ = scripted_actions.file_digests(path)
+            after = path.stat()
+        except OSError:
+            raise RuntimeError("Could not hash an approved shared file.") from None
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise RuntimeError("An approved shared file changed while it was hashed.")
+        identities.add((ed2k_hash.casefold(), size_bytes))
+    if len(identities) != len(files):
+        raise RuntimeError("Approved shared files do not have distinct eD2K identities.")
+    return frozenset(identities)
+
+
+def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
+    """Count distinct approved regular files without retaining their paths."""
+
+    return len(_approved_shared_files(shared_roots))
+
+
+def _shared_inventory_page(payload: dict[str, object]) -> tuple[list[dict[str, object]], int]:
+    inventory = _status_data(payload)
+    if not isinstance(inventory, dict):
+        raise RuntimeError("Client returned an invalid shared-inventory page.")
+    items = inventory.get("items")
+    total = inventory.get("total")
+    if not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool) or total < 0:
+        raise RuntimeError("Client returned an invalid shared-inventory page.")
+    if not all(isinstance(row, dict) for row in items):
+        raise RuntimeError("Client returned an invalid shared-inventory row.")
+    return items, total
+
+
+def _shared_file_identity(row: dict[str, object]) -> tuple[str, int]:
+    raw_hash = str(
+        row.get("hash") or row.get("fileHash") or row.get("ed2kHash") or ""
+    ).strip().casefold()
+    raw_size = row.get("sizeBytes", row.get("size"))
+    if re.fullmatch(r"[0-9a-f]{32}", raw_hash) is None:
+        raise RuntimeError("Client returned an invalid shared-file identity.")
+    if not isinstance(raw_size, int) or isinstance(raw_size, bool) or raw_size < 0:
+        raise RuntimeError("Client returned an invalid shared-file identity.")
+    return raw_hash, raw_size
+
+
+def _read_shared_inventory_identities(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int = 256,
+) -> tuple[frozenset[tuple[str, int]], int]:
+    """Read a stable, complete paged inventory without retaining private rows."""
+
+    offset = 0
+    total: int | None = None
+    identities: list[tuple[str, int]] = []
+    while total is None or offset < total:
+        payload = _http(
+            base_url,
+            api_key,
+            f"/api/v1/shared-files?offset={offset}&limit={page_size}",
+        )
+        rows, page_total = _shared_inventory_page(payload)
+        if total is None:
+            total = page_total
+        elif page_total != total:
+            raise RuntimeError("Client shared-inventory total changed during paging.")
+        if not rows:
+            if offset != total:
+                raise RuntimeError("Client shared inventory ended before its reported total.")
+            break
+        identities.extend(_shared_file_identity(row) for row in rows)
+        offset += len(rows)
+        if offset > total:
+            raise RuntimeError("Client shared inventory exceeded its reported total.")
+    assert total is not None
+    if offset != total:
+        raise RuntimeError("Client shared inventory did not match its reported total.")
+    identity_set = frozenset(identities)
+    if len(identity_set) != len(identities):
+        raise SharedInventorySafetyError("Client shared inventory contains duplicate identities.")
+    return identity_set, total
 
 
 def _shared_runtime_state(
@@ -642,33 +1049,41 @@ def _wait_for_shared_inventory(
     client: str,
     base_url: str,
     api_key: str,
-    expected_count: int,
+    expected_identities: frozenset[tuple[str, int]],
     timeout_seconds: float,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, object]:
-    """Wait until every approved local file is hashed and advertised."""
+    """Wait until exactly the approved local files are hashed and advertised."""
 
+    expected_count = len(expected_identities)
     if expected_count <= 0:
-        return {"ready": False, "expectedFileCount": expected_count, "advertisedFileCount": 0}
+        raise RuntimeError("Native parity requires at least one approved shared file.")
     deadline = monotonic() + timeout_seconds
-    latest = (0, 0)
     status_path = "/api/v1/stats" if client == "rust" else "/api/v1/status"
     while True:
         status_payload = _http(base_url, api_key, status_path)
-        inventory_payload = _http(
-            base_url,
-            api_key,
-            "/api/v1/shared-files?offset=0&limit=1",
-        )
-        latest = _shared_runtime_state(client, status_payload, inventory_payload)
-        advertised, hashing = latest
-        if advertised >= expected_count and hashing == 0:
+        identities, advertised = _read_shared_inventory_identities(base_url, api_key)
+        data = _status_data(status_payload)
+        if client == "mfc":
+            runtime = data.get("runtimeDiagnostics")
+            data = runtime if isinstance(runtime, dict) else {}
+        try:
+            hashing = int(data.get("sharedHashingCount") or 0)
+        except (AttributeError, TypeError, ValueError):
+            raise RuntimeError("Client returned an invalid shared hashing count.") from None
+        unexpected = identities - expected_identities
+        if unexpected or advertised > expected_count:
+            raise SharedInventorySafetyError(
+                "Client advertised content outside the approved shared identity set."
+            )
+        if identities == expected_identities and advertised == expected_count and hashing == 0:
             return {
                 "ready": True,
                 "expectedFileCount": expected_count,
                 "advertisedFileCount": advertised,
                 "hashingFileCount": hashing,
+                "identitySetMatched": True,
             }
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -677,6 +1092,7 @@ def _wait_for_shared_inventory(
                 "expectedFileCount": expected_count,
                 "advertisedFileCount": advertised,
                 "hashingFileCount": hashing,
+                "identitySetMatched": identities == expected_identities,
             }
         sleep(min(2.0, remaining))
 
@@ -744,6 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
     native_fixtures: list[dict[str, object]] = []
+    expected_shared_identities: frozenset[tuple[str, int]] = frozenset()
     forbidden_roots: tuple[str, ...] = ()
     input_summary: dict[str, int] | None = None
     if native_config is not None:
@@ -767,7 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
         shared_roots = [] if args.no_shared_roots else rust_mod.load_shared_roots(inputs_path)
 
     soak_root = output_root / "soak"
-    campaign = args.campaign or _utc_stamp()
+    campaign = _campaign_leaf(args.campaign)
     report_dir = soak_root / "reports" / campaign / f"{client}-{_utc_stamp()}"
     report_dir.mkdir(parents=True, exist_ok=True)
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
@@ -814,6 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
             },
             forbidden_roots,
         )
+        expected_shared_identities = _approved_shared_file_identities(shared_roots)
         client_audits["before"] = _require_no_other_clients()
         legacy_audits["before"] = _require_clean_legacy_audit(forbidden_roots)
         forbidden_root_fingerprints_before = fingerprint_forbidden_roots(forbidden_roots)
@@ -848,17 +1266,23 @@ def main(argv: list[str] | None = None) -> int:
             relevant_udp_ports = (*mapping_udp_ports, 1900)
             if client == "mfc":
                 relevant_udp_ports = (*relevant_udp_ports, args.mfc_server_udp_port)
+            relevant_tcp_ports = (
+                *mapping_tcp_ports,
+                int(OPERATOR_SERVER.rsplit(":", 1)[1]),
+            )
             capture = network_stack.enter_context(
                 ManagedDumpcapCapture(
                     output_path=report_dir / "native-capture.pcapng",
-                    capture_filter=f"host {rest_addr} and not tcp port {rest_port}",
+                    capture_filter=_native_capture_filter(
+                        local_address=rest_addr,
+                        rest_port=rest_port,
+                        tcp_ports=relevant_tcp_ports,
+                        udp_ports=relevant_udp_ports,
+                    ),
                     interface=capture_interface,
                     maximum_size_kib=args.capture_max_size_kib,
                     inspection_hook=make_tshark_frame_inspection_hook(
-                        relevant_tcp_ports=(
-                            *mapping_tcp_ports,
-                            int(OPERATOR_SERVER.rsplit(":", 1)[1]),
-                        ),
+                        relevant_tcp_ports=relevant_tcp_ports,
                         relevant_udp_ports=relevant_udp_ports,
                     ),
                     summary_hook=make_tshark_protocol_summary_hook(),
@@ -935,12 +1359,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if native_config is not None:
-            expected_shared_files = _approved_shared_file_count(shared_roots)
             sharing_state = _wait_for_shared_inventory(
                 client=client,
                 base_url=base_url,
                 api_key=api_key,
-                expected_count=expected_shared_files,
+                expected_identities=expected_shared_identities,
                 timeout_seconds=args.share_ready_timeout_seconds,
             )
             log(
@@ -1074,64 +1497,51 @@ def main(argv: list[str] | None = None) -> int:
             "runEndEpoch": time.time(),
         }
     finally:
+        # ``sys.exception`` is Python 3.11+; the harness supports Python 3.10.
+        primary_error = sys.exc_info()[1]
+        post_run_failures: list[tuple[str, Exception]] = []
         try:
-            if handles is not None and client == "rust" and handles.get("process") is not None:
-                try:
-                    _http(base_url, api_key, "/api/v1/app/shutdown", "POST", {}, timeout=5.0)
-                except Exception:  # noqa: BLE001
-                    pass
-                time.sleep(8.0)
-                if handles["process"].poll() is None:
-                    stop_process_tree(handles["process"])
-                try:
-                    handles["logHandle"].close()
-                except Exception:  # noqa: BLE001
-                    pass
-            elif handles is not None and client == "mfc" and handles.get("app") is not None:
-                try:
-                    mods["live_common"].close_app_cleanly(handles["app"])
-                except Exception:  # noqa: BLE001
-                    try:
-                        handles["app"].kill()
-                    except Exception:  # noqa: BLE001
-                        pass
-            # MFC persists + flushes its logs on the clean save-and-exit; give it a moment.
-            if handles is not None and client == "mfc":
-                time.sleep(6.0)
-        finally:
-            try:
-                if capture is not None:
-                    capture_result = capture.stop()
-            finally:
-                network_stack.close()
+            post_run_failures.extend(
+                _teardown_client(
+                    client=client,
+                    handles=handles,
+                    mods=mods,
+                    base_url=base_url,
+                    api_key=api_key,
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - audits must still run
+            post_run_failures.append(("client-teardown-orchestration", error))
+        try:
+            if capture is not None:
+                capture_result = capture.stop()
+        except Exception as error:  # noqa: BLE001 - firewall cleanup and audits must still run
+            post_run_failures.append(("capture-stop", error))
+        try:
+            network_stack.close()
+        except Exception as error:  # noqa: BLE001 - post-run audits must still run
+            post_run_failures.append(("network-stack-close", error))
+        if native_config is not None:
+            post_run_failures.extend(
+                _run_post_run_safety_audits(
+                    local_address=rest_addr,
+                    tcp_ports=mapping_tcp_ports,
+                    udp_ports=mapping_udp_ports,
+                    timeout_seconds=args.upnp_audit_timeout_seconds,
+                    forbidden_roots=forbidden_roots,
+                    forbidden_root_fingerprints_before=forbidden_root_fingerprints_before,
+                    upnp_audits=upnp_audits,
+                    client_audits=client_audits,
+                    legacy_audits=legacy_audits,
+                    results_meta=results_meta,
+                )
+            )
+        _preserve_post_run_failures(primary_error, post_run_failures)
 
     if native_config is not None:
-        upnp_audits["after"] = _wait_for_mapping_state(
-            local_address=rest_addr,
-            tcp_ports=mapping_tcp_ports,
-            udp_ports=mapping_udp_ports,
-            expected_mapped=False,
-            timeout_seconds=args.upnp_audit_timeout_seconds,
-        )
-        if not upnp_audits["after"].get("passed"):
-            network_audit_failure = True
         if args.connectivity == "firewalled" and not upnp_audits.get("active", {}).get("passed"):
             active_status = upnp_audits.get("active", {}).get("observedStatus")
             network_audit_failure = network_audit_failure or active_status != "unavailable"
-        results_meta["upnpMappingAudits"] = upnp_audits
-        client_audits["after"] = _require_no_other_clients()
-        legacy_audits["after"] = _require_clean_legacy_audit(forbidden_roots)
-        metadata_audit = compare_forbidden_root_fingerprints(
-            forbidden_root_fingerprints_before,
-            fingerprint_forbidden_roots(forbidden_roots),
-        )
-        if metadata_audit.changed_root_indices:
-            raise RuntimeError("A configured forbidden legacy root changed during the campaign.")
-        results_meta["clientProcessAudits"] = client_audits
-        results_meta["legacyRootAudits"] = legacy_audits
-        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(
-            metadata_audit
-        )
         if capture_result is None:
             raise RuntimeError("Native capture did not produce a validated result.")
         results_meta["nativeCapture"] = {
@@ -1189,5 +1599,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _cli_main() -> int:
+    """Map unexpected operator-run failures to the harness-failure exit class."""
+
+    try:
+        return main()
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:  # noqa: BLE001 - CLI failures are harness failures, never divergences
+        # Do not print the exception text: operator-local inputs and paths can be
+        # embedded in third-party exception messages.
+        print(f"harness-failure: {type(error).__name__}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli_main())

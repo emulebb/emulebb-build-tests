@@ -29,6 +29,7 @@ from emule_test_harness import converged_live_wire as clw  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
     load_ed2k_link_fixture,
     load_native_parity_config,
+    load_shared_path_fixture,
 )
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 
@@ -40,11 +41,25 @@ class StepResult:
 
 
 @dataclass(frozen=True)
-class FixturePin:
-    """Stable private identity of the operator-local download fixture."""
+class NativeInputPin:
+    """Stable private identity of every ignored native-campaign input."""
 
-    count: int
-    content_digest: str
+    download_count: int
+    shared_path_count: int
+    config_content_digest: str
+    download_content_digest: str
+    shared_paths_content_digest: str
+    download_path_digest: str
+    shared_paths_path_digest: str
+
+
+@dataclass(frozen=True)
+class PriorStageProvenance:
+    """Validated reusable build/deterministic evidence from one prior report."""
+
+    report_digest: str
+    build_steps: tuple[StepResult, ...]
+    deterministic_steps: tuple[StepResult, ...]
 
 
 @dataclass(frozen=True)
@@ -65,10 +80,40 @@ REQUIRED_COMPLETION_RECORDINGS = frozenset(
 CAPTURE_CONTINUE_CODES = frozenset({0, 1, 3})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ED2K_RE = re.compile(r"^[0-9a-f]{32}$")
+CAMPAIGN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
+FRESH_BUILD_STEP_NAMES = tuple(f"fresh-build-{index}" for index in range(1, 6))
+DETERMINISTIC_STEP_NAMES = tuple(f"deterministic-{index}" for index in range(1, 5))
 
 
 def _utc_stamp() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _validated_campaign_name(value: str) -> str:
+    """Require one privacy-safe leaf below the output-root reports directory."""
+
+    if (
+        value in {".", ".."}
+        or ".." in value
+        or value.rstrip(". ") != value
+        or CAMPAIGN_NAME_RE.fullmatch(value) is None
+        or value.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES
+    ):
+        raise RuntimeError(
+            "Campaign must be one short ASCII leaf using letters, digits, dot, dash, or underscore."
+        )
+    return value
+
+
+def _offline_result_requires_abort(return_code: int) -> bool:
+    """Stop public execution once the offline evidence reader is not trustworthy."""
+
+    return return_code not in CAPTURE_CONTINUE_CODES
 
 
 def build_commands(python: str = sys.executable) -> tuple[tuple[str, ...], ...]:
@@ -138,17 +183,222 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def pin_download_fixture(inputs_path: Path) -> FixturePin:
-    """Load and fingerprint the fixture while rejecting a concurrent rewrite."""
+def _stable_file_digest(path: Path, *, label: str) -> str:
+    """Hash one private input while rejecting an in-progress rewrite."""
 
-    fixture_path = load_native_parity_config(inputs_path).ed2k_links_file
-    before = fixture_path.stat()
-    fixtures = load_ed2k_link_fixture(fixture_path)
-    content_digest = _sha256(fixture_path)
-    after = fixture_path.stat()
+    try:
+        before = path.stat()
+        digest = _sha256(path)
+        after = path.stat()
+    except OSError:
+        raise RuntimeError(f"The operator-local {label} could not be pinned.") from None
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-        raise RuntimeError("The operator-local download fixture changed while it was pinned.")
-    return FixturePin(count=len(fixtures), content_digest=content_digest)
+        raise RuntimeError(f"The operator-local {label} changed while it was pinned.")
+    return digest
+
+
+def _private_path_digest(path: Path) -> str:
+    """Fingerprint a resolved private path without retaining it in evidence."""
+
+    return hashlib.sha256(str(path.resolve()).casefold().encode("utf-8")).hexdigest()
+
+
+def pin_native_inputs(inputs_path: Path) -> NativeInputPin:
+    """Pin config plus both fixtures while keeping paths and contents private."""
+
+    config_digest = _stable_file_digest(
+        inputs_path, label="native campaign configuration"
+    )
+    config = load_native_parity_config(inputs_path)
+    download_digest = _stable_file_digest(
+        config.ed2k_links_file,
+        label="download fixture",
+    )
+    downloads = load_ed2k_link_fixture(config.ed2k_links_file)
+    if (
+        _stable_file_digest(config.ed2k_links_file, label="download fixture")
+        != download_digest
+    ):
+        raise RuntimeError(
+            "The operator-local download fixture changed while it was pinned."
+        )
+    shared_paths_digest = _stable_file_digest(
+        config.shared_paths_file,
+        label="shared-path fixture",
+    )
+    shared_paths = load_shared_path_fixture(config.shared_paths_file)
+    if (
+        _stable_file_digest(config.shared_paths_file, label="shared-path fixture")
+        != shared_paths_digest
+    ):
+        raise RuntimeError(
+            "The operator-local shared-path fixture changed while it was pinned."
+        )
+    if (
+        _stable_file_digest(inputs_path, label="native campaign configuration")
+        != config_digest
+    ):
+        raise RuntimeError(
+            "The operator-local native campaign configuration changed while it was pinned."
+        )
+    return NativeInputPin(
+        download_count=len(downloads),
+        shared_path_count=len(shared_paths),
+        config_content_digest=config_digest,
+        download_content_digest=download_digest,
+        shared_paths_content_digest=shared_paths_digest,
+        download_path_digest=_private_path_digest(config.ed2k_links_file),
+        shared_paths_path_digest=_private_path_digest(config.shared_paths_file),
+    )
+
+
+def _validated_stage_steps(
+    payload: dict[str, object],
+    *,
+    stage: str,
+    expected_names: tuple[str, ...],
+) -> tuple[StepResult, ...]:
+    stage_provenance = payload.get("stageProvenance")
+    rows: object = None
+    if isinstance(stage_provenance, dict):
+        section = stage_provenance.get(stage)
+        if isinstance(section, dict):
+            if section.get("validated") is not True:
+                raise RuntimeError(
+                    f"Prior provenance does not validate its {stage} stage."
+                )
+            rows = section.get("steps")
+    if rows is None:
+        all_steps = payload.get("steps")
+        if isinstance(all_steps, list):
+            rows = [
+                row
+                for row in all_steps
+                if isinstance(row, dict) and row.get("name") in expected_names
+            ]
+    if not isinstance(rows, list):
+        raise RuntimeError(f"Prior provenance has no {stage} step evidence.")
+
+    parsed: dict[str, StepResult] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError(f"Prior provenance has malformed {stage} step evidence.")
+        name = row.get("name")
+        return_code = row.get("return_code", row.get("returnCode"))
+        if (
+            not isinstance(name, str)
+            or name not in expected_names
+            or name in parsed
+            or not isinstance(return_code, int)
+            or isinstance(return_code, bool)
+        ):
+            raise RuntimeError(f"Prior provenance has malformed {stage} step evidence.")
+        parsed[name] = StepResult(name, return_code)
+    if set(parsed) != set(expected_names) or any(
+        step.return_code != 0 for step in parsed.values()
+    ):
+        raise RuntimeError(
+            f"Prior provenance does not prove a successful {stage} stage."
+        )
+    return tuple(parsed[name] for name in expected_names)
+
+
+def validate_prior_stage_provenance(
+    report_path: Path,
+    *,
+    current_revisions: dict[str, str],
+    current_binary_provenance: dict[str, dict[str, object]],
+    require_build: bool,
+    require_deterministic: bool,
+) -> PriorStageProvenance:
+    """Validate and import requested stage evidence from a prior campaign report."""
+
+    try:
+        report_digest = _stable_file_digest(
+            report_path, label="prior provenance report"
+        )
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise RuntimeError("The prior provenance report is not valid JSON.") from None
+    if not isinstance(payload, dict):
+        raise RuntimeError("The prior provenance report must contain one JSON object.")
+    if payload.get("schema") not in {
+        "native_windows_parity_campaign_v1",
+        "native_windows_parity_campaign_v2",
+    }:
+        raise RuntimeError("The prior provenance report has an unsupported schema.")
+    if payload.get("sourceRevisions") != current_revisions:
+        raise RuntimeError(
+            "Prior provenance source revisions do not match the current campaign."
+        )
+    if payload.get("binaryProvenance") != current_binary_provenance:
+        raise RuntimeError(
+            "Prior provenance binaries do not match the staged campaign binaries."
+        )
+    build_steps = (
+        _validated_stage_steps(
+            payload,
+            stage="build",
+            expected_names=FRESH_BUILD_STEP_NAMES,
+        )
+        if require_build
+        else ()
+    )
+    deterministic_steps = (
+        _validated_stage_steps(
+            payload,
+            stage="deterministic",
+            expected_names=DETERMINISTIC_STEP_NAMES,
+        )
+        if require_deterministic
+        else ()
+    )
+    if (
+        _stable_file_digest(report_path, label="prior provenance report")
+        != report_digest
+    ):
+        raise RuntimeError(
+            "The prior provenance report changed while it was validated."
+        )
+    return PriorStageProvenance(
+        report_digest=report_digest,
+        build_steps=build_steps,
+        deterministic_steps=deterministic_steps,
+    )
+
+
+def stage_provenance_section(
+    *,
+    reused: bool,
+    steps: Sequence[StepResult],
+    expected_names: Sequence[str],
+    source_report_digest: str | None = None,
+) -> dict[str, object]:
+    """Render self-contained, path-free proof for one campaign stage."""
+
+    expected = tuple(expected_names)
+    observed = tuple(step.name for step in steps)
+    section: dict[str, object] = {
+        "mode": "reused" if reused else "executed",
+        "validated": observed == expected
+        and all(step.return_code == 0 for step in steps),
+        "steps": [
+            {"name": step.name, "returnCode": step.return_code} for step in steps
+        ],
+    }
+    if reused:
+        if not steps and source_report_digest is None:
+            section["mode"] = "not-reached"
+            return section
+        if (
+            source_report_digest is None
+            or SHA256_RE.fullmatch(source_report_digest) is None
+        ):
+            raise RuntimeError(
+                "Reused stage provenance requires a valid report digest."
+            )
+        section["sourceReportSha256"] = source_report_digest
+    return section
 
 
 def _new_recording(
@@ -171,7 +421,7 @@ def load_completion_set(recording: Path, expected_count: int) -> CompletionSet:
         if len(names) != 1:
             raise RuntimeError("The recording does not contain exactly one results document.")
     private_path = (
-        recording.with_name(f"{recording.stem}-downloaded-payloads")
+        recording.with_name(f"{recording.stem}-private-artifacts")
         / "completion-private.json"
     )
     if not private_path.is_file():
@@ -240,6 +490,7 @@ def compare_cross_case_completions(
     return {
         "complete": structurally_complete,
         "equivalent": equivalent,
+        "scope": "all-four-recordings-private-sha256",
         "expectedFileCount": expected_count,
         "recordingCount": len(completion_sets),
         "findings": findings,
@@ -378,11 +629,14 @@ def _capture_command(*, client: str, case: str, campaign: str, inputs: Path) -> 
     )
 
 
-def _offline_command(campaign: str) -> tuple[str, ...]:
+def _offline_command(rust_recording: Path, mfc_recording: Path) -> tuple[str, ...]:
+    """Bind offline adjudication to the two archives created by this run."""
+
     return (
         sys.executable,
         str(REPO_ROOT / "scripts/soak-offline-diff.py"),
-        "--campaign", campaign,
+        "--rust", str(rust_recording),
+        "--mfc", str(mfc_recording),
     )
 
 
@@ -392,6 +646,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--campaign", default=None)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-deterministic", action="store_true")
+    parser.add_argument(
+        "--prior-provenance",
+        type=Path,
+        help=(
+            "Prior native-parity summary proving the exact source revisions, staged "
+            "binaries, and every skipped stage. Required with either skip option."
+        ),
+    )
     return parser
 
 
@@ -404,15 +666,41 @@ def main(argv: list[str] | None = None) -> int:
     inputs = args.inputs.resolve()
     if not inputs.is_file():
         raise RuntimeError("The ignored native campaign input file is missing.")
+    if (args.skip_build or args.skip_deterministic) and args.prior_provenance is None:
+        raise RuntimeError(
+            "--prior-provenance is required with --skip-build or --skip-deterministic."
+        )
+    if (
+        not args.skip_build
+        and not args.skip_deterministic
+        and args.prior_provenance is not None
+    ):
+        raise RuntimeError("--prior-provenance is only valid when a stage is skipped.")
 
-    fixture_pin = pin_download_fixture(inputs)
+    input_pin = pin_native_inputs(inputs)
     revisions = require_clean_current_repositories()
-    campaign_root = args.campaign or f"ci-054-native-{_utc_stamp()}"
-    summary_dir = output_root / "soak" / "reports" / campaign_root
-    summary_dir.mkdir(parents=True, exist_ok=True)
+    campaign_root = _validated_campaign_name(
+        args.campaign or f"ci-054-native-{_utc_stamp()}"
+    )
+    reports_root = output_root / "soak" / "reports"
+    summary_dir = reports_root / campaign_root
+    summary_path = summary_dir / "native-parity-summary.json"
+    if (
+        args.prior_provenance is not None
+        and args.prior_provenance.resolve() == summary_path.resolve()
+    ):
+        raise RuntimeError("Prior provenance must not be the current campaign summary.")
+    reserved_output_dirs = (
+        summary_dir,
+        *(reports_root / f"{campaign_root}-{case}" for case in ("upnp", "firewalled")),
+    )
+    if any(path.exists() for path in reserved_output_dirs):
+        raise RuntimeError("Campaign output destinations must be new and unused.")
+    summary_dir.mkdir(parents=True, exist_ok=False)
     steps: list[StepResult] = []
     completion_sets: dict[str, CompletionSet] = {}
     fixture_unchanged = True
+    prior_provenance: PriorStageProvenance | None = None
 
     if not args.skip_build:
         for index, command in enumerate(build_commands(), start=1):
@@ -426,6 +714,15 @@ def main(argv: list[str] | None = None) -> int:
         if not any(step.return_code for step in steps)
         else {}
     )
+    sanitized_binaries = sanitized_binary_provenance(binaries, output_root)
+    if binaries and args.prior_provenance is not None:
+        prior_provenance = validate_prior_stage_provenance(
+            args.prior_provenance.resolve(),
+            current_revisions=revisions,
+            current_binary_provenance=sanitized_binaries,
+            require_build=args.skip_build,
+            require_deterministic=args.skip_deterministic,
+        )
     if binaries and not args.skip_deterministic:
         mfc_diagnostics = Path(str(binaries["mfc_diagnostics_release"]["path"]))
         for index, command in enumerate(
@@ -441,10 +738,11 @@ def main(argv: list[str] | None = None) -> int:
         for case in ("upnp", "firewalled"):
             case_campaign = f"{campaign_root}-{case}"
             case_dir = output_root / "soak" / "reports" / case_campaign
+            case_recordings: dict[str, Path] = {}
             for client in ("rust", "mfc"):
                 try:
-                    if pin_download_fixture(inputs) != fixture_pin:
-                        raise RuntimeError("fixture pin changed")
+                    if pin_native_inputs(inputs) != input_pin:
+                        raise RuntimeError("native input pin changed")
                 except (OSError, RuntimeError):
                     fixture_unchanged = False
                     steps.append(StepResult(f"fixture-pin-{case}-{client}", 2))
@@ -459,9 +757,10 @@ def main(argv: list[str] | None = None) -> int:
                 if code in CAPTURE_CONTINUE_CODES:
                     try:
                         recording = _new_recording(case_dir, client, previous_recordings)
+                        case_recordings[client] = recording
                         try:
                             completion_sets[f"{case}-{client}"] = load_completion_set(
-                                recording, fixture_pin.count
+                                recording, input_pin.download_count
                             )
                         except IncompleteCompletionEvidence:
                             if code not in (1, 3):
@@ -480,18 +779,24 @@ def main(argv: list[str] | None = None) -> int:
                 for step in steps
                 if step.name.startswith(f"capture-{case}-")
             ) and len([step for step in steps if step.name.startswith(f"capture-{case}-")]) == 2:
-                code = _run(_offline_command(case_campaign), cwd=REPO_ROOT)
+                code = _run(
+                    _offline_command(case_recordings["rust"], case_recordings["mfc"]),
+                    cwd=REPO_ROOT,
+                )
                 steps.append(StepResult(f"offline-{case}", code))
+                if _offline_result_requires_abort(code):
+                    abort_live_matrix = True
+                    break
 
     try:
-        fixture_unchanged = fixture_unchanged and pin_download_fixture(inputs) == fixture_pin
+        fixture_unchanged = fixture_unchanged and pin_native_inputs(inputs) == input_pin
     except (OSError, RuntimeError):
         fixture_unchanged = False
     if not fixture_unchanged and not any(step.name.startswith("fixture-pin-") for step in steps):
         steps.append(StepResult("fixture-pin-final", 2))
 
     completion_acceptance = compare_cross_case_completions(
-        completion_sets, fixture_pin.count
+        completion_sets, input_pin.download_count
     )
     verdict, exit_code = adjudicate_campaign(
         steps,
@@ -500,25 +805,79 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     summary = {
-        "schema": "native_windows_parity_campaign_v1",
+        "schema": "native_windows_parity_campaign_v2",
         "campaign": campaign_root,
         "verdict": verdict,
         "exitCode": exit_code,
         "sourceRevisions": revisions,
-        "binaryProvenance": sanitized_binary_provenance(binaries, output_root),
+        "binaryProvenance": sanitized_binaries,
+        "stageProvenance": {
+            "build": stage_provenance_section(
+                reused=args.skip_build,
+                expected_names=FRESH_BUILD_STEP_NAMES,
+                steps=(
+                    prior_provenance.build_steps
+                    if args.skip_build and prior_provenance is not None
+                    else tuple(
+                        step for step in steps if step.name.startswith("fresh-build-")
+                    )
+                ),
+                source_report_digest=(
+                    prior_provenance.report_digest
+                    if args.skip_build and prior_provenance is not None
+                    else None
+                ),
+            ),
+            "deterministic": stage_provenance_section(
+                reused=args.skip_deterministic,
+                expected_names=DETERMINISTIC_STEP_NAMES,
+                steps=(
+                    prior_provenance.deterministic_steps
+                    if args.skip_deterministic and prior_provenance is not None
+                    else tuple(
+                        step for step in steps if step.name.startswith("deterministic-")
+                    )
+                ),
+                source_report_digest=(
+                    prior_provenance.report_digest
+                    if args.skip_deterministic and prior_provenance is not None
+                    else None
+                ),
+            ),
+        },
         "fixturePin": {
-            "fileCount": fixture_pin.count,
+            "fileCount": input_pin.download_count,
+            "sharedPathCount": input_pin.shared_path_count,
+            "unchanged": fixture_unchanged,
+        },
+        "nativeInputPin": {
+            "configurationPinned": True,
+            "downloadFixturePinned": True,
+            "sharedPathsFixturePinned": True,
+            "downloadFileCount": input_pin.download_count,
+            "sharedPathCount": input_pin.shared_path_count,
             "unchanged": fixture_unchanged,
         },
         "completionAcceptance": completion_acceptance,
         "steps": [step.__dict__ for step in steps],
     }
-    summary_path = summary_dir / "native-parity-summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"campaign verdict: {verdict} (exit {exit_code})")
     print(f"summary: {summary_path}")
     return exit_code
 
 
+def _cli_main() -> int:
+    """Map unexpected orchestration failures to sanitized harness failure."""
+
+    try:
+        return main()
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:  # noqa: BLE001 - orchestration errors are never divergences
+        print(f"harness-failure: {type(error).__name__}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli_main())

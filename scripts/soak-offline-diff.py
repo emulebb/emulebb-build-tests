@@ -1,9 +1,10 @@
 """Offline rust-vs-MFC parity diff over two SOLO scripted-capture recordings.
 
-Consumes two packed recordings produced by ``soak-scripted-capture.py`` (one rust,
-one mfc) for the same campaign — captured SEQUENTIALLY, so each side has its own
-action windows. Correlates the two by ``actionId`` (deterministic — the same scripted
-set ran on both), slices each side's diag/packet records to that action's
+Consumes two sanitized recordings and their private-artifact siblings produced by
+``soak-scripted-capture.py`` (one rust, one mfc) for the same campaign — captured
+SEQUENTIALLY, so each side has its own action windows. Correlates the two by
+``actionId`` (deterministic — the same scripted set ran on both), slices each side's
+diag/packet records to that action's
 ``[begin-lead, end+settle]`` window, and delegates to the existing
 ``diag_event_diff`` / ``packet_trace_diff`` engines. Emits a per-action verdict plus a
 campaign summary (oracle conformance, cumulative Kad opcode coverage, source_count).
@@ -40,31 +41,57 @@ CAMPAIGN_EXIT_CODES = {
 
 
 def _load_recording(zip_path: Path) -> dict[str, Any]:
-    """Reads a packed recording: markers + all diag/packet records (split by schema)."""
+    """Read sanitized metadata plus raw diagnostics from its private sibling."""
 
     markers: list[dict[str, Any]] = []
     diag: list[dict[str, Any]] = []
     packets: list[dict[str, Any]] = []
     meta: dict[str, Any] = {}
     native_capture_sizes: list[int] = []
+    classification: dict[str, Any] | None = None
+    private_dir = zip_path.with_name(f"{zip_path.stem}-private-artifacts")
     with zipfile.ZipFile(zip_path) as zf:
         for name in zf.namelist():
             lower = name.lower()
             if lower.endswith("native-capture.pcapng"):
-                native_capture_sizes.append(zf.getinfo(name).file_size)
+                raise ValueError("A sanitized recording contains a private packet capture.")
+            if lower.endswith("evidence-classification.json"):
+                classification = json.loads(zf.read(name).decode("utf-8", "replace"))
                 continue
             if lower.endswith("markers.jsonl"):
                 for line in zf.read(name).decode("utf-8", "replace").splitlines():
                     line = line.strip()
                     if line:
-                        markers.append(json.loads(line))
+                        marker = json.loads(line)
+                        if not isinstance(marker, dict):
+                            raise ValueError("A recording marker is not a JSON object.")
+                        markers.append(marker)
                 continue
             if lower.endswith("results.json"):
-                meta = json.loads(zf.read(name).decode("utf-8", "replace"))
+                result = json.loads(zf.read(name).decode("utf-8", "replace"))
+                if not isinstance(result, dict):
+                    raise ValueError("The recording results document is not a JSON object.")
+                meta = result
                 continue
-            if not (lower.endswith(".jsonl") or lower.endswith(".log")):
+            if lower.endswith(".jsonl") or lower.endswith(".log"):
+                raise ValueError("A sanitized recording contains private diagnostics.")
+
+    expected_sibling = f"{zip_path.stem}-private-artifacts"
+    if (
+        not isinstance(classification, dict)
+        or classification.get("archiveClassification") != "sanitized-report"
+        or classification.get("privateArtifactsSibling") != expected_sibling
+    ):
+        raise ValueError("The recording evidence classification is missing or invalid.")
+    capture_path = private_dir / "native-capture.pcapng"
+    if capture_path.is_file():
+        native_capture_sizes.append(capture_path.stat().st_size)
+    dumps_dir = private_dir / "dumps"
+    if dumps_dir.is_dir():
+        for path in dumps_dir.rglob("*"):
+            if not path.is_file() or path.suffix.casefold() not in (".jsonl", ".log"):
                 continue
-            for line in zf.read(name).decode("utf-8", "replace").splitlines():
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
                     continue
@@ -80,6 +107,16 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
                     diag.append(record)
                 else:
                     packets.append(record)
+    private_completion_path = private_dir / "completion-private.json"
+    if private_completion_path.is_file():
+        private_completion = json.loads(
+            private_completion_path.read_text(encoding="utf-8")
+        )
+        if not isinstance(private_completion, dict):
+            raise ValueError("Private completion evidence is not a JSON object.")
+        # Private digests stay in memory and are reduced to counts/booleans by
+        # _compare_native_completions; they are never copied into the report.
+        meta["_privateCompletionEvidence"] = private_completion
     return {
         "markers": markers,
         "diag": diag,
@@ -348,9 +385,12 @@ def _completion_rows(
 ) -> tuple[bool, int | None, dict[str, tuple[int, str | None]] | None]:
     """Read opt-in native completion evidence without returning digest-bearing output."""
 
-    section = meta.get("nativeCompletionEvidence")
-    if not isinstance(section, dict) or section.get("required") is not True:
+    public_section = meta.get("nativeCompletionEvidence")
+    section = meta.get("_privateCompletionEvidence", public_section)
+    if not isinstance(public_section, dict) or public_section.get("required") is not True:
         return False, None, None
+    if not isinstance(section, dict) or section.get("required") is not True:
+        return True, None, None
     expected_count = section.get("expectedCount")
     if (
         not isinstance(expected_count, int)
@@ -368,7 +408,7 @@ def _completion_rows(
         action_id = str(item.get("actionId") or "")
         size = item.get("sizeBytes")
         raw_sha256 = item.get("sha256")
-        sha256 = str(raw_sha256).casefold() if raw_sha256 is not None else None
+        sha256 = str(raw_sha256).casefold() if isinstance(raw_sha256, str) else ""
         if (
             not action_id
             or action_id in rows
@@ -377,7 +417,7 @@ def _completion_rows(
             or size < 0
             or item.get("sizeVerified") is not True
             or item.get("ed2kVerified") is not True
-            or (sha256 is not None and re.fullmatch(r"[0-9a-f]{64}", sha256) is None)
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
         ):
             return True, expected_count, None
         rows[action_id] = (size, sha256)
@@ -480,6 +520,7 @@ def _campaign_verdict(
     capture_evidence_ok: bool = True,
     action_contract_ok: bool = True,
     state_machine_ok: bool = True,
+    state_machine_evidence_observed: bool = True,
 ) -> dict[str, Any]:
     """Adjudicate one campaign with harness failures taking precedence."""
 
@@ -496,6 +537,8 @@ def _campaign_verdict(
         findings.append("native-capture-evidence-failed")
     if not action_contract_ok:
         findings.append("native-action-contract-failed")
+    if not state_machine_evidence_observed:
+        findings.append("state-machine-evidence-missing")
     if any(row.get("verdict") == "no-window" for row in per_action):
         findings.append("missing-action-windows")
     if (
@@ -710,7 +753,8 @@ def main(argv: list[str] | None = None) -> int:
         for row in per_action
         if row.get("stateMachineOk") is not None
     ]
-    state_machine_ok = bool(state_machine_rows) and all(state_machine_rows)
+    state_machine_evidence_observed = bool(state_machine_rows)
+    state_machine_ok = state_machine_evidence_observed and all(state_machine_rows)
     external_inconclusive = any(
         side["meta"].get("externalInconclusive") is True for side in (rust, mfc)
     )
@@ -727,6 +771,7 @@ def main(argv: list[str] | None = None) -> int:
         capture_evidence_ok=all(row["ok"] for row in capture_evidence.values()),
         action_contract_ok=all(row["ok"] for row in action_contract.values()),
         state_machine_ok=state_machine_ok,
+        state_machine_evidence_observed=state_machine_evidence_observed,
     )
     all_parity = adjudication["verdict"] == "parity"
     print(f"  per-action verdicts: {sorted(verdicts)}")
@@ -762,6 +807,7 @@ def main(argv: list[str] | None = None) -> int:
         "nativeActionContract": action_contract,
         "stateMachineValidation": {
             "observedActionCount": len(state_machine_rows),
+            "evidenceObserved": state_machine_evidence_observed,
             "ok": state_machine_ok,
         },
         "campaignVerdict": adjudication["verdict"],
@@ -775,5 +821,17 @@ def main(argv: list[str] | None = None) -> int:
     return int(adjudication["exitCode"])
 
 
+def _cli_main() -> int:
+    """Map unexpected offline failures to a sanitized harness-failure exit."""
+
+    try:
+        return main()
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:  # noqa: BLE001 - malformed evidence must never look like divergence
+        print(f"harness-failure: {type(error).__name__}", file=sys.stderr)
+        return CAMPAIGN_EXIT_CODES["harness-failure"]
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli_main())

@@ -468,7 +468,18 @@ def verify_upnp_port_mappings(
             continue
         present_count += 1
         target = mapping[0] if isinstance(mapping, (tuple, list)) and mapping else None
-        if isinstance(target, str) and target.strip() == normalized_address:
+        internal_port = mapping[1] if isinstance(mapping, (tuple, list)) and len(mapping) > 1 else None
+        # WHY: a gateway can return the queried external port redirected to a
+        # different internal service; address-only matching would falsely
+        # claim that the product owns the exact mapping under test.
+        exact_internal_target = (
+            isinstance(target, str)
+            and target.strip() == normalized_address
+            and not isinstance(internal_port, bool)
+            and isinstance(internal_port, (int, str))
+            and str(internal_port).strip() == str(port)
+        )
+        if exact_internal_target:
             matching_local_count += 1
         else:
             foreign_target_count += 1

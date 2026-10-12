@@ -487,6 +487,29 @@ def test_upnp_mapping_audit_rejects_missing_or_foreign_mapping_without_leaking_t
     assert "198.51.100.9" not in str(raised.value.audit.sanitized_counts())
 
 
+def test_upnp_mapping_audit_rejects_wrong_internal_port_without_leaking_target() -> None:
+    client = FakeUpnpClient(
+        {
+            (4662, "TCP"): ("192.0.2.18", 54321, "private description", True, "", 0),
+        }
+    )
+
+    with pytest.raises(UpnpMappingAuditError) as raised:
+        verify_upnp_port_mappings(
+            "192.0.2.18",
+            tcp_ports=(4662,),
+            expected_mapped=True,
+            client_factory=lambda _address: client,
+        )
+
+    assert raised.value.audit.observed_status == "mismatched"
+    assert raised.value.audit.matching_local_count == 0
+    assert raised.value.audit.foreign_target_count == 1
+    assert "54321" not in str(raised.value)
+    assert "54321" not in str(raised.value.audit.sanitized_counts())
+    assert "private description" not in str(raised.value.audit.sanitized_counts())
+
+
 def test_upnp_mapping_audit_rejects_any_mapping_when_absence_is_required() -> None:
     client = FakeUpnpClient({(4662, "TCP"): ("192.0.2.18", 4662, "description", True, "", 0)})
 

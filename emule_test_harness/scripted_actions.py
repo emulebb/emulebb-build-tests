@@ -37,7 +37,19 @@ DEFAULT_SEARCH_METHODS = ("server", "global", "kad")
 DEFAULT_SPACING_SECONDS = 15.0
 ED2K_PART_SIZE = 9_728_000
 _SENSITIVE_OUTCOME_KEYS = frozenset(
-    {"ed2khash", "filehash", "hash", "link", "name", "query", "term"}
+    {
+        "detail",
+        "ed2khash",
+        "error",
+        "exception",
+        "filehash",
+        "hash",
+        "link",
+        "message",
+        "name",
+        "query",
+        "term",
+    }
 )
 
 ActionRunner = Callable[["ScriptedAction"], dict[str, Any]]
@@ -214,7 +226,12 @@ def execute_action_set(
             outcome = sanitize_action_outcome(action, runner(action))
             status = "ok"
         except Exception as exc:  # noqa: BLE001 - one failing action must not abort the set
-            outcome = sanitize_action_outcome(action, {"error": str(exc)[:200]})
+            # WHY: third-party exception text can embed operator-local paths,
+            # queries, hashes, or response bodies. Retain only stable taxonomy.
+            outcome = {
+                "errorCode": "action-runner-exception",
+                "errorType": type(exc).__name__,
+            }
             status = "error"
         marker_writer(
             {
@@ -450,7 +467,9 @@ def _md4_digest(payload: bytes) -> bytes:
     return digest.digest()
 
 
-def _file_digests(path: Path) -> tuple[int, str, str]:
+def file_digests(path: Path) -> tuple[int, str, str]:
+    """Return size, eD2K hash, and SHA-256 for one local regular file."""
+
     sha256 = hashlib.sha256()
     part_hashes: list[bytes] = []
     size_bytes = 0
@@ -492,7 +511,7 @@ def verify_completed_file(
         raise RuntimeError("completed payload is not a regular file")
 
     before = path.stat()
-    size_bytes, ed2k_hash, sha256 = _file_digests(path)
+    size_bytes, ed2k_hash, sha256 = file_digests(path)
     after = path.stat()
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise RuntimeError("completed payload changed during verification")

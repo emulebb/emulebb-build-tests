@@ -75,7 +75,7 @@ def test_execute_action_set_redacts_private_inputs_from_retained_results() -> No
 
     def runner(action: sa.ScriptedAction) -> dict:
         if action.kind == "search":
-            return {"query": action.params["query"], "message": "PRIVATE LINUX DOCUMENTS done"}
+            return {"query": action.params["query"], "message": r"unrelated X:\secret\response.txt"}
         return {
             "hash": action.params["hash"],
             "message": f"private-title.pdf {private_hash[:8]} added",
@@ -87,6 +87,7 @@ def test_execute_action_set_redacts_private_inputs_from_retained_results() -> No
     assert "private-title.pdf" not in retained
     assert private_hash not in retained
     assert private_hash[:8] not in retained
+    assert "secret" not in retained
     assert [result["actionId"] for result in results] == ["action-0001", "action-0002"]
 
 
@@ -129,13 +130,20 @@ def test_execute_action_set_isolates_a_failing_action() -> None:
 
     def runner(action: sa.ScriptedAction) -> dict:
         if action.params["method"] == "server":
-            raise RuntimeError("boom")
+            raise RuntimeError(r"private fixture at X:\secret\title.pdf")
         return {"ok": True}
 
     results = sa.execute_action_set(actions, runner, markers.append, sleep=lambda _s: None)
     assert [r["status"] for r in results] == ["error", "ok"]
     end_markers = [m for m in markers if m["marker"] == "end"]
-    assert end_markers[0]["status"] == "error" and "boom" in end_markers[0]["outcome"]["error"]
+    assert end_markers[0]["status"] == "error"
+    assert end_markers[0]["outcome"] == {
+        "errorCode": "action-runner-exception",
+        "errorType": "RuntimeError",
+    }
+    retained = json.dumps({"markers": markers, "results": results})
+    assert "private fixture" not in retained
+    assert "secret" not in retained
 
 
 def test_verify_completed_file_checks_size_ed2k_and_computes_sha256(tmp_path: Path) -> None:

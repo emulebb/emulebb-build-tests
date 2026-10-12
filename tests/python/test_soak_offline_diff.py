@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
@@ -65,6 +66,155 @@ def _sides(rust_pkt: list, mfc_pkt: list, rust_diag: list | None = None, mfc_dia
     rust = {"packets": rust_pkt, "diag": rust_diag or [], "markers": [], "meta": {}}
     mfc = {"packets": mfc_pkt, "diag": mfc_diag or [], "markers": [], "meta": {}}
     return rust, mfc
+
+
+def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording = tmp_path / "rust-recording.zip"
+    private_dir = tmp_path / "rust-recording-private-artifacts"
+    dumps = private_dir / "dumps" / "nested"
+    dumps.mkdir(parents=True)
+    (private_dir / "native-capture.pcapng").write_bytes(b"x" * 4096)
+    (dumps / "diag.jsonl").write_text(
+        json.dumps({"schema": "diag_event_v1", "ts": _ts(1)}) + "\n",
+        encoding="utf-8",
+    )
+    (dumps / "packet.log").write_text(
+        json.dumps({"schema": "ed2k_packet_v1", "ts_utc": _ts(2)}) + "\n",
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(recording, "w") as archive:
+        archive.writestr("rust-recording/results.json", json.dumps({"nativeCapture": {}}))
+        archive.writestr("rust-recording/markers.jsonl", "")
+        archive.writestr(
+            "rust-recording/evidence-classification.json",
+            json.dumps(
+                {
+                    "archiveClassification": "sanitized-report",
+                    "privateArtifactsSibling": "rust-recording-private-artifacts",
+                }
+            ),
+        )
+
+    loaded = mod._load_recording(recording)
+
+    assert loaded["nativeCaptureSizes"] == [4096]
+    assert len(loaded["diag"]) == 1
+    assert loaded["diag"][0]["ts_utc"] == _ts(1)
+    assert len(loaded["packets"]) == 1
+
+
+def test_load_recording_rejects_private_diagnostics_in_sanitized_archive(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording = tmp_path / "rust-recording.zip"
+    with zipfile.ZipFile(recording, "w") as archive:
+        archive.writestr("rust-recording/results.json", "{}")
+        archive.writestr("rust-recording/markers.jsonl", "")
+        archive.writestr("rust-recording/dumps/private.log", "sensitive")
+
+    with pytest.raises(ValueError, match="private diagnostics"):
+        mod._load_recording(recording)
+
+
+def test_load_recording_uses_private_completion_digest_for_pair_proof(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    digest = "a" * 64
+
+    def make_recording(stem: str) -> dict:
+        recording = tmp_path / f"{stem}.zip"
+        private_dir = tmp_path / f"{stem}-private-artifacts"
+        private_dir.mkdir()
+        public_meta = _completion_meta(digest=digest)
+        del public_meta["nativeCompletionEvidence"]["files"][0]["sha256"]
+        with zipfile.ZipFile(recording, "w") as archive:
+            archive.writestr(f"{stem}/results.json", json.dumps(public_meta))
+            archive.writestr(f"{stem}/markers.jsonl", "")
+            archive.writestr(
+                f"{stem}/evidence-classification.json",
+                json.dumps(
+                    {
+                        "archiveClassification": "sanitized-report",
+                        "privateArtifactsSibling": f"{stem}-private-artifacts",
+                    }
+                ),
+            )
+        (private_dir / "completion-private.json").write_text(
+            json.dumps(_completion_meta(digest=digest)["nativeCompletionEvidence"]),
+            encoding="utf-8",
+        )
+        return mod._load_recording(recording)
+
+    rust = make_recording("rust-recording")
+    mfc = make_recording("mfc-recording")
+    result = mod._compare_native_completions(rust["meta"], mfc["meta"])
+
+    assert result["ok"] is True
+    assert result["digestComparedCount"] == 1
+    assert digest not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("member", "payload", "message"),
+    [
+        ("results.json", "[]", "results document"),
+        ("markers.jsonl", '"not-an-object"\n', "marker"),
+    ],
+)
+def test_load_recording_rejects_valid_json_non_objects(
+    tmp_path: Path,
+    member: str,
+    payload: str,
+    message: str,
+) -> None:
+    mod = _load_offline_diff()
+    recording = tmp_path / "rust-recording.zip"
+    with zipfile.ZipFile(recording, "w") as archive:
+        archive.writestr(
+            "rust-recording/results.json",
+            payload if member == "results.json" else "{}",
+        )
+        archive.writestr(
+            "rust-recording/markers.jsonl",
+            payload if member == "markers.jsonl" else "",
+        )
+
+    with pytest.raises(ValueError, match=message):
+        mod._load_recording(recording)
+
+
+def test_cli_maps_unexpected_failure_to_sanitized_harness_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_offline_diff()
+    monkeypatch.setattr(
+        mod,
+        "main",
+        lambda: (_ for _ in ()).throw(RuntimeError("private recording path")),
+    )
+
+    assert mod._cli_main() == 2
+    stderr = capsys.readouterr().err
+    assert stderr == "harness-failure: RuntimeError\n"
+    assert "private recording path" not in stderr
+
+
+def test_cli_preserves_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_offline_diff()
+    monkeypatch.setattr(
+        mod,
+        "main",
+        lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        mod._cli_main()
 
 
 def test_diag_family_gate_passes_across_independent_sessions() -> None:
@@ -260,6 +410,23 @@ def test_native_completion_comparison_reports_digest_mismatch_without_values() -
     assert rust_digest not in emitted and mfc_digest not in emitted
 
 
+def test_native_completion_comparison_rejects_missing_private_digest() -> None:
+    mod = _load_offline_diff()
+    rust = _completion_meta(digest="a" * 64)
+    mfc = _completion_meta(digest="a" * 64)
+    del rust["nativeCompletionEvidence"]["files"][0]["sha256"]
+    del mfc["nativeCompletionEvidence"]["files"][0]["sha256"]
+
+    result = mod._compare_native_completions(rust, mfc)
+
+    assert result["ok"] is False
+    assert result["matchedCount"] == 0
+    assert set(result["findings"]) == {
+        "rust-completion-evidence-invalid",
+        "mfc-completion-evidence-invalid",
+    }
+
+
 def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> None:
     mod = _load_offline_diff()
     recording = {
@@ -295,6 +462,14 @@ def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> 
         ({}, "parity", 0),
         ({"conformance_ok": False}, "divergence", 1),
         ({"state_machine_ok": False}, "divergence", 1),
+        (
+            {
+                "state_machine_ok": False,
+                "state_machine_evidence_observed": False,
+            },
+            "harness-failure",
+            2,
+        ),
         ({"missing_action_count": 1}, "harness-failure", 2),
         ({"external_inconclusive": True}, "inconclusive-external", 3),
     ],
@@ -320,6 +495,36 @@ def test_campaign_verdict_taxonomy_and_exit_codes(
 
     assert result["verdict"] == expected_verdict
     assert result["exitCode"] == expected_exit
+
+
+def test_missing_state_machine_evidence_is_not_a_protocol_divergence() -> None:
+    mod = _load_offline_diff()
+    inputs = {
+        "per_action": [{"verdict": "conformant", "coverageOk": True}],
+        "missing_action_count": 0,
+        "action_error_count": 0,
+        "completion": {"required": False, "ok": None},
+        "scenario_mismatch": False,
+        "conformance_ok": True,
+        "kad_coverage_ok": True,
+        "secident_dead": False,
+        "external_inconclusive": False,
+        "state_machine_ok": False,
+        "state_machine_evidence_observed": False,
+    }
+
+    missing = mod._campaign_verdict(**inputs)
+    observed_mismatch = mod._campaign_verdict(
+        **{**inputs, "state_machine_evidence_observed": True}
+    )
+
+    assert missing == {
+        "verdict": "harness-failure",
+        "exitCode": 2,
+        "findings": ["state-machine-evidence-missing"],
+    }
+    assert observed_mismatch["verdict"] == "divergence"
+    assert observed_mismatch["exitCode"] == 1
 
 
 def test_action_errors_and_required_completion_failure_are_harness_failures() -> None:
