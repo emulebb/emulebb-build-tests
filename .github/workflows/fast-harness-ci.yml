@@ -92,6 +92,15 @@ jobs:
           ref: miniupnpc-master-emule
           path: repos/third_party/emulebb-miniupnp
 
+      # Cargo integration tests compile the PCP/NAT-PMP sys crate from the
+      # workspace-owned native source tree at this canonical path.
+      - name: Checkout PCP/NAT-PMP third-party source
+        uses: actions/checkout@v7
+        with:
+          repository: emulebb/emulebb-libpcpnatpmp
+          ref: a6e787f837e507336a8774522c33b54264ef4a4b
+          path: repos/third_party/emulebb-libpcpnatpmp
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
