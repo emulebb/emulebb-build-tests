@@ -617,14 +617,16 @@ def _fingerprint_forbidden_root(root: Path, *, root_index: int) -> RootMetadataF
 
 
 def _update_metadata_digest(digest: Any, relative: str, kind: str, metadata: os.stat_result) -> None:
-    fields = (
+    fields = [
         relative.replace("/", "\\").casefold(),
         kind,
         str(metadata.st_mode),
         str(metadata.st_size),
-        str(metadata.st_mtime_ns),
-        str(metadata.st_ctime_ns),
-    )
+    ]
+    if kind != "directory" and not (kind == "root" and stat.S_ISDIR(metadata.st_mode)):
+        # WHY: Windows can publish deferred directory timestamp updates after
+        # enumeration; descendant names and metadata already prove tree changes.
+        fields.extend((str(metadata.st_mtime_ns), str(metadata.st_ctime_ns)))
     for field in fields:
         encoded = field.encode("utf-8", errors="surrogatepass")
         digest.update(len(encoded).to_bytes(8, byteorder="big"))

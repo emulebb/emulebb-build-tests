@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -321,7 +322,7 @@ def seed_transfer_manifest(
     if completed:
         visible_state = "completed"
     elif control_state is not None:
-        visible_state = "controlled"
+        visible_state = "queued"
     else:
         visible_state = "queued"
     now = _now_ms()
@@ -390,17 +391,20 @@ def seed_transfer_manifest(
             """
             INSERT INTO transfers(
                 known_file_id, visible_state, control_state, download_priority,
-                payload_directory, source_path_id, source_mtime_ms,
+                payload_directory, delivery_state, delivery_ownership,
+                source_path_id, source_fingerprint,
                 created_at_ms, updated_at_ms, completed_at_ms
             )
-            VALUES (?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'normal', ?, ?, 'none', ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
                 download_priority = excluded.download_priority,
                 payload_directory = excluded.payload_directory,
+                delivery_state = excluded.delivery_state,
+                delivery_ownership = excluded.delivery_ownership,
                 source_path_id = excluded.source_path_id,
-                source_mtime_ms = excluded.source_mtime_ms,
+                source_fingerprint = excluded.source_fingerprint,
                 updated_at_ms = excluded.updated_at_ms,
                 completed_at_ms = excluded.completed_at_ms,
                 removed_at_ms = NULL
@@ -410,8 +414,9 @@ def seed_transfer_manifest(
                 visible_state,
                 control_state,
                 ed2k_hash,
+                "not_applicable" if source_path_id is not None else "pending",
                 source_path_id,
-                source_mtime_ms,
+                _native_file_fingerprint(source_path),
                 now,
                 now,
                 now if completed else None,
@@ -424,17 +429,24 @@ def seed_transfer_manifest(
             conn.execute(
                 """
                 INSERT INTO shared_file_sources(
-                    known_file_id, path_id, file_size, source_mtime_ms,
+                    known_file_id, path_id, file_size, source_fingerprint,
                     created_at_ms, updated_at_ms
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path_id) DO UPDATE SET
                     known_file_id = excluded.known_file_id,
                     file_size = excluded.file_size,
-                    source_mtime_ms = excluded.source_mtime_ms,
+                    source_fingerprint = excluded.source_fingerprint,
                     updated_at_ms = excluded.updated_at_ms
                 """,
-                (known_file_id, source_path_id, size_bytes, source_mtime_ms, now, now),
+                (
+                    known_file_id,
+                    source_path_id,
+                    size_bytes,
+                    _native_file_fingerprint(source_path),
+                    now,
+                    now,
+                ),
             )
             conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
         conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
@@ -507,12 +519,12 @@ def seed_share_in_place_manifest(
     all_time_upload_accepts: int = 0,
     last_upload_request_ms: int = 0,
 ) -> None:
-    """Seed a completed shared-file manifest that Rust can reload without hashing.
+    """Seed a completed shared-file manifest with schema-current path identity.
 
     The row mirrors Rust's local ingest result: completed transfer, verified
-    pieces and ranges, original ``source_path``, and source mtime. A later
-    shared-directory reload skips hashing only when path, size, and mtime still
-    match the scanned file.
+    pieces and ranges, original ``source_path``, and a native file fingerprint.
+    ``source_mtime_ms`` remains an accepted input for callers that parse stock
+    metadata, while the persisted identity is derived from the actual file.
     """
 
     seed_transfer_manifest(
@@ -658,28 +670,31 @@ def _seed_share_in_place_manifests_fast_conn(
 
     for manifest in manifests:
         source_path = str(manifest["source_path"])
-        normalized_key = normalize_path_key(source_path)
-        path_rows.append((source_path, source_path.encode(), source_path, normalized_key, platform, now))
+        path_rows.append(
+            (
+                source_path,
+                _native_path_storage_bytes(source_path),
+                normalize_path_key(source_path),
+                platform,
+            )
+        )
 
     conn.executemany(
         """
         INSERT INTO local_paths(
-            display_path, native_path, canonical_display_path, normalized_key,
-            platform, last_stat_ms
+            display_path, native_path, search_key, platform
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(platform, normalized_key) DO UPDATE SET
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(platform, native_path) DO UPDATE SET
             display_path = excluded.display_path,
-            native_path = excluded.native_path,
-            canonical_display_path = excluded.canonical_display_path,
-            last_stat_ms = excluded.last_stat_ms
+            search_key = excluded.search_key
         """,
         path_rows,
     )
     path_ids = {
         row[1]: row[0]
         for row in conn.execute(
-            "SELECT id, normalized_key FROM local_paths WHERE platform = ?",
+            "SELECT id, search_key FROM local_paths WHERE platform = ?",
             (platform,),
         )
     }
@@ -746,9 +761,11 @@ def _seed_share_in_place_manifests_fast_conn(
         known_file_id = known_ids[ed2k_hash]
         path_id = path_ids[normalize_path_key(str(manifest["source_path"]))]
         size_bytes = int(manifest["size_bytes"])
-        source_mtime_ms = int(manifest["source_mtime_ms"])
-        transfer_rows.append((known_file_id, ed2k_hash, path_id, source_mtime_ms, now, now, now))
-        source_rows.append((known_file_id, path_id, size_bytes, source_mtime_ms, now, now))
+        source_fingerprint = _native_file_fingerprint(str(manifest["source_path"]))
+        transfer_rows.append(
+            (known_file_id, ed2k_hash, path_id, source_fingerprint, now, now, now)
+        )
+        source_rows.append((known_file_id, path_id, size_bytes, source_fingerprint, now, now))
         range_rows.append((known_file_id, size_bytes, now))
         for index, part_hash in enumerate(manifest.get("md4_hashset", []) or []):
             md4_rows.append((known_file_id, index, bytes.fromhex(str(part_hash))))
@@ -759,15 +776,18 @@ def _seed_share_in_place_manifests_fast_conn(
         """
         INSERT INTO transfers(
             known_file_id, visible_state, download_priority, payload_directory,
-            source_path_id, source_mtime_ms, created_at_ms, updated_at_ms, completed_at_ms
+            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
+            created_at_ms, updated_at_ms, completed_at_ms
         )
-        VALUES (?, 'completed', 'normal', ?, ?, ?, ?, ?, ?)
+        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?)
         ON CONFLICT(known_file_id) DO UPDATE SET
             visible_state = excluded.visible_state,
             download_priority = excluded.download_priority,
             payload_directory = excluded.payload_directory,
+            delivery_state = excluded.delivery_state,
+            delivery_ownership = excluded.delivery_ownership,
             source_path_id = excluded.source_path_id,
-            source_mtime_ms = excluded.source_mtime_ms,
+            source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
             removed_at_ms = NULL
@@ -777,14 +797,14 @@ def _seed_share_in_place_manifests_fast_conn(
     conn.executemany(
         """
         INSERT INTO shared_file_sources(
-            known_file_id, path_id, file_size, source_mtime_ms,
+            known_file_id, path_id, file_size, source_fingerprint,
             created_at_ms, updated_at_ms
         )
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(path_id) DO UPDATE SET
             known_file_id = excluded.known_file_id,
             file_size = excluded.file_size,
-            source_mtime_ms = excluded.source_mtime_ms,
+            source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms
         """,
         source_rows,
@@ -940,20 +960,31 @@ def _seed_share_in_place_manifest_conn(
         """
         INSERT INTO transfers(
             known_file_id, visible_state, download_priority, payload_directory,
-            source_path_id, source_mtime_ms, created_at_ms, updated_at_ms, completed_at_ms
+            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
+            created_at_ms, updated_at_ms, completed_at_ms
         )
-        VALUES (?, 'completed', 'normal', ?, ?, ?, ?, ?, ?)
+        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?)
         ON CONFLICT(known_file_id) DO UPDATE SET
             visible_state = excluded.visible_state,
             download_priority = excluded.download_priority,
             payload_directory = excluded.payload_directory,
+            delivery_state = excluded.delivery_state,
+            delivery_ownership = excluded.delivery_ownership,
             source_path_id = excluded.source_path_id,
-            source_mtime_ms = excluded.source_mtime_ms,
+            source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
             removed_at_ms = NULL
         """,
-        (known_file_id, ed2k_hash, source_path_id, source_mtime_ms, now, now, now),
+        (
+            known_file_id,
+            ed2k_hash,
+            source_path_id,
+            _native_file_fingerprint(source_path),
+            now,
+            now,
+            now,
+        ),
     )
     transfer_id = conn.execute(
         "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
@@ -961,17 +992,24 @@ def _seed_share_in_place_manifest_conn(
     conn.execute(
         """
         INSERT INTO shared_file_sources(
-            known_file_id, path_id, file_size, source_mtime_ms,
+            known_file_id, path_id, file_size, source_fingerprint,
             created_at_ms, updated_at_ms
         )
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(path_id) DO UPDATE SET
             known_file_id = excluded.known_file_id,
             file_size = excluded.file_size,
-            source_mtime_ms = excluded.source_mtime_ms,
+            source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms
         """,
-        (known_file_id, source_path_id, size_bytes, source_mtime_ms, now, now),
+        (
+            known_file_id,
+            source_path_id,
+            size_bytes,
+            _native_file_fingerprint(source_path),
+            now,
+            now,
+        ),
     )
     conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
     conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
@@ -1059,7 +1097,7 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                    known_files.all_time_upload_requests,
                    known_files.all_time_upload_accepts,
                    known_files.last_upload_request_ms,
-                   source_paths.display_path, transfers.source_mtime_ms
+                   source_paths.display_path, transfers.source_fingerprint
             FROM known_files
             LEFT JOIN transfers ON transfers.known_file_id = known_files.id
             LEFT JOIN local_paths source_paths ON source_paths.id = transfers.source_path_id
@@ -1122,7 +1160,7 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         "all_time_upload_accepts": row[16],
         "last_upload_request_ms": row[17],
         "source_path": row[18],
-        "source_mtime_ms": row[19],
+        "source_mtime_ms": _fingerprint_modified_ms(row[19]),
         "md4_hashset": md4_hashset,
         "aich_hashset": aich_hashset,
         "sources": sources,
@@ -1136,27 +1174,167 @@ def _optional_local_path_id(conn: sqlite3.Connection, display_path: str | None, 
 
 
 def _upsert_local_path(conn: sqlite3.Connection, display_path: str, now: int) -> int:
-    normalized_key = normalize_path_key(display_path)
+    del now
+    native_path = _native_path_storage_bytes(display_path)
+    search_key = normalize_path_key(display_path)
     platform = current_platform()
     conn.execute(
         """
         INSERT INTO local_paths(
-            display_path, native_path, canonical_display_path, normalized_key,
-            platform, last_stat_ms
+            display_path, native_path, search_key, platform
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(platform, normalized_key) DO UPDATE SET
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(platform, native_path) DO UPDATE SET
             display_path = excluded.display_path,
-            native_path = excluded.native_path,
-            canonical_display_path = excluded.canonical_display_path,
-            last_stat_ms = excluded.last_stat_ms
+            search_key = excluded.search_key
         """,
-        (display_path, display_path.encode(), display_path, normalized_key, platform, now),
+        (display_path, native_path, search_key, platform),
     )
     return conn.execute(
-        "SELECT id FROM local_paths WHERE platform = ? AND normalized_key = ?",
-        (platform, normalized_key),
+        "SELECT id FROM local_paths WHERE platform = ? AND native_path = ?",
+        (platform, native_path),
     ).fetchone()[0]
+
+
+def _native_path_storage_bytes(display_path: str) -> bytes:
+    if current_platform() == "windows":
+        return display_path.encode("utf-16-le", errors="surrogatepass")
+    return os.fsencode(display_path)
+
+
+def _native_file_fingerprint(source_path: str | None) -> bytes | None:
+    if source_path is None:
+        return None
+    path = Path(source_path)
+    try:
+        metadata = path.stat()
+    except OSError:
+        return None
+    if not path.is_file():
+        return None
+
+    if current_platform() == "windows":
+        identity = _windows_file_identity(path)
+        changed_ns = None
+    else:
+        identity = b"\x01" + int(metadata.st_dev).to_bytes(8, "little") + int(
+            metadata.st_ino
+        ).to_bytes(8, "little")
+        changed_ns = metadata.st_ctime_ns
+    if identity is None:
+        return None
+
+    output = bytearray(b"\x01")
+    output.extend(identity)
+    output.extend(int(metadata.st_size).to_bytes(8, "little"))
+    _append_native_timestamp(output, metadata.st_mtime_ns)
+    if changed_ns is None:
+        output.append(0)
+    else:
+        output.append(1)
+        _append_native_timestamp(output, changed_ns)
+    return bytes(output)
+
+
+def _append_native_timestamp(output: bytearray, timestamp_ns: int) -> None:
+    seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
+    output.extend(int(seconds).to_bytes(8, "little", signed=True))
+    output.extend(int(nanoseconds).to_bytes(4, "little"))
+
+
+def _fingerprint_modified_ms(fingerprint: bytes | None) -> int | None:
+    if fingerprint is None or len(fingerprint) < 2 or fingerprint[0] != 1:
+        return None
+    identity_end = {1: 18, 2: 14, 3: 26}.get(fingerprint[1])
+    if identity_end is None:
+        return None
+    timestamp_start = identity_end + 8
+    timestamp_end = timestamp_start + 12
+    if len(fingerprint) < timestamp_end:
+        return None
+    seconds = int.from_bytes(
+        fingerprint[timestamp_start : timestamp_start + 8], "little", signed=True
+    )
+    nanoseconds = int.from_bytes(
+        fingerprint[timestamp_start + 8 : timestamp_end], "little"
+    )
+    if nanoseconds >= 1_000_000_000:
+        return None
+    return seconds * 1_000 + nanoseconds // 1_000_000
+
+
+def _windows_file_identity(path: Path) -> bytes | None:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class FileId128(ctypes.Structure):
+        _fields_ = [("identifier", ctypes.c_ubyte * 16)]
+
+    class FileIdInfo(ctypes.Structure):
+        _fields_ = [
+            ("volume_serial_number", ctypes.c_ulonglong),
+            ("file_id", FileId128),
+        ]
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("last_access_time", wintypes.FILETIME),
+            ("last_write_time", wintypes.FILETIME),
+            ("volume_serial_number", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_high_resolution = kernel32.GetFileInformationByHandleEx
+    get_high_resolution.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_high_resolution.restype = wintypes.BOOL
+    get_low_resolution = kernel32.GetFileInformationByHandle
+    get_low_resolution.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_low_resolution.restype = wintypes.BOOL
+
+    try:
+        with path.open("rb") as source:
+            handle = wintypes.HANDLE(msvcrt.get_osfhandle(source.fileno()))
+            high_resolution = FileIdInfo()
+            if get_high_resolution(
+                handle, 18, ctypes.byref(high_resolution), ctypes.sizeof(high_resolution)
+            ):
+                return (
+                    b"\x03"
+                    + int(high_resolution.volume_serial_number).to_bytes(8, "little")
+                    + bytes(high_resolution.file_id.identifier)
+                )
+
+            # WHY: match Rust's low-resolution fallback so fingerprint identity
+            # remains comparable when FileIdInfo is unavailable on a volume.
+            low_resolution = ByHandleFileInformation()
+            if not get_low_resolution(handle, ctypes.byref(low_resolution)):
+                return None
+            file_index = (
+                int(low_resolution.file_index_high) << 32
+            ) | int(low_resolution.file_index_low)
+            return (
+                b"\x02"
+                + int(low_resolution.volume_serial_number).to_bytes(4, "little")
+                + file_index.to_bytes(8, "little")
+            )
+    except OSError:
+        return None
 
 
 def normalize_path_key(value: str) -> str:

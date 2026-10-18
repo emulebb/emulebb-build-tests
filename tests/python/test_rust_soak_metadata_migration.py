@@ -41,7 +41,7 @@ KNOWN_FILES_MEDIA_DDL_LINES = (
 
 def schema_without_media_metadata(schema_sql: str) -> str:
     for line in KNOWN_FILES_MEDIA_DDL_LINES:
-        schema_sql = schema_sql.replace(line, "")
+        schema_sql = schema_sql.replace(line, "", 1)
     return schema_sql
 
 
@@ -90,13 +90,11 @@ def make_v15_db(path: Path) -> None:
         conn.execute(
             """
             INSERT INTO local_paths(
-                display_path, native_path, canonical_display_path, normalized_key,
-                platform, file_identity_kind, file_identity, size_bytes, mtime_ms,
-                last_stat_ms
+                display_path, native_path, search_key, platform
             )
-            VALUES ('C:/share', X'433A2F7368617265', 'C:/share', 'c:/share',
-                    'windows', NULL, NULL, NULL, NULL, NULL)
-            """
+            VALUES ('C:/share', ?, 'c:/share', 'windows')
+            """,
+            ("C:/share".encode("utf-16-le"),),
         )
         path_id = conn.execute("SELECT id FROM local_paths").fetchone()[0]
         conn.execute(
@@ -209,8 +207,8 @@ def make_v19_db_without_source_connect_options(path: Path) -> None:
         )
         known_file_id = conn.execute("SELECT id FROM known_files").fetchone()[0]
         conn.execute(
-            "INSERT INTO transfers(known_file_id, visible_state, created_at_ms, updated_at_ms) "
-            "VALUES (?, 'downloading', 0, 0)",
+            "INSERT INTO transfers(known_file_id, visible_state, delivery_state, "
+            "created_at_ms, updated_at_ms) VALUES (?, 'downloading', 'pending', 0, 0)",
             (known_file_id,),
         )
         transfer_id = conn.execute("SELECT id FROM transfers").fetchone()[0]
@@ -245,8 +243,8 @@ def make_v20_db_without_source_file_descriptions(path: Path) -> None:
         )
         known_file_id = conn.execute("SELECT id FROM known_files").fetchone()[0]
         conn.execute(
-            "INSERT INTO transfers(known_file_id, visible_state, created_at_ms, updated_at_ms) "
-            "VALUES (?, 'downloading', 0, 0)",
+            "INSERT INTO transfers(known_file_id, visible_state, delivery_state, "
+            "created_at_ms, updated_at_ms) VALUES (?, 'downloading', 'pending', 0, 0)",
             (known_file_id,),
         )
         transfer_id = conn.execute("SELECT id FROM transfers").fetchone()[0]
@@ -314,15 +312,13 @@ def make_v23_db_without_final_rehash_gate(path: Path) -> None:
             conn.execute(
                 """
                 INSERT INTO local_paths(
-                    id, display_path, native_path, canonical_display_path,
-                    normalized_key, platform
-                ) VALUES (?, ?, ?, ?, ?, 'windows')
+                    id, display_path, native_path, search_key, platform
+                ) VALUES (?, ?, ?, ?, 'windows')
                 """,
                 (
                     path_id,
                     display_path,
-                    display_path.encode(),
-                    display_path,
+                    display_path.encode("utf-16-le"),
                     display_path.lower(),
                 ),
             )
@@ -347,9 +343,10 @@ def make_v23_db_without_final_rehash_gate(path: Path) -> None:
                 """
                 INSERT INTO transfers(
                     id, known_file_id, visible_state, delivered_path_id,
-                    source_path_id, created_at_ms, updated_at_ms,
+                    source_path_id, delivery_state, delivery_ownership,
+                    created_at_ms, updated_at_ms,
                     completed_at_ms, removed_at_ms
-                ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
                 """,
                 (
                     row_id,
@@ -357,6 +354,12 @@ def make_v23_db_without_final_rehash_gate(path: Path) -> None:
                     state,
                     delivered,
                     source,
+                    (
+                        "not_applicable"
+                        if source is not None
+                        else "delivered" if delivered is not None else "pending"
+                    ),
+                    "unowned" if delivered is not None else "none",
                     completed_at,
                     removed,
                 ),
@@ -384,6 +387,7 @@ def test_migrates_v15_soak_metadata_to_current_shape(tmp_path: Path) -> None:
         "migrated-v21-to-v22",
         "migrated-v22-to-v23",
         "migrated-v23-to-v24",
+        "finalized-v24-to-current",
     ]
     assert all(Path(str(step["backup"])).is_file() for step in result["steps"])
     with sqlite3.connect(db_path) as conn:
