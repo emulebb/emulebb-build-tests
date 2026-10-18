@@ -250,6 +250,58 @@ def current_imported_known_files_sql(rust_repo: Path) -> str:
     )
 
 
+def schema_statements(schema_sql: str) -> list[str]:
+    statements: list[str] = []
+    pending = ""
+    for line in schema_sql.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statements.append(pending.strip())
+            pending = ""
+    if pending.strip():
+        raise RuntimeError("current Rust schema ends with an incomplete statement")
+    return statements
+
+
+def current_schema_secondary_objects_sql(rust_repo: Path) -> str:
+    statements = []
+    for statement in schema_statements(rust_metadata._schema_sql(rust_repo)):
+        upper = statement.upper()
+        if upper.startswith("CREATE UNIQUE INDEX "):
+            statement = statement.replace(
+                "CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1
+            )
+        elif upper.startswith("CREATE INDEX "):
+            statement = statement.replace(
+                "CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1
+            )
+        elif upper.startswith("CREATE TRIGGER "):
+            statement = statement.replace(
+                "CREATE TRIGGER ", "CREATE TRIGGER IF NOT EXISTS ", 1
+            )
+        else:
+            continue
+        statements.append(statement)
+    return "\n".join(statements)
+
+
+def schema_table_columns(conn: sqlite3.Connection) -> dict[str, set[str]]:
+    tables = [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
+    return {table: set(table_columns(conn, table)) for table in tables}
+
+
+def expected_schema_table_columns(rust_repo: Path) -> dict[str, set[str]]:
+    with sqlite3.connect(":memory:") as conn:
+        conn.executescript(rust_metadata._schema_sql(rust_repo))
+        return schema_table_columns(conn)
+
+
 def known_files_allows_not_published(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'known_files'"
@@ -973,9 +1025,12 @@ def migrate_v23_to_v24(
                 INSERT INTO {temp_table}(
                     id, known_file_id, visible_state, final_rehash_pending,
                     control_state, category_id, download_priority, target_path_id,
-                    payload_directory, delivered_path_id, source_path_id,
-                    source_mtime_ms, created_at_ms, updated_at_ms,
-                    completed_at_ms, removed_at_ms
+                    payload_directory, delivery_state, delivery_ownership,
+                    delivered_path_id, source_path_id, source_fingerprint,
+                    payload_fingerprint, created_at_ms, updated_at_ms,
+                    completed_at_ms, removed_at_ms, delete_requested_at_ms,
+                    transfer_directory_tombstone_identity,
+                    transfer_directory_tombstone_marker_id
                 )
                 SELECT
                     transfers.id,
@@ -1001,9 +1056,12 @@ def migrate_v23_to_v24(
                     transfers.download_priority,
                     transfers.target_path_id,
                     transfers.payload_directory,
+                    transfers.delivery_state,
+                    transfers.delivery_ownership,
                     transfers.delivered_path_id,
                     transfers.source_path_id,
-                    transfers.source_mtime_ms,
+                    transfers.source_fingerprint,
+                    transfers.payload_fingerprint,
                     transfers.created_at_ms,
                     transfers.updated_at_ms,
                     CASE
@@ -1014,7 +1072,10 @@ def migrate_v23_to_v24(
                         THEN NULL
                         ELSE transfers.completed_at_ms
                     END,
-                    transfers.removed_at_ms
+                    transfers.removed_at_ms,
+                    transfers.delete_requested_at_ms,
+                    transfers.transfer_directory_tombstone_identity,
+                    transfers.transfer_directory_tombstone_marker_id
                 FROM transfers
                 JOIN known_files ON known_files.id = transfers.known_file_id
                 """
@@ -1062,6 +1123,94 @@ def migrate_v23_to_v24(
         "transfers": transfer_count,
         "undeliveredDownloadsPendingRehash": pending_count,
         "columns": after_columns,
+    }
+
+
+def finalize_v24_to_current(
+    *,
+    db_path: Path,
+    rust_repo: Path,
+    backup_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Advance a verified harness v24 shape to the current schema marker."""
+
+    db_path = db_path.resolve()
+    rust_repo = rust_repo.resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"metadata database does not exist: {db_path}")
+
+    schema_id, current_version = rust_metadata._schema_marker(rust_repo)
+    expected_tables = expected_schema_table_columns(rust_repo)
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        before_version = schema_marker(db_path, schema_id)
+        if before_version is None:
+            raise RuntimeError(f"metadata_schema row is missing for {schema_id}")
+        actual_tables = schema_table_columns(conn)
+        transfers_sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transfers'"
+        ).fetchone()
+        transfers_sql = str(transfers_sql_row[0]) if transfers_sql_row else ""
+
+    mismatched_tables = sorted(
+        table
+        for table in set(expected_tables) | set(actual_tables)
+        if expected_tables.get(table) != actual_tables.get(table)
+    )
+    shape_current = not mismatched_tables and "'completing'" in transfers_sql
+    if before_version == current_version and shape_current:
+        return {
+            "schema": SCHEMA,
+            "action": "noop-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "schemaVersion": before_version,
+        }
+    if before_version != V24_SCHEMA_VERSION or not shape_current:
+        raise RuntimeError(
+            "metadata DB is not the bounded reconstructed v24 shape "
+            f"(schemaVersion={before_version}, mismatchedTables={mismatched_tables})"
+        )
+    if dry_run:
+        return {
+            "schema": SCHEMA,
+            "action": "would-finalize-v24-to-current",
+            "metadataDb": str(db_path),
+            "schemaId": schema_id,
+            "fromSchemaVersion": V24_SCHEMA_VERSION,
+            "toSchemaVersion": current_version,
+        }
+
+    backup_path = backup_database(db_path, backup_dir, "v24-to-current")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            conn.executescript(current_schema_secondary_objects_sql(rust_repo))
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE metadata_schema SET schema_version = ? WHERE schema_id = ?",
+                (current_version, schema_id),
+            )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_issues:
+            raise RuntimeError(
+                f"foreign key check failed after finalization: {fk_issues[:5]}"
+            )
+        after_version = schema_marker(db_path, schema_id)
+
+    return {
+        "schema": SCHEMA,
+        "action": "finalized-v24-to-current",
+        "metadataDb": str(db_path),
+        "backup": str(backup_path),
+        "schemaId": schema_id,
+        "fromSchemaVersion": before_version,
+        "toSchemaVersion": after_version,
     }
 
 
@@ -1127,6 +1276,7 @@ def migrate_to_current(
         V21_SCHEMA_VERSION,
         V22_SCHEMA_VERSION,
         V23_SCHEMA_VERSION,
+        V24_SCHEMA_VERSION,
     ):
         raise RuntimeError(
             f"metadata DB schemaVersion={before_version} cannot be migrated to current {current_version}"
@@ -1254,6 +1404,20 @@ def migrate_to_current(
             )
         )
 
+    if not dry_run:
+        before_version = schema_marker(db_path, schema_id)
+    elif before_version == V23_SCHEMA_VERSION and current_version >= V24_SCHEMA_VERSION:
+        before_version = V24_SCHEMA_VERSION
+    if before_version == V24_SCHEMA_VERSION and current_version > V24_SCHEMA_VERSION:
+        steps.append(
+            finalize_v24_to_current(
+                db_path=db_path,
+                rust_repo=rust_repo,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+            )
+        )
+
     final_version = (
         schema_marker(db_path, schema_id) if not dry_run else current_version
     )
@@ -1270,6 +1434,7 @@ def migrate_to_current(
             "noop-v22-shape-current",
             "noop-v23-shape-current",
             "noop-v24-shape-current",
+            "noop-current",
         )
         for step in steps
     ):

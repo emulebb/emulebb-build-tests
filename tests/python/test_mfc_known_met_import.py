@@ -280,7 +280,8 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         source_row = conn.execute(
             """
-            SELECT shared_file_sources.file_size, shared_file_sources.source_mtime_ms
+            SELECT shared_file_sources.file_size,
+                   length(shared_file_sources.source_fingerprint)
             FROM shared_file_sources
             JOIN local_paths ON local_paths.id = shared_file_sources.path_id
             WHERE local_paths.display_path = ?
@@ -294,7 +295,8 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
             FROM verified_ranges
             """
         ).fetchone()
-    assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
+    assert source_row[0] == payload.stat().st_size
+    assert source_row[1] > 0
     assert piece_rows == 0
     assert range_row == (0, payload.stat().st_size)
 
@@ -500,7 +502,8 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
     with sqlite3.connect(db_path) as conn:
         source_row = conn.execute(
             """
-            SELECT shared_file_sources.file_size, shared_file_sources.source_mtime_ms
+            SELECT shared_file_sources.file_size,
+                   length(shared_file_sources.source_fingerprint)
             FROM shared_file_sources
             JOIN local_paths ON local_paths.id = shared_file_sources.path_id
             WHERE local_paths.display_path = ?
@@ -514,7 +517,8 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
             FROM verified_ranges
             """
         ).fetchone()
-    assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
+    assert source_row[0] == payload.stat().st_size
+    assert source_row[1] > 0
     assert piece_rows == 0
     assert range_row == (0, payload.stat().st_size)
 

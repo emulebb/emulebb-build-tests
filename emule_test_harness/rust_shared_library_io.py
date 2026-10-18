@@ -1618,7 +1618,7 @@ def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
                    known_files.md4_hashset_acquired,
                    known_files.aich_hashset_acquired,
                    length(known_files.aich_root), local_paths.display_path,
-                   shared_file_sources.source_mtime_ms
+                   length(shared_file_sources.source_fingerprint)
             FROM shared_file_sources
             JOIN known_files
               ON known_files.id = shared_file_sources.known_file_id
@@ -1639,7 +1639,7 @@ def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
             "md4Acquired": int(row[4]),
             "aichAcquired": int(row[5]),
             "aichRootBytes": int(row[6] or 0),
-            "sourceMtimeMs": row[8],
+            "sourceFingerprintBytes": int(row[8] or 0),
             "sourcePath": str(row[7]),
         }
         for row in rows
@@ -1680,7 +1680,7 @@ def _watcher_row_evidence(
         or row["md4Acquired"] != 1
         or row["aichAcquired"] != 1
         or row["aichRootBytes"] != 20
-        or row["sourceMtimeMs"] is None
+        or row["sourceFingerprintBytes"] == 0
     )
     normal_count = sum(
         1

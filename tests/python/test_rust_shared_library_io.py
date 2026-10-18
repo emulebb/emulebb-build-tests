@@ -367,7 +367,7 @@ def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) ->
             "md4Acquired": 1,
             "aichAcquired": 1,
             "aichRootBytes": 20,
-            "sourceMtimeMs": 1,
+            "sourceFingerprintBytes": 47,
         },
         long: {
             "hash": "b" * 32,
@@ -376,7 +376,7 @@ def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) ->
             "md4Acquired": 1,
             "aichAcquired": 1,
             "aichRootBytes": 20,
-            "sourceMtimeMs": 2,
+            "sourceFingerprintBytes": 47,
         },
     }
     evidence, ok = subject._watcher_row_evidence(rows, expected)
@@ -423,7 +423,7 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
             CREATE TABLE shared_file_sources (
                 known_file_id INTEGER, path_id INTEGER,
-                file_size INTEGER, source_mtime_ms INTEGER
+                file_size INTEGER, source_fingerprint BLOB
             );
             CREATE TABLE unshared_files (known_file_id INTEGER);
             """
@@ -442,8 +442,12 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
         connection.execute(
             "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "removed"),)
         )
-        connection.execute("INSERT INTO shared_file_sources VALUES (1, 1, 16, 123)")
-        connection.execute("INSERT INTO shared_file_sources VALUES (2, 2, 16, 124)")
+        connection.execute(
+            "INSERT INTO shared_file_sources VALUES (1, 1, 16, zeroblob(47))"
+        )
+        connection.execute(
+            "INSERT INTO shared_file_sources VALUES (2, 2, 16, zeroblob(47))"
+        )
         connection.execute("INSERT INTO unshared_files VALUES (2)")
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
@@ -469,7 +473,7 @@ def test_storage_snapshot_counts_active_shared_sources_not_transfers(
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
             CREATE TABLE shared_file_sources (
                 known_file_id INTEGER, path_id INTEGER,
-                file_size INTEGER, source_mtime_ms INTEGER
+                file_size INTEGER, source_fingerprint BLOB
             );
             CREATE TABLE unshared_files (known_file_id INTEGER);
             CREATE TABLE transfers (removed_at_ms INTEGER);
@@ -489,8 +493,12 @@ def test_storage_snapshot_counts_active_shared_sources_not_transfers(
         connection.execute(
             "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
         )
-        connection.execute("INSERT INTO shared_file_sources VALUES (1, 1, 16, 123)")
-        connection.execute("INSERT INTO shared_file_sources VALUES (2, 2, 32, 124)")
+        connection.execute(
+            "INSERT INTO shared_file_sources VALUES (1, 1, 16, zeroblob(47))"
+        )
+        connection.execute(
+            "INSERT INTO shared_file_sources VALUES (2, 2, 32, zeroblob(47))"
+        )
         connection.execute("INSERT INTO unshared_files VALUES (2)")
         connection.execute("INSERT INTO transfers VALUES (NULL)")
 
