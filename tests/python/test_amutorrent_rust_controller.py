@@ -22,7 +22,7 @@ import pytest
 from emule_test_harness import rust_client
 from emule_test_harness import rust_metadata
 
-API_KEY = "amutorrent-rust-controller-key"
+API_KEY = "amutorrent-rust-controller-test-key"
 SEED_HASH = "00112233445566778899aabbccddeeff"
 
 
