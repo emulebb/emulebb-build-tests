@@ -316,6 +316,8 @@ Rust 100k shared-library I/O characterization:
 - `prepare` creates or resumes an owned 100,000-file, 10,485,760,000-byte tree
   below `EMULEBB_WORKSPACE_OUTPUT_ROOT\profiles`. The tree has 100 top-level
   directories, 100 leaves per top level, and 10 generic `.bin` files per leaf;
+  a fixed 16-file cohort covers NFC/NFD, compatibility, case, accented, CJK,
+  emoji, bracketed, and long-Unicode names without changing the size buckets;
   the final 1,000 files use safe relative paths of at least 300 characters.
   It refuses a non-SSD target unless `--allow-non-ssd` is explicitly supplied.
 - `run` uses a fresh isolated profile with ED2K, Kad, NAT, and automatic connect
@@ -327,6 +329,9 @@ Rust 100k shared-library I/O characterization:
 - Windows resolves mount points to physical disks and uses verbatim paths only
   for filesystem calls. Native Linux resolves local block devices through
   `findmnt`/`lsblk`; ambiguous composite devices fail instead of being guessed.
+  Validation records Windows lengths as UTF-16 code units and Unix lengths as
+  encoded bytes, including component maxima and explicit case/normalization
+  collision capability dispositions.
   `--watcher-timeout-seconds` and `--watcher-poll-seconds` tune only live watcher
   convergence.
 - Reports below `EMULEBB_WORKSPACE_OUTPUT_ROOT\reports\emulebb-rust\shared-library-io`

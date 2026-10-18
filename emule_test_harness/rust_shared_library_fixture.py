@@ -18,6 +18,25 @@ WATCHER_FILE_COUNT = 1_000
 WATCHER_TOTAL_BYTES = 100 * MIB
 WATCHER_LONG_PATH_COUNT = 500
 MUTATION_COUNTS = (800, 150, 50)
+UNICODE_COHORT_START = 98_900
+UNICODE_FILE_NAMES = (
+    "caf\u00e9-nfc.bin",
+    "cafe\u0301-nfd.bin",
+    "\u212b-compatibility.bin",
+    "\u00c5-canonical.bin",
+    "Case-Variant.bin",
+    "case-variant.bin",
+    "r\u00e9sum\u00e9-accented.bin",
+    "\u4e2d\u6587-\u6587\u4ef6.bin",
+    "\u65e5\u672c\u8a9e-\u5171\u6709.bin",
+    "emoji-\U0001f680-\U0001f4be.bin",
+    "[bracketed]-name.bin",
+    "\uff21\uff22\uff23-fullwidth.bin",
+    "espa\u00f1ol-ni\u00f1o.bin",
+    "polski-za\u017c\u00f3\u0142\u0107.bin",
+    "greek-\u03b4\u03bf\u03ba\u03b9\u03bc\u03ae.bin",
+    "cyrillic-\u0442\u0435\u0441\u0442.bin",
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +87,24 @@ def baseline_long_path_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
     return 1_000 if spec == PRODUCTION_SPEC else 0
 
 
+def unicode_cohort_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
+    return len(UNICODE_FILE_NAMES) if spec == PRODUCTION_SPEC else 0
+
+
+def unicode_cohort_summary(spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, object]:
+    return {
+        "fileCount": unicode_cohort_count(spec),
+        "nfcNfd": True,
+        "compatibilityEquivalent": True,
+        "caseVariants": True,
+        "accented": True,
+        "cjk": True,
+        "emoji": True,
+        "bracketed": True,
+        "longUnicodePathCount": 4 if spec == PRODUCTION_SPEC else 0,
+    }
+
+
 def _long_segments(namespace: str) -> tuple[str, ...]:
     segments = []
     for index in range(5):
@@ -99,6 +136,20 @@ def relative_file_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> 
     top = index // files_per_top
     leaf = (index % files_per_top) // spec.files_per_leaf
     relative = Path(f"group-{top:03d}") / f"leaf-{leaf:03d}"
+    unicode_offset = index - UNICODE_COHORT_START
+    if spec == PRODUCTION_SPEC and 0 <= unicode_offset < len(UNICODE_FILE_NAMES):
+        relative = (
+            Path("group-098")
+            / "unicode-cohort"
+            / f"case-{unicode_offset:02d}"
+        )
+        if unicode_offset >= len(UNICODE_FILE_NAMES) - 4:
+            relative = (
+                relative
+                / ("\u9577\u3044\u9053-" + "\u754c" * 36)
+                / ("\u8def\u5f91-" + "\u9053" * 36)
+            )
+        return relative / UNICODE_FILE_NAMES[unicode_offset]
     if index >= spec.file_count - baseline_long_path_count(spec):
         relative = relative.joinpath(*_long_segments("baseline-long-segment"))
     relative /= f"file-{index:06d}.bin"
@@ -187,7 +238,9 @@ def validate_fixture(
     empty_directory_count = 0
     unexpected_size_count = 0
     long_path_count = 0
+    unicode_path_count = 0
     path_lengths: list[int] = []
+    component_lengths: list[int] = []
     for directory, subdirs, files in storage.walk(root):
         if not subdirs and not files:
             empty_directory_count += 1
@@ -201,8 +254,11 @@ def validate_fixture(
                 unexpected_size_count += 1
             length = storage.absolute_path_length(path)
             path_lengths.append(length)
+            component_lengths.append(storage.maximum_native_component_length(path))
             if len(str(relative)) >= LONG_PATH_MIN_RELATIVE_CHARS:
                 long_path_count += 1
+            if relative.parts[:2] == ("group-098", "unicode-cohort"):
+                unicode_path_count += 1
     missing_count = len(expected_set - seen)
     unexpected_path_count = len(seen - expected_set)
     expected_long = baseline_long_path_count(spec)
@@ -215,12 +271,17 @@ def validate_fixture(
             and missing_count == 0
             and unexpected_path_count == 0
             and long_path_count == expected_long
+            and unicode_path_count == unicode_cohort_count(spec)
         ),
         "fileCount": len(seen),
         "totalBytes": total_bytes,
         "longPathFileCount": long_path_count,
         "minimumAbsolutePathLength": min(path_lengths, default=0),
         "maximumAbsolutePathLength": max(path_lengths, default=0),
+        "pathLengthUnit": storage.native_length_unit(),
+        "maximumComponentLength": max(component_lengths, default=0),
+        "unicodePathFileCount": unicode_path_count,
+        "nameCapabilities": storage.detect_name_capabilities(root),
         "emptyDirectoryCount": empty_directory_count,
         "unexpectedSizeCount": unexpected_size_count,
         "missingCount": missing_count,

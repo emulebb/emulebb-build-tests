@@ -15,6 +15,7 @@ ROUTE_SPEC_FUNCTION = "inline const std::vector<SApiRouteSpec> &GetApiRouteSpecs
 # must still implement every frozen-contract route; these are the documented
 # forward-only additions it is allowed to carry on top.
 FORWARD_ONLY_RUST_ROUTES = {
+    ("DELETE", "/api/v1/shared-directories/exclusions"),
     ("DELETE", "/api/v1/shared-directories/roots"),
     ("GET", "/api/v1/app/settings"),
     ("GET", "/api/v1/app/settings/surface"),
@@ -26,12 +27,16 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("GET", "/api/v1/kad/nodes"),
     ("GET", "/api/v1/nat"),
     ("GET", "/api/v1/network"),
+    ("GET", "/api/v1/shared-directories/exclusions"),
     ("GET", "/api/v1/transfers/{}/comments"),
     ("GET", "/api/v1/vpn-guard"),
+    ("GET", "/healthz"),
     ("PATCH", "/api/v1/app/settings"),
+    ("PATCH", "/api/v1/shared-directories/exclusions/rules/{}"),
     ("POST", "/api/v1/ip-filter/operations/reload"),
     ("POST", "/api/v1/nat/operations/refresh"),
     ("POST", "/api/v1/shared-directories/roots"),
+    ("POST", "/api/v1/shared-directories/exclusions"),
     ("POST", "/api/v1/vpn-guard/operations/probe"),
 }
 
@@ -73,8 +78,10 @@ REQUEST_SCHEMA_TO_RUST_STRUCT = {
     "UrlImportRequest": "UrlImportRequest",
     "ServerPatch": "ServerUpdate",
     "KadBootstrapRequest": "KadBootstrapRequest",
-    "SearchCreateRequest": "SearchCreate",
+    "SearchCreateRequest": "SearchSpec",
     "SearchResultDownloadRequest": "SearchResultDownloadCreate",
+    "SharedFileExclusionRequest": "SharedFileExclusionUpdate",
+    "SharedFileIgnoreRuleUpdate": "SharedFileIgnoreRuleUpdate",
     "FriendCreateRequest": "FriendCreate",
     "ClearLogsRequest": "LogsClearRequest",
 }
@@ -85,7 +92,14 @@ def test_emulebb_rust_request_bodies_accept_contract_fields() -> None:
     workspace_root = get_emule_workspace_root(repo_root)
     contract = yaml.safe_load(
         (
-            workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+            workspace_root
+            / "repos"
+            / "emulebb-tooling"
+            / "docs"
+            / "products"
+            / "emulebb-rust"
+            / "api"
+            / "REST-API-OPENAPI.yaml"
         ).read_text(encoding="utf-8")
     )
     schemas = contract["components"]["schemas"]
@@ -181,7 +195,9 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
         / "repos"
         / "emulebb-tooling"
         / "docs"
-        / "rest"
+        / "products"
+        / "emulebb-rust"
+        / "api"
         / "REST-API-OPENAPI.yaml"
     )
     rust_routes = emulebb_rust_routes(
@@ -195,8 +211,8 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
 
     assert openapi_routes
     assert rust_routes
-    assert sorted(openapi_routes - rust_routes - MFC_ONLY_RUST_PARITY_BACKLOG_ROUTES) == []
-    assert sorted(rust_routes - openapi_routes) == sorted(FORWARD_ONLY_RUST_ROUTES)
+    assert sorted(openapi_routes - rust_routes) == []
+    assert sorted(rust_routes - openapi_routes) == [("GET", "/healthz")]
 
 
 def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:

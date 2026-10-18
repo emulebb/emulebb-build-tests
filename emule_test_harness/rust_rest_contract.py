@@ -2,5 +2,5 @@
 
 from __future__ import annotations
 
-REST_CONTRACT_VERSION = "1.2.0"
+REST_CONTRACT_VERSION = "2.0.0"
 REST_CONTRACT_VERSION_HEADER = "X-Contract-Version"

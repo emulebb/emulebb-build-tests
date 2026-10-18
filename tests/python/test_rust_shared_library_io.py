@@ -65,6 +65,18 @@ def test_production_fixture_reserves_exactly_one_long_path_group() -> None:
 
 
 @pytest.mark.unit
+def test_fixture_manifest_describes_native_lengths_and_unicode_cohort() -> None:
+    manifest = subject.fixture_manifest(
+        subject.PRODUCTION_SPEC, status="planned", disk_number=4
+    )
+
+    assert manifest["fileCount"] == 100_000
+    assert manifest["longPaths"]["nativeLengthUnit"] == storage.native_length_unit()
+    assert manifest["unicodeCohort"]["fileCount"] == 16
+    assert manifest["unicodeCohort"]["longUnicodePathCount"] == 4
+
+
+@pytest.mark.unit
 def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> None:
     observation = {
         "progress": {
@@ -191,7 +203,15 @@ def test_prepare_fixture_is_resumable_and_validates_without_deleting(
     assert first["createdCount"] == 8
     assert second["createdCount"] == 0
     assert second["reusedCount"] == 8
-    assert subject.validate_fixture(paths.fixture_root, spec)["ok"] is True
+    validation = subject.validate_fixture(paths.fixture_root, spec)
+    assert validation["ok"] is True
+    assert validation["pathLengthUnit"] == storage.native_length_unit()
+    assert validation["unicodePathFileCount"] == 0
+    assert validation["nameCapabilities"]["caseCollisionDisposition"] in {
+        "supported",
+        "skipped-native-alias",
+    }
+    assert str(tmp_path) not in json.dumps(validation, ensure_ascii=False)
     manifest = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "prepared"
 

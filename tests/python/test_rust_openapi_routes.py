@@ -1429,10 +1429,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -1442,18 +1442,18 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       properties:
         priority:
           $ref: "#/components/schemas/TransferPriority"
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -1502,10 +1502,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -1515,17 +1515,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           maxLength: 255
@@ -1534,14 +1534,14 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="TransferPatch.properties.name",
+            component="TransferPatch.properties.displayName",
             issue=(
                 "transfer rename pattern must reject trim-empty text, "
                 "Windows-forbidden filename characters, and controls"
             ),
         ),
         SchemaComponentDrift(
-            component="TransferPatch.properties.name",
+            component="TransferPatch.properties.displayName",
             issue="transfer rename schema must not claim an unsupported maxLength",
         ),
     )
@@ -1562,10 +1562,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -1575,17 +1575,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -1613,10 +1613,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -1626,17 +1626,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryLabel]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -1679,10 +1679,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -1692,17 +1692,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -2640,10 +2640,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -2653,17 +2653,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -2748,10 +2748,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -2761,17 +2761,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -2972,10 +2972,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -2985,17 +2985,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -3111,10 +3111,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -3124,17 +3124,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -3188,10 +3188,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -3201,17 +3201,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -3344,10 +3344,10 @@ components:
         - required: [priority]
           not:
             anyOf:
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
               - required: [categoryName]
-        - required: [name]
+        - required: [displayName]
           not:
             anyOf:
               - required: [priority]
@@ -3357,17 +3357,17 @@ components:
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryName]
         - required: [categoryName]
           not:
             anyOf:
               - required: [priority]
-              - required: [name]
+              - required: [displayName]
               - required: [categoryId]
       minProperties: 1
       properties:
-        name:
+        displayName:
           type: string
           minLength: 1
           pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
@@ -5693,24 +5693,24 @@ components:
         for drift in openapi_contract_version_drift(openapi_yaml, responses_rs)
     }
 
-    assert drift_by_source[str(responses_rs)] == "CONTRACT_VERSION must be 1.2.0, got 1.1.0"
-    assert drift_by_source["info.version"] == "must be 1.2.0, got '1.1.0'"
-    assert drift_by_source["info.x-contract-version"] == "must be 1.2.0, got '1.0.0'"
+    assert drift_by_source[str(responses_rs)] == "CONTRACT_VERSION must be 2.0.0, got 1.1.0"
+    assert drift_by_source["info.version"] == "must be 2.0.0, got '1.1.0'"
+    assert drift_by_source["info.x-contract-version"] == "must be 2.0.0, got '1.0.0'"
     assert (
         drift_by_source["components.headers.ContractVersionHeader.schema.const"]
-        == "must be 1.2.0, got '1.1.0'"
+        == "must be 2.0.0, got '1.1.0'"
     )
     assert (
         drift_by_source["components.headers.ContractVersionHeader.schema.example"]
-        == "must be 1.2.0, got '1.1.0'"
+        == "must be 2.0.0, got '1.1.0'"
     )
     assert (
         drift_by_source["components.schemas.CapabilityDiscovery.properties.contractVersion.const"]
-        == "must be 1.2.0, got None"
+        == "must be 2.0.0, got None"
     )
     assert (
         drift_by_source["components.schemas.CapabilityDiscovery.properties.contractVersion.example"]
-        == "must be 1.2.0, got '1.0.0'"
+        == "must be 2.0.0, got '1.0.0'"
     )
     assert (
         drift_by_source["components.responses.AppResponse.headers.X-Contract-Version"]
@@ -5725,14 +5725,14 @@ components:
 def test_openapi_contract_version_drift_accepts_shared_version_and_header_refs(tmp_path: Path) -> None:
     responses_rs = write(
         tmp_path / "responses.rs",
-        'pub(crate) const CONTRACT_VERSION: &str = "1.2.0";',
+        'pub(crate) const CONTRACT_VERSION: &str = "2.0.0";',
     )
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 info:
-  version: 1.2.0
-  x-contract-version: "1.2.0"
+  version: 2.0.0
+  x-contract-version: "2.0.0"
 paths:
   /app:
     get:
@@ -5746,20 +5746,20 @@ components:
     ContractVersionHeader:
       schema:
         type: string
-        const: "1.2.0"
-        example: "1.2.0"
+        const: "2.0.0"
+        example: "2.0.0"
   schemas:
     CapabilityDiscovery:
       type: object
       properties:
         contractVersion:
           type: string
-          const: "1.2.0"
-          example: "1.2.0"
+          const: "2.0.0"
+          example: "2.0.0"
 """,
     )
 
-    assert rust_contract_version(responses_rs) == "1.2.0"
+    assert rust_contract_version(responses_rs) == "2.0.0"
     assert openapi_contract_version_drift(openapi_yaml, responses_rs) == ()
 
 
@@ -5780,7 +5780,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
         '''
         fn route_body_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
             const TRANSFER_ADD: &[&str] = &["link", "links", "categoryId", "categoryName", "paused"];
-            const TRANSFER_PATCH: &[&str] = &["name", "priority", "categoryId", "categoryName"];
+            const TRANSFER_PATCH: &[&str] = &["displayName", "priority", "categoryId", "categoryName"];
             const SEARCH_RESULT_DOWNLOAD: &[&str] = &["categoryId", "categoryName", "paused"];
             const URL_IMPORT: &[&str] = &["url"];
             if method == "POST" && path == "/api/v1/transfers" {
@@ -5811,7 +5811,12 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
     assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),
         Route("POST", "/transfers"): ("categoryId", "categoryName", "link", "links", "paused"),
-        Route("PATCH", "/transfers/{hash}"): ("categoryId", "categoryName", "name", "priority"),
+        Route("PATCH", "/transfers/{hash}"): (
+            "categoryId",
+            "categoryName",
+            "displayName",
+            "priority",
+        ),
         Route("POST", "/servers/operations/import-met-url"): ("url",),
         Route("POST", "/searches/{searchId}/results/{hash}/operations/download"): (
             "categoryId",

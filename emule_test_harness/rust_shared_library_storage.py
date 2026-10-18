@@ -127,7 +127,65 @@ def walk(path: Path) -> Iterator[tuple[Path, list[str], list[str]]]:
 
 
 def absolute_path_length(path: Path) -> int:
-    return len(os.path.abspath(os.fspath(path)))
+    return native_path_length(path)
+
+
+def native_length_unit() -> str:
+    return "utf16CodeUnits" if os.name == "nt" else "encodedBytes"
+
+
+def native_text_length(value: str) -> int:
+    if os.name == "nt":
+        return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+    return len(os.fsencode(value))
+
+
+def native_path_length(path: Path) -> int:
+    return native_text_length(os.path.abspath(os.fspath(path)))
+
+
+def maximum_native_component_length(path: Path) -> int:
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    return max((native_text_length(part) for part in absolute.parts), default=0)
+
+
+def detect_name_capabilities(root: Path) -> dict[str, object]:
+    """Probe case and normalization aliases without retaining fixture names."""
+
+    probe = root / ".emulebb-capability-probe"
+    remove_tree(probe)
+    make_directories(probe)
+
+    def supports_pair(first: str, second: str) -> bool:
+        first_path = probe / first
+        second_path = probe / second
+        try:
+            with open(filesystem_path(first_path), "xb") as handle:
+                handle.write(b"1")
+            with open(filesystem_path(second_path), "xb") as handle:
+                handle.write(b"2")
+        except FileExistsError:
+            return False
+        names = {entry.name for entry in Path(filesystem_path(probe)).iterdir()}
+        return len(names) == 2
+
+    try:
+        case_distinct = supports_pair("Case-Probe.bin", "case-probe.bin")
+        remove_tree(probe)
+        make_directories(probe)
+        normalization_distinct = supports_pair(
+            "caf\u00e9-probe.bin", "cafe\u0301-probe.bin"
+        )
+        return {
+            "caseDistinctNames": case_distinct,
+            "normalizationDistinctNames": normalization_distinct,
+            "caseCollisionDisposition": "supported" if case_distinct else "skipped-native-alias",
+            "normalizationCollisionDisposition": (
+                "supported" if normalization_distinct else "skipped-native-alias"
+            ),
+        }
+    finally:
+        remove_tree(probe)
 
 
 def _windows_volume_identity(path: Path) -> tuple[str, str, int | None]:
