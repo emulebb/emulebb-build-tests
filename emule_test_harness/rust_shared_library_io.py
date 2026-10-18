@@ -167,7 +167,9 @@ def fixture_manifest(
             "fileCount": fixture.baseline_long_path_count(spec),
             "minimumRelativeCharacters": fixture.LONG_PATH_MIN_RELATIVE_CHARS,
             "maximumComponentCharacters": fixture.LONG_SEGMENT_LENGTH,
+            "nativeLengthUnit": storage.native_length_unit(),
         },
+        "unicodeCohort": fixture.unicode_cohort_summary(spec),
         "watcherCohort": fixture.watcher_cohort_summary(),
     }
 

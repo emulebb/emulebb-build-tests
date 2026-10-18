@@ -84,7 +84,12 @@ TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
 TRANSFER_PRIORITY_COMPONENT = "TransferPriority"
 TRANSFER_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "veryhigh")
 TRANSFER_PATCH_COMPONENT = "TransferPatch"
-TRANSFER_PATCH_MUTATION_FAMILIES = ("priority", "name", "categoryId", "categoryName")
+TRANSFER_PATCH_MUTATION_FAMILIES = (
+    "priority",
+    "displayName",
+    "categoryId",
+    "categoryName",
+)
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
@@ -1570,7 +1575,7 @@ def append_transfer_patch_schema_drift(
         )
         return
     assert_transfer_patch_mutation_family_schema(drift, schema)
-    assert_transfer_rename_schema(drift, properties.get("name"))
+    assert_transfer_rename_schema(drift, properties.get("displayName"))
     assert_priority_ref_schema(
         drift,
         "TransferPatch.properties.priority",
@@ -1657,7 +1662,7 @@ def assert_transfer_rename_schema(
     drift: list[SchemaComponentDrift],
     schema: object,
 ) -> None:
-    component = "TransferPatch.properties.name"
+    component = "TransferPatch.properties.displayName"
     if not isinstance(schema, dict):
         drift.append(
             SchemaComponentDrift(
@@ -3511,6 +3516,11 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
     for pattern, method, path in (
         (r'\("PATCH",\s*\["transfers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/transfers/{hash}"),
         (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
+        (
+            r'\("PATCH",\s*\["shared-directories", "exclusions", "rules", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
+            "PATCH",
+            "/shared-directories/exclusions/rules/{ruleKey}",
+        ),
         (r'\("PATCH",\s*\["servers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/servers/{serverId}"),
         (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryId}"),
         (

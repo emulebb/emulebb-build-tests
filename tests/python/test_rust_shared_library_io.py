@@ -65,6 +65,60 @@ def test_production_fixture_reserves_exactly_one_long_path_group() -> None:
 
 
 @pytest.mark.unit
+def test_production_fixture_has_deterministic_unicode_cohort() -> None:
+    first = subject.relative_file_for_index(subject.fixture.UNICODE_COHORT_START)
+    paths = [
+        subject.relative_file_for_index(subject.fixture.UNICODE_COHORT_START + offset)
+        for offset in range(len(subject.fixture.UNICODE_FILE_NAMES))
+    ]
+
+    assert first == Path("group-098/unicode-cohort/case-00/café-nfc.bin")
+    assert len(paths) == 16
+    assert len(set(paths)) == len(paths)
+    assert paths[1].name == "café-nfd.bin"
+    assert paths[9].name == "emoji-🚀-💾.bin"
+    assert all(len(path.parts) > 4 for path in paths[-4:])
+    assert subject.fixture.unicode_cohort_summary()["fileCount"] == 16
+
+
+@pytest.mark.unit
+def test_fixture_manifest_describes_native_lengths_and_unicode_cohort() -> None:
+    manifest = subject.fixture_manifest(
+        subject.PRODUCTION_SPEC, status="planned", disk_number=4
+    )
+
+    assert manifest["fileCount"] == 100_000
+    assert manifest["longPaths"]["nativeLengthUnit"] == storage.native_length_unit()
+    assert manifest["unicodeCohort"]["fileCount"] == 16
+    assert manifest["unicodeCohort"]["longUnicodePathCount"] == 4
+
+
+@pytest.mark.unit
+def test_native_length_helpers_and_name_probe_are_explicit(tmp_path: Path) -> None:
+    expected_emoji_length = 2 if storage.native_length_unit() == "utf16CodeUnits" else 4
+    assert storage.native_text_length("🚀") == expected_emoji_length
+    assert storage.maximum_native_component_length(tmp_path / "café") >= 4
+
+    capabilities = storage.detect_name_capabilities(tmp_path)
+
+    assert set(capabilities) == {
+        "caseDistinctNames",
+        "normalizationDistinctNames",
+        "caseCollisionDisposition",
+        "normalizationCollisionDisposition",
+    }
+    assert capabilities["caseCollisionDisposition"] in {
+        "supported",
+        "skipped-native-alias",
+    }
+    assert capabilities["normalizationCollisionDisposition"] in {
+        "supported",
+        "skipped-native-alias",
+    }
+    assert not (tmp_path / ".emulebb-capability-probe").exists()
+
+
+@pytest.mark.unit
 def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> None:
     observation = {
         "progress": {
@@ -191,7 +245,15 @@ def test_prepare_fixture_is_resumable_and_validates_without_deleting(
     assert first["createdCount"] == 8
     assert second["createdCount"] == 0
     assert second["reusedCount"] == 8
-    assert subject.validate_fixture(paths.fixture_root, spec)["ok"] is True
+    validation = subject.validate_fixture(paths.fixture_root, spec)
+    assert validation["ok"] is True
+    assert validation["pathLengthUnit"] == storage.native_length_unit()
+    assert validation["unicodePathFileCount"] == 0
+    assert validation["nameCapabilities"]["caseCollisionDisposition"] in {
+        "supported",
+        "skipped-native-alias",
+    }
+    assert str(tmp_path) not in json.dumps(validation, ensure_ascii=False)
     manifest = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "prepared"
 

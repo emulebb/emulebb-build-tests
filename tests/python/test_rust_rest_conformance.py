@@ -24,7 +24,7 @@ class FakeEventStreamResponse:
         self.headers = {
             "Content-Type": content_type,
             "Cache-Control": "no-cache, no-transform",
-            "X-Contract-Version": "1.2.0",
+            "X-Contract-Version": "2.0.0",
             "X-Accel-Buffering": "no",
             **(headers or {}),
         }
@@ -152,10 +152,25 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
         "/api/v1/shared-directories/roots?"
         + urllib.parse.urlencode({"path": str(shared_root.resolve())})
     )
+    exclusion_path = shared_root / "excluded-by-rest-contract.bin"
+    assert routes_by_operation["removeSharedFileExclusion"]["path"] == (
+        "/api/v1/shared-directories/exclusions?"
+        + urllib.parse.urlencode({"path": str(exclusion_path.resolve())})
+    )
+    assert routes_by_operation["updateSharedFileIgnoreRule"]["path"] == (
+        "/api/v1/shared-directories/exclusions/rules/noise.desktop-ini"
+    )
     assert module.get_contract_route_body("addSharedDirectoryRoot") == {
         "path": str(shared_root.resolve())
     }
     assert shared_root.is_dir()
+    assert module.get_contract_route_body("addSharedFileExclusion") == {
+        "path": str(exclusion_path.resolve())
+    }
+    assert exclusion_path.read_bytes() == b"REST contract exclusion fixture\n"
+    assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {
+        "enabled": True
+    }
 
 
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
@@ -407,7 +422,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -
         "contentType": "text/event-stream",
         "responseHeaders": {
             "Cache-Control": "no-cache, no-transform",
-            "X-Contract-Version": "1.2.0",
+            "X-Contract-Version": "2.0.0",
             "X-Accel-Buffering": "no",
         },
         "payloadSchema": "TransferEvent",

@@ -1300,7 +1300,7 @@ def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pyt
             "content_type": "application/json",
             "raw_json": {"data": {"ok": True, "imported": True}, "meta": {"apiVersion": "v1"}},
             "json": {"ok": True, "imported": True},
-            "headers": {"X-Contract-Version": "1.2.0"},
+            "headers": {"X-Contract-Version": "2.0.0"},
             "body_text": "",
         }
 
@@ -1356,7 +1356,7 @@ def test_live_seed_import_evidence_rejects_failed_import(monkeypatch: pytest.Mon
             "content_type": "application/json",
             "raw_json": {"data": {"ok": False, "imported": False}, "meta": {"apiVersion": "v1"}},
             "json": {"ok": False, "imported": False},
-            "headers": {"X-Contract-Version": "1.2.0"},
+            "headers": {"X-Contract-Version": "2.0.0"},
             "body_text": "",
         }
 
@@ -2346,7 +2346,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
     method_not_allowed = {
         **error_result,
         "status": 405,
-        "headers": {"Allow": "GET", "X-Contract-Version": "1.2.0"},
+        "headers": {"Allow": "GET", "X-Contract-Version": "2.0.0"},
         "body_text": (
             '{"error":{"code":"METHOD_NOT_ALLOWED",'
             '"message":"HTTP method is not allowed for this API route","details":{}}}'
@@ -2374,7 +2374,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
     )
     with pytest.raises(AssertionError):
         module.require_method_not_allowed_response(
-            {**method_not_allowed, "headers": {"X-Contract-Version": "1.2.0"}},
+            {**method_not_allowed, "headers": {"X-Contract-Version": "2.0.0"}},
             expected_allow_methods=("GET",),
         )
 
@@ -2394,7 +2394,7 @@ def test_native_rest_envelopes_require_contract_version_header() -> None:
     success_result = {
         "status": 200,
         "content_type": "application/json; charset=utf-8",
-        "headers": {"x-contract-version": "1.2.0"},
+        "headers": {"x-contract-version": "2.0.0"},
         "body_text": '{"data":{"ok":true},"meta":{"apiVersion":"v1"}}',
         "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
         "json": {"ok": True},
@@ -2402,7 +2402,7 @@ def test_native_rest_envelopes_require_contract_version_header() -> None:
     error_result = {
         "status": 404,
         "content_type": "application/json; charset=utf-8",
-        "headers": {"X-Contract-Version": "1.2.0"},
+        "headers": {"X-Contract-Version": "2.0.0"},
         "body_text": '{"error":{"code":"NOT_FOUND","message":"route missing","details":{}}}',
         "raw_json": {
             "error": {
