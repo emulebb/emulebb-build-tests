@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .paths import get_workspace_output_root
 
 CLIENT01_EMULEBB = "cl-emulebb-001"
 CLIENT02_HARNESS = "cl-harness-002"
 CLIENT03_EMULEAI = "cl-emuleai-003"
+CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
 CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
+CLIENT07_AMULE = "cl-amule-007"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
 NICK_CLIENT02_HARNESS = "cl-harness-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
+NICK_CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 NICK_CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
 NICK_CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
+NICK_CLIENT07_AMULE = "cl-amule-007"
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,8 @@ class ClientAvailability:
     launch_adapter: str = ""
     deterministic_transfer_adapter: bool = False
     control_executable: Path | None = None
+    source_repo: Path | None = None
+    source_revision: str | None = None
 
     def as_report(self) -> dict[str, object]:
         """Returns a JSON-serializable availability row."""
@@ -62,6 +71,10 @@ class ClientAvailability:
         }
         if self.control_executable is not None:
             row["control_executable"] = str(self.control_executable)
+        if self.source_repo is not None:
+            row["source_repo"] = str(self.source_repo)
+        if self.source_revision is not None:
+            row["source_revision"] = self.source_revision
         return row
 
 
@@ -90,6 +103,14 @@ CLIENT_IDENTITIES = {
         role="optional Windows eMule-family comparison client",
         supports_long_paths=False,
     ),
+    "stock_emule": ClientIdentity(
+        key="stock_emule",
+        profile_id=CLIENT04_STOCK_EMULE,
+        nick=NICK_CLIENT04_STOCK_EMULE,
+        product="eMule Community 0.72a",
+        role="fixed stock-compatible protocol baseline",
+        supports_long_paths=False,
+    ),
     "emulebb_rust": ClientIdentity(
         key="emulebb_rust",
         profile_id=CLIENT05_EMULEBB_RUST_A,
@@ -110,6 +131,14 @@ CLIENT_IDENTITIES = {
         role="second headless Rust eMuleBB-compatible client",
         # Long-path capable (scoped, see emulebb_rust above).
         supports_long_paths=True,
+    ),
+    "amule": ClientIdentity(
+        key="amule",
+        profile_id=CLIENT07_AMULE,
+        nick=NICK_CLIENT07_AMULE,
+        product="aMule",
+        role="moving official-upstream protocol parity reference",
+        supports_long_paths=False,
     ),
 }
 
@@ -186,6 +215,23 @@ def first_existing_file(candidates: list[Path]) -> Path | None:
     return None
 
 
+def git_head_revision(repo_root: Path) -> str | None:
+    """Returns the full Git HEAD revision for report provenance when available."""
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root.resolve()), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    revision = completed.stdout.strip()
+    return revision if completed.returncode == 0 and len(revision) == 40 else None
+
+
 def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
     """Builds the mandatory eMuleBB client descriptor from the active app executable."""
 
@@ -259,6 +305,73 @@ def resolve_emuleai_client(workspace_root: Path, configuration: str, override: s
     )
 
 
+def resolve_stock_emule_client(
+    workspace_root: Path,
+    configuration: str,
+    override: str | None = None,
+) -> ClientAvailability:
+    """Resolves the fixed stock-compatible Community 0.72a baseline worktree."""
+
+    identity = CLIENT_IDENTITIES["stock_emule"]
+    root = (workspace_root / "app" / "emulebb-community-baseline").resolve()
+    candidates = [Path(override)] if override else [
+        root / "srchybrid" / "x64" / configuration / "emule.exe",
+        root / "srchybrid" / "x64" / configuration / "emulebb.exe",
+    ]
+    executable = first_existing_file(candidates)
+    return ClientAvailability(
+        identity=identity,
+        available=executable is not None,
+        executable=executable,
+        reason="available" if executable is not None else f"no built stock baseline executable found under {root}",
+        launch_adapter="emule-community-baseline-rest-profile",
+        deterministic_transfer_adapter=executable is not None,
+        source_repo=root,
+        source_revision=git_head_revision(root),
+    )
+
+
+def resolve_amule_client(
+    workspace_root: Path,
+    executable_override: str | None = None,
+    control_override: str | None = None,
+    output_root: Path | None = None,
+) -> ClientAvailability:
+    """Resolves the staged official aMule runtime and its EC control executable."""
+
+    identity = CLIENT_IDENTITIES["amule"]
+    try:
+        root = resolve_manifest_repo(workspace_root, "amule")
+    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        return unavailable_manifest_client(identity, "amule", "amule-ec", exc)
+    staged_bin = (output_root.resolve() if output_root is not None else get_workspace_output_root()) / "tools" / "amule" / "bin"
+    executable_candidates = [Path(executable_override)] if executable_override else [
+        staged_bin / "amuled.exe",
+        staged_bin / "amule.exe",
+    ]
+    executable = first_existing_file(executable_candidates)
+    control_candidates = [Path(control_override)] if control_override else [staged_bin / "amulecmd.exe"]
+    control_executable = first_existing_file(control_candidates)
+    if executable is None:
+        reason = f"no staged aMule executable found under {staged_bin}"
+    elif control_executable is None:
+        reason = f"aMule EC control executable is missing under {staged_bin}"
+    else:
+        reason = "available"
+    available = executable is not None and control_executable is not None
+    return ClientAvailability(
+        identity=identity,
+        available=available,
+        executable=executable,
+        reason=reason,
+        launch_adapter="amule-ec",
+        deterministic_transfer_adapter=False,
+        control_executable=control_executable,
+        source_repo=root,
+        source_revision=git_head_revision(root),
+    )
+
+
 def resolve_emulebb_rust_client(
     workspace_root: Path,
     repo_key: str = "emulebb_rust",
@@ -290,6 +403,9 @@ def resolve_windows_client_inventory(
     configuration: str,
     harness_exe: str | None = None,
     emuleai_exe: str | None = None,
+    stock_emule_exe: str | None = None,
+    amule_exe: str | None = None,
+    amule_control_exe: str | None = None,
 ) -> dict[str, ClientAvailability]:
     """Resolves the current Windows multi-client inventory for live E2E scenarios."""
 
@@ -297,6 +413,8 @@ def resolve_windows_client_inventory(
         "emulebb": resolve_emulebb_client(app_exe),
         "harness": resolve_harness_client(workspace_root, configuration, harness_exe),
         "emuleai": resolve_emuleai_client(workspace_root, configuration, emuleai_exe),
+        "stock_emule": resolve_stock_emule_client(workspace_root, configuration, stock_emule_exe),
         "emulebb_rust": resolve_emulebb_rust_client(workspace_root),
         "emulebb_rust_peer": resolve_emulebb_rust_client(workspace_root, identity_key="emulebb_rust_peer"),
+        "amule": resolve_amule_client(workspace_root, amule_exe, amule_control_exe),
     }
