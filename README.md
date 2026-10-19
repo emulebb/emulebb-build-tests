@@ -129,7 +129,7 @@ Script inventory:
 | `scripts\native-windows-parity-campaign.py` | native Rust/MFC parity runner | maintained | fresh builds, protocol/state oracle stages, then sequential direct UPnP and forced-firewalled diagnostics captures |
 | `scripts\soak-scripted-capture.py` | capture-then-diff recorder | maintained | VPN solo capture by default; the policy-bounded `--route direct` mode adds isolated profiles, PCAPNG, path audits, exact completion verification, and owned firewall rules |
 | `scripts\soak-offline-diff.py` | capture-then-diff adjudicator | maintained | correlates opaque actions and emits parity, divergence, harness-failure, or external-inconclusive verdicts |
-| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB MFC/Rust cross-client transfers and records optional eMuleAI readiness |
+| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, and Rust cross-client transfers; records optional eMuleAI readiness and the explicit aMule EC-adapter gap |
 | `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through required UPnP TCP/UDP mappings, public server/Kad imports, independent disconnect/reconnect, a rendered-UI synthetic shared-tree reload with eD2K offer and acknowledged Kad keyword/source publishing, safe PDF-only searches, received bytes from a sourced PDF below 5 MiB, visible Stop and confirmed Delete actions, restart persistence, and pass-clean/fail-retain disposal |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
@@ -138,6 +138,20 @@ Script inventory:
 | `scripts\emule-live-profile-common.py` | internal Python helper | maintained | compatibility facade for live-profile launch and trace helpers |
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
 | `scripts\fake-kad-trust-soak.py` | operator-facing live soak | maintained | long-running Kad search soak for fake-file risk and Kad trust telemetry |
+
+External parity references in the multi-client matrix:
+
+- `cl-stock-emule-004` resolves the fixed `app\emulebb-community-baseline`
+  worktree and runs through the deterministic two-client transfer adapter
+- `cl-amule-007` resolves the official `repos\amule` source revision and the
+  staged `tools\amule\bin\amuled.exe`/`amulecmd.exe` runtime under
+  `EMULEBB_WORKSPACE_OUTPUT_ROOT`
+- aMule discovery is reported with its exact Git revision, but its deterministic
+  scenario remains blocked until a native External Connections adapter exists;
+  requiring `cl-emulebb-001-downloads-from-cl-amule-007` therefore fails rather
+  than silently claiming parity
+- `--stock-emule-exe`, `--amule-exe`, and `--amule-control-exe` override only
+  runtime discovery; they do not alter source provenance or adapter status
 | `scripts\rust-shared-library-io.py` | operator-facing Rust I/O characterization | maintained | owned 100k-file SSD fixture with long paths, live watcher lifecycle, restart/no-change proof, and offline 1% mutation |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
