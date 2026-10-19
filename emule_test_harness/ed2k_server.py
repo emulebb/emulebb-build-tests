@@ -13,7 +13,7 @@ from . import goed2k
 
 
 ED2K_SERVER_PROVIDER_ENV = "EMULEBB_TEST_ED2K_SERVER_PROVIDER"
-DEFAULT_ED2K_SERVER_PROVIDER = "goed2k"
+DEFAULT_ED2K_SERVER_PROVIDER = "rust"
 
 
 class Ed2kServerBinary(Protocol):

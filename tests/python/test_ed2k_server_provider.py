@@ -8,8 +8,8 @@ from emule_test_harness import ed2k_server, goed2k
 
 
 @pytest.mark.unit
-def test_resolve_provider_keeps_goed2k_as_default() -> None:
-    assert ed2k_server.resolve_provider(env={}) is ed2k_server.GOED2K_PROVIDER
+def test_resolve_provider_uses_rust_by_default_and_keeps_go_explicit() -> None:
+    assert ed2k_server.resolve_provider(env={}).name == "rust"
     assert ed2k_server.resolve_provider("go") is ed2k_server.GOED2K_PROVIDER
     assert ed2k_server.resolve_provider("goed2k-server") is ed2k_server.GOED2K_PROVIDER
 
