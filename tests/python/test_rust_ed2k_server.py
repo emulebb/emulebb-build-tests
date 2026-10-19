@@ -117,12 +117,93 @@ def test_rust_control_normalizes_stats_and_clients(monkeypatch) -> None:
 def test_rust_control_reports_missing_observation_capabilities() -> None:
     control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
 
-    with pytest.raises(UnsupportedEd2kServerCapability, match="file lookup"):
-        control.get_file("00112233445566778899aabbccddeeff")
     with pytest.raises(UnsupportedEd2kServerCapability, match="file listing"):
         control.list_files()
     with pytest.raises(UnsupportedEd2kServerCapability, match="audit API"):
         control.audit()
+
+
+@pytest.mark.unit
+def test_rust_control_normalizes_exact_file_and_missing_response(monkeypatch) -> None:
+    file_hash = "00112233445566778899aabbccddeeff"
+    payload = {
+        "hash": file_hash,
+        "name": "fixture.bin",
+        "size": 123,
+        "source_count": 2,
+        "complete_source_count": 1,
+        "sources_truncated": False,
+        "sources": [
+            {
+                "user_hash": "aabbccddeeff00112233445566778899",
+                "ip": "192.0.2.10",
+                "port": 4662,
+                "complete": True,
+            },
+            "ignored",
+        ],
+    }
+
+    def fake_request(_base, path, **_kwargs):
+        if path.endswith("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"):
+            raise rust_ed2k.RustEd2kAdminError(path, 404, b'{"error":"file is not indexed"}')
+        return payload
+
+    monkeypatch.setattr(rust_ed2k, "admin_request", fake_request)
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    assert control.get_file(file_hash) == {
+        "hash": file_hash.upper(),
+        "name": "fixture.bin",
+        "size": 123,
+        "sources": 2,
+        "complete_sources": 1,
+        "endpoints": [
+            {
+                "host": "192.0.2.10",
+                "port": 4662,
+                "complete": True,
+                "user_hash": "AABBCCDDEEFF00112233445566778899",
+            }
+        ],
+        "sources_truncated": False,
+    }
+    assert control.get_file("ff" * 16) is None
+
+
+@pytest.mark.unit
+def test_rust_control_waits_for_file_and_exact_endpoint(monkeypatch) -> None:
+    file_hash = "00112233445566778899aabbccddeeff"
+    responses = [
+        None,
+        {
+            "hash": file_hash.upper(),
+            "endpoints": [{"host": "192.0.2.10", "port": 4662}],
+        },
+    ]
+    monkeypatch.setattr(
+        rust_ed2k.RustEd2kServerControl,
+        "get_file",
+        lambda *_args: responses.pop(0),
+    )
+    monkeypatch.setattr(
+        rust_ed2k.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve() or resolve(),
+    )
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    row = control.wait_for_file(file_hash, 1.0)
+    assert row["observations"][0]["indexed"] is False
+
+    responses.append(
+        {
+            "hash": file_hash.upper(),
+            "endpoints": [{"host": "192.0.2.10", "port": 4662}],
+        }
+    )
+    endpoint_row = control.wait_for_file_endpoint(file_hash, "192.0.2.10", 4662, 1.0)
+    assert endpoint_row["hash"] == file_hash.upper()
 
 
 @pytest.mark.unit
@@ -331,11 +412,13 @@ def test_rust_provider_live_wsl_smoke() -> None:
             exe_override=str(server_exe),
             health_timeout_seconds=30.0,
         )
-        stats = rust_ed2k.RUST_ED2K_PROVIDER.control(launch.admin_base_url, "unused").stats()
+        control = rust_ed2k.RUST_ED2K_PROVIDER.control(launch.admin_base_url, "unused")
+        stats = control.stats()
         assert launch.ed2k_host
         assert launch.health["data"]["ready"] is True
         assert stats["ok"] is True
         assert "bytes_in" in stats["data"]
+        assert control.get_file("00" * 16) is None
     finally:
         if launch is not None:
             rust_ed2k.RUST_ED2K_PROVIDER.stop_process(launch.process)

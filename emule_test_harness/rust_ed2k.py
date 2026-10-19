@@ -462,8 +462,52 @@ def admin_request(admin_base_url: str, path: str, *, timeout_seconds: float = 10
             data = response.read()
     except urllib.error.HTTPError as exc:
         data = exc.read()
-        raise RuntimeError(f"Rust ED2K admin request failed: {path} status={exc.code} body={data!r}") from exc
+        raise RustEd2kAdminError(path, exc.code, data) from exc
     return json.loads(data.decode("utf-8"))
+
+
+class RustEd2kAdminError(RuntimeError):
+    """One non-success response from the Rust server admin API."""
+
+    def __init__(self, path: str, status_code: int, body: bytes) -> None:
+        self.path = path
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"Rust ED2K admin request failed: {path} status={status_code} body={body!r}")
+
+
+def normalize_file_response(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalizes the Rust exact-file response to the provider-neutral shape."""
+
+    native_sources = payload.get("sources")
+    endpoints: list[dict[str, Any]] = []
+    if isinstance(native_sources, list):
+        for source in native_sources:
+            if not isinstance(source, dict):
+                continue
+            endpoints.append(
+                {
+                    "host": str(source.get("ip") or ""),
+                    "port": int(source.get("port") or 0),
+                    "complete": bool(source.get("complete")),
+                    "user_hash": str(source.get("user_hash") or "").upper(),
+                }
+            )
+    source_count = payload.get("source_count")
+    complete_source_count = payload.get("complete_source_count")
+    return {
+        "hash": str(payload.get("hash") or "").upper(),
+        "name": str(payload.get("name") or ""),
+        "size": int(payload.get("size") or 0),
+        "sources": int(source_count) if source_count is not None else len(endpoints),
+        "complete_sources": (
+            int(complete_source_count)
+            if complete_source_count is not None
+            else sum(1 for endpoint in endpoints if endpoint["complete"])
+        ),
+        "endpoints": endpoints,
+        "sources_truncated": bool(payload.get("sources_truncated")),
+    }
 
 
 @dataclass(frozen=True)
@@ -489,9 +533,15 @@ class RustEd2kServerControl:
         return clients
 
     def get_file(self, file_hash: str) -> dict[str, Any] | None:
-        raise UnsupportedEd2kServerCapability(
-            f"Rust ed2k-server does not yet expose file lookup required for {file_hash.upper()}."
-        )
+        try:
+            payload = admin_request(self.admin_base_url, f"/api/files/{file_hash.upper()}")
+        except RustEd2kAdminError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Rust ED2K file response was not an object: {payload!r}")
+        return normalize_file_response(payload)
 
     def list_files(self, search: str | None = None) -> dict[str, Any]:
         detail = f" for {search!r}" if search else ""
@@ -516,8 +566,18 @@ class RustEd2kServerControl:
         return live_common.wait_for(resolve, timeout_seconds, 1.0, f"ED2K client {name_fragment!r}")
 
     def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]:
-        del timeout_seconds
-        return self.get_file(file_hash) or {}
+        observations: list[dict[str, object]] = []
+
+        def resolve():
+            row = self.get_file(file_hash)
+            if row is not None:
+                result = dict(row)
+                result["observations"] = observations
+                return result
+            observations.append({"observed_at": round(time.time(), 3), "indexed": False})
+            return None
+
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, "ED2K server file publication")
 
     def wait_for_file_endpoint(
         self,
@@ -527,8 +587,23 @@ class RustEd2kServerControl:
         timeout_seconds: float,
         description: str = "ED2K server file endpoint publication",
     ) -> dict[str, Any]:
-        del host, port, timeout_seconds, description
-        return self.get_file(file_hash) or {}
+        def resolve():
+            row = self.get_file(file_hash)
+            if row is None:
+                return None
+            endpoints = row.get("endpoints")
+            if not isinstance(endpoints, list):
+                return None
+            if any(
+                isinstance(endpoint, dict)
+                and endpoint.get("host") == host
+                and int(endpoint.get("port") or 0) == port
+                for endpoint in endpoints
+            ):
+                return row
+            return None
+
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, description)
 
 
 class RustEd2kServerProvider:
