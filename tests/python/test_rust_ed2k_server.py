@@ -235,7 +235,7 @@ def test_build_server_binary_uses_workspace_orchestrator(monkeypatch, tmp_path: 
     calls: list[dict[str, object]] = []
 
     def fake_resolve(_workspace, key):
-        return {"ed2k_index_server": server_repo, "build": build_repo}[key]
+        return {"ed2k_server": server_repo, "build": build_repo}[key]
 
     def fake_run(command, **kwargs):
         calls.append({"command": command, **kwargs})

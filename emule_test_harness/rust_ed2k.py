@@ -52,7 +52,7 @@ class RustEd2kServerLaunch:
 def resolve_server_repo(workspace_root: Path, override: str | None) -> Path:
     """Resolves the managed Rust server repository from the workspace manifest."""
 
-    candidate = Path(override).resolve() if override else resolve_manifest_repo(workspace_root, "ed2k_index_server")
+    candidate = Path(override).resolve() if override else resolve_manifest_repo(workspace_root, "ed2k_server")
     if not (candidate / "Cargo.toml").is_file():
         raise RuntimeError(f"Rust ED2K server repo was not found at '{candidate}'.")
     return candidate
