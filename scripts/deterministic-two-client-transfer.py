@@ -1034,10 +1034,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
+        server_address = server_launch.ed2k_host
         server_control = server_provider.control(admin_base_url, args.api_key)
         report["checks"]["server_build"] = server_launch.build
         report["checks"]["ed2k_server_health"] = server_launch.health
         report["ed2k_server"] = server_launch.config
+        report["network"]["ed2k_server_address"] = server_address
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_file = fixture_dir / "deterministic-two-client-transfer.bin"
@@ -1096,7 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
         for profile in (client1, client2):
             write_server_met(
                 Path(profile["config_dir"]) / "server.met",
-                address=p2p_address,
+                address=server_address,
                 port=ports["ed2k_tcp"],
                 name="emulebb-local-e2e",
             )
@@ -1164,7 +1166,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["client1_server_connect"] = add_and_connect_server(
             base_url,
             args.api_key,
-            address=p2p_address,
+            address=server_address,
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )

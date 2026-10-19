@@ -28,6 +28,8 @@ class Goed2kServerLaunch:
 
     process: subprocess.Popen
     admin_base_url: str
+    ed2k_host: str
+    ed2k_port: int
     server_exe: Path
     server_dir: Path
     catalog_path: Path
@@ -322,6 +324,8 @@ def launch_ed2k_server(
     return Goed2kServerLaunch(
         process=process,
         admin_base_url=admin_base_url,
+        ed2k_host=str(ed2k_address),
+        ed2k_port=ed2k_port,
         server_exe=binary.server_exe,
         server_dir=server_dir,
         catalog_path=catalog_path,

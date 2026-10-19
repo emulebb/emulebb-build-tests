@@ -476,6 +476,8 @@ def test_launch_ed2k_server_centralizes_catalog_config_start_and_health(monkeypa
 
     assert launch.process is fake_process
     assert launch.admin_base_url == "http://192.0.2.10:8080"
+    assert launch.ed2k_host == "192.0.2.10"
+    assert launch.ed2k_port == 4661
     assert launch.build["server_exe"] == str(server_exe)
     assert launch.health == {"base_url": "http://192.0.2.10:8080", "timeout": 12.5}
     assert calls["start"] == {
@@ -507,6 +509,7 @@ def test_deterministic_transfer_uses_provider_neutral_server_launcher() -> None:
     assert "server_provider.launch(" in script_text
     assert "admin_secret=args.api_key" in script_text
     assert "ed2k_address=p2p_address" in script_text
+    assert "address=server_address" in script_text
     assert "goed2k.launch_ed2k_server(" not in script_text
 
 

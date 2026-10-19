@@ -28,6 +28,8 @@ class Ed2kServerLaunch(Ed2kServerBinary, Protocol):
 
     process: subprocess.Popen
     admin_base_url: str
+    ed2k_host: str
+    ed2k_port: int
     server_dir: Path
     config_path: Path
     log_path: Path
