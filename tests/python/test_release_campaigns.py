@@ -138,7 +138,6 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
             assert scenario["localSuites"] == list(shared.local_suites)
             assert scenario["vmProfile"] == spec.name
             assert scenario["controlBindScope"] == shared.control_bind_scope == "lan"
-            assert scenario["amutorrentBindScope"] == shared.amutorrent_bind_scope == "lan"
             assert scenario["p2pMode"] == shared.p2p_mode == "local-swarm"
             assert scenario["p2pBindScope"] == shared.p2p_bind_scope == "lan"
         else:
@@ -937,7 +936,6 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
     assert scenario["localExecuteCommand"] == scenario["localCommand"]
     assert scenario["vmPlanCommand"] == scenario["vmCommand"]
     assert scenario["controlBindScope"] == "lan"
-    assert scenario["amutorrentBindScope"] == "lan"
     assert scenario["p2pMode"] == "local-swarm"
     assert scenario["p2pBindScope"] == "lan"
     assert "emulebb.flow.controller.installer-swarm.v1" in text

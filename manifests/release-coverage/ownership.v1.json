@@ -158,8 +158,8 @@
       ]
     },
     {
-      "id": "controller-rest-arr-amutorrent",
-      "title": "REST, Arr, and aMuTorrent controller surface",
+      "id": "controller-rest-arr",
+      "title": "REST and Arr controller surface",
       "releasePhase": "controller-surface",
       "ownerLane": "live-e2e",
       "status": "covered",
@@ -175,15 +175,13 @@
         "scripts/rest-api-smoke.py",
         "scripts/prowlarr-emulebb-live.py",
         "scripts/radarr-emulebb-live.py",
-        "scripts/sonarr-emulebb-live.py",
-        "scripts/amutorrent-browser-smoke.py"
+        "scripts/sonarr-emulebb-live.py"
       ],
       "campaignScenarioIds": [
         "emulebb.flow.rest.contract.controller.v1",
         "emulebb.flow.arr.prowlarr.search-to-client.live.v1",
         "emulebb.flow.arr.radarr.import.live.v1",
-        "emulebb.flow.arr.sonarr.import.live.v1",
-        "emulebb.flow.amutorrent.browser.controller.v1"
+        "emulebb.flow.arr.sonarr.import.live.v1"
       ]
     },
     {
@@ -326,7 +324,6 @@
       "campaignScenarioIds": [
         "emulebb.flow.package.core.x64.v1",
         "emulebb.flow.package.core.arm64.v1",
-        "emulebb.flow.package.amutorrent.x64.v1",
         "emulebb.flow.provenance.clean-worktree.release.v1"
       ]
     }

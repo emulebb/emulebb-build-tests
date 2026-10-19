@@ -31,7 +31,7 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
     }
     assert matrix["localSwarm"]["tierOptions"][1]["stage"] == "launch-scale"
     assert matrix["localSwarm"]["tierOptions"][3]["adverse_kill_cycles"] == 2
-    assert matrix["scenarioCount"] == 6
+    assert matrix["scenarioCount"] == 4
     json.dumps(matrix)
 
 
@@ -41,8 +41,6 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
 
     assert set(scenarios) == {
         "installer-controller-surface",
-        "amutorrent-clean-startup",
-        "amutorrent-emulebb-ui",
         "arr-local-acquisition",
         "prowlarr-controller-handoff",
         "search-ui-local-swarm",
@@ -61,7 +59,6 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
         assert scenario["usesLocalSwarm"] is True
         assert scenario["liveWire"] is False
         assert scenario["controlBindScope"] == "lan"
-        assert scenario["amutorrentBindScope"] == "lan"
         assert scenario["p2pMode"] == "local-swarm"
         assert scenario["p2pBindScope"] == "lan"
         assert scenario["localSuites"]
@@ -71,12 +68,8 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
         "local-ed2k-search-soak",
         "local-kad-swarm",
     ]
-    assert scenarios["amutorrent-clean-startup"]["localSuites"] == [
-        "amutorrent-local-ed2k-ui-live",
-    ]
     assert scenarios["installer-controller-surface"]["localSuites"] == [
         "command-line-smoke",
-        "amutorrent-browser-smoke",
         "package-helper-integration",
     ]
     assert scenarios["prowlarr-controller-handoff"]["localSuites"] == [
@@ -260,7 +253,6 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
         assert matrix_row["vmPlanCommand"] == scenario.command_for_mode("vm", local_swarm_mode="plan")
         assert matrix_row["vmExecuteCommand"] == scenario.command_for_mode("vm", local_swarm_mode="execute")
         assert matrix_row["controlBindScope"] == scenario.control_bind_scope
-        assert matrix_row["amutorrentBindScope"] == scenario.amutorrent_bind_scope
         assert matrix_row["p2pMode"] == scenario.p2p_mode
         assert matrix_row["p2pBindScope"] == scenario.p2p_bind_scope
 

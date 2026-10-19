@@ -301,7 +301,6 @@ def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], s
         "executionMode": scenario.get("executionMode", ""),
         "executionModes": scenario.get("executionModes", []),
         "controlBindScope": scenario.get("controlBindScope", ""),
-        "amutorrentBindScope": scenario.get("amutorrentBindScope", ""),
         "p2pMode": scenario.get("p2pMode", ""),
         "p2pBindScope": scenario.get("p2pBindScope", ""),
         "status": _aggregate_evidence_status(evidence_reports),
@@ -503,8 +502,6 @@ def _validate_scenario_mapping(scenario: dict[str, Any], *, release_version: str
             raise ReleaseCampaignError(f"Scenario {scenario_id} vmProfile must match the shared scenario catalog.")
         if scenario.get("controlBindScope") != shared.control_bind_scope:
             raise ReleaseCampaignError(f"Scenario {scenario_id} controlBindScope must match the shared scenario catalog.")
-        if scenario.get("amutorrentBindScope") != shared.amutorrent_bind_scope:
-            raise ReleaseCampaignError(f"Scenario {scenario_id} amutorrentBindScope must match the shared scenario catalog.")
         if scenario.get("p2pMode") != shared.p2p_mode:
             raise ReleaseCampaignError(f"Scenario {scenario_id} p2pMode must match the shared scenario catalog.")
         if scenario.get("p2pBindScope") != shared.p2p_bind_scope:

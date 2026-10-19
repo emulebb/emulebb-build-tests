@@ -320,7 +320,7 @@ def test_installer_local_swarm_uses_auto_download_for_package_helpers(tmp_path, 
 
     def fake_run_live_e2e_suite(args, _harness_cli_common):
         observed.append((args.dependency_mode, list(args.suite)))
-        suites = ["command-line-smoke", "amutorrent-browser-smoke", "package-helper-integration", "godzilla-local-swarm"]
+        suites = ["command-line-smoke", "package-helper-integration", "godzilla-local-swarm"]
         return {
             "status": "planned",
             "suites": [
@@ -345,7 +345,7 @@ def test_installer_local_swarm_uses_auto_download_for_package_helpers(tmp_path, 
     assert observed == [
         (
             "auto-download",
-            ["command-line-smoke", "amutorrent-browser-smoke", "package-helper-integration", "godzilla-local-swarm"],
+            ["command-line-smoke", "package-helper-integration", "godzilla-local-swarm"],
         )
     ]
 

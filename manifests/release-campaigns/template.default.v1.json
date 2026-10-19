@@ -19,7 +19,7 @@
       {
         "id": "controller-surface",
         "title": "Controller surface",
-        "intent": "REST, Web/API compatibility, aMuTorrent, and Arr controller integration coverage."
+        "intent": "REST, Web/API compatibility, and Arr controller integration coverage."
       },
       {
         "id": "live-wire-release",
@@ -51,7 +51,6 @@
       "community-comparison",
       "rest-api",
       "controller",
-      "amutorrent",
       "arr",
       "live-wire",
       "file-format",

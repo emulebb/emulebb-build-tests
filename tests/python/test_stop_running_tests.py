@@ -118,17 +118,11 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
             "python.exe",
             r"C:\Python313\python.exe scripts\godzilla-local-swarm.py --visible-ui",
         ),
-        module.ProcessInfo(
-            203,
-            200,
-            "node.exe",
-            rf"node {workspace_root}\repos\amutorrent\server\server.js",
-        ),
     ]
 
     selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
-    assert selected == {200, 203}
+    assert selected == {200}
     assert reasons[200] == "workspace test runner command line"
     assert module.termination_roots(selected, processes) == [200]
 

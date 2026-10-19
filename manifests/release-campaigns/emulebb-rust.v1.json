@@ -209,24 +209,7 @@
     {
       "id": "ui-resource-depth",
       "title": "UI resource depth",
-      "scenarios": [
-        {
-          "id": "emulebb.flow.rust.amutorrent.controller.v1",
-          "title": "aMuTorrent against Rust controller surface",
-          "phase": "ui-resource-depth",
-          "flowCategory": "amutorrent",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test python --path tests/python/test_amutorrent_rust_controller.py --quiet",
-          "evidence": [
-            {
-              "kind": "manual",
-              "required": false,
-              "description": "aMuTorrent's real EmulebbManager adapter drives a live emulebb-rust client through the canonical /api/v1 contract (connect, categories, snapshot, shared files, search) with no private adapters, aliases, or compatibility shims. Verified green via tests/python/test_amutorrent_rust_controller.py."
-            }
-          ]
-        }
-      ]
+      "scenarios": []
     },
     {
       "id": "stabilization-stress",

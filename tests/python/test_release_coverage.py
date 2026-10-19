@@ -45,7 +45,7 @@ def test_release_coverage_manifest_keeps_required_weak_areas_owned() -> None:
         "direct-download-dialog-inputs",
         "category-scheduler-dialog-inputs",
         "comment-kad-note-dialogs",
-        "controller-rest-arr-amutorrent",
+        "controller-rest-arr",
         "live-profile-policy",
         "server-ipfilter-update-flows",
         "irc-chat-friends",

@@ -52,7 +52,6 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "godzilla-local-swarm.py",
         "local-ed2k-search-soak.py",
         "local-kad-swarm.py",
-        "amutorrent-local-ed2k-ui-live.py",
         "package-helper-integration.py",
         "prowlarr-emulebb-live.py",
         "radarr-emulebb-local.py",

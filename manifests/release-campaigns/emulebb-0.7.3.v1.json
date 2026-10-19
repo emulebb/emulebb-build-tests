@@ -5,7 +5,7 @@
   "campaignId": "emulebb-0.7.3",
   "releaseVersion": "0.7.3-rc.3",
   "title": "eMuleBB 0.7.3-rc.3 quick release campaign",
-  "description": "Repeatable RC-blocking campaign for package readiness. Uses bounded quick live/stress profiles plus targeted controller and aMuTorrent proof; full overnight soak is tracked by emulebb-0.7.3-overnight.",
+  "description": "Repeatable RC-blocking campaign for package readiness. Uses bounded quick live/stress profiles plus targeted controller proof; full overnight soak is tracked by emulebb-0.7.3-overnight.",
   "proofTier": "rc-blocking-quick",
   "phases": [
     {
@@ -294,26 +294,6 @@
           ]
         },
         {
-          "id": "emulebb.flow.amutorrent.browser.controller.v1",
-          "title": "aMuTorrent browser controller smoke",
-          "phase": "controller-surface",
-          "flowCategory": "amutorrent",
-          "required": true,
-          "blocking": false,
-          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
-          "liveE2eProfile": "installer-controller-surface",
-          "liveE2eSuite": "amutorrent-browser-smoke",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/amutorrent-browser-smoke/latest/amutorrent-browser-smoke-result.json",
-              "statusPointer": "/status"
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.installer.controller-surface.materialized.v1",
           "title": "Installer-backed controller surface",
           "phase": "controller-surface",
@@ -356,12 +336,10 @@
           "localProfile": "installer-controller-surface",
           "localSuites": [
             "command-line-smoke",
-            "amutorrent-browser-smoke",
             "package-helper-integration"
           ],
           "vmProfile": "installer-controller-surface-vm",
           "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
           "p2pMode": "local-swarm",
           "p2pBindScope": "lan",
           "evidence": [
@@ -398,7 +376,6 @@
           ],
           "vmProfile": "prowlarr-controller-handoff-vm",
           "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
           "p2pMode": "local-swarm",
           "p2pBindScope": "lan",
           "evidence": [
@@ -436,7 +413,6 @@
           ],
           "vmProfile": "arr-local-acquisition-vm",
           "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
           "p2pMode": "local-swarm",
           "p2pBindScope": "lan",
           "evidence": [
@@ -724,44 +700,6 @@
           ]
         },
         {
-          "id": "emulebb.flow.ui.search.local-swarm.v1",
-          "title": "Search UI local swarm reusable VM swarm",
-          "phase": "ui-resource-depth",
-          "flowCategory": "local-vm-swarm",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "executionMode": "vm",
-          "executionModes": [
-            "local",
-            "vm"
-          ],
-          "localProfile": "multi-client-p2p",
-          "localSuites": [
-            "local-ed2k-search-soak",
-            "local-kad-swarm"
-          ],
-          "vmProfile": "search-ui-local-swarm-vm",
-          "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
-          "p2pMode": "local-swarm",
-          "p2pBindScope": "lan",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "glob": "reports/windows-vm/*/windows-vm-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/profile": "search-ui-local-swarm-vm"
-              }
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.ui.preferences.resource-depth.v1",
           "title": "Preferences UI resource-depth companion",
           "phase": "ui-resource-depth",
@@ -794,6 +732,43 @@
               "kind": "manual",
               "required": true,
               "description": "Native friend/source, direct-download, category, and comment/Kad-note seams own nonblocking dialog input coverage. Scheduler, IRC, archive preview, legacy HTML templates, and proxy support are frozen and excluded from release evidence."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.ui.search.local-swarm.v1",
+          "title": "Search UI local swarm reusable VM swarm",
+          "phase": "ui-resource-depth",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "multi-client-p2p",
+          "localSuites": [
+            "local-ed2k-search-soak",
+            "local-kad-swarm"
+          ],
+          "vmProfile": "search-ui-local-swarm-vm",
+          "controlBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "search-ui-local-swarm-vm"
+              }
             }
           ]
         }
@@ -961,143 +936,6 @@
               }
             }
           ]
-        },
-        {
-          "id": "emulebb.flow.amutorrent.live.clean-startup.v1",
-          "title": "aMuTorrent clean startup live proof",
-          "phase": "stabilization-stress",
-          "flowCategory": "amutorrent",
-          "required": true,
-          "blocking": false,
-          "command": "python -m emule_workspace test amutorrent-clean-startup --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
-          "localInputs": [
-            "live-wire-inputs.local.json"
-          ],
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/amutorrent-clean-startup/latest/amutorrent-clean-startup-result.json",
-              "statusPointer": "/status"
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.amutorrent.live.emulebb-ui.v1",
-          "title": "aMuTorrent eMuleBB UI live proof",
-          "phase": "stabilization-stress",
-          "flowCategory": "amutorrent",
-          "required": true,
-          "blocking": false,
-          "command": "python -m emule_workspace test amutorrent-emulebb-ui --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
-          "localInputs": [
-            "live-wire-inputs.local.json"
-          ],
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
-              "statusPointer": "/status"
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.amutorrent.clean-startup.swarm.v1",
-          "title": "aMuTorrent clean startup reusable VM swarm",
-          "phase": "stabilization-stress",
-          "flowCategory": "local-vm-swarm",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "executionMode": "vm",
-          "executionModes": [
-            "local",
-            "vm"
-          ],
-          "localProfile": "multi-client-p2p",
-          "localSuites": [
-            "amutorrent-local-ed2k-ui-live"
-          ],
-          "vmProfile": "amutorrent-clean-startup-vm",
-          "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
-          "p2pMode": "local-swarm",
-          "p2pBindScope": "lan",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "glob": "reports/windows-vm/*/windows-vm-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/profile": "amutorrent-clean-startup-vm"
-              }
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.amutorrent.emulebb-ui.swarm.v1",
-          "title": "aMuTorrent eMuleBB UI reusable VM swarm",
-          "phase": "stabilization-stress",
-          "flowCategory": "local-vm-swarm",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.3 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
-          "executionMode": "vm",
-          "executionModes": [
-            "local",
-            "vm"
-          ],
-          "localProfile": "multi-client-p2p",
-          "localSuites": [
-            "amutorrent-local-ed2k-ui-live"
-          ],
-          "vmProfile": "amutorrent-emulebb-ui-vm",
-          "controlBindScope": "lan",
-          "amutorrentBindScope": "lan",
-          "p2pMode": "local-swarm",
-          "p2pBindScope": "lan",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "glob": "reports/windows-vm/*/windows-vm-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/profile": "amutorrent-emulebb-ui-vm"
-              }
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.amutorrent.live.resilience.v1",
-          "title": "aMuTorrent resilience live proof",
-          "phase": "stabilization-stress",
-          "flowCategory": "amutorrent",
-          "required": true,
-          "blocking": false,
-          "command": "python -m emule_workspace test amutorrent-resilience --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
-          "localInputs": [
-            "live-wire-inputs.local.json"
-          ],
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/amutorrent-resilience-live/latest/amutorrent-resilience-live-result.json",
-              "statusPointer": "/status"
-            }
-          ]
         }
       ]
     },
@@ -1136,23 +974,6 @@
               "required": true,
               "base": "workspace-output",
               "path": "release/emulebb-v0.7.3-rc.3/emulebb-0.7.3-rc.3-arm64.manifest.json"
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.package.amutorrent.x64.v1",
-          "title": "aMuTorrent x64 controller package and manifest",
-          "phase": "packaging-provenance",
-          "flowCategory": "packaging",
-          "required": true,
-          "blocking": true,
-          "command": "python -m emule_workspace package-amutorrent --config Release --platform x64 --release-version 0.7.3-rc.3",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "release/emulebb-v0.7.3-rc.3/emulebb-0.7.3-rc.3-amutorrent-x64.manifest.json"
             }
           ]
         },
@@ -1296,10 +1117,7 @@
         "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
         "emulebb.flow.livewire.rest.download-trigger.v1",
         "emulebb.flow.ui.preferences.shared-files.hash.release.v1",
-        "emulebb.flow.stress.rest.crash-leak-dump.v1",
-        "emulebb.flow.amutorrent.live.clean-startup.v1",
-        "emulebb.flow.amutorrent.live.emulebb-ui.v1",
-        "emulebb.flow.amutorrent.live.resilience.v1"
+        "emulebb.flow.stress.rest.crash-leak-dump.v1"
       ]
     },
     {
@@ -1340,12 +1158,6 @@
       "id": "package-arm64",
       "coveredBy": [
         "emulebb.flow.package.core.arm64.v1"
-      ]
-    },
-    {
-      "id": "package-amutorrent-x64",
-      "coveredBy": [
-        "emulebb.flow.package.amutorrent.x64.v1"
       ]
     },
     {

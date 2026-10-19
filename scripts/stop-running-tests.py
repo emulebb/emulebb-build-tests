@@ -20,7 +20,6 @@ TEST_PROCESS_NAMES = {"python.exe", "python", "py.exe", "py"}
 TEST_HELPER_PROCESS_NAMES = {
     "emulebb.exe",
     "emule.exe",
-    "node.exe",
     "prowlarr.exe",
     "xperf.exe",
     "procdump.exe",
@@ -46,7 +45,6 @@ TEST_HELPER_MARKERS = (
     "\\profile-base",
     "\\profile-work",
     "cpu-profile",
-    "\\repos\\amutorrent\\server\\server.js",
 )
 
 

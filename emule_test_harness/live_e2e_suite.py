@@ -127,7 +127,6 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
     "local-ed2k-search-soak",
     "local-ed2k-chaos-mode",
     "local-ed2k-protocol-combinations",
-    "amutorrent-local-ed2k-ui-live",
     "radarr-emulebb-local",
     "sonarr-emulebb-local",
 }
@@ -138,7 +137,6 @@ CLIENT2_APP_EXE_SUITE_NAMES = {
     "local-ed2k-search-soak",
     "local-ed2k-chaos-mode",
     "local-ed2k-protocol-combinations",
-    "amutorrent-local-ed2k-ui-live",
     "radarr-emulebb-local",
     "sonarr-emulebb-local",
 }
@@ -155,7 +153,6 @@ DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS = 8.0 * 60.0 * 60.0
 DEFAULT_LIVE_PROCESS_MONITOR_TIMEOUT_SECONDS = 10.0 * 60.0 * 60.0
 HIDE_ME_REMOTE_HOST_PATTERN = re.compile(r"\bRemote host resolved:\s*(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b")
 EMULEBB_PUBLIC_IPV4_PROBE_PATTERN = re.compile(r"\bVPN public IPv4 probe:\s+.*\bpublicIp=(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b")
-DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB = 6144
 DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB = 32768
 SUITE_TIMEOUT_RETURN_CODE = 124
 RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
@@ -205,8 +202,6 @@ TEST_NETWORK_ALLOWED_SCOPES = {
 }
 LAN_BIND_ADDR_SUITE_NAMES = frozenset(
     {
-        "amutorrent-browser-smoke",
-        "amutorrent-local-ed2k-ui-live",
         "auto-browse-live",
         "category-incoming-path-matrix",
         "deterministic-two-client-transfer",
@@ -257,7 +252,6 @@ class SuiteSpec:
     uses_live_seed_refresh: bool = False
     is_rest_api: bool = False
     is_auto_browse: bool = False
-    is_amutorrent_browser: bool = False
     is_prowlarr_emulebb: bool = False
     is_arr_emulebb: bool = False
     is_rest_cold_start_dump_stress: bool = False
@@ -376,13 +370,6 @@ SUITE_SPECS = (
         name="local-kad-mixed-client-swarm",
         script_name="local-kad-mixed-client-swarm.py",
         category="protocol",
-        network_scope="lan",
-        default_enabled=False,
-    ),
-    SuiteSpec(
-        name="amutorrent-local-ed2k-ui-live",
-        script_name="amutorrent-local-ed2k-ui-live.py",
-        category="ui",
         network_scope="lan",
         default_enabled=False,
     ),
@@ -515,16 +502,6 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
-        name="amutorrent-browser-smoke",
-        script_name="amutorrent-browser-smoke.py",
-        category="rest",
-        network_scope="lan",
-        is_amutorrent_browser=True,
-        accepts_vpn_guard_profile=True,
-        accepts_admin_volume_fixtures=True,
-        default_enabled=False,
-    ),
-    SuiteSpec(
         name="package-helper-integration",
         script_name="package-helper-integration.py",
         category="rest",
@@ -606,7 +583,6 @@ PROFILE_SUITE_NAMES = {
         "local-ed2k-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
-        "amutorrent-local-ed2k-ui-live",
     ),
     "multi-client-p2p-required": (
         "multi-client-p2p-matrix",
@@ -615,7 +591,6 @@ PROFILE_SUITE_NAMES = {
         "local-ed2k-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
-        "amutorrent-local-ed2k-ui-live",
     ),
     "beta-green": (
         "shared-directories-rest",
@@ -623,7 +598,6 @@ PROFILE_SUITE_NAMES = {
     ),
     "controller-surface": (
         "rest-api",
-        "amutorrent-browser-smoke",
     ),
     "installer-controller-surface": (
         "command-line-smoke",
@@ -631,7 +605,6 @@ PROFILE_SUITE_NAMES = {
         "prowlarr-emulebb",
         "radarr-emulebb",
         "sonarr-emulebb",
-        "amutorrent-browser-smoke",
     ),
     "installer-controller-surface-soak": (
         "live-process-monitor",
@@ -673,7 +646,6 @@ PROFILE_SUITE_NAMES = {
         "admin-volume-cleanup-audit",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
-        "amutorrent-browser-smoke",
         "auto-browse-live",
     ),
     "release-expanded-quick": (
@@ -1208,8 +1180,6 @@ def build_suite_command(
             command.append("--admin-volume-fixtures")
         if spec.is_arr_emulebb:
             suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)
-        elif spec.is_amutorrent_browser:
-            suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)
         elif spec.name == "godzilla-local-swarm":
             suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_GODZILLA_VHD_SIZE_MB)
         else:
@@ -1278,17 +1248,11 @@ def build_suite_command(
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
     if spec.is_auto_browse and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.is_amutorrent_browser:
-        if p2p_bind_interface_name and not p2p_bind_interface_address:
-            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-        elif p2p_bind_interface_address:
-            command.extend(["--p2p-bind-interface-name", ""])
     if (
         spec.accepts_vpn_guard_profile
         and not spec.is_rest_api
         and vpn_guard_scenario != "off"
         and p2p_bind_interface_name
-        and not (spec.is_amutorrent_browser and p2p_bind_interface_address)
     ):
         command.append("--vpn-guard-enabled")
         if vpn_guard_allowed_public_ip_cidrs:
@@ -1315,8 +1279,6 @@ def build_suite_command(
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if spec.name == "multi-client-p2p-matrix" and multi_client_require_optional_clients:
         command.append("--require-optional-clients")
-    if spec.name == "amutorrent-local-ed2k-ui-live" and multi_client_require_optional_clients:
-        command.append("--include-rust-client")
     if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
         command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
     if spec.name in CLIENT2_APP_EXE_SUITE_NAMES and client2_app_exe is not None:
@@ -1332,7 +1294,6 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
-            "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_name
         and p2p_bind_interface_name != "hide.me"
@@ -1349,7 +1310,6 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
-            "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_address
         and not (spec.name == "godzilla-local-swarm" and godzilla_p2p_bind_interface_address)
@@ -1964,7 +1924,6 @@ def campaign_scenario_network_contract(scenario_id: str, key: str) -> dict[str, 
         "local_test_network": scenario.local_test_network,
         "local_allowed_network_scopes": list(scenario.local_allowed_network_scopes),
         "control_bind_scope": scenario.control_bind_scope,
-        "amutorrent_bind_scope": scenario.amutorrent_bind_scope,
         "p2p_mode": scenario.p2p_mode,
         "p2p_bind_scope": scenario.p2p_bind_scope,
     }
@@ -2544,7 +2503,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 "admin_volume_fixtures": bool(args.admin_volume_fixtures),
             },
             "integrations": {
-                "amutorrent_browser_smoke": any(spec.name == "amutorrent-browser-smoke" for spec in selected_specs),
                 "arr_live_wire_suites": [
                     spec.name
                     for spec in selected_specs

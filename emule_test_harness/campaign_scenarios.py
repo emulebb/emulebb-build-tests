@@ -80,7 +80,6 @@ class CampaignScenarioSpec:
     local_test_network: str = LOCAL_CAMPAIGN_TEST_NETWORK
     local_allowed_network_scopes: tuple[str, ...] = LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES
     control_bind_scope: str = "lan"
-    amutorrent_bind_scope: str = "lan"
     p2p_mode: str = "local-swarm"
     p2p_bind_scope: str = "lan"
 
@@ -89,8 +88,6 @@ class CampaignScenarioSpec:
 
         if self.control_bind_scope not in CONTROL_BIND_SCOPES:
             raise ValueError(f"Unsupported control bind scope: {self.control_bind_scope!r}.")
-        if self.amutorrent_bind_scope not in CONTROL_BIND_SCOPES:
-            raise ValueError(f"Unsupported aMuTorrent bind scope: {self.amutorrent_bind_scope!r}.")
         if self.p2p_mode not in P2P_MODES:
             raise ValueError(f"Unsupported P2P mode: {self.p2p_mode!r}.")
         if self.p2p_bind_scope not in P2P_BIND_SCOPES:
@@ -118,7 +115,6 @@ class CampaignScenarioSpec:
             "usesLocalSwarm": self.uses_local_swarm,
             "liveWire": self.live_wire,
             "controlBindScope": self.control_bind_scope,
-            "amutorrentBindScope": self.amutorrent_bind_scope,
             "p2pMode": self.p2p_mode,
             "p2pBindScope": self.p2p_bind_scope,
             "localCommand": self.command_for_mode("local"),
@@ -169,33 +165,10 @@ REUSABLE_CAMPAIGN_SCENARIOS = (
         local_profile="installer-controller-surface",
         local_suites=(
             "command-line-smoke",
-            "amutorrent-browser-smoke",
             "package-helper-integration",
         ),
         vm_profile="installer-controller-surface-vm",
         scenario_id="emulebb.flow.controller.installer-swarm.v1",
-        uses_local_swarm=True,
-    ),
-    CampaignScenarioSpec(
-        key="amutorrent-clean-startup",
-        title="aMuTorrent clean startup",
-        release_phase="stabilization-stress",
-        network_scope="lan",
-        local_profile="multi-client-p2p",
-        local_suites=("amutorrent-local-ed2k-ui-live",),
-        vm_profile="amutorrent-clean-startup-vm",
-        scenario_id="emulebb.flow.amutorrent.clean-startup.swarm.v1",
-        uses_local_swarm=True,
-    ),
-    CampaignScenarioSpec(
-        key="amutorrent-emulebb-ui",
-        title="aMuTorrent eMuleBB UI",
-        release_phase="stabilization-stress",
-        network_scope="lan",
-        local_profile="multi-client-p2p",
-        local_suites=("amutorrent-local-ed2k-ui-live",),
-        vm_profile="amutorrent-emulebb-ui-vm",
-        scenario_id="emulebb.flow.amutorrent.emulebb-ui.swarm.v1",
         uses_local_swarm=True,
     ),
     CampaignScenarioSpec(

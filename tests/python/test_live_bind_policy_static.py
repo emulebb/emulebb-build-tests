@@ -11,10 +11,6 @@ SCRIPT_ROOT = REPO_ROOT / "scripts"
 HARNESS_ROOT = REPO_ROOT / "emule_test_harness"
 
 STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
-    "amutorrent-clean-startup.py": "vpn",
-    "amutorrent-emulebb-ui-live.py": "vpn",
-    "amutorrent-interactive-session.py": "vpn",
-    "amutorrent-resilience-live.py": "vpn",
     "emulebb-rust-emulebb-cross-client.py": "lan",
     "emulebb-rust-reask-capture-emulebb.py": "lan",
     "emulebb-rust-reask-cross-client.py": "lan",

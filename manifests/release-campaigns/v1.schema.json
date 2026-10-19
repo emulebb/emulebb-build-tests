@@ -202,11 +202,6 @@
             "lan"
           ]
         },
-        "amutorrentBindScope": {
-          "enum": [
-            "lan"
-          ]
-        },
         "p2pMode": {
           "enum": [
             "local-swarm",

@@ -69,8 +69,6 @@
     "import_profile_dir": "%EMULEBB_LOCAL_TEST_PROFILE_PATH%",
     "lan_bind_address": "192.0.2.10",
     "emulebb_port": 4711,
-    "amutorrent_port": 4000,
-    "amutorrent_lan_bind_address": "192.0.2.10",
     "p2p_bind_interface": "hide.me",
     "dependency_manifest": "C:\\example\\emulebb-suite-dependencies.json",
     "enable_rest": true,

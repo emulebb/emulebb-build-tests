@@ -61,7 +61,7 @@ def classify_topology(spec: live_e2e_suite.SuiteSpec) -> str:
         return "local-swarm"
     if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-ed2k-protocol-combinations"}:
         return "local-two-client"
-    if spec.is_arr_emulebb or spec.is_prowlarr_emulebb or spec.is_amutorrent_browser or spec.name.startswith("amutorrent-"):
+    if spec.is_arr_emulebb or spec.is_prowlarr_emulebb:
         return "controller-stack"
     if spec.category == "storage":
         return "single-client-storage"
@@ -126,7 +126,7 @@ def classify_optional_client_policy(spec: live_e2e_suite.SuiteSpec) -> str:
         return "mixed-clients-required"
     if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-ed2k-protocol-combinations", "local-kad-swarm"}:
         return "emulebb-and-harness-required"
-    if spec.is_arr_emulebb or spec.is_prowlarr_emulebb or spec.is_amutorrent_browser or spec.name.startswith("amutorrent-"):
+    if spec.is_arr_emulebb or spec.is_prowlarr_emulebb:
         return "controller-dependencies-required"
     return "none"
 

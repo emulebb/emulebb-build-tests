@@ -138,7 +138,6 @@ def test_live_e2e_summary_records_campaign_scenario_metadata(tmp_path: Path) -> 
         "local_test_network": "default",
         "local_allowed_network_scopes": ["offline", "lan"],
         "control_bind_scope": "lan",
-        "amutorrent_bind_scope": "lan",
         "p2p_mode": "local-swarm",
         "p2p_bind_scope": "lan",
     }
@@ -614,21 +613,6 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     )
     assert "--admin-volume-fixtures" in partfile_recovery_command
     assert option_values(partfile_recovery_command, "--mount-root") == [str(mount_root.resolve())]
-    amutorrent_command = live_e2e_suite.build_suite_command(
-        spec=suite_spec("amutorrent-browser-smoke"),
-        scripts_dir=tmp_path / "scripts",
-        python_executable="python",
-        workspace_root=tmp_path / "workspace",
-        configuration="Release",
-        artifacts_dir=tmp_path / "artifacts",
-        admin_volume_fixtures=True,
-        vhd_size_mb=384,
-        mount_root=mount_root,
-        keep_admin_fixtures=True,
-    )
-    assert "--admin-volume-fixtures" in amutorrent_command
-    assert option_values(amutorrent_command, "--mount-root") == [str(mount_root.resolve())]
-    assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
     radarr_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("radarr-emulebb"),
         scripts_dir=tmp_path / "scripts",
@@ -782,33 +766,6 @@ def test_lan_network_context_does_not_fallback_to_resolved_interface_ip(tmp_path
             ),
             FakeHarnessCliCommon(tmp_path),
         )
-
-
-def test_lan_amutorrent_browser_clears_live_p2p_bind_without_vpn_guard(tmp_path: Path, monkeypatch) -> None:
-    commands: list[list[str]] = []
-    monkeypatch.delenv("EMULEBB_TEST_LAN_INTERFACE", raising=False)
-    monkeypatch.setattr(
-        live_e2e_suite,
-        "run_suite_command",
-        lambda command: commands.append(command) or 0,
-    )
-
-    summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args(
-            "--suite",
-            "amutorrent-browser-smoke",
-            "--test-network",
-            "lan",
-            "--lan-bind-addr",
-            "192.0.2.11",
-        ),
-        FakeHarnessCliCommon(tmp_path),
-    )
-
-    assert summary["test_network"] == "lan"
-    assert option_values(commands[0], "--p2p-bind-interface-name") == [""]
-    assert option_values(commands[0], "--p2p-bind-interface-address") == []
-    assert "--vpn-guard-enabled" not in commands[0]
 
 
 def test_vpn_search_ui_uses_lan_rest_bind_and_vpn_p2p_bind(tmp_path: Path, monkeypatch) -> None:
@@ -1039,7 +996,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "local-ed2k-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
-        "amutorrent-local-ed2k-ui-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "multi-client-p2p-matrix",
@@ -1048,7 +1004,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "local-ed2k-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
-        "amutorrent-local-ed2k-ui-live",
     ]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert option_values(commands[1], "--p2p-bind-interface-name") == []
@@ -1057,8 +1012,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[4], "--p2p-bind-interface-name") == []
     assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[5], "--p2p-bind-interface-name") == []
-    assert option_values(commands[6], "--p2p-bind-interface-name") == []
-    assert "--include-rust-client" not in commands[6]
 
 
 def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp_path: Path, monkeypatch) -> None:
@@ -1110,10 +1063,8 @@ def test_multi_client_required_profile_enables_required_optional_clients(tmp_pat
         "local-ed2k-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
-        "amutorrent-local-ed2k-ui-live.py",
     ]
     assert "--require-optional-clients" in commands[0]
-    assert "--include-rust-client" in commands[6]
 
 
 def test_controller_local_profile_owns_lan_arr_lanes(tmp_path: Path, monkeypatch) -> None:
@@ -1632,11 +1583,9 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     assert summary["explicit_suite_names"] == []
     assert [script_name(command) for command in commands] == [
         "rest-api-smoke.py",
-        "amutorrent-browser-smoke.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "rest-api",
-        "amutorrent-browser-smoke",
     ]
     assert summary["arr_live_wire_suites"] == []
     assert summary["arr_download_proof_mode"] == live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
@@ -1646,10 +1595,6 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     rest_command = commands[0]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract"]
     assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
-
-    browser_command = commands[1]
-    assert option_values(browser_command, "--p2p-bind-interface-name") == [""]
-    assert option_values(browser_command, "--p2p-bind-interface-address") == []
 
 
 def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path: Path, monkeypatch) -> None:
@@ -1675,7 +1620,6 @@ def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path
     assert summary["arr_live_wire_suites"] == []
     assert [script_name(command) for command in commands] == [
         "rest-api-smoke.py",
-        "amutorrent-browser-smoke.py",
     ]
 
 
@@ -1901,7 +1845,6 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "admin-volume-cleanup-audit.py",
         "rest-cold-start-dump-stress.py",
         "local-dumps-crash-smoke.py",
-        "amutorrent-browser-smoke.py",
         "auto-browse-live.py",
     ]
     assert summary["preference_ui_directories_tree_stress"] is True
@@ -1934,7 +1877,6 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "category-incoming-path-matrix",
         "vhd-partfile-recovery",
         "admin-volume-cleanup-audit",
-        "amutorrent-browser-smoke",
     ]
     assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
     assert summary["weak_path_matrix"]["live_download_triggers"] == {
@@ -1957,8 +1899,6 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "admin_volume_cleanup_audit": True,
         "admin_volume_fixtures": True,
     }
-    assert summary["weak_path_matrix"]["integrations"]["amutorrent_browser_smoke"] is True
-
     preference_command = commands[1]
     assert "--directories-tree-stress" in preference_command
 
@@ -2054,12 +1994,6 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
     ]
 
-    amutorrent_command = commands[23]
-    assert script_name(amutorrent_command) == "amutorrent-browser-smoke.py"
-    assert "--admin-volume-fixtures" in amutorrent_command
-    assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
-
-
 def test_release_expanded_quick_profile_tolerates_sparse_live_cold_start_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -2123,9 +2057,6 @@ def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: 
             assert "--enable-upnp" in command
         if script in {"search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py"}:
             assert option_values(command, "--live-wire-inputs-file") == [str(live_wire_inputs_file.resolve())]
-
-    amutorrent_browser_command = by_script["amutorrent-browser-smoke.py"]
-    assert option_values(amutorrent_browser_command, "--p2p-bind-interface-name") == [""]
 
     deterministic_command = by_script["deterministic-two-client-transfer.py"]
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
@@ -2937,7 +2868,6 @@ def test_package_helper_integration_uses_emulebb_release_asset_scripts() -> None
     script_text = (Path(__file__).resolve().parents[2] / "scripts" / "package-helper-integration.py").read_text(encoding="utf-8")
 
     assert "workspace_layout.resolve_workspace_repo(paths.workspace_root, \"build\")" in script_text
-    assert "amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)" in script_text
     assert '"release_assets" / "emulebb" / "scripts"' in script_text
     assert '"release_assets" / "emule" / "scripts"' not in script_text
     assert '"repos" / "emulebb-build"' not in script_text

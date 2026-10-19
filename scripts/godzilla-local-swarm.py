@@ -18,7 +18,6 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import urllib.request
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -53,8 +52,6 @@ def load_local_module(module_name: str, filename: str):
 
 dtt = load_local_module("deterministic_two_client_transfer_godzilla", "deterministic-two-client-transfer.py")
 protocol_matrix = load_local_module("local_ed2k_protocol_combinations_godzilla", "local-ed2k-protocol-combinations.py")
-amutorrent_smoke = load_local_module("amutorrent_browser_smoke_godzilla", "amutorrent-browser-smoke.py")
-amutorrent_local = load_local_module("amutorrent_local_ed2k_ui_godzilla", "amutorrent-local-ed2k-ui-live.py")
 harness_cli_common = dtt.harness_cli_common
 live_common = dtt.live_common
 rest_smoke = dtt.rest_smoke
@@ -87,7 +84,6 @@ DEFAULT_FILE_LARGE_SIZE_BYTES = 32 * 1024 * 1024
 DEFAULT_PROTOCOL_CASE = "obfuscated-preferred"
 DEFAULT_VHD_SIZE_MB = 128 * 1024
 DEFAULT_REST_SEARCH_ROUNDS = 12
-DEFAULT_AMUTORRENT_API_ROUNDS = 8
 DEFAULT_MIN_PUBLISHED_FILES_TO_START = 1
 DEFAULT_HAMMER_WAVES = 6
 DEFAULT_HAMMER_WAVE_SLEEP_SECONDS = 1.0
@@ -191,8 +187,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ui-cycle-cycles", type=int, default=DEFAULT_UI_CYCLE_CYCLES)
     parser.add_argument("--ui-cycle-interval-seconds", type=float, default=DEFAULT_UI_CYCLE_INTERVAL_SECONDS)
     parser.add_argument("--rest-search-rounds", type=int, default=DEFAULT_REST_SEARCH_ROUNDS)
-    parser.add_argument("--amutorrent-controller", action="store_true")
-    parser.add_argument("--amutorrent-api-rounds", type=int, default=DEFAULT_AMUTORRENT_API_ROUNDS)
     parser.add_argument("--min-published-files-to-start", type=int, default=DEFAULT_MIN_PUBLISHED_FILES_TO_START)
     parser.add_argument("--hammer-waves", type=int, default=DEFAULT_HAMMER_WAVES)
     parser.add_argument("--hammer-wave-sleep-seconds", type=float, default=DEFAULT_HAMMER_WAVE_SLEEP_SECONDS)
@@ -241,7 +235,6 @@ def validate_args(args: argparse.Namespace) -> None:
         "client_rotation_cycles",
         "ui_cycle_cycles",
         "rest_search_rounds",
-        "amutorrent_api_rounds",
         "min_published_files_to_start",
         "hammer_waves",
     ):
@@ -663,57 +656,6 @@ def start_server_search_with_retry(base_url: str, api_key: str, query: str) -> d
         "method_candidates": ["server"],
         "response": response,
     }
-
-
-def amutorrent_http_json(base_url: str, path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Runs one JSON aMuTorrent controller request."""
-
-    data = None
-    headers = {"Accept": "application/json"}
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=20.0) as response:
-        payload_text = response.read().decode("utf-8", errors="replace")
-        payload = json.loads(payload_text) if payload_text else None
-        return {"status": response.status, "payload": payload}
-
-
-def run_amutorrent_api_hammer(base_url: str, *, links: list[str], rounds: int) -> dict[str, object]:
-    """Runs optional aMuTorrent controller API traffic against eMuleBB."""
-
-    if rounds <= 0:
-        return {"skipped": True, "reason": "rounds disabled"}
-    rows: list[dict[str, object]] = []
-    instance_cycle = [CLIENT01.profile_id]
-    for index in range(rounds):
-        instance_id = instance_cycle[index % len(instance_cycle)]
-        row: dict[str, object] = {
-            "round": index + 1,
-            "instance_id": instance_id,
-            "health": amutorrent_http_json(base_url, "/health"),
-            "snapshot_before": amutorrent_http_json(base_url, "/api/v1/data/snapshot"),
-        }
-        if links:
-            link = links[index % len(links)]
-            row["add_ed2k"] = amutorrent_http_json(
-                base_url,
-                "/api/v1/downloads/ed2k",
-                method="POST",
-                body={"links": [link], "instanceId": instance_id},
-            )
-        query = "linux" if index % 2 == 0 else "debian"
-        row["search"] = amutorrent_http_json(
-            base_url,
-            "/api/v1/search?wait=false",
-            method="POST",
-            body={"query": query, "type": "server", "instanceId": instance_id},
-        )
-        row["search_results"] = amutorrent_http_json(base_url, f"/api/v1/search/results?type=server&instanceId={instance_id}")
-        row["snapshot_after"] = amutorrent_http_json(base_url, "/api/v1/data/snapshot")
-        rows.append(row)
-    return {"rounds": rows}
 
 
 def server_telemetry_snapshot(admin_base_url: str, api_key: str) -> dict[str, object]:
@@ -1819,9 +1761,6 @@ def main(argv: list[str] | None = None) -> int:
     client1_app = None
     client2_app = None
     extra_emulebb_clients: list[dict[str, object]] = []
-    amutorrent_process: subprocess.Popen[str] | None = None
-    amutorrent_output = None
-    amutorrent_log_path: Path | None = None
     runtime_storage_context = None
     analysis_dir = paths.source_artifacts_dir / "analysis"
     diagnostics_dir = paths.source_artifacts_dir / "diagnostics"
@@ -1935,8 +1874,6 @@ def main(argv: list[str] | None = None) -> int:
         p2p_address = resolve_local_p2p_address(args)
         args.lan_bind_addr = resolve_lan_bind_addr(args, p2p_address)
         ports = choose_ports(args.extra_emulebb_clients, args.lan_bind_addr)
-        if args.amutorrent_controller:
-            ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
         base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         ed2k_admin_address = p2p_address if bool(args.lan_mode) else args.lan_bind_addr
         admin_base_url = f"http://{ed2k_admin_address}:{ports['ed2k_admin']}"
@@ -2198,48 +2135,6 @@ def main(argv: list[str] | None = None) -> int:
                     analysis_dir / "umdh-primary-baseline.txt",
                 )
 
-        if args.amutorrent_controller:
-            current_phase = "launch_amutorrent_controller"
-            amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
-            node_info = amutorrent_smoke.resolve_amutorrent_node()
-            node_path = Path(str(node_info["path"]))
-            amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
-            amutorrent_data_dir = runtime_root / "amutorrent-data"
-            amutorrent_log_path = paths.source_artifacts_dir / "amutorrent-server.log"
-            env = amutorrent_local.build_local_amutorrent_environment(
-                base_env=os.environ,
-                amutorrent_port=ports["amutorrent"],
-                lan_bind_addr=args.lan_bind_addr,
-                node_path=node_path,
-                data_dir=amutorrent_data_dir,
-                emulebb_rest_port=ports["client1_rest"],
-                emulebb_api_key=args.api_key,
-            )
-            amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
-            amutorrent_process = subprocess.Popen(
-                [str(node_path), "server/server.js"],
-                cwd=str(amutorrent_root),
-                env=env,
-                stdout=amutorrent_output,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            amutorrent_base_url = f"http://{args.lan_bind_addr}:{ports['amutorrent']}"
-            amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
-            report["amutorrent"] = {
-                "base_url": amutorrent_base_url,
-                "data_dir": str(amutorrent_data_dir),
-                "process_id": amutorrent_process.pid,
-                "node": node_info,
-            }
-            report["checks"]["amutorrent_clients_connected"] = amutorrent_local.wait_for_amutorrent_clients(
-                base_url=amutorrent_base_url,
-                expected={
-                    CLIENT01.profile_id: "emulebb",
-                },
-                timeout_seconds=args.rest_ready_timeout_seconds,
-            )
-
         current_phase = "wait_for_publish"
         report["checks"]["server_clients"] = {
             CLIENT01.profile_id: ed2k_harness.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
@@ -2465,13 +2360,6 @@ def main(argv: list[str] | None = None) -> int:
             queries=local_search_queries,
             rounds=args.rest_search_rounds,
         )
-        if args.amutorrent_controller:
-            report["checks"]["amutorrent_api_hammer"] = run_amutorrent_api_hammer(
-                str(report["amutorrent"]["base_url"]),
-                links=emulebb_links[: max(1, min(len(emulebb_links), 20))],
-                rounds=args.amutorrent_api_rounds,
-            )
-
         current_phase = "transfer_churn"
         pre_churn_rows = fetch_transfer_rows(base_url, args.api_key)
         report["checks"]["pre_churn_transfer_snapshot"] = summarize_transfer_rows(pre_churn_rows)
@@ -2620,17 +2508,6 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup["cpu_profile"] = {"stopped": True}
             except Exception as exc:  # pragma: no cover - diagnostics best effort during cleanup
                 cleanup["cpu_profile"] = {"error": str(exc) or repr(exc)}
-        if amutorrent_process is not None:
-            try:
-                amutorrent_local.stop_amutorrent(amutorrent_process)
-                cleanup["amutorrent"] = {"ok": True}
-            except Exception as exc:  # pragma: no cover - cleanup diagnostics only
-                cleanup["amutorrent"] = {"error": str(exc)}
-        if amutorrent_output is not None:
-            amutorrent_output.close()
-            if amutorrent_log_path is not None and amutorrent_log_path.exists():
-                cleanup["amutorrent_log"] = str(amutorrent_log_path)
-                cleanup["amutorrent_output_tail"] = amutorrent_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
         for identity, app in ((CLIENT01, client1_app), (CLIENT02, client2_app)):
             if app is None:
                 continue
