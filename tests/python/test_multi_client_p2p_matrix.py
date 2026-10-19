@@ -173,7 +173,7 @@ def test_matrix_accepts_external_parity_runtime_overrides() -> None:
             "192.0.2.10",
             "--stock-emule-exe",
             "stock-emule.exe",
-            "--amule-exe",
+            "--amule-daemon-exe",
             "amuled.exe",
             "--amule-control-exe",
             "amulecmd.exe",
@@ -181,8 +181,11 @@ def test_matrix_accepts_external_parity_runtime_overrides() -> None:
     )
 
     assert args.stock_emule_exe == "stock-emule.exe"
-    assert args.amule_exe == "amuled.exe"
+    assert args.amule_daemon_exe == "amuled.exe"
     assert args.amule_control_exe == "amulecmd.exe"
+
+    alias_args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--amule-exe", "amule.exe"])
+    assert alias_args.amule_daemon_exe == "amule.exe"
 
 
 def test_matrix_accepts_targeted_required_scenario() -> None:

@@ -150,8 +150,9 @@ External parity references in the multi-client matrix:
   scenario remains blocked until a native External Connections adapter exists;
   requiring `cl-emulebb-001-downloads-from-cl-amule-007` therefore fails rather
   than silently claiming parity
-- `--stock-emule-exe`, `--amule-exe`, and `--amule-control-exe` override only
-  runtime discovery; they do not alter source provenance or adapter status
+- `--stock-emule-exe`, `--amule-daemon-exe`, and `--amule-control-exe`
+  override only runtime discovery; `--amule-exe` remains a compatibility alias,
+  and none of these options alter source provenance or adapter status
 | `scripts\rust-shared-library-io.py` | operator-facing Rust I/O characterization | maintained | owned 100k-file SSD fixture with long paths, live watcher lifecycle, restart/no-change proof, and offline 1% mutation |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |

@@ -67,7 +67,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
     parser.add_argument("--stock-emule-exe")
-    parser.add_argument("--amule-exe")
+    parser.add_argument("--amule-daemon-exe", "--amule-exe", dest="amule_daemon_exe")
     parser.add_argument("--amule-control-exe")
     parser.add_argument("--require-optional-clients", action="store_true")
     parser.add_argument(
@@ -411,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
             harness_exe=args.client2_app_exe,
             emuleai_exe=args.emuleai_exe,
             stock_emule_exe=args.stock_emule_exe,
-            amule_exe=args.amule_exe,
+            amule_exe=args.amule_daemon_exe,
             amule_control_exe=args.amule_control_exe,
         )
         report["client_inventory"] = {key: value.as_report() for key, value in inventory.items()}
