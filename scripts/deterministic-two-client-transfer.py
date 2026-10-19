@@ -999,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     server_process: subprocess.Popen | None = None
     server_provider: ed2k_server.Ed2kServerProvider | None = None
+    server_control: ed2k_server.Ed2kServerControl | None = None
     client1_app = None
     client2_app = None
     current_phase = "initializing"
@@ -1033,6 +1034,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
+        server_control = server_provider.control(admin_base_url, args.api_key)
         report["checks"]["server_build"] = server_launch.build
         report["checks"]["ed2k_server_health"] = server_launch.health
         report["ed2k_server"] = server_launch.config
@@ -1143,15 +1145,11 @@ def main(argv: list[str] | None = None) -> int:
         link_info = parse_ed2k_file_link(exported_link)
         report["checks"]["client2_shared_file_link"] = {**shared_link, "parsed": link_info}
         transfer_hash = str(link_info["hash"])
-        report["checks"]["client2_server_client"] = server_provider.wait_for_client(
-            admin_base_url,
-            args.api_key,
+        report["checks"]["client2_server_client"] = server_control.wait_for_client(
             client2_identity.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["client2_server_file"] = server_provider.wait_for_file(
-            admin_base_url,
-            args.api_key,
+        report["checks"]["client2_server_file"] = server_control.wait_for_file(
             transfer_hash,
             args.server_publish_timeout_seconds,
         )
@@ -1170,9 +1168,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = server_provider.wait_for_client(
-            admin_base_url,
-            args.api_key,
+        report["checks"]["client1_server_client"] = server_control.wait_for_client(
             CLIENT01.nick,
             args.server_connect_timeout_seconds,
         )
@@ -1196,11 +1192,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = server_provider.admin_request(
-            admin_base_url,
-            args.api_key,
-            "/api/stats",
-        )
+        report["checks"]["ed2k_server_stats_final"] = server_control.stats()
         report["status"] = "passed"
         return 0
     except Exception as exc:

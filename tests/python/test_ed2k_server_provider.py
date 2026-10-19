@@ -85,23 +85,27 @@ def test_goed2k_provider_delegates_normalized_observation_calls(monkeypatch) -> 
         "admin_request",
         lambda *args, **kwargs: calls.append(("admin", args, kwargs)) or {"ok": True},
     )
-    monkeypatch.setattr(
-        goed2k,
-        "wait_for_server_client",
-        lambda *args, **kwargs: calls.append(("client", args, kwargs)) or {"client_name": "aMule"},
-    )
-    monkeypatch.setattr(
-        goed2k,
-        "wait_for_server_file",
-        lambda *args, **kwargs: calls.append(("file", args, kwargs)) or {"hash": "0011"},
-    )
-
-    provider = ed2k_server.GOED2K_PROVIDER
-    assert provider.admin_request("http://server", "secret", "/api/stats", timeout_seconds=3.0)["ok"] is True
-    assert provider.wait_for_client("http://server", "secret", "amule", 4.0)["client_name"] == "aMule"
-    assert provider.wait_for_file("http://server", "secret", "0011", 5.0)["hash"] == "0011"
+    control = ed2k_server.GOED2K_PROVIDER.control("http://server", "secret")
+    assert control.stats()["ok"] is True
     assert calls == [
-        ("admin", ("http://server", "secret", "/api/stats"), {"timeout_seconds": 3.0}),
-        ("client", ("http://server", "secret", "amule", 4.0), {}),
-        ("file", ("http://server", "secret", "0011", 5.0), {}),
+        ("admin", ("http://server", "secret", "/api/stats"), {"timeout_seconds": 10.0}),
     ]
+
+
+@pytest.mark.unit
+def test_goed2k_control_normalizes_clients_and_files(monkeypatch) -> None:
+    payloads = {
+        "/api/clients": {"ok": True, "data": [{"client_name": "aMule"}, "ignored"]},
+        "/api/files/0011": {"ok": True, "data": {"hash": "0011"}},
+        "/api/files?search=fixture%20file": {"ok": True, "data": [{"hash": "0011"}]},
+    }
+    monkeypatch.setattr(
+        goed2k,
+        "admin_request",
+        lambda _base, _secret, path, **_kwargs: payloads[path],
+    )
+    control = ed2k_server.GOED2K_PROVIDER.control("http://server", "secret")
+
+    assert control.list_clients() == [{"client_name": "aMule"}]
+    assert control.get_file("0011") == {"hash": "0011"}
+    assert control.list_files("fixture file") == {"ok": True, "data": [{"hash": "0011"}]}

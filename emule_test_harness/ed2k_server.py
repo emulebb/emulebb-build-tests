@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,6 +33,37 @@ class Ed2kServerLaunch(Ed2kServerBinary, Protocol):
     log_path: Path
     config: dict[str, object]
     health: dict[str, Any]
+
+
+class UnsupportedEd2kServerCapability(RuntimeError):
+    """Raised when a selected server cannot provide an optional harness capability."""
+
+
+class Ed2kServerControl(Protocol):
+    """Semantic observation operations normalized across server providers."""
+
+    def stats(self) -> dict[str, Any]: ...
+
+    def list_clients(self) -> list[dict[str, Any]]: ...
+
+    def get_file(self, file_hash: str) -> dict[str, Any] | None: ...
+
+    def list_files(self, search: str | None = None) -> dict[str, Any]: ...
+
+    def audit(self) -> dict[str, Any]: ...
+
+    def wait_for_client(self, name_fragment: str, timeout_seconds: float) -> dict[str, Any]: ...
+
+    def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]: ...
+
+    def wait_for_file_endpoint(
+        self,
+        file_hash: str,
+        host: str,
+        port: int,
+        timeout_seconds: float,
+        description: str = "ED2K server file endpoint publication",
+    ) -> dict[str, Any]: ...
 
 
 class Ed2kServerProvider(Protocol):
@@ -65,45 +98,93 @@ class Ed2kServerProvider(Protocol):
         health_timeout_seconds: float = 30.0,
     ) -> Ed2kServerLaunch: ...
 
-    def admin_request(
-        self,
-        admin_base_url: str,
-        admin_secret: str,
-        path: str,
-        *,
-        timeout_seconds: float = 10.0,
-    ) -> dict[str, Any]: ...
+    def control(self, admin_base_url: str, admin_secret: str) -> Ed2kServerControl: ...
+
+    def stop_process(self, process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None: ...
+
+    def stop_server_processes(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class Goed2kServerControl:
+    """Semantic control adapter over the Go server's admin API."""
+
+    admin_base_url: str
+    admin_secret: str
+
+    def _request(self, path: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
+        return goed2k.admin_request(
+            self.admin_base_url,
+            self.admin_secret,
+            path,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def stats(self) -> dict[str, Any]:
+        return self._request("/api/stats")
+
+    def list_clients(self) -> list[dict[str, Any]]:
+        payload = self._request("/api/clients")
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"ED2K clients response did not contain a list: {payload!r}")
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_file(self, file_hash: str) -> dict[str, Any] | None:
+        payload = self._request(f"/api/files/{file_hash.upper()}")
+        row = payload.get("data")
+        return dict(row) if isinstance(row, dict) else None
+
+    def list_files(self, search: str | None = None) -> dict[str, Any]:
+        path = "/api/files"
+        if search:
+            path += "?search=" + urllib.parse.quote(search)
+        return self._request(path)
+
+    def audit(self) -> dict[str, Any]:
+        return self._request("/api/audit")
 
     def wait_for_client(
         self,
-        admin_base_url: str,
-        admin_secret: str,
         name_fragment: str,
         timeout_seconds: float,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        return goed2k.wait_for_server_client(
+            self.admin_base_url,
+            self.admin_secret,
+            name_fragment,
+            timeout_seconds,
+        )
 
     def wait_for_file(
         self,
-        admin_base_url: str,
-        admin_secret: str,
         file_hash: str,
         timeout_seconds: float,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        return goed2k.wait_for_server_file(
+            self.admin_base_url,
+            self.admin_secret,
+            file_hash,
+            timeout_seconds,
+        )
 
     def wait_for_file_endpoint(
         self,
-        admin_base_url: str,
-        admin_secret: str,
         file_hash: str,
         host: str,
         port: int,
         timeout_seconds: float,
         description: str = "ED2K server file endpoint publication",
-    ) -> dict[str, Any]: ...
-
-    def stop_process(self, process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None: ...
-
-    def stop_server_processes(self) -> None: ...
+    ) -> dict[str, Any]:
+        return goed2k.wait_for_server_file_endpoint(
+            self.admin_base_url,
+            self.admin_secret,
+            file_hash,
+            host,
+            port,
+            timeout_seconds,
+            description,
+        )
 
 
 class Goed2kServerProvider:
@@ -159,68 +240,8 @@ class Goed2kServerProvider:
             health_timeout_seconds=health_timeout_seconds,
         )
 
-    def admin_request(
-        self,
-        admin_base_url: str,
-        admin_secret: str,
-        path: str,
-        *,
-        timeout_seconds: float = 10.0,
-    ) -> dict[str, Any]:
-        return goed2k.admin_request(
-            admin_base_url,
-            admin_secret,
-            path,
-            timeout_seconds=timeout_seconds,
-        )
-
-    def wait_for_client(
-        self,
-        admin_base_url: str,
-        admin_secret: str,
-        name_fragment: str,
-        timeout_seconds: float,
-    ) -> dict[str, Any]:
-        return goed2k.wait_for_server_client(
-            admin_base_url,
-            admin_secret,
-            name_fragment,
-            timeout_seconds,
-        )
-
-    def wait_for_file(
-        self,
-        admin_base_url: str,
-        admin_secret: str,
-        file_hash: str,
-        timeout_seconds: float,
-    ) -> dict[str, Any]:
-        return goed2k.wait_for_server_file(
-            admin_base_url,
-            admin_secret,
-            file_hash,
-            timeout_seconds,
-        )
-
-    def wait_for_file_endpoint(
-        self,
-        admin_base_url: str,
-        admin_secret: str,
-        file_hash: str,
-        host: str,
-        port: int,
-        timeout_seconds: float,
-        description: str = "ED2K server file endpoint publication",
-    ) -> dict[str, Any]:
-        return goed2k.wait_for_server_file_endpoint(
-            admin_base_url,
-            admin_secret,
-            file_hash,
-            host,
-            port,
-            timeout_seconds,
-            description,
-        )
+    def control(self, admin_base_url: str, admin_secret: str) -> Ed2kServerControl:
+        return Goed2kServerControl(admin_base_url, admin_secret)
 
     def stop_process(self, process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None:
         goed2k.stop_process(process, timeout_seconds=timeout_seconds)
