@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import socket
-import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -19,7 +18,7 @@ from emule_test_harness import rust_metadata
 from emule_test_harness.script_modules import load_script_module
 
 
-API_KEY = "test-api-key"
+API_KEY = "0123456789abcdef0123456789abcdef"
 SEED_HASH = "00112233445566778899aabbccddeeff"
 SERVER_SEARCH_HASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
 SERVER_SEARCH_NAME = "Rust.Live.Search.Fixture.bin"
@@ -139,7 +138,8 @@ def write_rust_peer_exchange_report(report: dict[str, object]) -> None:
 
 
 def seed_index(repo: Path, metadata_path: Path) -> None:
-    rust_metadata.create_metadata_db(repo, metadata_path)
+    if not metadata_path.exists():
+        rust_metadata.create_metadata_db(repo, metadata_path)
     rust_metadata.seed_indexed_file(
         metadata_path,
         ed2k_hash=SEED_HASH,
