@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
@@ -86,6 +86,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--ed2k-server-provider")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
@@ -997,6 +998,7 @@ def main(argv: list[str] | None = None) -> int:
         "checks": {},
     }
     server_process: subprocess.Popen | None = None
+    server_provider: ed2k_server.Ed2kServerProvider | None = None
     client1_app = None
     client2_app = None
     current_phase = "initializing"
@@ -1016,22 +1018,24 @@ def main(argv: list[str] | None = None) -> int:
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        server_provider = ed2k_server.resolve_provider(args.ed2k_server_provider)
+        report["ed2k_server_provider"] = server_provider.name
+        server_launch = server_provider.launch(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
-            token=args.api_key,
+            admin_secret=args.api_key,
             admin_address=args.lan_bind_addr,
             ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
         )
-        server_process = ed2k_server.process
-        admin_base_url = ed2k_server.admin_base_url
-        report["checks"]["server_build"] = ed2k_server.build
-        report["checks"]["ed2k_server_health"] = ed2k_server.health
-        report["ed2k_server"] = ed2k_server.config
+        server_process = server_launch.process
+        admin_base_url = server_launch.admin_base_url
+        report["checks"]["server_build"] = server_launch.build
+        report["checks"]["ed2k_server_health"] = server_launch.health
+        report["ed2k_server"] = server_launch.config
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_file = fixture_dir / "deterministic-two-client-transfer.bin"
@@ -1139,13 +1143,13 @@ def main(argv: list[str] | None = None) -> int:
         link_info = parse_ed2k_file_link(exported_link)
         report["checks"]["client2_shared_file_link"] = {**shared_link, "parsed": link_info}
         transfer_hash = str(link_info["hash"])
-        report["checks"]["client2_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["client2_server_client"] = server_provider.wait_for_client(
             admin_base_url,
             args.api_key,
             client2_identity.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["client2_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["client2_server_file"] = server_provider.wait_for_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -1166,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["client1_server_client"] = server_provider.wait_for_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -1192,7 +1196,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = server_provider.admin_request(
+            admin_base_url,
+            args.api_key,
+            "/api/stats",
+        )
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -1212,7 +1220,8 @@ def main(argv: list[str] | None = None) -> int:
                 close_results[name] = {"ok": True}
             except Exception as exc:
                 close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        goed2k.stop_process(server_process)
+        if server_provider is not None:
+            server_provider.stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "deterministic-two-client-transfer-result.json"

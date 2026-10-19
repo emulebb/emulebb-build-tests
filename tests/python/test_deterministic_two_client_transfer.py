@@ -499,14 +499,15 @@ def test_launch_ed2k_server_centralizes_catalog_config_start_and_health(monkeypa
     assert launch.config["admin_listen_address"] == "192.0.2.10:8080"
 
 
-def test_deterministic_transfer_reuses_shared_goed2k_launcher() -> None:
+def test_deterministic_transfer_uses_provider_neutral_server_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "ed2k_server.resolve_provider(args.ed2k_server_provider)" in script_text
+    assert "server_provider.launch(" in script_text
+    assert "admin_secret=args.api_key" in script_text
     assert "ed2k_address=p2p_address" in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
+    assert "goed2k.launch_ed2k_server(" not in script_text
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -1085,6 +1086,14 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
     assert args.client2_identity == "harness"
+    assert args.ed2k_server_provider is None
+
+
+def test_ed2k_server_provider_accepts_migration_target() -> None:
+    module = load_suite_module()
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--ed2k-server-provider", "rust"])
+
+    assert args.ed2k_server_provider == "rust"
 
 
 def test_client2_identity_accepts_stock_baseline() -> None:
