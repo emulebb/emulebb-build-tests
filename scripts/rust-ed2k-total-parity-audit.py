@@ -84,7 +84,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     Requirement(
         "private-modules",
-        "p2p-overlord-derived private Rust ED2K protocol and runtime modules pass",
+        "Private Rust ED2K protocol and runtime modules pass",
         "reports/rust-ed2k-private-parity-modules/latest/rust-ed2k-private-parity-modules-result.json",
         (
             ("/status", "passed"),
@@ -273,7 +273,7 @@ def build_checks(requirements: list[dict[str, Any]]) -> dict[str, Any]:
         "stockOraclePassed": "stock-oracle" not in failed,
         "protocolVariantsPassed": "protocol-matrix" not in failed,
         "multiUnicodeMetadataPassed": "protocol-metadata" not in failed,
-        "privateP2pOverlordModulesPassed": "private-modules" not in failed,
+        "privateEd2kModulesPassed": "private-modules" not in failed,
         "preflightAndRestPassed": "pytest-preflight" not in failed,
         "crossClientMatrixPassed": not any(row in failed for row in ("cross-emulebb", "cross-rust")),
     }

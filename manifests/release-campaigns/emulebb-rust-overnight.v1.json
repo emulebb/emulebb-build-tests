@@ -286,7 +286,7 @@
                 "/checks/rust_ed2k_total_parity_audit/stockOraclePassed": true,
                 "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/privateP2pOverlordModulesPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/privateEd2kModulesPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/preflightAndRestPassed": true,
                 "/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed": true
               }

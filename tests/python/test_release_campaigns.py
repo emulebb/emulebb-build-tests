@@ -170,28 +170,6 @@ def test_073_overnight_campaign_validates_and_covers_all_release_gates() -> None
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
 
 
-def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
-    root = repo_root()
-    template = release_campaigns.load_release_campaign_template(root)
-    campaign = release_campaigns.load_release_campaign(root, "p2p-overlord-0.1.1")
-
-    assert release_campaigns.validate_release_campaign(campaign, template) == []
-    assert campaign["releaseVersion"] == "0.1.1-rc.1"
-    scenario_ids = {
-        scenario["id"]
-        for phase in campaign["phases"]
-        for scenario in phase["scenarios"]
-    }
-    covered_ids = {
-        scenario_id
-        for gate in campaign["releaseGates"]
-        for scenario_id in gate["coveredBy"]
-    }
-    assert covered_ids <= scenario_ids
-    assert "emulebb.flow.p2p-overlord.rest.openapi-subset.v1" in scenario_ids
-    assert campaign["proofTier"] == "future"
-
-
 def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
@@ -621,7 +599,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                         "stockOraclePassed": True,
                         "protocolVariantsPassed": True,
                         "multiUnicodeMetadataPassed": True,
-                        "privateP2pOverlordModulesPassed": True,
+                        "privateEd2kModulesPassed": True,
                         "preflightAndRestPassed": True,
                         "crossClientMatrixPassed": True,
                     }

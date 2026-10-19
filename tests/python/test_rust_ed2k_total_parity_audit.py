@@ -202,7 +202,7 @@ def test_total_parity_audit_accepts_complete_output_root_evidence(monkeypatch, t
         "stockOraclePassed": True,
         "protocolVariantsPassed": True,
         "multiUnicodeMetadataPassed": True,
-        "privateP2pOverlordModulesPassed": True,
+        "privateEd2kModulesPassed": True,
         "preflightAndRestPassed": True,
         "crossClientMatrixPassed": True,
     }

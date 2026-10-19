@@ -35,7 +35,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
     },
     "repos": {
       "tooling": "..\\\\..\\\\repos\\\\emulebb-tooling",
-      "p2p_overlord_agents": "..\\\\..\\\\repos\\\\p2p-overlord-agents"
+      "example_service": "..\\\\..\\\\repos\\\\example-service"
     }
   }
 }
@@ -51,7 +51,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
         ("community", Path("app\\emulebb-community-baseline")),
     ]
     assert manifest.repos["tooling"] == Path("..\\..\\repos\\emulebb-tooling")
-    assert manifest.repos["p2p_overlord_agents"] == Path("..\\..\\repos\\p2p-overlord-agents")
+    assert manifest.repos["example_service"] == Path("..\\..\\repos\\example-service")
 
 
 def test_resolve_workspace_repo_uses_manifest_repo_map(tmp_path: Path) -> None:
@@ -61,7 +61,7 @@ def test_resolve_workspace_repo_uses_manifest_repo_map(tmp_path: Path) -> None:
         """{
   "workspace": {
     "repos": {
-      "p2p_overlord_be": "..\\\\..\\\\repos\\\\p2p-overlord-be"
+      "example_worker": "..\\\\..\\\\repos\\\\example-worker"
     }
   }
 }
@@ -69,8 +69,8 @@ def test_resolve_workspace_repo_uses_manifest_repo_map(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert resolve_workspace_repo(workspace_root, "p2p_overlord_be") == (
-        tmp_path / "repos" / "p2p-overlord-be"
+    assert resolve_workspace_repo(workspace_root, "example_worker") == (
+        tmp_path / "repos" / "example-worker"
     ).resolve()
 
 
