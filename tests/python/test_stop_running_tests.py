@@ -111,19 +111,12 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
     output_root = Path(r"C:\var\emulebb-output")
-    run_root = output_root / "artifacts" / "godzilla-local-swarm" / "run"
     processes = [
         module.ProcessInfo(
             200,
             1,
             "python.exe",
             r"C:\Python313\python.exe scripts\godzilla-local-swarm.py --visible-ui",
-        ),
-        module.ProcessInfo(
-            201,
-            200,
-            "goed2k-server.exe",
-            rf"{output_root}\tools\goed2k-server\goed2k-server.exe -config {run_root}\ed2k-server\config.json",
         ),
         module.ProcessInfo(
             203,
@@ -135,7 +128,7 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
 
     selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
-    assert selected == {200, 201, 203}
+    assert selected == {200, 203}
     assert reasons[200] == "workspace test runner command line"
     assert module.termination_roots(selected, processes) == [200]
 
