@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import goed2k, live_process_monitor, rust_client
+from . import ed2k_server as ed2k_harness, live_process_monitor, rust_client
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     file_sha256,
@@ -51,13 +51,13 @@ def staged_rust_bin(name: str) -> Path:
     return get_workspace_output_root() / "tools" / "emulebb-rust" / "bin" / name
 
 
-def resolve_goed2k_repo_override(workspace_root: Path, override: Path | None) -> str | None:
-    """Returns the goed2k repo override for the canonical workspace layout."""
+def resolve_ed2k_server_repo_override(workspace_root: Path, override: Path | None) -> str | None:
+    """Returns the Rust ED2K server override for the canonical workspace layout."""
 
     if override is not None:
         return str(override)
-    repo = workspace_root / "repos" / "goed2k-server"
-    return str(repo) if (repo / "go.mod").is_file() else None
+    repo = workspace_root / "repos" / "ed2k-server"
+    return str(repo) if (repo / "Cargo.toml").is_file() else None
 
 
 def free_lan_port(host: str, used: set[int] | None = None) -> int:
@@ -384,21 +384,19 @@ def run(argv: list[str] | None = None) -> int:
             args.payload_mib * 1024 * 1024,
         )
         report["payload"] = payload
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=workspace_root,
-            server_dir=artifacts_dir / "goed2k-server",
+            server_dir=artifacts_dir / "ed2k-server",
             ed2k_port=server_port,
             admin_port=server_admin_port,
             token=args.api_key,
             admin_address=lan,
             ed2k_address=lan,
-            repo_override=resolve_goed2k_repo_override(workspace_root, args.ed2k_server_repo),
+            repo_override=resolve_ed2k_server_repo_override(workspace_root, args.ed2k_server_repo),
             exe_override=str(args.ed2k_server_exe) if args.ed2k_server_exe else None,
-            packet_trace=True,
         )
         server_process = ed2k_server.process
         report["ed2kServer"] = ed2k_server.config
-        report["ed2kServerTracePath"] = str(ed2k_server.server_dir / "packets.trace.jsonl")
         seeder_profile = artifacts_dir / "seeder-profile"
         leecher_profile = artifacts_dir / "leecher-profile"
         rust_client.write_rust_profile(
@@ -463,7 +461,7 @@ def run(argv: list[str] | None = None) -> int:
         shared_files = share.get("sharedFiles") if isinstance(share.get("sharedFiles"), dict) else {}
         file_row = shared_files.get("matched") if isinstance(shared_files.get("matched"), dict) else share
         file_hash = str(file_row["hash"]).lower()
-        goed2k.wait_for_server_file_endpoint(
+        ed2k_harness.wait_for_server_file_endpoint(
             ed2k_server.admin_base_url,
             args.api_key,
             file_hash,
@@ -587,6 +585,6 @@ def run(argv: list[str] | None = None) -> int:
             if handle is not None:
                 handle.close()
         if server_process is not None:
-            goed2k.stop_process(server_process)
-            goed2k.stop_server_processes()
+            ed2k_harness.stop_process(server_process)
+            ed2k_harness.stop_server_processes()
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

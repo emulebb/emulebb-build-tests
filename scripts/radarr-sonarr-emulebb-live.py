@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import live_env
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixture,
@@ -4772,21 +4772,20 @@ def main() -> int:
             )
             local_ports = choose_local_ed2k_ports({port}, bind_addr)
             local_server_dir = artifacts_dir / "local-ed2k-server"
-            local_catalog_path = local_server_dir / "catalog.json"
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
                 {
                     "p2p_address": p2p_address,
                     "ports": local_ports,
-                    "server_catalog_path": str(local_catalog_path),
                 }
             )
-            local_ed2k_server = goed2k.launch_ed2k_server(
+            local_ed2k_server = ed2k_harness.launch_ed2k_server(
                 workspace_root=paths.workspace_root,
                 server_dir=local_server_dir,
                 ed2k_port=local_ports["ed2k_tcp"],
                 admin_port=local_ports["ed2k_admin"],
                 token=args.emule_api_key,
                 admin_address=bind_addr,
+                ed2k_address=p2p_address,
                 repo_override=args.ed2k_server_repo,
                 exe_override=args.ed2k_server_exe,
             )
@@ -4884,13 +4883,13 @@ def main() -> int:
                 }
             )
             report["checks"]["local_ed2k_seed_shared_file_link"] = {**shared_link, "parsed": link_info}
-            report["checks"]["local_ed2k_seed_client"] = goed2k.wait_for_server_client(
+            report["checks"]["local_ed2k_seed_client"] = ed2k_harness.wait_for_server_client(
                 local_admin_base_url,
                 args.emule_api_key,
                 dtt.CLIENT02.nick,
                 args.emule_connection_timeout_seconds,
             )
-            report["checks"]["local_ed2k_seed_file"] = goed2k.wait_for_server_file(
+            report["checks"]["local_ed2k_seed_file"] = ed2k_harness.wait_for_server_file(
                 local_admin_base_url,
                 args.emule_api_key,
                 str(link_info["hash"]),
@@ -5170,7 +5169,7 @@ def main() -> int:
                 report.setdefault("cleanup", {})["local_ed2k_seed_close_error"] = str(exc)  # type: ignore[index]
                 if report.get("status") == "passed":
                     report["status"] = "failed"
-        goed2k.stop_process(local_ed2k_server_process)
+        ed2k_harness.stop_process(local_ed2k_server_process)
         for name, process in reversed(embedded_controller_processes):
             package_helper.stop_process(process)
             report.setdefault("cleanup", {})[f"stopped_{name}"] = True  # type: ignore[index]

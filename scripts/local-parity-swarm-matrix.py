@@ -1,6 +1,6 @@
 """Local MFC-vs-rust parity swarm on distinct LAN IPs (throw-away, no live wire).
 
-Brings up a local goed2k server plus N eMuleBB-MFC (emulebb-main diagnostics
+Brings up a local ed2k_server server plus N eMuleBB-MFC (emulebb-main diagnostics
 build) and N eMuleBB-Rust (diagnostics build) clients, each on its OWN secondary
 LAN IP with distinct P2P + REST ports, all bound to the physical LAN interface
 that holds X_LOCAL_IP (never loopback). Every client is a distinct source IP so
@@ -11,7 +11,7 @@ cells (queuing, AICH, obfuscation x compression, failures) build on the roster.
 
 Run under an ELEVATED shell (secondary-IP aliasing needs admin). Reuses the
 proven single-client primitives from deterministic-two-client-transfer,
-emule-live-profile-common, goed2k, and rust_client.
+emule-live-profile-common, ed2k_server, and rust_client.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
@@ -60,7 +60,7 @@ def request_json(base_url: str, method: str, path: str, api_key: str, body: dict
 
 # Allocate from a low band well BELOW the Windows/WinNAT reserved high-dynamic
 # port ranges (Hyper-V excludes many 49669..65271 ranges; a UDP/TCP bind there
-# fails with WSAEACCES -- which silently broke the goed2k server's UDP callback
+# fails with WSAEACCES -- which silently broke the ed2k_server server's UDP callback
 # listener and left rust unable to get a HighID). Every port is verified free for
 # BOTH TCP and UDP so eD2K TCP + Kad/eD2K UDP + the server UDP callback all bind.
 _PORT_CURSOR = [32000]
@@ -244,7 +244,7 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         item = next((s for s in items if isinstance(s, dict) and s.get("connected")), None) if isinstance(items, list) else None
         if item is not None:
             client.connected = True
-            # goed2k grants a HighID unless the UDP callback fails; the rust log
+            # ed2k_server grants a HighID unless the UDP callback fails; the rust log
             # reports it, but the servers row does not -- read HighID from stats.
             try:
                 st = request_json(client.base_url, "GET", "/api/v1/status", client.api_key)
@@ -325,7 +325,7 @@ def share_fixture(uploader: SwarmClient, *, api_key: str, admin_base_url: str, a
         link = str(dtt.wait_for_emule_shared_file_link(uploader.base_url, api_key, file_name=name, timeout_seconds=timeout)["link"])
     link_info = dtt.parse_ed2k_file_link(link)
     file_hash = str(link_info["hash"])
-    goed2k.wait_for_server_file(admin_base_url, api_key, file_hash, timeout)
+    ed2k_harness.wait_for_server_file(admin_base_url, api_key, file_hash, timeout)
     return {"link": link, "hash": file_hash, "size": int(link_info["size"]), "name": str(link_info["name"]), "sha256": sha256}
 
 
@@ -493,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report: dict[str, object] = {"suite": SUITE_NAME, "status": "running", "clients": []}
     used_ports: set[int] = set()
-    # goed2k derives its UDP callback port from ed2k_tcp + 4; reserve that too so
+    # ed2k_server derives its UDP callback port from ed2k_tcp + 4; reserve that too so
     # HighID assignment works (no UDP -> LowID -> rust session churn).
     server_ed2k = next_free_port(server_ip, used_ports, extra_udp_offset=4)
     used_ports.add(server_ed2k + 4)
@@ -507,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[swarm] provisioned client IPs: {', '.join(client_ips)}", flush=True)
 
         server_dir = artifacts / "ed2k-server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=server_ed2k,
@@ -519,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
             exe_override=args.ed2k_server_exe,
         )
         server_process = ed2k_server.process
-        print(f"[swarm] goed2k server on {server_ip}:{server_ed2k} (admin {server_admin})", flush=True)
+        print(f"[swarm] ed2k_server server on {server_ip}:{server_ed2k} (admin {server_admin})", flush=True)
 
         ip_iter = iter(client_ips)
         for i in range(args.mfc_count):

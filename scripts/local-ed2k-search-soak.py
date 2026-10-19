@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import hashlib
 import importlib.util
-import json
 import subprocess
 import sys
 import time
@@ -17,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 
 
@@ -44,7 +42,6 @@ API_KEY = "local-ed2k-search-soak-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
 SOAK_DOWNLOAD_NAME = "local-ed2k-soak-download.bin"
-DEFAULT_SYNTHETIC_CATALOG_FILES = 240
 DEFAULT_SEARCH_WAVES = 3
 DEFAULT_SEARCHES_PER_WAVE = 12
 DEFAULT_MAX_CONCURRENT_SEARCHES = 6
@@ -87,49 +84,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-concurrent-searches", type=int, default=DEFAULT_MAX_CONCURRENT_SEARCHES)
     parser.add_argument("--search-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
     parser.add_argument("--download-timeout-seconds", type=float, default=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS)
-    parser.add_argument("--synthetic-catalog-files", type=int, default=DEFAULT_SYNTHETIC_CATALOG_FILES)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
-
-
-def synthetic_hash(seed: str) -> str:
-    """Returns a deterministic 32-hex ED2K-shaped hash for search-only rows."""
-
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32].upper()
-
-
-def build_synthetic_catalog_records(count: int, *, source_host: str, source_port: int) -> list[dict[str, object]]:
-    """Builds deterministic search-only catalog rows for local ED2K query stress."""
-
-    if count <= 0:
-        raise ValueError("synthetic catalog file count must be greater than zero.")
-    records: list[dict[str, object]] = []
-    for index in range(count):
-        term = SOAK_TERMS[index % len(SOAK_TERMS)]
-        extension = "bin" if index % 3 else "txt"
-        records.append(
-            {
-                "hash": synthetic_hash(f"{term}:{index}"),
-                "name": f"{term}-{index:05d}.{extension}",
-                "size": 1024 * (64 + index),
-                "file_type": "Pro" if extension == "bin" else "Doc",
-                "extension": extension,
-                "sources": 1,
-                "complete_sources": 1,
-                "endpoints": [{"host": source_host, "port": source_port}],
-            }
-        )
-    return records
-
-
-def write_catalog(path: Path, records: list[dict[str, object]]) -> dict[str, object]:
-    """Writes a local server catalog file and returns a compact summary."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"files": records}, indent=2), encoding="utf-8")
-    return {"path": str(path), "file_count": len(records)}
 
 
 def start_server_search(base_url: str, api_key: str, query: str) -> dict[str, object]:
@@ -345,27 +303,17 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        current_phase = "prepare_catalog"
         server_dir = paths.source_artifacts_dir / "ed2k-server"
-        synthetic_records = build_synthetic_catalog_records(
-            args.synthetic_catalog_files,
-            source_host=p2p_address,
-            source_port=ports["client2_tcp"],
-        )
-        report["checks"]["synthetic_catalog"] = {
-            "path": str(server_dir / "catalog.json"),
-            "file_count": len(synthetic_records),
-        }
 
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
-            catalog_files=synthetic_records,
+            ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
         )
@@ -443,13 +391,13 @@ def main(argv: list[str] | None = None) -> int:
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
         report["checks"]["harness_shared_file_link"] = {**shared_link, "parsed": link_info}
-        report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["harness_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["harness_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -469,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["emulebb_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["emulebb_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -502,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.download_timeout_seconds,
         )
         report["checks"]["delete_all_searches"] = rest_smoke.delete_all_searches(base_url, args.api_key)
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["profiles"] = {
             CLIENT01.profile_id: {
                 "profile_base": str(client1["profile_base"]),
@@ -538,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[identity.profile_id] = {"ok": True}
             except Exception as exc:
                 cleanup[identity.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "local-ed2k-search-soak-result.json"

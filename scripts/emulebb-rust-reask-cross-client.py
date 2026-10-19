@@ -1,6 +1,6 @@
 """Local real-process validation of the Rust client's UDP source-reask (FEAT-001).
 
-Topology (all on one LAN interface, through a local goed2k server):
+Topology (all on one LAN interface, through a local ed2k_server server):
   * eMuleBB (reference uploader) shares one fixture, configured with its
     minimum two upload slots and no elastic headroom.
   * three temporary LAN aliases give the Rust peers distinct source addresses,
@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
@@ -103,7 +103,7 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
         server_endpoint=server_endpoint,
         enable_udp_reask=enable_reask,
         # Plaintext locally: the client-UDP reask obfuscation keys on our public
-        # IP, but the goed2k lab server reports a fake one (2.0.0.1) that does not
+        # IP, but the ed2k_server lab server reports a fake one (2.0.0.1) that does not
         # match our LAN IP, so an obfuscated reask can't be deobfuscated by the
         # peer. Real networks report the true public IP (no mismatch); the
         # obfuscated path is covered by unit tests. Plaintext isolates the reask
@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             "diagnosticInitialReaskDelaySeconds": DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS,
         }
 
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root, server_dir=paths.source_artifacts_dir / "ed2k-server",
             ed2k_port=ports["ed2k_tcp"], admin_port=ports["ed2k_admin"], token=args.api_key,
             admin_address=args.lan_bind_addr, ed2k_address=p2p_address,
@@ -294,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         shared_link = dtt.wait_for_emule_shared_file_link(emulebb_base_url, args.api_key, file_name=fixture_path.name, timeout_seconds=args.link_export_timeout_seconds)
         link_info = dtt.parse_ed2k_file_link(str(shared_link["link"]))
         transfer_hash = str(link_info["hash"])
-        goed2k.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
+        ed2k_harness.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
         report["checks"]["emulebb_shared"] = {"hash": transfer_hash, "name": fixture_path.name}
 
         # Start all three clients before requesting a transfer. Otherwise the
@@ -350,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         for occupier_proc in occupier_procs:
             rust_client.stop_process_tree(occupier_proc)
         rust_client.stop_process_tree(reask_proc)
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         if peer_ip_pool is not None:
             peer_ip_pool.release()
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")

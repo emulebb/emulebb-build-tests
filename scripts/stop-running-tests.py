@@ -20,7 +20,6 @@ TEST_PROCESS_NAMES = {"python.exe", "python", "py.exe", "py"}
 TEST_HELPER_PROCESS_NAMES = {
     "emulebb.exe",
     "emule.exe",
-    "goed2k-server.exe",
     "node.exe",
     "prowlarr.exe",
     "xperf.exe",

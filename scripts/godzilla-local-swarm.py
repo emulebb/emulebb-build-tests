@@ -18,7 +18,6 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 import urllib.request
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import cpu_profile  # noqa: E402
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixtureConfig,
@@ -506,52 +505,14 @@ def protocol_preferences(case) -> dict[str, object]:
     }
 
 
-def admin_files_page(admin_base_url: str, api_key: str, *, search: str, page: int = 1) -> dict[str, object]:
-    """Reads one ED2K server admin file page."""
-
-    encoded = quote(search)
-    return goed2k.admin_request(admin_base_url, api_key, f"/api/files?search={encoded}&page={page}&per_page=500&sort=name")
-
-
-def server_file_count(admin_base_url: str, api_key: str, *, search: str) -> int:
-    """Returns the server-side published file count matching one prefix."""
-
-    payload = admin_files_page(admin_base_url, api_key, search=search, page=1)
-    meta = payload.get("meta")
-    if not isinstance(meta, dict) or "total" not in meta:
-        data = payload.get("data")
-        return len(data) if isinstance(data, list) else 0
-    return int(meta["total"])
-
-
-def wait_for_server_file_count(
-    admin_base_url: str,
-    api_key: str,
-    *,
-    search: str,
-    expected_count: int,
-    timeout_seconds: float,
-) -> dict[str, object]:
-    """Waits until the local ED2K server has observed enough published files."""
-
-    observations: list[dict[str, object]] = []
-
-    def resolve():
-        count = server_file_count(admin_base_url, api_key, search=search)
-        observations.append({"count": count, "observed_at": round(time.time(), 3)})
-        return {"count": count, "observations": observations} if count >= expected_count else None
-
-    return live_common.wait_for(resolve, timeout_seconds, 5.0, f"server published files for {search}")
-
-
 def server_total_file_count(admin_base_url: str, api_key: str) -> int:
     """Returns the current dynamic/shared file count from the local ED2K server."""
 
-    stats = goed2k.admin_request(admin_base_url, api_key, "/api/stats")
+    stats = ed2k_harness.admin_request(admin_base_url, api_key, "/api/status")
     data = stats.get("data") if isinstance(stats, dict) else None
     if not isinstance(data, dict):
         return 0
-    return int(data.get("current_files") or 0)
+    return int(data.get("file_count") or 0)
 
 
 def wait_for_server_min_file_count(
@@ -581,35 +542,10 @@ def snapshot_publication_counts(
 ) -> dict[str, object]:
     """Records current publication coverage without blocking the hammer."""
 
-    counts = {"total": server_total_file_count(admin_base_url, api_key)}
-    for owner_key in owner_keys:
-        counts[owner_key] = server_file_count(admin_base_url, api_key, search=f"{owner_key}-godzilla-")
-    return counts
-
-
-def collect_server_files(admin_base_url: str, api_key: str, *, search: str, limit: int) -> list[GeneratedFile]:
-    """Collects published file rows from the local ED2K server."""
-
-    rows: list[GeneratedFile] = []
-    page = 1
-    while len(rows) < limit:
-        payload = admin_files_page(admin_base_url, api_key, search=search, page=page)
-        data = payload.get("data")
-        if not isinstance(data, list) or not data:
-            break
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "")
-            ed2k_hash = str(item.get("hash") or "").lower()
-            size = int(item.get("size") or 0)
-            if name and dtt.ED2K_HASH_PATTERN.match(ed2k_hash) and size > 0:
-                owner_key = name.split("-godzilla-", 1)[0]
-                rows.append(GeneratedFile(owner_key=owner_key, path=Path(name), name=name, size=size, sha256="", ed2k_hash=ed2k_hash))
-            if len(rows) >= limit:
-                break
-        page += 1
-    return rows
+    return {
+        "total": server_total_file_count(admin_base_url, api_key),
+        "owners": list(owner_keys),
+    }
 
 
 def wait_for_rest_shared_count(base_url: str, api_key: str, expected_count: int, timeout_seconds: float) -> dict[str, object]:
@@ -781,17 +717,17 @@ def run_amutorrent_api_hammer(base_url: str, *, links: list[str], rounds: int) -
 
 
 def server_telemetry_snapshot(admin_base_url: str, api_key: str) -> dict[str, object]:
-    """Captures a compact Go ED2K server telemetry snapshot through the admin API."""
+    """Captures a compact Rust ED2K server telemetry snapshot."""
 
     snapshot: dict[str, object] = {"observed_at": round(time.time(), 3)}
     endpoints = {
         "stats": "/api/stats",
-        "clients": "/api/clients?page=1&per_page=100&sort=last_seen",
-        "audit": "/api/audit?page=1&per_page=25",
+        "clients": "/api/clients",
+        "review": "/api/review",
     }
     for name, endpoint in endpoints.items():
         try:
-            snapshot[name] = goed2k.admin_request(admin_base_url, api_key, endpoint)
+            snapshot[name] = ed2k_harness.admin_request(admin_base_url, api_key, endpoint)
         except Exception as exc:  # noqa: BLE001 - telemetry must not abort the hammer
             snapshot[name] = {"error_type": type(exc).__name__, "error_message": str(exc) or repr(exc)}
     return snapshot
@@ -1412,7 +1348,7 @@ def restart_mfc_peer_client(
         port=ed2k_port,
         timeout_seconds=timeout_seconds,
     )
-    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
+    event["server_client"] = ed2k_harness.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
 
@@ -1453,7 +1389,7 @@ def restart_extra_emulebb_client(
         port=int(client["server_port"]),
         timeout_seconds=timeout_seconds,
     )
-    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, str(client["nick"]), timeout_seconds)
+    event["server_client"] = ed2k_harness.wait_for_server_client(admin_base_url, api_key, str(client["nick"]), timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return event
 
@@ -1491,7 +1427,7 @@ def restart_primary_emulebb_client(
         port=ed2k_port,
         timeout_seconds=timeout_seconds,
     )
-    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT01.nick, timeout_seconds)
+    event["server_client"] = ed2k_harness.wait_for_server_client(admin_base_url, api_key, CLIENT01.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
 
@@ -2052,19 +1988,21 @@ def main(argv: list[str] | None = None) -> int:
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=ed2k_admin_address,
+            ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
             protocol_obfuscation=protocol_case.server_protocol_obfuscation,
             server_udp=protocol_case.server_udp,
         )
         server_process = ed2k_server.process
+        server_log_path = ed2k_server.log_path
         report["checks"]["server_build"] = ed2k_server.build
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
@@ -2304,10 +2242,10 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "wait_for_publish"
         report["checks"]["server_clients"] = {
-            CLIENT01.profile_id: goed2k.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
-            CLIENT02.profile_id: goed2k.wait_for_server_client(admin_base_url, args.api_key, CLIENT02.nick, args.server_connect_timeout_seconds),
+            CLIENT01.profile_id: ed2k_harness.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
+            CLIENT02.profile_id: ed2k_harness.wait_for_server_client(admin_base_url, args.api_key, CLIENT02.nick, args.server_connect_timeout_seconds),
             **{
-                str(client["profile_id"]): goed2k.wait_for_server_client(
+                str(client["profile_id"]): ed2k_harness.wait_for_server_client(
                     admin_base_url,
                     args.api_key,
                     str(client["nick"]),
@@ -2422,15 +2360,12 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "queue_transfer_waves"
         server_collect_limit = max(args.transfer_count, args.peer_transfer_count, args.harness_transfer_count, 1)
-        harness_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT02.key}-godzilla-", limit=server_collect_limit)
-        emulebb_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT01.key}-godzilla-", limit=server_collect_limit)
+        harness_rows = harness_library[:server_collect_limit]
+        emulebb_rows = emulebb_library[:server_collect_limit]
         extra_rows_by_profile = {
-            str(client["profile_id"]): collect_server_files(
-                admin_base_url,
-                args.api_key,
-                search=f"{client['key']}-godzilla-",
-                limit=server_collect_limit,
-            )
+            str(client["profile_id"]): extra_emulebb_libraries[str(client["profile_id"])][
+                :server_collect_limit
+            ]
             for client in extra_emulebb_clients
         }
         source_port_by_key = {
@@ -2606,7 +2541,7 @@ def main(argv: list[str] | None = None) -> int:
         final_transfers = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=args.api_key, request_timeout_seconds=20.0)
         final_rows = rest_smoke.require_json_array(final_transfers, 200)
         report["checks"]["final_transfer_count"] = len(final_rows)
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         current_phase = "diagnostic_capture"
         capture_primary_memory_diagnostics(
             report=report,
@@ -2715,7 +2650,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[str(client["profile_id"])] = {"error": str(exc)}
         if server_process is not None:
             try:
-                goed2k.stop_process(server_process)
+                ed2k_harness.stop_process(server_process)
                 cleanup["ed2k_server"] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup["ed2k_server"] = {"error": str(exc)}

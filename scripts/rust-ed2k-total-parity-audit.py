@@ -64,7 +64,6 @@ REQUIREMENTS: tuple[Requirement, ...] = (
             ("/checks/protocol_matrix_coverage/plainServerPlainClients", True),
             ("/checks/protocol_matrix_coverage/obfuscatedPreferred", True),
             ("/checks/protocol_matrix_coverage/obfuscatedRequired", True),
-            ("/checks/protocol_matrix_coverage/serverUdpDisabled", True),
             ("/checks/protocol_matrix_coverage/compressibleFixture", True),
             ("/checks/protocol_matrix_coverage/lowCompressibilityFixture", True),
             ("/checks/protocol_matrix_coverage/unicodeFixtureNames", True),

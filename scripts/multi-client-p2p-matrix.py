@@ -19,7 +19,7 @@ from emule_test_harness.multi_client import (  # noqa: E402
     resolve_windows_client_inventory,
     workspace_parent_root,
 )
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
@@ -146,9 +146,9 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
 
 
 def prepare_shared_ed2k_server_binary(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Stages one goed2k-server executable for every child scenario in this matrix run."""
+    """Stages one Rust ed2k-server executable for every child scenario in this matrix run."""
 
-    prepared = goed2k.prepare_ed2k_server_binary(
+    prepared = ed2k_harness.prepare_ed2k_server_binary(
         paths.workspace_root,
         repo_override=args.ed2k_server_repo,
         exe_override=args.ed2k_server_exe,
@@ -278,7 +278,7 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     child_env = os.environ.copy()
     child_env["X_LOCAL_IP"] = args.lan_bind_addr
     if args.ed2k_server_exe:
-        child_env = goed2k.with_ed2k_server_exe_env(child_env, args.ed2k_server_exe)
+        child_env = ed2k_harness.with_ed2k_server_exe_env(child_env, args.ed2k_server_exe)
     child_env["EMULEBB_RUST_PEER_EXCHANGE_REPORT"] = str(report_path)
     return run_child_scenario(
         scenario_id=RUST_BIDIRECTIONAL_SCENARIO_ID,
@@ -483,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_reports(paths, report)
-        goed2k.stop_server_processes()
+        ed2k_harness.stop_server_processes()
         try:
             harness_cli_common.publish_run_artifacts(paths)
             harness_cli_common.publish_latest_report(paths)

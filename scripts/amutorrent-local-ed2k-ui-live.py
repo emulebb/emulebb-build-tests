@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client, rust_local_ed2k  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
@@ -1162,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
@@ -1286,13 +1286,13 @@ def main(argv: list[str] | None = None) -> int:
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
         report["checks"]["seed_shared_file_link"] = {**shared_link, "parsed": link_info}
-        report["checks"]["seed_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["seed_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["seed_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["seed_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -1312,7 +1312,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["client1_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -1348,7 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.api_key,
                 args.server_connect_timeout_seconds,
             )
-            report["checks"]["rust_server_client"] = goed2k.wait_for_server_client(
+            report["checks"]["rust_server_client"] = ed2k_harness.wait_for_server_client(
                 admin_base_url,
                 args.api_key,
                 RUST_ED2K_NICK,
@@ -1368,7 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             rust_shared_tree_file = report["checks"]["rust_shared_tree_publish"]["sharedFiles"]["matched"]
             rust_shared_tree_link_info = dtt.parse_ed2k_file_link(str(rust_shared_tree_file["ed2kLink"]))
-            report["checks"]["rust_shared_tree_server_file"] = goed2k.wait_for_server_file(
+            report["checks"]["rust_shared_tree_server_file"] = ed2k_harness.wait_for_server_file(
                 admin_base_url,
                 args.api_key,
                 str(rust_shared_tree_link_info["hash"]),
@@ -1501,7 +1501,7 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 ),
             )
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -1533,7 +1533,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 cleanup[CLIENT02.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         rust_client.stop_process_tree(rust_process)
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_reports(paths, report)

@@ -5,7 +5,7 @@ Inverse of `emulebb-rust-reask-cross-client.py`: here eMuleBB is the *queued
 downloader* that emits the reask, and the Rust client is the *uploader* that logs
 the inbound datagram verbatim.
 
-Topology (all on the LAN bind addr, through a local goed2k server):
+Topology (all on the LAN bind addr, through a local ed2k_server server):
   * a Rust uploader (enableUdpReask=true) shares one fixture and offers it to the
     server. Its upload queue is configured with activeSlots=0, so every requester
     is parked in the WAITING queue instead of being served.
@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
 
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root, server_dir=paths.source_artifacts_dir / "ed2k-server",
             ed2k_port=ports["ed2k_tcp"], admin_port=ports["ed2k_admin"], token=args.api_key,
             admin_address=args.lan_bind_addr, ed2k_address=p2p_address,
@@ -206,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         transfer_hash, shared_link = rust_shared_file_link(
             up_url, args.api_key, file_name=fixture_path.name, timeout=args.server_publish_timeout_seconds,
         )
-        goed2k.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
+        ed2k_harness.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
         report["checks"]["rust_shared"] = {
             "hash": transfer_hash, "name": fixture_path.name, "link": shared_link, "udpPort": up_kad_port,
         }
@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:  # noqa: BLE001
                 pass
         rust_client.stop_process_tree(uploader_proc)
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         harness_cli_common.write_json_file(paths.source_artifacts_dir / "emulebb-rust-reask-capture-emulebb-result.json", report)
         print(report)

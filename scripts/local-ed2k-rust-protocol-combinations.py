@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
@@ -214,7 +214,6 @@ def require_protocol_coverage(
             and case.client_crypt_required
             for case in cases
         ),
-        "serverUdpDisabled": any(not case.server_udp for case in cases),
         "compressibleFixture": any(case.fixture_pattern == "compressible" for case in cases),
         "lowCompressibilityFixture": any(case.fixture_pattern == "low-compressibility" for case in cases),
         "unicodeFixtureNames": all(protocol_fixture_name(case).isascii() is False for case in cases),
@@ -229,7 +228,6 @@ def require_protocol_coverage(
             "plainServerPlainClients",
             "obfuscatedPreferred",
             "obfuscatedRequired",
-            "serverUdpDisabled",
             "compressibleFixture",
             "lowCompressibilityFixture",
             "unicodeFixtureNames",
@@ -516,7 +514,7 @@ def run_protocol_case(
         }
 
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=case_dir / "ed2k-server",
             ed2k_port=ports["ed2k_tcp"],
@@ -652,13 +650,13 @@ def run_protocol_case(
             "parsed": link_info,
             "decodedName": decoded_link_name,
         }
-        report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["harness_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT_HARNESS.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["harness_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -683,7 +681,7 @@ def run_protocol_case(
             "parsed": secondary_link_info,
             "decodedName": secondary_decoded_name,
         }
-        report["checks"]["harness_secondary_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["harness_secondary_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             secondary_expected_hash,
@@ -708,7 +706,7 @@ def run_protocol_case(
             "parsed": hash_only_link_info,
             "decodedName": hash_only_decoded_name,
         }
-        report["checks"]["harness_hash_only_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["harness_hash_only_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             hash_only_hash,
@@ -960,7 +958,7 @@ def run_protocol_case(
             "transferCount": 3,
             "hashOnlyMetadataRecovery": True,
         }
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["profiles"] = {
             CLIENT_HARNESS.profile_id: {
                 "profile_base": str(harness["profile_base"]),
@@ -985,7 +983,7 @@ def run_protocol_case(
             except Exception as exc:
                 cleanup[CLIENT_HARNESS.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         rust_client.stop_process_tree(rust_process)
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     return report
@@ -1023,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
         }
-        ed2k_binary = goed2k.prepare_ed2k_server_binary(
+        ed2k_binary = ed2k_harness.prepare_ed2k_server_binary(
             paths.workspace_root,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,

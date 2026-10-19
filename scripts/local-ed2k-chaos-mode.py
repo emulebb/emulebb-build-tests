@@ -24,7 +24,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     build_storage_topology,
     create_admin_volume_fixture,
 )
-from emule_test_harness import goed2k  # noqa: E402
+from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
@@ -331,13 +331,14 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
-        ed2k_server = goed2k.launch_ed2k_server(
+        ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
         )
@@ -423,13 +424,13 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
         report["checks"]["harness_shared_file_link"] = {**shared_link, "parsed": link_info}
-        report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["harness_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = goed2k.wait_for_server_file(
+        report["checks"]["harness_server_file"] = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -454,7 +455,7 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["initial_server_client"] = goed2k.wait_for_server_client(
+        report["checks"]["initial_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -502,7 +503,7 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
             ),
         )
         report["checks"]["final_transfer_lookup"] = transfer_lookup(base_url, args.api_key, transfer_hash)
-        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["profiles"] = {
             CLIENT01.profile_id: {
                 "profile_base": str(client1["profile_base"]),
@@ -536,7 +537,7 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
             stack.close()
         except Exception as exc:
             cleanup["exit_stack"] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "local-ed2k-chaos-mode-result.json"

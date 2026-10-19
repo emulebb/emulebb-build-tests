@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import (
-    goed2k,
+    ed2k_server as ed2k_harness,
     rust_client,
     rust_local_ed2k,
     rust_metadata,
@@ -1109,29 +1109,6 @@ def _configure_lan_startup_profile(
     }
 
 
-def _server_target_publications(
-    payload: dict[str, object], *, host: str, port: int
-) -> list[dict[str, object]]:
-    rows = payload.get("data")
-    if not isinstance(rows, list):
-        return []
-    matches: list[dict[str, object]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        endpoints = row.get("endpoints")
-        if not isinstance(endpoints, list):
-            continue
-        if any(
-            isinstance(endpoint, dict)
-            and endpoint.get("host") == host
-            and int(endpoint.get("port") or 0) == port
-            for endpoint in endpoints
-        ):
-            matches.append(row)
-    return matches
-
-
 def lan_startup_overlap_acceptance(
     observation: dict[str, object], *, expected_file_count: int
 ) -> dict[str, object]:
@@ -1194,8 +1171,7 @@ def _lan_startup_observation(
     target_base_url: str,
     seed_base_url: str,
     admin_base_url: str,
-    target_host: str,
-    target_port: int,
+    target_nick: str,
 ) -> dict[str, object]:
     directories = target_client.request(
         "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
@@ -1217,12 +1193,27 @@ def _lan_startup_observation(
     seed_kad = rust_local_ed2k.request_json(
         seed_base_url, "GET", "/api/v1/kad", API_KEY
     )
-    server_files = goed2k.admin_request(
-        admin_base_url, API_KEY, "/api/files?page=1&per_page=200", timeout_seconds=5.0
+    server_stats = ed2k_harness.admin_request(
+        admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
     )
-    target_publications = _server_target_publications(
-        server_files, host=target_host, port=target_port
+    server_clients = ed2k_harness.admin_request(
+        admin_base_url, API_KEY, "/api/clients", timeout_seconds=5.0
     )
+    client_rows = server_clients.get("data")
+    if not isinstance(client_rows, list):
+        client_rows = []
+    target_client = next(
+        (
+            row
+            for row in client_rows
+            if isinstance(row, dict)
+            and str(row.get("nick") or row.get("client_name") or "") == target_nick
+        ),
+        {},
+    )
+    server_stats_data = server_stats.get("data")
+    if not isinstance(server_stats_data, dict):
+        server_stats_data = {}
     stats = status.get("stats") if isinstance(status.get("stats"), dict) else {}
     return {
         "observedAtUtc": utc_now(),
@@ -1234,15 +1225,9 @@ def _lan_startup_observation(
         "kadPublish": diagnostics.get("kadPublish"),
         "targetKad": local_kad.compact_local_kad_status(target_kad),
         "seedKad": local_kad.compact_local_kad_status(seed_kad),
-        "serverFileCount": (
-            server_files.get("meta", {}).get("total")
-            if isinstance(server_files.get("meta"), dict)
-            else len(server_files.get("data") or [])
-        ),
-        "serverTargetPublicationCount": len(target_publications),
-        "serverTargetPublishedHashes": sorted(
-            str(row.get("hash") or "") for row in target_publications
-        )[:10],
+        "serverFileCount": int(server_stats_data.get("file_count") or 0),
+        "serverTargetPublicationCount": int(target_client.get("shared_files") or 0),
+        "serverTargetPublishedHashes": [],
     }
 
 
@@ -1347,11 +1332,11 @@ def run_lan_startup_campaign(
         server_repo = (
             Path(args.ed2k_server_repo).resolve()
             if args.ed2k_server_repo
-            else paths.workspace_root / "repos" / "goed2k-server"
+            else paths.workspace_root / "repos" / "ed2k-server"
         )
-        if not (server_repo / "go.mod").is_file():
-            raise RuntimeError(f"goed2k-server repo is missing go.mod: {server_repo}")
-        server = goed2k.launch_ed2k_server(
+        if not (server_repo / "Cargo.toml").is_file():
+            raise RuntimeError(f"Rust ed2k-server repo is missing Cargo.toml: {server_repo}")
+        server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=run_root / "ed2k-server",
             ed2k_port=ports["ed2k_tcp"],
@@ -1420,8 +1405,7 @@ def run_lan_startup_campaign(
                 target_base_url=target_base_url,
                 seed_base_url=seed_base_url,
                 admin_base_url=server.admin_base_url,
-                target_host=lan_bind_addr,
-                target_port=target_spec.tcp_port,
+                target_nick=target_spec.nick,
             )
             acceptance = lan_startup_overlap_acceptance(
                 observation, expected_file_count=PRODUCTION_SPEC.file_count
@@ -1453,7 +1437,7 @@ def run_lan_startup_campaign(
             "target": stop_daemon(target_process, target_client),
             "seed": stop_daemon(seed_process, seed_client),
         }
-        goed2k.stop_process(server_process)
+        ed2k_harness.stop_process(server_process)
         report["finishedAtUtc"] = utc_now()
         write_json(report_path, report)
     return report_path, report
