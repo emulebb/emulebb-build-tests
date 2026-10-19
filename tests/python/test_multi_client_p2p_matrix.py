@@ -139,6 +139,26 @@ def test_matrix_defaults_to_132_mib_fixture() -> None:
     assert args.require_scenario == []
 
 
+def test_matrix_accepts_external_parity_runtime_overrides() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--stock-emule-exe",
+            "stock-emule.exe",
+            "--amule-exe",
+            "amuled.exe",
+            "--amule-control-exe",
+            "amulecmd.exe",
+        ]
+    )
+
+    assert args.stock_emule_exe == "stock-emule.exe"
+    assert args.amule_exe == "amuled.exe"
+    assert args.amule_control_exe == "amulecmd.exe"
+
+
 def test_matrix_accepts_targeted_required_scenario() -> None:
     module = load_suite_module()
     args = module.parse_args(
