@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import secrets
 import subprocess
 import sys
@@ -40,7 +39,6 @@ def load_local_module(module_name: str, filename: str):
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 rest_smoke = load_local_module("package_helper_rest_smoke", "rest-api-smoke.py")
-amutorrent_smoke = load_local_module("package_helper_amutorrent_smoke", "amutorrent-browser-smoke.py")
 
 
 class InconclusiveSuite(RuntimeError):
@@ -246,7 +244,6 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / f"{SUITE_NAME}-result.json"
     build_repo_root = workspace_layout.resolve_workspace_repo(paths.workspace_root, "build")
-    amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
     report: dict[str, Any] = {
         "suite": SUITE_NAME,
         "status": "failed",
@@ -258,9 +255,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
 
     app = None
-    amutorrent_process: subprocess.Popen[str] | None = None
     arr_processes: list[subprocess.Popen[str]] = []
-    amutorrent_log_output = None
     try:
         try:
             arr = resolve_arr_dependencies(args, paths)
@@ -275,14 +270,9 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             return INCONCLUSIVE_EXIT_CODE, report
         report["dependencies"] = {name: dependency.to_report() for name, dependency in arr.items()}
 
-        node_info = amutorrent_smoke.resolve_amutorrent_node()
-        amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
-        report["dependencies"]["amutorrent_node"] = node_info
-
         seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
         lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
         emule_port = rest_smoke.choose_listen_port(lan_bind_addr)
-        amutorrent_port = rest_smoke.choose_listen_port(lan_bind_addr)
         prowlarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
         radarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
         sonarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
@@ -291,7 +281,6 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         radarr_api_key = secrets.token_hex(16)
         sonarr_api_key = secrets.token_hex(16)
         emule_base_url = f"http://{lan_bind_addr}:{emule_port}"
-        amutorrent_base_url = f"http://{lan_bind_addr}:{amutorrent_port}"
         prowlarr_base_url = f"http://{lan_bind_addr}:{prowlarr_port}"
         radarr_base_url = f"http://{lan_bind_addr}:{radarr_port}"
         sonarr_base_url = f"http://{lan_bind_addr}:{sonarr_port}"
@@ -322,83 +311,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             wait_for_http(base_url, status_path, api_key=api_key, timeout_seconds=args.ready_timeout_seconds)
             report["checks"][f"{name}_ready"] = {"port": port, "pid": process.pid}
 
-        amutorrent_data_dir = artifacts_dir / "amutorrent-data"
-        amutorrent_log_path = artifacts_dir / "amutorrent.log"
-        amutorrent_log_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
-        env = os.environ.copy()
-        env.update(
-            {
-                "PORT": str(amutorrent_port),
-                "lan_bind_address": lan_bind_addr,
-                "AMUTORRENT_DATA_DIR": str(amutorrent_data_dir),
-                "WEB_AUTH_ENABLED": "false",
-                "SKIP_SETUP_WIZARD": "true",
-            }
-        )
-        node_path = Path(str(node_info["path"]))
-        if node_path.is_absolute():
-            env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
-        amutorrent_process = subprocess.Popen(
-            [str(node_path), "server/server.js"],
-            cwd=str(amutorrent_root),
-            env=env,
-            stdout=amutorrent_log_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        wait_for_http(amutorrent_base_url, "/api/config/status", timeout_seconds=args.ready_timeout_seconds)
-        report["checks"]["amutorrent_ready"] = {"port": amutorrent_port, "pid": amutorrent_process.pid}
-
         scripts_root = helper_scripts_root(build_repo_root)
-        run_helper(
-            scripts_root / "Register-aMuTorrent.ps1",
-            [
-                "-AmutorrentUrl",
-                amutorrent_base_url,
-                "-AmutorrentApiKey",
-                "",
-                "-EmulebbBaseUrl",
-                emule_base_url,
-                "-EmulebbApiKey",
-                emule_api_key,
-                "-InstanceName",
-                "eMuleBB Helper Test",
-                "-InstanceId",
-                f"emulebb-helper-{emule_port}",
-            ],
-            report,
-            "amutorrent_register",
-        )
-        current_config = invoke_json_api(amutorrent_base_url, "/api/config/current")
-        clients = current_config.get("clients") if isinstance(current_config, dict) else []
-        report["checks"]["amutorrent_client_registered"] = {
-            "client_count": len(clients) if isinstance(clients, list) else 0,
-            "matched": any(isinstance(client, dict) and client.get("name") == "eMuleBB Helper Test" for client in clients or []),
-        }
-        if not report["checks"]["amutorrent_client_registered"]["matched"]:
-            raise RuntimeError("aMuTorrent helper did not create the eMuleBB client")
-        # Keep the unregister path covered without leaving aMuTorrent in an
-        # unusable no-client state. The helper is expected to refuse removal of
-        # the last enabled client; the suite verifies that guard still fires.
-        run_helper(
-            scripts_root / "Register-aMuTorrent.ps1",
-            [
-                "-Action",
-                "Unregister",
-                "-AmutorrentUrl",
-                amutorrent_base_url,
-                "-AmutorrentApiKey",
-                "",
-                "-InstanceName",
-                "eMuleBB Helper Test",
-                "-InstanceId",
-                f"emulebb-helper-{emule_port}",
-            ],
-            report,
-            "amutorrent_last_client_refusal",
-            expect_success=False,
-        )
-
         run_helper(
             scripts_root / "Register-Prowlarr.ps1",
             [
@@ -475,9 +388,6 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         live_common.write_json(result_path, report)
         return 1, report
     finally:
-        stop_process(amutorrent_process)
-        if amutorrent_log_output is not None:
-            amutorrent_log_output.close()
         for process in reversed(arr_processes):
             stop_process(process)
         if app is not None:

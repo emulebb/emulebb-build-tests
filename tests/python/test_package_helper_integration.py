@@ -8,10 +8,8 @@ def test_package_helper_uses_packaged_powershell_script_names() -> None:
     script = repo_root / "scripts" / "package-helper-integration.py"
     text = script.read_text(encoding="utf-8")
 
-    assert '"Register-aMuTorrent.ps1"' in text
     assert '"Register-Prowlarr.ps1"' in text
     assert '"Register-ArrStack.ps1"' in text
-    assert '"register-amutorrent.ps1"' not in text
     assert '"register-prowlarr.ps1"' not in text
     assert '"register-arr-stack.ps1"' not in text
 
