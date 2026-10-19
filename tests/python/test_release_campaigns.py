@@ -363,7 +363,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert scenarios[protocol_id]["required"] is True
     assert scenarios[protocol_id]["blocking"] is True
     assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe" in scenarios[protocol_id]["command"]
-    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe" in scenarios[protocol_id]["command"]
+    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server" in scenarios[protocol_id]["command"]
     protocol_evidence = scenarios[protocol_id]["evidence"][0]
     assert protocol_evidence["base"] == "workspace-output"
     assert protocol_evidence["matches"]["/checks/protocol_matrix_coverage/caseCount"] == 4

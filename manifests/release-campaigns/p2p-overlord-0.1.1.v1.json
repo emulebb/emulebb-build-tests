@@ -62,7 +62,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "0.1.1-rc.1 Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use goed2k-server for deterministic ED2K server scenarios."
+              "description": "0.1.1-rc.1 Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use Rust ed2k-server for deterministic ED2K server scenarios."
             }
           ]
         }
