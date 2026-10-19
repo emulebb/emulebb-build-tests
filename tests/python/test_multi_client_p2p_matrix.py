@@ -39,6 +39,12 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
             executable=None,
             reason="missing",
         ),
+        "stock_emule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["stock_emule"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
         "emulebb_rust": multi_client.ClientAvailability(
             identity=multi_client.CLIENT_IDENTITIES["emulebb_rust"],
             available=False,
@@ -58,6 +64,7 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
 
     assert {row["status"] for row in rows} == {"skipped"}
     assert rows_by_id["cl-emulebb-001-downloads-from-cl-emuleai-003"]["missing_clients"] == ["cl-emuleai-003"]
+    assert rows_by_id[module.STOCK_EMULE_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-stock-emule-004"]
     assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == [
         "cl-emulebb-rust-005",
         "cl-emulebb-rust-006",
@@ -70,6 +77,12 @@ def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> No
     inventory = {
         "emuleai": multi_client.ClientAvailability(
             identity=multi_client.CLIENT_IDENTITIES["emuleai"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "stock_emule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["stock_emule"],
             available=False,
             executable=None,
             reason="missing",
@@ -110,7 +123,7 @@ def test_selected_required_scenario_marks_unselected_optional_rows_skipped() -> 
             reason="available",
         deterministic_transfer_adapter=True,
     )
-        for key in ("emuleai", "emulebb_rust", "emulebb_rust_peer")
+        for key in ("emuleai", "stock_emule", "emulebb_rust", "emulebb_rust_peer")
     }
 
     rows = module.build_optional_scenario_rows(
@@ -201,7 +214,11 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
         ),
     }
 
-    rows = module.build_optional_scenario_rows(inventory, require_optional_clients=True)
+    rows = module.build_optional_scenario_rows(
+        inventory,
+        require_optional_clients=True,
+        completed_scenario_ids={module.STOCK_EMULE_TRANSFER_SCENARIO_ID},
+    )
 
     assert {row["status"] for row in rows} == {"failed"}
     assert all("adapter" in str(row["reason"]) for row in rows)
@@ -245,6 +262,29 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     assert command[command.index("--artifacts-dir") + 1].endswith("\\h2") or command[command.index("--artifacts-dir") + 1].endswith("/h2")
     assert "--p2p-bind-interface-name" not in command
     assert "--client2-app-exe" in command
+
+
+def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    stock_executable = tmp_path / "stock-emule.exe"
+
+    result = module.run_stock_emule_transfer_scenario(paths, args, stock_executable)
+
+    assert result["status"] == "passed"
+    assert result["id"] == module.STOCK_EMULE_TRANSFER_SCENARIO_ID
+    assert result["clients"] == ["cl-emulebb-001", "cl-stock-emule-004"]
+    command = captured["command"]
+    assert option_value(command, "--client2-app-exe") == str(stock_executable.resolve())
+    assert option_value(command, "--client2-identity") == "stock_emule"
 
 
 def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> None:
@@ -484,6 +524,9 @@ def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatc
         "emulebb": available_client("emulebb"),
         "harness": available_client("harness"),
         "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
+        "stock_emule": multi_client.ClientAvailability(
+            multi_client.CLIENT_IDENTITIES["stock_emule"], False, None, "missing"
+        ),
         "emulebb_rust": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emulebb_rust"], False, None, "missing"),
         "emulebb_rust_peer": multi_client.ClientAvailability(
             multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
@@ -552,6 +595,9 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
         "emulebb": available_client("emulebb"),
         "harness": available_client("harness"),
         "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
+        "stock_emule": multi_client.ClientAvailability(
+            multi_client.CLIENT_IDENTITIES["stock_emule"], False, None, "missing"
+        ),
         "emulebb_rust": available_client("emulebb_rust"),
         "emulebb_rust_peer": available_client("emulebb_rust_peer"),
     }

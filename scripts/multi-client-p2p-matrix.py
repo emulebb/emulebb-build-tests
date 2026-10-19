@@ -25,10 +25,12 @@ from emule_test_harness.script_modules import load_script_module  # noqa: E402
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
 HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
+STOCK_EMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-stock-emule-004"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
 OPTIONAL_SCENARIO_DEFINITIONS = (
     ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
+    (STOCK_EMULE_TRANSFER_SCENARIO_ID, "stock_emule"),
     (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
     (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
 )
@@ -226,6 +228,28 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
     )
 
 
+def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_executable: Path) -> dict[str, object]:
+    """Runs the deterministic download from the fixed stock-compatible baseline."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "e4"
+    command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    command.extend(
+        [
+            "--client2-app-exe",
+            str(stock_executable.resolve()),
+            "--client2-identity",
+            "stock_emule",
+        ]
+    )
+    return run_child_scenario(
+        scenario_id=STOCK_EMULE_TRANSFER_SCENARIO_ID,
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["stock_emule"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "deterministic-two-client-transfer-result.json",
+    )
+
+
 def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the existing Rust local-client suite for bidirectional peer exchange."""
 
@@ -410,6 +434,15 @@ def main(argv: list[str] | None = None) -> int:
         if run_all_optional or HARNESS_TRANSFER_SCENARIO_ID in selected_optional_ids:
             scenarios.append(run_deterministic_transfer_scenario(paths, args))
         completed_optional_ids: set[str] = set()
+        stock_emule = inventory["stock_emule"]
+        if (
+            (run_all_optional or STOCK_EMULE_TRANSFER_SCENARIO_ID in selected_optional_ids)
+            and stock_emule.available
+            and stock_emule.deterministic_transfer_adapter
+            and stock_emule.executable is not None
+        ):
+            scenarios.append(run_stock_emule_transfer_scenario(paths, args, stock_emule.executable))
+            completed_optional_ids.add(STOCK_EMULE_TRANSFER_SCENARIO_ID)
         rust = inventory["emulebb_rust"]
         rust_peer = inventory["emulebb_rust_peer"]
         if (
