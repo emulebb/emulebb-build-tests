@@ -28,11 +28,13 @@ HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
 STOCK_EMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-stock-emule-004"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
+AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-007"
 OPTIONAL_SCENARIO_DEFINITIONS = (
     ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
     (STOCK_EMULE_TRANSFER_SCENARIO_ID, "stock_emule"),
     (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
     (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
+    (AMULE_TRANSFER_SCENARIO_ID, "amule"),
 )
 
 

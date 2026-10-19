@@ -57,6 +57,12 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
             executable=None,
             reason="missing",
         ),
+        "amule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["amule"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
     }
 
     rows = module.build_optional_scenario_rows(inventory, require_optional_clients=False)
@@ -70,6 +76,7 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
         "cl-emulebb-rust-006",
     ]
     assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
+    assert rows_by_id[module.AMULE_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-amule-007"]
 
 
 def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> None:
@@ -99,6 +106,12 @@ def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> No
             executable=None,
             reason="missing",
         ),
+        "amule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["amule"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
     }
 
     rows = module.build_optional_scenario_rows(
@@ -123,7 +136,7 @@ def test_selected_required_scenario_marks_unselected_optional_rows_skipped() -> 
             reason="available",
         deterministic_transfer_adapter=True,
     )
-        for key in ("emuleai", "stock_emule", "emulebb_rust", "emulebb_rust_peer")
+        for key in ("emuleai", "stock_emule", "emulebb_rust", "emulebb_rust_peer", "amule")
     }
 
     rows = module.build_optional_scenario_rows(
@@ -212,6 +225,12 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
             executable=rust_manifest,
             reason="available",
         ),
+        "amule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["amule"],
+            available=True,
+            executable=tmp_path / "amuled.exe",
+            reason="available",
+        ),
     }
 
     rows = module.build_optional_scenario_rows(
@@ -224,6 +243,7 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
     assert all("adapter" in str(row["reason"]) for row in rows)
     assert rows[0]["adapter_blocked_clients"] == ["cl-emuleai-003"]
     assert rows[1]["adapter_blocked_clients"] == ["cl-emulebb-rust-005", "cl-emulebb-rust-006"]
+    assert rows[-1]["adapter_blocked_clients"] == ["cl-amule-007"]
 
 
 def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: Path) -> None:
@@ -534,6 +554,7 @@ def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatc
             None,
             "missing",
         ),
+        "amule": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["amule"], False, None, "missing"),
     }
 
     monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", lambda **_kwargs: paths)
@@ -600,6 +621,7 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
         ),
         "emulebb_rust": available_client("emulebb_rust"),
         "emulebb_rust_peer": available_client("emulebb_rust_peer"),
+        "amule": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["amule"], False, None, "missing"),
     }
 
     monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", lambda **_kwargs: paths)
