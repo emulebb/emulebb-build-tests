@@ -30,7 +30,6 @@ def test_local_soak_defaults_are_bounded_and_local() -> None:
     assert args.search_waves == 3
     assert args.searches_per_wave == 12
     assert args.max_concurrent_searches == 6
-    assert args.synthetic_catalog_files == 240
     assert args.fixture_size_bytes == 132 * 1024 * 1024
 
 
@@ -38,7 +37,7 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
     module = load_suite_module()
     calls: dict[str, object] = {}
     source_artifacts_dir = tmp_path / "artifacts"
-    server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
+    server_exe = tmp_path / "harness" / "tools" / "ed2k-server"
     server_exe.parent.mkdir(parents=True)
     server_exe.write_bytes(b"")
 
@@ -74,7 +73,7 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
     monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: None)
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.77")
     monkeypatch.setattr(module.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
-    monkeypatch.setattr(module.goed2k, "launch_ed2k_server", fake_launch_ed2k_server)
+    monkeypatch.setattr(module.ed2k_harness, "launch_ed2k_server", fake_launch_ed2k_server)
 
     exit_code = module.main(["--lan-bind-addr", "192.0.2.77", "--ed2k-server-exe", str(server_exe)])
 
@@ -88,30 +87,15 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
     assert calls["ed2k_launch"]["admin_address"] == "192.0.2.77"
     assert calls["ed2k_launch"]["repo_override"] is None
     assert calls["ed2k_launch"]["exe_override"] == str(server_exe)
-    assert len(calls["ed2k_launch"]["catalog_files"]) == module.DEFAULT_SYNTHETIC_CATALOG_FILES
-    assert calls["ed2k_launch"]["catalog_files"][0]["endpoints"] == [{"host": "192.0.2.77", "port": 4663}]
 
 
-def test_local_soak_reuses_shared_goed2k_launcher() -> None:
+def test_local_soak_reuses_shared_ed2k_harness_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
-
-
-def test_synthetic_catalog_records_are_deterministic_and_searchable() -> None:
-    module = load_suite_module()
-
-    records = module.build_synthetic_catalog_records(10, source_host="10.1.2.3", source_port=4662)
-
-    assert len(records) == 10
-    assert records[0]["name"].startswith("local-soak-linux-")
-    assert records[0]["hash"] == module.synthetic_hash("local-soak-linux:0")
-    assert records[0]["endpoints"] == [{"host": "10.1.2.3", "port": 4662}]
-    assert {row["complete_sources"] for row in records} == {1}
-    assert len({row["hash"] for row in records}) == 10
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.build_or_skip_ed2k_server_binary(" not in script_text
 
 
 def test_run_one_search_retries_transient_url_error(monkeypatch) -> None:
@@ -163,17 +147,6 @@ def test_run_one_search_retries_direct_connection_reset(monkeypatch) -> None:
     assert result["search_id"] == "search-1"
     assert result["attempts"] == 2
     assert result["retry_failures"][0]["type"] == "ConnectionResetError"
-
-
-def test_write_catalog_uses_server_schema(tmp_path: Path) -> None:
-    module = load_suite_module()
-    path = tmp_path / "catalog.json"
-    records = module.build_synthetic_catalog_records(2, source_host="10.1.2.3", source_port=4662)
-
-    summary = module.write_catalog(path, records)
-
-    assert summary == {"path": str(path), "file_count": 2}
-    assert '"files"' in path.read_text(encoding="utf-8")
 
 
 def test_search_wave_validation_rejects_zero_counts() -> None:

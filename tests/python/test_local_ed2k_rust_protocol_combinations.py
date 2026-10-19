@@ -25,19 +25,19 @@ def load_suite_module():
     return module
 
 
-def test_rust_server_entry_advertises_obfuscated_tcp_without_udp_for_no_udp_case() -> None:
+def test_rust_server_entry_advertises_obfuscated_tcp_and_udp() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-no-server-udp-compressible"]
+    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
 
     entry = module.rust_server_entry(case, "192.0.2.10", 4661)
 
     assert entry["host"] == "192.0.2.10"
     assert entry["port"] == 4661
     assert entry["obfuscationPortTcp"] == 4661
-    assert entry["obfuscationPortUdp"] == 0
-    assert entry["udpKey"] == 0
+    assert entry["obfuscationPortUdp"] == 4665
+    assert entry["udpKey"] == 0x11223344
     assert entry["udpFlags"] & module.SERVER_UDP_FLAG_TCPOBFUSCATION
-    assert not entry["udpFlags"] & module.SERVER_UDP_FLAG_UDPOBFUSCATION
+    assert entry["udpFlags"] & module.SERVER_UDP_FLAG_UDPOBFUSCATION
 
 
 def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
@@ -154,7 +154,7 @@ def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
     assert coverage["plainServerPlainClients"] is True
     assert coverage["obfuscatedPreferred"] is True
     assert coverage["obfuscatedRequired"] is True
-    assert coverage["serverUdpDisabled"] is True
+    assert all(case.server_udp for case in module.protocol_matrix.PROTOCOL_CASES)
     assert coverage["compressibleFixture"] is True
     assert coverage["lowCompressibilityFixture"] is True
     assert coverage["unicodeFixtureNames"] is True
@@ -251,16 +251,16 @@ def test_rust_protocol_case_requirements_reject_missing_hash_only_recovery() -> 
         raise AssertionError("missing hash-only metadata recovery was accepted")
 
 
-def test_rust_protocol_cases_reuse_shared_goed2k_launcher() -> None:
+def test_rust_protocol_cases_reuse_shared_ed2k_harness_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.prepare_ed2k_server_binary(" in script_text
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.resolve_ed2k_server_exe(" not in script_text
-    assert "goed2k.build_ed2k_server_binary(" not in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_server_config(" not in script_text
+    assert "ed2k_harness.prepare_ed2k_server_binary(" in script_text
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.resolve_ed2k_server_exe(" not in script_text
+    assert "ed2k_harness.build_ed2k_server_binary(" not in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.build_server_config(" not in script_text
 
 
 def test_rust_protocol_cases_materialize_run_specific_profile_seed() -> None:
@@ -273,7 +273,7 @@ def test_rust_protocol_cases_materialize_run_specific_profile_seed() -> None:
 
 def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-no-server-udp-compressible"]
+    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
 
     metadata = module.require_rust_source_metadata(
         case,

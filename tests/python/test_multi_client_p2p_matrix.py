@@ -320,10 +320,10 @@ def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> Non
     assert option_value(command, "--p2p-bind-interface-name") == "Ethernet"
 
 
-def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatch, tmp_path: Path) -> None:
+def test_matrix_prepares_one_shared_ed2k_server_binary_for_child_scenarios(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+    server_exe = tmp_path / "tools" / "ed2k-server"
     calls: dict[str, object] = {}
 
     def fake_prepare_ed2k_server_binary(workspace_root: Path, **kwargs):
@@ -331,14 +331,14 @@ def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatc
         calls["kwargs"] = kwargs
         return SimpleNamespace(server_exe=server_exe, build={"server_exe": str(server_exe), "return_code": 0})
 
-    monkeypatch.setattr(module.goed2k, "prepare_ed2k_server_binary", fake_prepare_ed2k_server_binary)
+    monkeypatch.setattr(module.ed2k_harness, "prepare_ed2k_server_binary", fake_prepare_ed2k_server_binary)
     paths = SimpleNamespace(workspace_root=workspace)
     args = module.parse_args(
         [
             "--lan-bind-addr",
             "192.0.2.10",
             "--ed2k-server-repo",
-            str(tmp_path / "goed2k-server"),
+            str(tmp_path / "ed2k-server"),
         ]
     )
 
@@ -350,7 +350,7 @@ def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatc
     assert calls == {
         "workspace_root": workspace,
         "kwargs": {
-            "repo_override": str(tmp_path / "goed2k-server"),
+            "repo_override": str(tmp_path / "ed2k-server"),
             "exe_override": None,
         },
     }
@@ -406,7 +406,7 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
     workspace_root = tmp_path / "workspaces" / "workspace"
     paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix", workspace_root=workspace_root)
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
-    args.ed2k_server_exe = str(tmp_path / "tools" / "goed2k-server.exe")
+    args.ed2k_server_exe = str(tmp_path / "tools" / "ed2k-server")
 
     result = module.run_emulebb_rust_exchange_scenario(paths, args)
 
@@ -429,8 +429,8 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
         "native",
     ]
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
-    assert captured["env"][module.goed2k.ED2K_SERVER_EXE_ENV] == str(
-        (tmp_path / "tools" / "goed2k-server.exe").resolve()
+    assert captured["env"][module.ed2k_harness.ED2K_SERVER_EXE_ENV] == str(
+        (tmp_path / "tools" / "ed2k-server").resolve()
     )
     assert captured["env"]["EMULEBB_RUST_PEER_EXCHANGE_REPORT"] == str(
         tmp_path / "matrix" / "r5" / "emulebb-rust-peer-exchange-result.json"
@@ -459,9 +459,9 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
             "--p2p-bind-interface-address",
             "10.1.2.3",
             "--ed2k-server-repo",
-            str(tmp_path / "goed2k-server"),
+            str(tmp_path / "ed2k-server"),
             "--ed2k-server-exe",
-            str(tmp_path / "goed2k-server.exe"),
+            str(tmp_path / "ed2k-server"),
             "--link-export-timeout-seconds",
             "45",
         ]
@@ -480,12 +480,14 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
     assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-e1") or command[command.index("--artifacts-dir") + 1].endswith("/r5-e1")
     assert option_value(command, "--lan-bind-addr") == "192.0.2.10"
     assert option_value(command, "--p2p-bind-interface-address") == "10.1.2.3"
-    assert option_value(command, "--ed2k-server-repo") == str((tmp_path / "goed2k-server").resolve())
-    assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "goed2k-server.exe").resolve())
+    assert option_value(command, "--ed2k-server-repo") == str((tmp_path / "ed2k-server").resolve())
+    assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "ed2k-server").resolve())
     assert option_value(command, "--link-export-timeout-seconds") == "45.0"
 
 
-def test_emulebb_rust_emulebb_bidirectional_scenario_uses_prepared_goed2k_exe_only(monkeypatch, tmp_path: Path) -> None:
+def test_emulebb_rust_emulebb_bidirectional_scenario_uses_prepared_ed2k_server_exe_only(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     captured: dict[str, object] = {}
 
@@ -504,21 +506,21 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_prepared_goed2k_exe_on
             "--p2p-bind-interface-address",
             "10.1.2.3",
             "--ed2k-server-repo",
-            str(tmp_path / "goed2k-server"),
+            str(tmp_path / "ed2k-server"),
         ]
     )
-    args.ed2k_server_exe = str(tmp_path / "tools" / "goed2k-server.exe")
+    args.ed2k_server_exe = str(tmp_path / "tools" / "ed2k-server")
     args.ed2k_server_repo = None
 
     result = module.run_emulebb_rust_emulebb_bidirectional_scenario(paths, args)
 
     assert result["status"] == "passed"
     command = captured["command"]
-    assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "tools" / "goed2k-server.exe").resolve())
+    assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "tools" / "ed2k-server").resolve())
     assert "--ed2k-server-repo" not in command
 
 
-def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatch, tmp_path: Path) -> None:
+def test_matrix_main_stops_stray_ed2k_server_processes_after_child_failure(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     calls: list[str] = []
     workspace_root = tmp_path / "workspaces" / "workspace"
@@ -568,7 +570,7 @@ def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatc
         "run_deterministic_transfer_scenario",
         lambda _paths, _args: {"id": module.HARNESS_TRANSFER_SCENARIO_ID, "status": "failed"},
     )
-    monkeypatch.setattr(module.goed2k, "stop_server_processes", lambda: calls.append("stop_goed2k"))
+    monkeypatch.setattr(module.ed2k_harness, "stop_server_processes", lambda: calls.append("stop_ed2k_server"))
     monkeypatch.setattr(module.harness_cli_common, "write_json_file", lambda _path, _report: calls.append("write_report"))
     monkeypatch.setattr(module.harness_cli_common, "publish_run_artifacts", lambda _paths: calls.append("publish_run"))
     monkeypatch.setattr(module.harness_cli_common, "publish_latest_report", lambda _paths: calls.append("publish_latest"))
@@ -586,7 +588,7 @@ def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatc
     )
 
     assert exit_code == 1
-    assert calls == ["write_report", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
+    assert calls == ["write_report", "stop_ed2k_server", "publish_run", "publish_latest", "cleanup_artifacts"]
 
 
 def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path: Path) -> None:
@@ -646,7 +648,7 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
         lambda _paths, _args: calls.append("rust-emulebb")
         or {"id": module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "status": "passed"},
     )
-    monkeypatch.setattr(module.goed2k, "stop_server_processes", lambda: calls.append("stop_goed2k"))
+    monkeypatch.setattr(module.ed2k_harness, "stop_server_processes", lambda: calls.append("stop_ed2k_server"))
     monkeypatch.setattr(
         module.harness_cli_common,
         "write_json_file",
@@ -670,5 +672,5 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
     )
 
     assert exit_code == 0
-    assert calls == ["rust-emulebb", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
+    assert calls == ["rust-emulebb", "stop_ed2k_server", "publish_run", "publish_latest", "cleanup_artifacts"]
     assert reports[-1]["status"] == "passed"

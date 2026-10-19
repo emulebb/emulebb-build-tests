@@ -6,10 +6,11 @@ import re
 import struct
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from emule_test_harness import goed2k
+from emule_test_harness import ed2k_server as ed2k_harness
 
 
 def load_suite_module():
@@ -43,129 +44,79 @@ def load_script_module(filename: str, module_name: str):
 def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    repo = tmp_path / "repos" / "goed2k-server"
+    repo = tmp_path / "repos" / "ed2k-server"
     workspace.mkdir(parents=True)
     repo.mkdir(parents=True)
-    (repo / "go.mod").write_text("module example\n", encoding="utf-8")
+    (repo / "Cargo.toml").write_text("[package]\nname = 'ed2k-server'\n", encoding="utf-8")
     (workspace / "deps.json").write_text(
-        json.dumps({"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\goed2k-server"}}}),
+        json.dumps({"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\ed2k-server"}}}),
         encoding="utf-8",
     )
 
     assert module.resolve_manifest_repo(workspace, "ed2k_server") == repo.resolve()
-    assert goed2k.resolve_ed2k_server_repo(workspace, None) == repo.resolve()
-
-
-def test_resolve_ed2k_server_exe_defaults_to_output_root(tmp_path: Path, monkeypatch) -> None:
-    workspace = tmp_path / "workspaces" / "workspace"
-    output_root = tmp_path.parent / f"{tmp_path.name}-output"
-    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
-
-    resolved = goed2k.resolve_ed2k_server_exe(workspace, None)
-
-    assert resolved == (output_root / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
-
-
-def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(tmp_path: Path) -> None:
-    workspace = tmp_path / "vm" / "workspace"
-    server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
-    server_exe.parent.mkdir(parents=True)
-    server_exe.write_bytes(b"")
-
-    result = goed2k.build_or_skip_ed2k_server_binary(
-        workspace,
-        server_exe,
-        exe_override=str(server_exe),
-    )
-
-    assert result["return_code"] == 0
-    assert result["server_exe"] == str(server_exe)
-    assert result["skipped"] is True
-    assert result["reason"] == "using explicit --ed2k-server-exe"
 
 
 def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
-    assert goed2k.env_ed2k_server_exe_override({}) is None
-    assert goed2k.env_ed2k_server_exe_override({goed2k.ED2K_SERVER_EXE_ENV: "  "}) is None
+    assert ed2k_harness.env_ed2k_server_exe_override({}) is None
+    assert ed2k_harness.env_ed2k_server_exe_override({ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}) is None
     assert (
-        goed2k.env_ed2k_server_exe_override(
-            {goed2k.ED2K_SERVER_EXE_ENV: "C:/tools/goed2k-server.exe"}
+        ed2k_harness.env_ed2k_server_exe_override(
+            {ed2k_harness.ED2K_SERVER_EXE_ENV: "C:/tools/ed2k-server"}
         )
-        == "C:/tools/goed2k-server.exe"
+        == "C:/tools/ed2k-server"
     )
 
 
 def test_with_ed2k_server_exe_env_returns_child_env_copy(tmp_path: Path) -> None:
     base_env = {"KEEP": "1"}
-    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+    server_exe = tmp_path / "tools" / "ed2k-server"
 
-    child_env = goed2k.with_ed2k_server_exe_env(base_env, server_exe)
+    child_env = ed2k_harness.with_ed2k_server_exe_env(base_env, server_exe)
 
     assert child_env["KEEP"] == "1"
-    assert child_env[goed2k.ED2K_SERVER_EXE_ENV] == str(server_exe.resolve())
-    assert goed2k.ED2K_SERVER_EXE_ENV not in base_env
+    assert child_env[ed2k_harness.ED2K_SERVER_EXE_ENV] == str(server_exe.resolve())
+    assert ed2k_harness.ED2K_SERVER_EXE_ENV not in base_env
 
 
-def test_stop_server_processes_uses_shared_goed2k_process_name_on_windows(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
+def test_stop_server_processes_delegates_to_selected_provider(monkeypatch) -> None:
+    calls: list[str] = []
+    provider = SimpleNamespace(stop_server_processes=lambda: calls.append("stop"))
+    monkeypatch.setattr(ed2k_harness, "resolve_provider", lambda: provider)
 
-    def fake_run(command, **kwargs):
-        calls.append({"command": command, **kwargs})
-        return None
+    ed2k_harness.stop_server_processes()
 
-    monkeypatch.setattr(goed2k.os, "name", "nt", raising=False)
-    monkeypatch.setattr(goed2k.subprocess, "run", fake_run)
-
-    goed2k.stop_server_processes()
-
-    assert calls == [
-        {
-            "command": ["taskkill", "/IM", "goed2k-server.exe", "/T", "/F"],
-            "stdout": goed2k.subprocess.DEVNULL,
-            "stderr": goed2k.subprocess.DEVNULL,
-            "check": False,
-        }
-    ]
-
-
-def test_stop_server_processes_is_noop_off_windows(monkeypatch) -> None:
-    calls: list[object] = []
-    monkeypatch.setattr(goed2k.os, "name", "posix", raising=False)
-    monkeypatch.setattr(goed2k.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
-
-    goed2k.stop_server_processes()
-
-    assert calls == []
+    assert calls == ["stop"]
 
 
 def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+    server_exe = tmp_path / "tools" / "ed2k-server"
+    calls: dict[str, object] = {}
 
-    monkeypatch.setattr(goed2k, "resolve_ed2k_server_exe", lambda _workspace, override: Path(override).resolve())
+    def prepare_binary(workspace_root: Path, **kwargs: object) -> SimpleNamespace:
+        calls["workspace_root"] = workspace_root
+        calls.update(kwargs)
+        return SimpleNamespace(server_exe=server_exe.resolve(), build={"provider": "rust"})
+
     monkeypatch.setattr(
-        goed2k,
-        "build_or_skip_ed2k_server_binary",
-        lambda workspace_root, resolved_exe, **kwargs: {
-            "workspace_root": str(workspace_root),
-            "server_exe": str(resolved_exe),
-            "repo_override": kwargs["repo_override"],
-            "exe_override": kwargs["exe_override"],
-        },
+        ed2k_harness,
+        "resolve_provider",
+        lambda: SimpleNamespace(prepare_binary=prepare_binary),
     )
 
-    prepared = goed2k.prepare_ed2k_server_binary(
+    prepared = ed2k_harness.prepare_ed2k_server_binary(
         workspace,
         repo_override="repo-override",
         exe_override=str(server_exe),
     )
 
     assert prepared.server_exe == server_exe.resolve()
-    assert prepared.build["workspace_root"] == str(workspace)
-    assert prepared.build["server_exe"] == str(server_exe.resolve())
-    assert prepared.build["repo_override"] == "repo-override"
-    assert prepared.build["exe_override"] == str(server_exe)
+    assert prepared.build == {"provider": "rust"}
+    assert calls == {
+        "workspace_root": workspace,
+        "repo_override": "repo-override",
+        "exe_override": str(server_exe),
+    }
 
 
 def test_resolve_client2_app_exe_uses_emulebb_main_executable(tmp_path: Path) -> None:
@@ -335,172 +286,6 @@ def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_
     assert b"10.44.55.66" in data
 
 
-def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> None:
-    config_path = tmp_path / "state" / "artifacts" / "server" / "config.json"
-    catalog_path = tmp_path / "state" / "artifacts" / "server" / "catalog.json"
-
-    config = goed2k.build_server_config(
-        config_path,
-        ed2k_port=4661,
-        admin_port=8080,
-        catalog_path=catalog_path,
-        token="secret",
-        admin_address="192.0.2.10",
-        ed2k_address="192.0.2.10",
-    )
-
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
-    assert payload == config
-    assert payload["listen_address"] == "192.0.2.10:4661"
-    assert payload["admin_listen_address"] == "192.0.2.10:8080"
-    assert payload["catalog_path"] == str(catalog_path)
-    assert payload["protocol_obfuscation"] is True
-    assert payload["tcp_flags"] == goed2k.SERVER_TCP_FLAG_TCPOBFUSCATION
-    assert payload["aux_port"] == 0
-    assert payload["server_udp"] is True
-
-
-def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
-    config_path = tmp_path / "server" / "config.json"
-    catalog_path = tmp_path / "server" / "catalog.json"
-
-    config = goed2k.build_server_config(
-        config_path,
-        ed2k_port=4661,
-        admin_port=8080,
-        catalog_path=catalog_path,
-        token="secret",
-        admin_address="192.0.2.10",
-        ed2k_address="192.0.2.10",
-        protocol_obfuscation=False,
-        server_udp=False,
-    )
-
-    assert config["protocol_obfuscation"] is False
-    assert config["tcp_flags"] == 0
-    assert config["server_udp"] is False
-
-
-def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
-    config_path = tmp_path / "server" / "config.json"
-    catalog_path = tmp_path / "server" / "catalog.json"
-
-    config = goed2k.build_server_config(
-        config_path,
-        ed2k_port=4661,
-        admin_port=8080,
-        catalog_path=catalog_path,
-        token="secret",
-        admin_address="192.0.2.10",
-        ed2k_address="192.0.2.10",
-    )
-
-    assert config["admin_listen_address"] == "192.0.2.10:8080"
-    assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.0.2.10:8080"
-
-
-def test_build_server_config_rejects_missing_ed2k_bind(tmp_path: Path) -> None:
-    config_path = tmp_path / "server" / "config.json"
-    catalog_path = tmp_path / "server" / "catalog.json"
-
-    with pytest.raises(ValueError, match="explicit LAN bind address"):
-        goed2k.build_server_config(
-            config_path,
-            ed2k_port=4661,
-            admin_port=8080,
-            catalog_path=catalog_path,
-            token="secret",
-            admin_address="192.0.2.10",
-        )
-
-
-def test_build_server_config_allows_ed2k_bind_override(tmp_path: Path) -> None:
-    config_path = tmp_path / "server" / "config.json"
-    catalog_path = tmp_path / "server" / "catalog.json"
-
-    config = goed2k.build_server_config(
-        config_path,
-        ed2k_port=4661,
-        admin_port=8080,
-        catalog_path=catalog_path,
-        token="secret",
-        admin_address="192.0.2.10",
-        ed2k_address="192.0.2.20",
-    )
-
-    assert config["listen_address"] == "192.0.2.20:4661"
-    assert json.loads(config_path.read_text(encoding="utf-8"))["listen_address"] == "192.0.2.20:4661"
-
-
-def test_launch_ed2k_server_centralizes_catalog_config_start_and_health(monkeypatch, tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    server_dir = tmp_path / "server"
-    server_exe = tmp_path / "tools" / "goed2k-server.exe"
-    fake_process = object()
-    calls: dict[str, object] = {}
-
-    monkeypatch.setattr(goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
-    monkeypatch.setattr(
-        goed2k,
-        "build_or_skip_ed2k_server_binary",
-        lambda _workspace, exe, **_kwargs: {"server_exe": str(exe), "return_code": 0},
-    )
-
-    def fake_start(exe: Path, config_path: Path, log_path: Path):
-        calls["start"] = {"exe": exe, "config_path": config_path, "log_path": log_path}
-        return fake_process
-
-    monkeypatch.setattr(goed2k, "start_ed2k_server", fake_start)
-    monkeypatch.setattr(goed2k, "wait_for_admin_health", lambda base_url, timeout: {"base_url": base_url, "timeout": timeout})
-
-    launch = goed2k.launch_ed2k_server(
-        workspace_root=workspace,
-        server_dir=server_dir,
-        ed2k_port=4661,
-        admin_port=8080,
-        token="secret",
-        admin_address="192.0.2.10",
-        ed2k_address="192.0.2.10",
-        catalog_files=[
-            goed2k.catalog_file(
-                file_hash="00112233445566778899aabbccddeeff",
-                name="fixture.bin",
-                size=123,
-                endpoints=[{"host": "192.0.2.20", "port": 4662}],
-            )
-        ],
-        repo_override="repo-override",
-        exe_override="exe-override",
-        health_timeout_seconds=12.5,
-    )
-
-    assert launch.process is fake_process
-    assert launch.admin_base_url == "http://192.0.2.10:8080"
-    assert launch.ed2k_host == "192.0.2.10"
-    assert launch.ed2k_port == 4661
-    assert launch.build["server_exe"] == str(server_exe)
-    assert launch.health == {"base_url": "http://192.0.2.10:8080", "timeout": 12.5}
-    assert calls["start"] == {
-        "exe": server_exe,
-        "config_path": server_dir / "config.json",
-        "log_path": server_dir / "server.log",
-    }
-    assert json.loads((server_dir / "catalog.json").read_text(encoding="utf-8"))["files"] == [
-        {
-            "hash": "00112233445566778899AABBCCDDEEFF",
-            "name": "fixture.bin",
-            "size": 123,
-            "file_type": "Archive",
-            "extension": "bin",
-            "sources": 1,
-            "complete_sources": 1,
-            "endpoints": [{"host": "192.0.2.20", "port": 4662}],
-        }
-    ]
-    assert launch.config["listen_address"] == "192.0.2.10:4661"
-    assert launch.config["admin_listen_address"] == "192.0.2.10:8080"
-
-
 def test_deterministic_transfer_uses_provider_neutral_server_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
@@ -510,26 +295,27 @@ def test_deterministic_transfer_uses_provider_neutral_server_launcher() -> None:
     assert "admin_secret=args.api_key" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert "goed2k.launch_ed2k_server(" not in script_text
+    assert "ed2k_harness.launch_ed2k_server(" not in script_text
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
-    monkeypatch.setattr(
-        goed2k,
-        "admin_request",
-        lambda *_args, **_kwargs: {
-            "data": [
-                {
-                    "hash": "00112233445566778899AABBCCDDEEFF",
-                    "name": "fixture.bin",
-                    "endpoints": [{"host": "192.0.2.10", "port": 4662}],
-                }
-            ]
-        },
-    )
-    monkeypatch.setattr(goed2k.live_common, "wait_for", lambda resolve, *_args: resolve())
+    expected = {
+        "hash": "00112233445566778899AABBCCDDEEFF",
+        "name": "fixture.bin",
+        "endpoints": [{"host": "192.0.2.10", "port": 4662}],
+    }
+    calls: list[tuple[object, ...]] = []
 
-    row = goed2k.wait_for_server_file_endpoint(
+    class FakeControl:
+        @staticmethod
+        def wait_for_file_endpoint(*args: object) -> dict[str, object]:
+            calls.append(args)
+            return expected
+
+    provider = SimpleNamespace(control=lambda *_args: FakeControl())
+    monkeypatch.setattr(ed2k_harness, "resolve_provider", lambda: provider)
+
+    row = ed2k_harness.wait_for_server_file_endpoint(
         "http://192.0.2.10:8080",
         "secret",
         "00112233445566778899aabbccddeeff",
@@ -539,6 +325,15 @@ def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) 
     )
 
     assert row["name"] == "fixture.bin"
+    assert calls == [
+        (
+            "00112233445566778899aabbccddeeff",
+            "192.0.2.10",
+            4662,
+            1.0,
+            "ED2K server file endpoint publication",
+        )
+    ]
 
 
 def test_parse_exported_ed2k_file_link() -> None:
@@ -1072,13 +867,13 @@ def test_godzilla_rejects_loopback_lan_bind(monkeypatch) -> None:
         godzilla.resolve_local_p2p_address(args)
 
 
-def test_godzilla_local_swarm_reuses_shared_goed2k_launcher() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_goed2k_launcher_test")
+def test_godzilla_local_swarm_reuses_shared_ed2k_harness_launcher() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_ed2k_harness_launcher_test")
     script_text = Path(godzilla.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_server_config(" not in script_text
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.build_server_config(" not in script_text
 
 
 def test_default_fixture_size_is_132_mib() -> None:

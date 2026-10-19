@@ -386,10 +386,10 @@ def test_windows_npm_command_uses_cmd_fallback(monkeypatch) -> None:
     assert command == "npm.cmd"
 
 
-def test_amutorrent_local_ed2k_reuses_shared_goed2k_launcher() -> None:
+def test_amutorrent_local_ed2k_reuses_shared_ed2k_harness_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_ed2k_server_binary(" not in script_text
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.build_ed2k_server_binary(" not in script_text

@@ -24,6 +24,12 @@ def test_default_matrix_covers_plain_obfuscated_udp_and_compression_surfaces() -
 
     cases = {case.name: case for case in module.selected_cases(None)}
 
+    assert tuple(cases) == (
+        "plain-server-plain-clients",
+        "obfuscated-preferred",
+        "obfuscated-required",
+        "obfuscated-required-compressible",
+    )
     assert "plain-server-plain-clients" in cases
     assert cases["plain-server-plain-clients"].server_protocol_obfuscation is False
     assert cases["plain-server-plain-clients"].client_crypt_supported is False
@@ -31,10 +37,10 @@ def test_default_matrix_covers_plain_obfuscated_udp_and_compression_surfaces() -
     assert cases["obfuscated-preferred"].client_crypt_requested is True
     assert "obfuscated-required" in cases
     assert cases["obfuscated-required"].client_crypt_required is True
-    assert "obfuscated-required-no-server-udp-compressible" in cases
-    assert cases["obfuscated-required-no-server-udp-compressible"].artifact_id == "obf-req-no-udp-z"
-    assert cases["obfuscated-required-no-server-udp-compressible"].server_udp is False
-    assert cases["obfuscated-required-no-server-udp-compressible"].fixture_pattern == "compressible"
+    assert "obfuscated-required-compressible" in cases
+    assert cases["obfuscated-required-compressible"].artifact_id == "obf-req-z"
+    assert all(case.server_udp for case in cases.values())
+    assert cases["obfuscated-required-compressible"].fixture_pattern == "compressible"
 
 
 def test_selected_cases_preserves_matrix_order() -> None:
@@ -48,7 +54,7 @@ def test_selected_cases_preserves_matrix_order() -> None:
 def test_protocol_surface_documents_auto_negotiated_compression() -> None:
     module = load_suite_module()
 
-    surface = module.protocol_surface(module.PROTOCOL_CASE_MAP["obfuscated-required-no-server-udp-compressible"])
+    surface = module.protocol_surface(module.PROTOCOL_CASE_MAP["obfuscated-required-compressible"])
 
     assert surface["fixture_pattern"] == "compressible"
     assert surface["client_data_compression"]["mode"] == "stock-auto-negotiated"
@@ -87,14 +93,14 @@ def test_compressible_fixture_writer_is_deterministic(tmp_path: Path) -> None:
     assert first_hash == second_hash == module.dtt.file_sha256(first)
 
 
-def test_protocol_cases_reuse_shared_goed2k_launcher() -> None:
+def test_protocol_cases_reuse_shared_ed2k_harness_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.prepare_ed2k_server_binary(" in script_text
-    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.prepare_ed2k_server_binary(" in script_text
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
     assert "ed2k_address=p2p_address" in script_text
-    assert "goed2k.resolve_ed2k_server_exe(" not in script_text
-    assert "goed2k.build_ed2k_server_binary(" not in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
-    assert "goed2k.build_server_config(" not in script_text
+    assert "ed2k_harness.resolve_ed2k_server_exe(" not in script_text
+    assert "ed2k_harness.build_ed2k_server_binary(" not in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.build_server_config(" not in script_text

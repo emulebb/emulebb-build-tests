@@ -71,15 +71,15 @@ def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch)
     assert result["result"]["name"] == "fixture.bin"
 
 
-def test_cross_client_script_uses_shared_goed2k_launcher_boundary() -> None:
+def test_cross_client_script_uses_shared_ed2k_harness_launcher_boundary() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "goed2k.launch_ed2k_server(" in script_text
-    assert "goed2k.resolve_ed2k_server_exe(" not in script_text
-    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
-    assert "goed2k.build_server_config(" not in script_text
-    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "ed2k_harness.launch_ed2k_server(" in script_text
+    assert "ed2k_harness.resolve_ed2k_server_exe(" not in script_text
+    assert "ed2k_harness.build_or_skip_ed2k_server_binary(" not in script_text
+    assert "ed2k_harness.build_server_config(" not in script_text
+    assert "ed2k_harness.start_ed2k_server(" not in script_text
 
 
 def test_cross_client_disables_rust_kad_by_default() -> None:
@@ -525,7 +525,9 @@ def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_p
     assert metadata["aichHashsetCount"] == 0
 
 
-def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkeypatch, tmp_path: Path) -> None:
+def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -574,15 +576,15 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
             config={"listen_address": f"{kwargs['ed2k_address']}:{kwargs['ed2k_port']}"},
         )
 
-    monkeypatch.setattr(module.goed2k, "launch_ed2k_server", fake_launch_ed2k_server)
-    monkeypatch.setattr(module.goed2k, "stop_process", lambda process: calls["stopped"].append(process))
+    monkeypatch.setattr(module.ed2k_harness, "launch_ed2k_server", fake_launch_ed2k_server)
+    monkeypatch.setattr(module.ed2k_harness, "stop_process", lambda process: calls["stopped"].append(process))
     monkeypatch.setattr(module.rust_client, "stop_process_tree", lambda process: calls.setdefault("rust_stop", process))
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.10")
 
-    def fail_after_goed2k_started(*_args, **_kwargs):
-        raise RuntimeError("stop after shared goed2k launch")
+    def fail_after_ed2k_server_started(*_args, **_kwargs):
+        raise RuntimeError("stop after shared ED2K harness launch")
 
-    monkeypatch.setattr(module.rust_client, "write_rust_profile", fail_after_goed2k_started)
+    monkeypatch.setattr(module.rust_client, "write_rust_profile", fail_after_ed2k_server_started)
 
     exit_code = module.main(
         [

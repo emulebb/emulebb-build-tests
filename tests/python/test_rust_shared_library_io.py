@@ -114,23 +114,11 @@ def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> No
 
 
 @pytest.mark.unit
-def test_lan_startup_server_publication_filter_requires_target_endpoint() -> None:
-    payload = {
-        "data": [
-            {
-                "hash": "target",
-                "endpoints": [{"host": "192.0.2.10", "port": 47002}],
-            },
-            {
-                "hash": "seed",
-                "endpoints": [{"host": "192.0.2.10", "port": 47001}],
-            },
-        ]
-    }
+def test_lan_startup_uses_rust_ed2k_server_cargo_manifest() -> None:
+    source = Path(subject.__file__).read_text(encoding="utf-8")
 
-    assert subject._server_target_publications(
-        payload, host="192.0.2.10", port=47002
-    ) == [payload["data"][0]]
+    assert 'paths.workspace_root / "repos" / "ed2k-server"' in source
+    assert 'server_repo / "Cargo.toml"' in source
 
 
 @pytest.mark.unit
