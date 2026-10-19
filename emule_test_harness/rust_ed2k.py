@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -10,11 +13,327 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .ed2k_server import UnsupportedEd2kServerCapability
+from .ed2k_server import Ed2kServerControl, ManagedProcess, UnsupportedEd2kServerCapability
+from .multi_client import resolve_manifest_repo
+from .paths import get_workspace_output_root, reject_windows_temp_path
 from .script_modules import load_script_module
 
 
 live_common = load_script_module("emule_live_profile_common_rust_ed2k", "emule-live-profile-common.py")
+RUST_ED2K_SERVER_EXE_ENV = "EMULEBB_TEST_RUST_ED2K_SERVER_EXE"
+RUST_ED2K_WSL_DISTRIBUTION_ENV = "EMULEBB_TEST_WSL_DISTRIBUTION"
+
+
+@dataclass(frozen=True)
+class RustEd2kServerBinary:
+    """Resolved staged Rust server executable and its build result."""
+
+    server_exe: Path
+    build: dict[str, object]
+
+
+@dataclass(frozen=True)
+class RustEd2kServerLaunch:
+    """Result of launching one local Rust ed2k-server instance."""
+
+    process: ManagedProcess
+    admin_base_url: str
+    ed2k_host: str
+    ed2k_port: int
+    server_exe: Path
+    server_dir: Path
+    config_path: Path
+    log_path: Path
+    build: dict[str, object]
+    config: dict[str, object]
+    health: dict[str, Any]
+
+
+def resolve_server_repo(workspace_root: Path, override: str | None) -> Path:
+    """Resolves the managed Rust server repository from the workspace manifest."""
+
+    candidate = Path(override).resolve() if override else resolve_manifest_repo(workspace_root, "ed2k_index_server")
+    if not (candidate / "Cargo.toml").is_file():
+        raise RuntimeError(f"Rust ED2K server repo was not found at '{candidate}'.")
+    return candidate
+
+
+def resolve_server_exe(override: str | None) -> Path:
+    """Resolves the staged Linux Rust server binary under the output root."""
+
+    if override:
+        return Path(override).resolve()
+    return (get_workspace_output_root() / "tools" / "ed2k-server" / "bin" / "ed2k-server").resolve()
+
+
+def env_server_exe_override(env: dict[str, str] | None = None) -> str | None:
+    """Returns the Rust server executable override passed to harness children."""
+
+    value = (env or os.environ).get(RUST_ED2K_SERVER_EXE_ENV, "").strip()
+    return value or None
+
+
+def build_or_skip_server_binary(
+    workspace_root: Path,
+    server_exe: Path,
+    *,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+) -> dict[str, object]:
+    """Builds through emule_workspace unless an explicit staged binary is supplied."""
+
+    reject_windows_temp_path(server_exe.parent, "Rust ED2K server binary directory")
+    if exe_override:
+        if not server_exe.is_file():
+            raise RuntimeError(f"Explicit Rust ED2K server binary was not found: {server_exe}")
+        return {
+            "command": [],
+            "cwd": "",
+            "return_code": 0,
+            "server_exe": str(server_exe),
+            "skipped": True,
+            "reason": "using explicit Rust ED2K server executable",
+        }
+    if repo_override:
+        raise RuntimeError(
+            "Rust --ed2k-server-repo overrides require --ed2k-server-exe; canonical Rust builds are owned by emule_workspace."
+        )
+    resolve_server_repo(workspace_root, None)
+    build_repo = resolve_manifest_repo(workspace_root, "build")
+    command = [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "ed2k-server",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=build_repo,
+        text=True,
+        capture_output=True,
+        timeout=900,
+        check=False,
+    )
+    result = {
+        "command": command,
+        "cwd": str(build_repo),
+        "return_code": completed.returncode,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-4000:],
+        "server_exe": str(server_exe),
+    }
+    if completed.returncode != 0:
+        raise RuntimeError(f"Rust ED2K server build failed: {result!r}")
+    if not server_exe.is_file():
+        raise RuntimeError(f"Rust ED2K server build did not stage the expected binary: {server_exe}")
+    return result
+
+
+def prepare_server_binary(
+    workspace_root: Path,
+    *,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+) -> RustEd2kServerBinary:
+    """Resolves and stages the Linux Rust server binary."""
+
+    effective_override = exe_override or env_server_exe_override()
+    server_exe = resolve_server_exe(effective_override)
+    build = build_or_skip_server_binary(
+        workspace_root,
+        server_exe,
+        repo_override=repo_override,
+        exe_override=effective_override,
+    )
+    return RustEd2kServerBinary(server_exe=server_exe, build=build)
+
+
+def _wsl_command(distribution: str | None, *arguments: str) -> list[str]:
+    command = ["wsl.exe"]
+    if distribution:
+        command.extend(("--distribution", distribution))
+    command.extend(("--", *arguments))
+    return command
+
+
+def wsl_path(path: Path, distribution: str | None = None) -> str:
+    """Translates an existing Windows path into the selected WSL distribution."""
+
+    completed = subprocess.run(
+        _wsl_command(distribution, "wslpath", "-a", "-u", path.resolve().as_posix()),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    translated = completed.stdout.strip()
+    if completed.returncode != 0 or not translated.startswith("/"):
+        raise RuntimeError(f"WSL path translation failed for {path}: {completed.stderr.strip()}")
+    return translated
+
+
+def wsl_ipv4_address(distribution: str | None = None) -> str:
+    """Returns the WSL address selected by its default IPv4 route."""
+
+    completed = subprocess.run(
+        _wsl_command(distribution, "ip", "-j", "-4", "route", "get", "1.1.1.1"),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    try:
+        routes = json.loads(completed.stdout)
+        address = str(routes[0].get("prefsrc") or "") if isinstance(routes, list) and routes else ""
+    except (json.JSONDecodeError, AttributeError):
+        address = ""
+    if completed.returncode != 0 or not address:
+        raise RuntimeError(f"Could not resolve the WSL IPv4 address: {completed.stderr.strip()}")
+    return address
+
+
+@dataclass
+class RustWslProcess:
+    """WSL process proxy with PID-backed Linux process-group signaling."""
+
+    proxy: subprocess.Popen
+    pid_path: Path
+    distribution: str | None = None
+
+    @property
+    def returncode(self) -> int | None:
+        return self.proxy.returncode
+
+    def poll(self) -> int | None:
+        return self.proxy.poll()
+
+    def _signal(self, signal_name: str) -> None:
+        try:
+            linux_pid = int(self.pid_path.read_text(encoding="ascii").strip())
+        except (OSError, ValueError):
+            if self.proxy.poll() is None:
+                self.proxy.terminate()
+            return
+        completed = subprocess.run(
+            _wsl_command(self.distribution, "kill", f"-{signal_name}", "--", f"-{linux_pid}"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0:
+            subprocess.run(
+                _wsl_command(self.distribution, "kill", f"-{signal_name}", str(linux_pid)),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+
+    def terminate(self) -> None:
+        self._signal("TERM")
+
+    def kill(self) -> None:
+        self._signal("KILL")
+        if self.proxy.poll() is None:
+            self.proxy.kill()
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.proxy.wait(timeout=timeout)
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def start_server(
+    server_exe: Path,
+    config_path: Path,
+    log_path: Path,
+    pid_path: Path,
+    *,
+    distribution: str | None = None,
+) -> ManagedProcess:
+    """Starts the Linux Rust server directly or through a managed WSL process."""
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = log_path.open("wb", buffering=0)
+    try:
+        if _is_windows_host():
+            linux_exe = wsl_path(server_exe, distribution)
+            linux_config = wsl_path(config_path, distribution)
+            linux_pid = wsl_path(pid_path, distribution)
+            helper_path = Path(__file__).with_name("wsl_managed_process.py")
+            linux_helper = wsl_path(helper_path, distribution)
+            proxy = subprocess.Popen(
+                _wsl_command(
+                    distribution,
+                    "setsid",
+                    "--wait",
+                    "python3",
+                    linux_helper,
+                    "--pid-file",
+                    linux_pid,
+                    "--",
+                    linux_exe,
+                    "--config",
+                    linux_config,
+                ),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+            )
+            return RustWslProcess(proxy=proxy, pid_path=pid_path, distribution=distribution)
+        return subprocess.Popen(
+            [str(server_exe), "--config", str(config_path)],
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            cwd=server_exe.parent,
+            start_new_session=True,
+        )
+    finally:
+        log_handle.close()
+
+
+def stop_process(process: ManagedProcess | None, *, timeout_seconds: float = 10.0) -> None:
+    """Stops one direct or WSL Rust server process without leaving descendants."""
+
+    if process is None:
+        return
+    if not isinstance(process, RustWslProcess) and process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout_seconds)
+
+
+def wait_for_admin_health(
+    admin_base_url: str,
+    process: ManagedProcess,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Waits for Rust readiness and fails immediately on an early process exit."""
+
+    def resolve():
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(f"Rust ed2k-server exited before readiness with code {return_code}.")
+        try:
+            payload = admin_request(admin_base_url, "/api/ready", timeout_seconds=2.0)
+        except (OSError, RuntimeError, json.JSONDecodeError):
+            return None
+        if isinstance(payload, dict) and payload.get("ready") is True:
+            return {"ok": True, "data": payload}
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 0.5, "Rust ED2K server admin readiness")
 
 
 def _toml_string(value: str) -> str:
@@ -210,3 +529,137 @@ class RustEd2kServerControl:
     ) -> dict[str, Any]:
         del host, port, timeout_seconds, description
         return self.get_file(file_hash) or {}
+
+
+class RustEd2kServerProvider:
+    """Provider adapter for the upstream-aligned Linux Rust server."""
+
+    name = "rust"
+
+    def prepare_binary(
+        self,
+        workspace_root: Path,
+        *,
+        repo_override: str | None = None,
+        exe_override: str | None = None,
+    ) -> RustEd2kServerBinary:
+        return prepare_server_binary(
+            workspace_root,
+            repo_override=repo_override,
+            exe_override=exe_override,
+        )
+
+    def launch(
+        self,
+        *,
+        workspace_root: Path,
+        server_dir: Path,
+        ed2k_port: int,
+        admin_port: int,
+        admin_secret: str,
+        admin_address: str,
+        ed2k_address: str | None = None,
+        fixture_files: list[dict[str, object]] | None = None,
+        repo_override: str | None = None,
+        exe_override: str | None = None,
+        protocol_obfuscation: bool = True,
+        server_udp: bool = True,
+        packet_trace: bool = False,
+        health_timeout_seconds: float = 30.0,
+    ) -> RustEd2kServerLaunch:
+        del admin_secret, admin_address
+        if fixture_files:
+            raise UnsupportedEd2kServerCapability(
+                "Rust ed2k-server fixtures must be published through ED2K; static catalog seeding is unavailable."
+            )
+        if packet_trace:
+            raise UnsupportedEd2kServerCapability(
+                "Rust ed2k-server structured packet tracing is not implemented yet."
+            )
+        if not server_udp:
+            raise UnsupportedEd2kServerCapability("Rust ed2k-server always enables its protocol UDP sockets.")
+        if not ed2k_address:
+            raise ValueError("ed2k_address must identify the client-side harness interface.")
+
+        binary = self.prepare_binary(
+            workspace_root,
+            repo_override=repo_override,
+            exe_override=exe_override,
+        )
+        distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
+        if _is_windows_host():
+            advertised_address = wsl_ipv4_address(distribution)
+            listen_address = "0.0.0.0"
+        else:
+            advertised_address = ed2k_address
+            listen_address = ed2k_address
+        server_dir.mkdir(parents=True, exist_ok=True)
+        config_path = server_dir / "config.toml"
+        log_path = server_dir / "server.log"
+        pid_path = server_dir / "server.pid"
+        config = build_server_config(
+            config_path,
+            ed2k_port=ed2k_port,
+            admin_port=admin_port,
+            listen_address=listen_address,
+            advertised_address=advertised_address,
+            protocol_obfuscation=protocol_obfuscation,
+        )
+        process = start_server(
+            binary.server_exe,
+            config_path,
+            log_path,
+            pid_path,
+            distribution=distribution,
+        )
+        admin_base_url = f"http://127.0.0.1:{admin_port}"
+        try:
+            health = wait_for_admin_health(admin_base_url, process, health_timeout_seconds)
+        except Exception as exc:
+            stop_process(process)
+            log_tail = ""
+            if log_path.is_file():
+                log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+            raise RuntimeError(f"Rust ed2k-server failed readiness: {exc}; log_tail={log_tail!r}") from exc
+        return RustEd2kServerLaunch(
+            process=process,
+            admin_base_url=admin_base_url,
+            ed2k_host=advertised_address,
+            ed2k_port=ed2k_port,
+            server_exe=binary.server_exe,
+            server_dir=server_dir,
+            config_path=config_path,
+            log_path=log_path,
+            build=binary.build,
+            config=config,
+            health=health,
+        )
+
+    def control(self, admin_base_url: str, admin_secret: str) -> Ed2kServerControl:
+        del admin_secret
+        return RustEd2kServerControl(admin_base_url)
+
+    def stop_process(self, process: ManagedProcess | None, *, timeout_seconds: float = 10.0) -> None:
+        stop_process(process, timeout_seconds=timeout_seconds)
+
+    def stop_server_processes(self) -> None:
+        distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
+        if _is_windows_host():
+            subprocess.run(
+                _wsl_command(distribution, "pkill", "-x", "ed2k-server"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+            return
+        subprocess.run(
+            ["pkill", "-x", "ed2k-server"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+
+
+RUST_ED2K_PROVIDER = RustEd2kServerProvider()

@@ -23,10 +23,25 @@ class Ed2kServerBinary(Protocol):
     build: dict[str, object]
 
 
+class ManagedProcess(Protocol):
+    """Process operations required for reliable provider cleanup."""
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    def poll(self) -> int | None: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+
 class Ed2kServerLaunch(Ed2kServerBinary, Protocol):
     """Common launch result exposed by every server provider."""
 
-    process: subprocess.Popen
+    process: ManagedProcess
     admin_base_url: str
     ed2k_host: str
     ed2k_port: int
@@ -281,6 +296,10 @@ def resolve_provider(
     requested = requested_provider_name(provider_name, env)
     if requested == GOED2K_PROVIDER.name:
         return GOED2K_PROVIDER
+    if requested == "rust":
+        from .rust_ed2k import RUST_ED2K_PROVIDER
+
+        return RUST_ED2K_PROVIDER
     raise RuntimeError(
-        f"ED2K server provider {requested!r} is unavailable; available providers: {GOED2K_PROVIDER.name}."
+        f"ED2K server provider {requested!r} is unavailable; available providers: {GOED2K_PROVIDER.name}, rust."
     )

@@ -22,9 +22,14 @@ def test_resolve_provider_reads_explicit_environment() -> None:
 
 
 @pytest.mark.unit
-def test_resolve_provider_rejects_unavailable_rust_provider() -> None:
-    with pytest.raises(RuntimeError, match="provider 'rust' is unavailable"):
-        ed2k_server.resolve_provider("rust")
+def test_resolve_provider_loads_rust_provider_lazily() -> None:
+    assert ed2k_server.resolve_provider("rust").name == "rust"
+
+
+@pytest.mark.unit
+def test_resolve_provider_rejects_unknown_provider() -> None:
+    with pytest.raises(RuntimeError, match="provider 'unknown' is unavailable"):
+        ed2k_server.resolve_provider("unknown")
 
 
 @pytest.mark.unit
