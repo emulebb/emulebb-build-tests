@@ -367,6 +367,7 @@ def build_server_config(
             "tcp_port": ed2k_port,
             "listen_ip": listen_address,
             "support_crypt": protocol_obfuscation,
+            "private_highid_probe": True,
         },
         "limits": {
             "max_clients": 1000,
@@ -413,6 +414,7 @@ def build_server_config(
         f"tcp_port = {ed2k_port}",
         f"listen_ip = {_toml_string(listen_address)}",
         f"support_crypt = {str(protocol_obfuscation).lower()}",
+        "private_highid_probe = true",
         "",
         "[limits]",
         "max_clients = 1000",
