@@ -25,7 +25,11 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
+from emule_test_harness.multi_client import (  # noqa: E402
+    CLIENT_IDENTITIES,
+    resolve_harness_client,
+    resolve_stock_emule_client,
+)
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 
@@ -44,7 +48,6 @@ ED2K_LOCAL_PORT_MAX = 49151
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
-CLIENT02 = CLIENT_IDENTITIES["harness"]
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
@@ -68,6 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--client2-app-exe")
+    parser.add_argument("--client2-identity", choices=["harness", "stock_emule"], default="harness")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
@@ -105,12 +109,20 @@ def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
     return (manifest_path.parent / value).resolve()
 
 
-def resolve_client2_app_exe(workspace_root: Path, configuration: str, override: str | None) -> Path:
+def resolve_client2_app_exe(
+    workspace_root: Path,
+    configuration: str,
+    override: str | None,
+    identity_key: str = "harness",
+) -> Path:
     """Resolves the MFC parity peer client executable."""
 
-    availability = resolve_harness_client(workspace_root, configuration, override)
+    if identity_key == "stock_emule":
+        availability = resolve_stock_emule_client(workspace_root, configuration, override)
+    else:
+        availability = resolve_harness_client(workspace_root, configuration, override)
     if not availability.available or availability.executable is None:
-        raise RuntimeError(f"Client2 MFC parity peer executable was not found: {availability.reason}.")
+        raise RuntimeError(f"Client2 {availability.identity.product} executable was not found: {availability.reason}.")
     return availability.executable
 
 
@@ -966,6 +978,7 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the deterministic two-client transfer suite."""
 
     args = parse_args(argv)
+    client2_identity = CLIENT_IDENTITIES[args.client2_identity]
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
@@ -1040,9 +1053,14 @@ def main(argv: list[str] | None = None) -> int:
             profile_seed_dir,
             paths.source_artifacts_dir,
             [],
-            CLIENT02.profile_id,
+            client2_identity.profile_id,
         )
-        client2_app_exe = resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
+        client2_app_exe = resolve_client2_app_exe(
+            paths.workspace_root,
+            args.configuration,
+            args.client2_app_exe,
+            args.client2_identity,
+        )
         configure_client_profile(
             config_dir=Path(client1["config_dir"]),
             app_exe=paths.app_exe,
@@ -1059,7 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
         configure_client_profile(
             config_dir=Path(client2["config_dir"]),
             app_exe=client2_app_exe,
-            nick=CLIENT02.nick,
+            nick=client2_identity.nick,
             tcp_port=ports["client2_tcp"],
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
@@ -1087,9 +1105,9 @@ def main(argv: list[str] | None = None) -> int:
                 "temp_dir": str(client1["temp_dir"]),
                 "preferences": read_preferences_snapshot(Path(client1["config_dir"])),
             },
-            CLIENT02.profile_id: {
-                "client_key": CLIENT02.key,
-                "nick": CLIENT02.nick,
+            client2_identity.profile_id: {
+                "client_key": client2_identity.key,
+                "nick": client2_identity.nick,
                 "profile_base": str(client2["profile_base"]),
                 "config_dir": str(client2["config_dir"]),
                 "incoming_dir": str(client2["incoming_dir"]),
@@ -1124,7 +1142,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["client2_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
-            CLIENT02.nick,
+            client2_identity.nick,
             args.server_connect_timeout_seconds,
         )
         report["checks"]["client2_server_file"] = goed2k.wait_for_server_file(
@@ -1186,7 +1204,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         close_results: dict[str, object] = {}
-        for name, app in ((CLIENT01.profile_id, client1_app), (CLIENT02.profile_id, client2_app)):
+        for name, app in ((CLIENT01.profile_id, client1_app), (client2_identity.profile_id, client2_app)):
             if app is None:
                 continue
             try:

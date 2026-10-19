@@ -187,6 +187,16 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
     assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
 
 
+def test_resolve_client2_app_exe_uses_stock_baseline_identity(tmp_path: Path) -> None:
+    module = load_suite_module()
+    workspace = tmp_path / "workspaces" / "workspace"
+    stock_exe = workspace / "app" / "emulebb-community-baseline" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    stock_exe.parent.mkdir(parents=True)
+    stock_exe.write_bytes(b"")
+
+    assert module.resolve_client2_app_exe(workspace, "Release", None, "stock_emule") == stock_exe.resolve()
+
+
 def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_suite_module()
     availability_checks: list[tuple[int, str | None, bool]] = []
@@ -1074,6 +1084,14 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert module.DEFAULT_FIXTURE_SIZE_BYTES == 132 * 1024 * 1024
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
+    assert args.client2_identity == "harness"
+
+
+def test_client2_identity_accepts_stock_baseline() -> None:
+    module = load_suite_module()
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client2-identity", "stock_emule"])
+
+    assert args.client2_identity == "stock_emule"
 
 
 def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
