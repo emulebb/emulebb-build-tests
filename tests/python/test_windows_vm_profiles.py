@@ -14,8 +14,6 @@ def test_windows_vm_profile_matrix_is_the_profile_authority() -> None:
     assert profiles["package-smoke"]["networkScope"] == "offline"
     assert profiles["package-smoke"]["releasePhase"] == "packaging-provenance"
     assert profiles["package-smoke"]["requiredTargets"] == ["win10", "win11"]
-    assert profiles["local-ed2k-transfer"]["networkScope"] == "lan"
-    assert profiles["local-ed2k-transfer"]["releasePhase"] == "protocol-parity"
     assert profiles["hideme-live-wire"]["networkScope"] == "vpn"
     assert profiles["hideme-live-wire"]["releasePhase"] == "live-wire-release"
     assert profiles["rest-smoke-stress"]["networkScope"] == "offline"

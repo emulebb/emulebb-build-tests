@@ -45,15 +45,6 @@ WINDOWS_VM_PROFILE_SPECS = (
         scenario_id="emulebb.flow.windows-vm.package-smoke.release.v1",
     ),
     WindowsVmProfileSpec(
-        name="local-ed2k-transfer",
-        title="Windows VM local eD2K transfer",
-        network_scope="lan",
-        release_phase="protocol-parity",
-        required_targets=SUPPORTED_TARGETS,
-        result_file_name="local-ed2k-transfer-result.json",
-        scenario_id="emulebb.flow.windows-vm.local-ed2k.transfer.v1",
-    ),
-    WindowsVmProfileSpec(
         name="hideme-live-wire",
         title="Windows VM hide.me live-wire",
         network_scope="vpn",
@@ -175,7 +166,6 @@ WINDOWS_VM_PROFILE_SPECS = (
 WINDOWS_VM_PROFILE_BY_NAME = {spec.name: spec for spec in WINDOWS_VM_PROFILE_SPECS}
 WINDOWS_VM_PROFILE_BY_SCENARIO_ID = {spec.scenario_id: spec for spec in WINDOWS_VM_PROFILE_SPECS}
 SUPPORTED_TEST_PROFILES = tuple(spec.name for spec in WINDOWS_VM_PROFILE_SPECS)
-LOCAL_ED2K_REQUIRED_TARGETS = WINDOWS_VM_PROFILE_BY_NAME["local-ed2k-transfer"].required_targets
 HIDEME_LIVE_REQUIRED_TARGETS = WINDOWS_VM_PROFILE_BY_NAME["hideme-live-wire"].required_targets
 
 

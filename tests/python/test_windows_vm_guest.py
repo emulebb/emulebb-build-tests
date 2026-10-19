@@ -23,25 +23,6 @@ def test_package_smoke_script_contains_guest_checks() -> None:
     assert "UseShellExecute = $false" in script
 
 
-def test_local_ed2k_transfer_script_is_minimal_transport_shim() -> None:
-    script = windows_vm_guest.local_ed2k_transfer_script()
-
-    assert "Ensure-GuestInternet" in script
-    assert "Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.switchName" in script
-    assert "windows_vm_local_ed2k.py" in script
-    assert "vm_guest_profiles.py" in script
-    assert "Invoke-GuestPython" in script
-    assert "guest python failed with exit code" in script
-    assert "2>&1" in script
-    assert "Copy-Item -ToSession" in script
-    assert "Restore-VMSnapshot" in script
-    assert "pythonRoot" not in script
-    assert "Re-run vm-lab prepare" in script
-    assert "/api/v1/shared-files" not in script
-    assert "Get-FileHash" not in script
-    assert "New-NetFirewallRule" not in script
-
-
 def test_hideme_live_wire_script_uses_python_guest_runner_and_visible_vpn() -> None:
     script = windows_vm_guest.hideme_live_wire_script()
 
@@ -110,6 +91,8 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "--profile" in script
     assert "--swarm-tier" in script
     assert "fixtureSizeBytes" in script
+    assert "localSwarmGoed2kServerExe" not in script
+    assert "--ed2k-server-exe" not in script
     assert "Invoke-GuestPython" in script
     assert "PYTHONPATH" in script
     assert "@($guestHarnessRoot, $guestRoot)" in script

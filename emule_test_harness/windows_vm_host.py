@@ -19,7 +19,6 @@ except ModuleNotFoundError:
 LOCAL_SWARM_VM_PROFILES = tuple(REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE)
 GUEST_SCRIPT_FACTORIES = {
     "package-smoke": "package_smoke_script",
-    "local-ed2k-transfer": "local_ed2k_transfer_script",
     "hideme-live-wire": "hideme_live_wire_script",
     "rest-smoke-stress": "profile_smoke_script",
     "crash-dump-smoke": "profile_smoke_script",
@@ -34,7 +33,6 @@ GUEST_SCRIPT_FACTORIES = {
     **{profile: "profile_smoke_script" for profile in LOCAL_SWARM_VM_PROFILES},
 }
 GUEST_RUNNER_FILES = {
-    "local-ed2k-transfer": "windows_vm_local_ed2k.py",
     "hideme-live-wire": "windows_vm_hideme_live.py",
     "rest-smoke-stress": "windows_vm_profile_smoke.py",
     "crash-dump-smoke": "windows_vm_profile_smoke.py",
@@ -91,10 +89,6 @@ LOCAL_SWARM_PAYLOAD_SCRIPT_FILES = tuple(
         )
     )
 )
-LOCAL_ED2K_TARGET_ENDPOINTS = {
-    "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},
-    "win11": {"target": "win11", "tcpPort": 4762, "udpPort": 4772, "restPort": 4711},
-}
 HIDEME_LIVE_TARGET_ENDPOINTS = {
     "win10": {"target": "win10", "tcpPort": 4862, "udpPort": 4872, "restPort": 4711},
     "win11": {"target": "win11", "tcpPort": 4962, "udpPort": 4972, "restPort": 4711},
@@ -156,12 +150,6 @@ def write_local_swarm_payload_inputs(tests_repo_root: str | Path, destination: s
         Path(destination),
         local_package_install=local_package_install,
     )
-
-
-def build_local_ed2k_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:
-    """Returns stable per-target ports for the local ED2K VM scenario."""
-
-    return _target_payloads(LOCAL_ED2K_TARGET_ENDPOINTS, vm_names)
 
 
 def build_hideme_live_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:

@@ -161,31 +161,6 @@
               "description": "Native server input, server socket, server.met persistence, and IP filter update seams cover current nonblocking release ownership."
             }
           ]
-        },
-        {
-          "id": "emulebb.flow.windows-vm.local-ed2k.transfer.v1",
-          "title": "Windows VM local eD2K transfer proof",
-          "phase": "protocol-parity",
-          "flowCategory": "windows-vm",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile local-ed2k-transfer --release-version 0.7.3-rc.3 --skip-build",
-          "localInputs": [
-            "vm-lab.local.json",
-            "Windows 10/11 Hyper-V clean checkpoints"
-          ],
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": false,
-              "base": "workspace-output",
-              "glob": "reports/windows-vm/*/windows-vm-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/profile": "local-ed2k-transfer"
-              }
-            }
-          ]
         }
       ]
     },

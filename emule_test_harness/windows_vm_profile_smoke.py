@@ -75,7 +75,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-size-bytes", type=int, default=25 * 1024 * 1024)
     parser.add_argument("--swarm-tier", type=int, choices=LOCAL_SWARM_TIERS, default=DEFAULT_LOCAL_SWARM_TIER)
     parser.add_argument("--harness-root", type=Path)
-    parser.add_argument("--ed2k-server-exe", type=Path)
     parser.add_argument("--client2-app-exe", type=Path)
     parser.add_argument("--prowlarr-exe", type=Path)
     parser.add_argument("--radarr-exe", type=Path)
@@ -334,7 +333,6 @@ def run_profile_checks(
                 args.root,
                 app_root,
                 artifacts,
-                ed2k_server_exe=args.ed2k_server_exe,
                 client2_app_exe=args.client2_app_exe,
                 prowlarr_exe=args.prowlarr_exe,
                 radarr_exe=args.radarr_exe,
@@ -502,7 +500,6 @@ def local_swarm_plan_check(
     root: Path,
     app_root: Path,
     artifacts: Path,
-    ed2k_server_exe: Path | None = None,
     client2_app_exe: Path | None = None,
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
@@ -593,8 +590,6 @@ def local_swarm_plan_check(
             argv.append("--godzilla-cpu-profile")
         if bool(tier_options["fail_fast"]):
             argv.append("--fail-fast")
-        if ed2k_server_exe is not None:
-            argv.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
         if client2_app_exe is not None:
             argv.extend(["--client2-app-exe", str(client2_app_exe.resolve())])
         if prowlarr_exe is not None:
@@ -677,7 +672,6 @@ def local_swarm_plan_check(
                 "commands": commands,
                 "tierOptions": dict(tier_options),
                 "lanBindAddr": lan_bind_addr,
-                "ed2kServerExe": str(ed2k_server_exe) if ed2k_server_exe is not None else "",
                 "client2AppExe": str(client2_app_exe) if client2_app_exe is not None else "",
                 "prowlarrExe": str(prowlarr_exe) if prowlarr_exe is not None else "",
                 "radarrExe": str(radarr_exe) if radarr_exe is not None else "",
