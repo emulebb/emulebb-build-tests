@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 from typing import Any, Protocol
@@ -302,6 +303,17 @@ def require_published_endpoint(file_row: dict[str, object], *, port: int) -> dic
     if not host:
         raise RuntimeError(f"Published source endpoint on port {port} has no host: {endpoint!r}")
     return endpoint
+
+
+def resolve_route_bind_ip(server_host: str, server_port: int) -> str:
+    """Returns the non-loopback IPv4 source selected for the managed server route."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((server_host, server_port))
+        address = str(probe.getsockname()[0])
+    if not address or address == "0.0.0.0" or address.startswith("127."):
+        raise RuntimeError(f"Managed ED2K server route resolved to an invalid client bind address: {address!r}")
+    return address
 
 
 def wait_for_server_file_endpoint(
