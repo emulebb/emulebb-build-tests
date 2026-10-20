@@ -1254,7 +1254,7 @@
   "schemaVersion": "emulebb-build-tests.protocol-oracle-golden.v1",
   "stockOracle": {
     "baselinePath": "workspaces/workspace/app/emulebb-community-baseline",
-    "baselineRevision": "953efc05b377f75152d5b8beaf93553d69ce9dca",
+    "baselineRevision": "f808d546cc12aeb64aaae5017f4f06c89e1cb9da",
     "derivation": "Canonical synthetic fixtures transcribed from the pinned community/stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
     "requiredCoverageCount": 97
   }
