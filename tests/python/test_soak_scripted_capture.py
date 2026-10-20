@@ -778,6 +778,48 @@ def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     assert failures == []
 
 
+def test_rust_teardown_confirms_shutdown_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_capture()
+
+    class Process:
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    class LogHandle:
+        @staticmethod
+        def close() -> None:
+            return None
+
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        module,
+        "_http",
+        lambda *args, **kwargs: calls.append((*args, kwargs)),
+    )
+
+    failures = module._teardown_client(
+        client="rust",
+        handles={"process": Process(), "logHandle": LogHandle()},
+        mods={},
+        base_url="http://192.0.2.1:1",
+        api_key="private",
+        sleep=lambda _seconds: None,
+    )
+
+    assert failures == []
+    assert calls == [
+        (
+            "http://192.0.2.1:1",
+            "private",
+            "/api/v1/app/shutdown",
+            "POST",
+            {"confirmShutdown": True},
+            {"timeout": 5.0},
+        )
+    ]
+
+
 def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
