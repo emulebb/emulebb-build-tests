@@ -271,6 +271,17 @@ def test_rust_protocol_cases_materialize_run_specific_profile_seed() -> None:
     assert "harness-seed-config" in script_text
 
 
+def test_rust_protocol_cases_separate_bind_server_and_peer_addresses() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "ed2k_server_address = ed2k_server.ed2k_host" in script_text
+    assert "server_address=ed2k_server_address" in script_text
+    assert "address=ed2k_server_address" in script_text
+    assert "ed2k_harness.require_published_endpoint(" in script_text
+    assert "expected_ip=p2p_address" not in script_text
+
+
 def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     module = load_suite_module()
     case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
