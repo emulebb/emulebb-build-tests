@@ -100,6 +100,9 @@ def test_protocol_cases_reuse_shared_ed2k_harness_launcher() -> None:
     assert "ed2k_harness.prepare_ed2k_server_binary(" in script_text
     assert "ed2k_harness.launch_ed2k_server(" in script_text
     assert "ed2k_address=p2p_address" in script_text
+    assert "server_address = ed2k_server.ed2k_host" in script_text
+    assert script_text.count("address=server_address") == 2
+    assert "network[\"ed2k_server_address\"] = server_address" in script_text
     assert "ed2k_harness.resolve_ed2k_server_exe(" not in script_text
     assert "ed2k_harness.build_ed2k_server_binary(" not in script_text
     assert "ed2k_harness.start_ed2k_server(" not in script_text
