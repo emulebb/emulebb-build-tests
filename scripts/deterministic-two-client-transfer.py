@@ -977,6 +977,27 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     return snapshot
 
 
+def require_published_endpoint(file_row: dict[str, object], *, port: int) -> dict[str, object]:
+    """Returns the unique server-observed source endpoint using one client port."""
+
+    endpoints = file_row.get("endpoints")
+    rows = endpoints if isinstance(endpoints, list) else []
+    matches = [
+        endpoint
+        for endpoint in rows
+        if isinstance(endpoint, dict) and int(endpoint.get("port") or 0) == port
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected one published source endpoint on port {port}, found {len(matches)}: {rows!r}"
+        )
+    endpoint = dict(matches[0])
+    host = str(endpoint.get("host") or "")
+    if not host:
+        raise RuntimeError(f"Published source endpoint on port {port} has no host: {endpoint!r}")
+    return endpoint
+
+
 def recycle_publisher(
     *,
     app,
@@ -1229,18 +1250,18 @@ def main(argv: list[str] | None = None) -> int:
             client2_identity.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["client2_server_file"] = server_control.wait_for_file(
+        published_file = server_control.wait_for_file(
             transfer_hash,
             args.server_publish_timeout_seconds,
         )
+        report["checks"]["client2_server_file"] = published_file
         if args.verify_source_lifecycle:
             current_phase = "client2_source_lifecycle_initial_endpoint"
-            initial_endpoint = server_control.wait_for_file_endpoint(
-                transfer_hash,
-                p2p_address,
-                ports["client2_tcp"],
-                args.server_publish_timeout_seconds,
+            source_endpoint = require_published_endpoint(
+                published_file,
+                port=ports["client2_tcp"],
             )
+            report["network"]["client2_server_observed_address"] = source_endpoint["host"]
             current_phase = "client2_source_lifecycle_reconnect"
             client2_app, lifecycle = recycle_publisher(
                 app=client2_app,
@@ -1250,7 +1271,7 @@ def main(argv: list[str] | None = None) -> int:
                 api_key=args.api_key,
                 client_nick=client2_identity.nick,
                 transfer_hash=transfer_hash,
-                endpoint_host=p2p_address,
+                endpoint_host=str(source_endpoint["host"]),
                 endpoint_port=ports["client2_tcp"],
                 server_control=server_control,
                 rest_ready_timeout_seconds=args.rest_ready_timeout_seconds,
@@ -1261,7 +1282,8 @@ def main(argv: list[str] | None = None) -> int:
                 "enabled": True,
                 "initial": {
                     "connected": report["checks"]["client2_server_client"],
-                    "published": initial_endpoint,
+                    "published": published_file,
+                    "endpoint": source_endpoint,
                 },
                 **lifecycle,
             }
