@@ -32,3 +32,38 @@ def test_resolve_provider_rejects_unknown_provider() -> None:
 def test_resolve_provider_rejects_retired_and_unknown_providers(provider_name: str) -> None:
     with pytest.raises(RuntimeError, match="available provider: rust"):
         ed2k_server.resolve_provider(provider_name)
+
+
+@pytest.mark.unit
+def test_require_published_endpoint_uses_server_observed_host() -> None:
+    endpoint = ed2k_server.require_published_endpoint(
+        {
+            "endpoints": [
+                {
+                    "host": "172.17.128.1",
+                    "port": 4662,
+                    "user_hash": "AA" * 16,
+                }
+            ]
+        },
+        port=4662,
+    )
+
+    assert endpoint["host"] == "172.17.128.1"
+    assert endpoint["port"] == 4662
+
+
+@pytest.mark.unit
+def test_require_published_endpoint_rejects_missing_or_ambiguous_port() -> None:
+    with pytest.raises(RuntimeError, match="found 0"):
+        ed2k_server.require_published_endpoint({"endpoints": []}, port=4662)
+    with pytest.raises(RuntimeError, match="found 2"):
+        ed2k_server.require_published_endpoint(
+            {
+                "endpoints": [
+                    {"host": "192.0.2.10", "port": 4662},
+                    {"host": "192.0.2.11", "port": 4662},
+                ]
+            },
+            port=4662,
+        )

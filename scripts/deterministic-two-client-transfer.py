@@ -1032,27 +1032,6 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     return snapshot
 
 
-def require_published_endpoint(file_row: dict[str, object], *, port: int) -> dict[str, object]:
-    """Returns the unique server-observed source endpoint using one client port."""
-
-    endpoints = file_row.get("endpoints")
-    rows = endpoints if isinstance(endpoints, list) else []
-    matches = [
-        endpoint
-        for endpoint in rows
-        if isinstance(endpoint, dict) and int(endpoint.get("port") or 0) == port
-    ]
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"Expected one published source endpoint on port {port}, found {len(matches)}: {rows!r}"
-        )
-    endpoint = dict(matches[0])
-    host = str(endpoint.get("host") or "")
-    if not host:
-        raise RuntimeError(f"Published source endpoint on port {port} has no host: {endpoint!r}")
-    return endpoint
-
-
 def require_known_met_fixture(
     known_met_path: Path,
     *,
@@ -1711,7 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["client2_server_file"] = published_file
         if args.verify_source_lifecycle and args.client2_identity not in {"stock_emule", "amule"}:
             current_phase = "client2_source_lifecycle_initial_endpoint"
-            source_endpoint = require_published_endpoint(
+            source_endpoint = ed2k_server.require_published_endpoint(
                 published_file,
                 port=ports["client2_tcp"],
             )

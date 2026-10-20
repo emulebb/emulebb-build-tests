@@ -283,6 +283,27 @@ def wait_for_server_file(
     )
 
 
+def require_published_endpoint(file_row: dict[str, object], *, port: int) -> dict[str, object]:
+    """Returns the unique server-observed source endpoint using one client port."""
+
+    endpoints = file_row.get("endpoints")
+    rows = endpoints if isinstance(endpoints, list) else []
+    matches = [
+        endpoint
+        for endpoint in rows
+        if isinstance(endpoint, dict) and int(endpoint.get("port") or 0) == port
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected one published source endpoint on port {port}, found {len(matches)}: {rows!r}"
+        )
+    endpoint = dict(matches[0])
+    host = str(endpoint.get("host") or "")
+    if not host:
+        raise RuntimeError(f"Published source endpoint on port {port} has no host: {endpoint!r}")
+    return endpoint
+
+
 def wait_for_server_file_endpoint(
     admin_base_url: str,
     admin_secret: str,
