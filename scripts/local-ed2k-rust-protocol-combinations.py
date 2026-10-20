@@ -374,7 +374,7 @@ def wait_for_rust_search_result_by_name(
                 for result in items:
                     if not isinstance(result, dict):
                         continue
-                    result_name = str(result.get("name") or "")
+                    result_name = str(result.get("displayName") or result.get("name") or "")
                     result_size = int(result.get("size") or result.get("sizeBytes") or 0)
                     result_hash = str(result.get("hash") or "").lower()
                     if result_name == expected_name and result_size == expected_size and len(result_hash) == 32:
