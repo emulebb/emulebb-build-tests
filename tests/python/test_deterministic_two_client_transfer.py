@@ -76,6 +76,43 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
 
+def test_require_published_endpoint_uses_server_observed_host() -> None:
+    module = load_suite_module()
+
+    endpoint = module.require_published_endpoint(
+        {
+            "endpoints": [
+                {
+                    "host": "172.17.128.1",
+                    "port": 4662,
+                    "user_hash": "AA" * 16,
+                }
+            ]
+        },
+        port=4662,
+    )
+
+    assert endpoint["host"] == "172.17.128.1"
+    assert endpoint["port"] == 4662
+
+
+def test_require_published_endpoint_rejects_missing_or_ambiguous_port() -> None:
+    module = load_suite_module()
+
+    with pytest.raises(RuntimeError, match="found 0"):
+        module.require_published_endpoint({"endpoints": []}, port=4662)
+    with pytest.raises(RuntimeError, match="found 2"):
+        module.require_published_endpoint(
+            {
+                "endpoints": [
+                    {"host": "192.0.2.10", "port": 4662},
+                    {"host": "192.0.2.11", "port": 4662},
+                ]
+            },
+            port=4662,
+        )
+
+
 def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
     assert ed2k_harness.env_ed2k_server_exe_override({ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}) is None
