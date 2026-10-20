@@ -149,7 +149,7 @@ def test_resolve_amule_client_requires_staged_runtime_and_control(tmp_path: Path
     assert available.available is True
     assert available.executable == amuled_exe.resolve()
     assert available.control_executable == amulecmd_exe.resolve()
-    assert available.deterministic_transfer_adapter is False
+    assert available.deterministic_transfer_adapter is True
     assert available.source_repo == amule_repo.resolve()
     assert available.source_revision == "b" * 40
     assert available.as_report()["source_revision"] == "b" * 40

@@ -365,7 +365,7 @@ def resolve_amule_client(
         executable=executable,
         reason=reason,
         launch_adapter="amule-ec",
-        deterministic_transfer_adapter=False,
+        deterministic_transfer_adapter=available,
         control_executable=control_executable,
         source_repo=root,
         source_revision=git_head_revision(root),

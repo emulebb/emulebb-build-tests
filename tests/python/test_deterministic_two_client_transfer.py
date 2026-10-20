@@ -247,8 +247,15 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     module = load_suite_module()
     availability_checks: list[tuple[int, str | None, bool]] = []
 
-    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+    def fake_is_port_available(
+        port: int,
+        *,
+        host: str | None = None,
+        udp: bool = False,
+        allow_loopback: bool = False,
+    ) -> bool:
         availability_checks.append((port, host, udp))
+        assert allow_loopback is (host == "127.0.0.1")
         return True
 
     monkeypatch.setattr(module, "is_port_available", fake_is_port_available)
@@ -267,13 +274,18 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert ports["client1_udp"] == 6206
     assert ports["client2_tcp"] == 6207
     assert ports["client2_udp"] == 6208
-    assert all(host == "172.24.112.1" for _port, host, _udp in availability_checks)
+    assert ports["client2_ec"] == 6209
+    assert all(
+        host == ("127.0.0.1" if port == ports["client2_ec"] else "172.24.112.1")
+        for port, host, _udp in availability_checks
+    )
     assert availability_checks[:2] == [
         (6200, "172.24.112.1", False),
         (6204, "172.24.112.1", True),
     ]
     assert (6206, "172.24.112.1", True) in availability_checks
     assert (6208, "172.24.112.1", True) in availability_checks
+    assert (6209, "127.0.0.1", False) in availability_checks
 
 
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
@@ -994,6 +1006,156 @@ def test_client2_identity_accepts_stock_baseline() -> None:
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client2-identity", "stock_emule"])
 
     assert args.client2_identity == "stock_emule"
+
+
+def test_client2_identity_accepts_amule_control() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "amule",
+            "--client2-control-exe",
+            "amulecmd.exe",
+        ]
+    )
+
+    assert args.client2_identity == "amule"
+    assert args.client2_control_exe == "amulecmd.exe"
+
+
+def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    fixture = tmp_path / "fixture.bin"
+    fixture.write_bytes(b"fixture")
+    calls: list[tuple[object, ...]] = []
+
+    class FakeControl:
+        def wait_for_client_shared_files(self, nick, minimum, timeout):
+            calls.append(("shared_files", nick, minimum, timeout))
+            return {"client_name": nick, "ip": "172.17.128.1", "shared_files": 1}
+
+        def wait_for_file(self, file_hash, timeout):
+            calls.append(("file", file_hash, timeout))
+            return {"hash": file_hash, "sources": 1}
+
+        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
+            calls.append(("endpoint", file_hash, host, port, timeout, description))
+            return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
+
+    monkeypatch.setattr(
+        module.amule_client,
+        "wait_for_control",
+        lambda control, **kwargs: calls.append(("control", control, kwargs)) or {"ready": True},
+    )
+    monkeypatch.setattr(
+        module.amule_client,
+        "wait_for_shared_file_hash",
+        lambda control, **kwargs: calls.append(("shared", control, kwargs)) or {"hash": "ab" * 16},
+    )
+
+    link, observation = module.observe_amule_publisher(
+        control_exe=tmp_path / "amulecmd.exe",
+        ec_port=4712,
+        ec_password="secret",
+        client_nick="cl-amule-007",
+        fixture_file=fixture,
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        publish_timeout_seconds=30.0,
+    )
+
+    assert link == "ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/"
+    assert observation["observed_host"] == "172.17.128.1"
+    assert observation["published"]["sources"] == 1
+    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "endpoint"]
+
+
+def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    old_app = object()
+    new_app = object()
+    fixture = tmp_path / "fixture.bin"
+    fixture.write_bytes(b"fixture")
+    calls: list[tuple[object, ...]] = []
+    file_hash = "ab" * 16
+    initial = {"shared": {"hash": file_hash}, "observed_host": "172.17.128.1"}
+
+    class FakeControl:
+        def wait_for_client_absent(self, nick, timeout):
+            calls.append(("client_absent", nick, timeout))
+            return {"absent": True}
+
+        def wait_for_file_endpoint_absent(self, hash_value, host, port, timeout):
+            calls.append(("endpoint_absent", hash_value, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_client_shared_files(self, nick, minimum, timeout):
+            calls.append(("shared_files", nick, minimum, timeout))
+            return {"client_name": nick, "shared_files": 1}
+
+        def wait_for_file(self, hash_value, timeout):
+            calls.append(("file", hash_value, timeout))
+            return {"hash": hash_value, "sources": 1}
+
+        def wait_for_file_endpoint(self, hash_value, host, port, timeout, description):
+            calls.append(("endpoint", hash_value, host, port, timeout, description))
+            return {"hash": hash_value, "endpoints": [{"host": host, "port": port}]}
+
+    monkeypatch.setattr(
+        module,
+        "observe_amule_publisher",
+        lambda **kwargs: calls.append(("observe", kwargs))
+        or ("ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/", initial),
+    )
+    monkeypatch.setattr(
+        module.amule_client,
+        "shutdown_daemon",
+        lambda app, control, **kwargs: calls.append(("shutdown", app, control, kwargs)) or {"return_code": 0},
+    )
+    monkeypatch.setattr(
+        module.amule_client,
+        "launch_daemon",
+        lambda daemon, config: calls.append(("launch", daemon, config)) or new_app,
+    )
+    monkeypatch.setattr(
+        module.amule_client,
+        "wait_for_control",
+        lambda control, **kwargs: calls.append(("control", control, kwargs)) or {"ready": True},
+    )
+
+    relaunched, link, report = module.recycle_amule_publisher(
+        app=old_app,
+        daemon_exe=tmp_path / "amuled.exe",
+        control_exe=tmp_path / "amulecmd.exe",
+        config_dir=tmp_path / "config",
+        ec_port=4712,
+        ec_password="secret",
+        client_nick="cl-amule-007",
+        fixture_file=fixture,
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        withdraw_timeout_seconds=20.0,
+        publish_timeout_seconds=30.0,
+    )
+
+    assert relaunched is new_app
+    assert link.endswith("|ABABABABABABABABABABABABABABABAB|/")
+    assert report["required_by_adapter"] is False
+    assert report["withdrawn"]["client"]["absent"] is True
+    assert report["republished"]["file"]["sources"] == 1
+    assert [call[0] for call in calls] == [
+        "observe",
+        "shutdown",
+        "client_absent",
+        "endpoint_absent",
+        "launch",
+        "control",
+        "shared_files",
+        "file",
+        "endpoint",
+    ]
 
 
 def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
