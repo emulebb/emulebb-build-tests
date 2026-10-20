@@ -276,8 +276,11 @@ def test_rust_protocol_cases_separate_bind_server_and_peer_addresses() -> None:
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert "ed2k_server_address = ed2k_server.ed2k_host" in script_text
+    assert "client_p2p_address = ed2k_harness.resolve_route_bind_ip(" in script_text
     assert "server_address=ed2k_server_address" in script_text
     assert "address=ed2k_server_address" in script_text
+    assert "p2p_bind_addr=client_p2p_address" in script_text
+    assert "p2p_bind_ip=client_p2p_address" in script_text
     assert "ed2k_harness.require_published_endpoint(" in script_text
     assert "expected_ip=p2p_address" not in script_text
 
