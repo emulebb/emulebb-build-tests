@@ -382,29 +382,6 @@ def test_choose_extra_port_uses_bounded_harness_range_allocator(monkeypatch) -> 
     assert used_ports == {21000, 21001, 21002}
 
 
-def test_resolve_route_bind_ip_uses_managed_server_route(monkeypatch) -> None:
-    module = load_suite_module()
-    calls: list[tuple[str, int]] = []
-
-    class FakeSocket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def connect(self, endpoint):
-            calls.append(endpoint)
-
-        def getsockname(self):
-            return ("172.17.128.1", 50000)
-
-    monkeypatch.setattr(module.socket, "socket", lambda *_args: FakeSocket())
-
-    assert module.resolve_route_bind_ip("172.17.142.32", 4661) == "172.17.128.1"
-    assert calls == [("172.17.142.32", 4661)]
-
-
 def test_local_kad_diagnostics_audit_rejects_nonlocal_contacts(tmp_path: Path) -> None:
     module = load_suite_module()
     rust_dir = tmp_path / "rust"
@@ -874,7 +851,7 @@ def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
         )
 
     monkeypatch.setattr(module.ed2k_harness, "launch_ed2k_server", fake_launch_ed2k_server)
-    monkeypatch.setattr(module, "resolve_route_bind_ip", lambda _host, _port: "172.17.128.1")
+    monkeypatch.setattr(module.ed2k_harness, "resolve_route_bind_ip", lambda _host, _port: "172.17.128.1")
     monkeypatch.setattr(module.ed2k_harness, "stop_process", lambda process: calls["stopped"].append(process))
     monkeypatch.setattr(module.rust_client, "stop_process_tree", lambda process: calls.setdefault("rust_stop", process))
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.10")

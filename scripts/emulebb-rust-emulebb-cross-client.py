@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -100,17 +99,6 @@ def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = F
     candidate = dtt.choose_available_local_port(lan_bind_addr, used_ports, udp=udp)
     used_ports.add(candidate)
     return candidate
-
-
-def resolve_route_bind_ip(server_host: str, server_port: int) -> str:
-    """Returns the non-loopback IPv4 source selected for the managed server route."""
-
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.connect((server_host, server_port))
-        address = str(probe.getsockname()[0])
-    if not address or address == "0.0.0.0" or address.startswith("127."):
-        raise RuntimeError(f"Managed ED2K server route resolved to an invalid client bind address: {address!r}")
-    return address
 
 
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None) -> dict[str, object]:
@@ -1157,7 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
         admin_base_url = ed2k_server.admin_base_url
         server_address = ed2k_server.ed2k_host
         server_endpoint = f"{server_address}:{ed2k_server.ed2k_port}"
-        client_p2p_address = resolve_route_bind_ip(server_address, ed2k_server.ed2k_port)
+        client_p2p_address = ed2k_harness.resolve_route_bind_ip(server_address, ed2k_server.ed2k_port)
         report["network"]["server_endpoint"] = server_endpoint
         report["network"]["client_p2p_address"] = client_p2p_address
         report["checks"]["server_build"] = ed2k_server.build

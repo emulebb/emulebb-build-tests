@@ -67,3 +67,26 @@ def test_require_published_endpoint_rejects_missing_or_ambiguous_port() -> None:
             },
             port=4662,
         )
+
+
+@pytest.mark.unit
+def test_resolve_route_bind_ip_uses_managed_server_route(monkeypatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def connect(self, endpoint):
+            calls.append(endpoint)
+
+        def getsockname(self):
+            return ("172.17.128.1", 50000)
+
+    monkeypatch.setattr(ed2k_server.socket, "socket", lambda *_args: FakeSocket())
+
+    assert ed2k_server.resolve_route_bind_ip("172.17.142.32", 4661) == "172.17.128.1"
+    assert calls == [("172.17.142.32", 4661)]
