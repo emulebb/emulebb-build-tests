@@ -232,11 +232,12 @@ def run_protocol_case(
 
     try:
         ports = dtt.choose_distinct_ports(args.lan_bind_addr)
-        report["network"] = {
+        network = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
             "ports": ports,
         }
+        report["network"] = network
 
         server_dir = case_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
@@ -254,6 +255,8 @@ def run_protocol_case(
         )
         server_process = ed2k_server.process
         admin_base_url = ed2k_server.admin_base_url
+        server_address = ed2k_server.ed2k_host
+        network["ed2k_server_address"] = server_address
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
 
@@ -301,7 +304,7 @@ def run_protocol_case(
         for profile in (client1, client2):
             dtt.write_server_met(
                 Path(profile["config_dir"]) / "server.met",
-                address=p2p_address,
+                address=server_address,
                 port=ports["ed2k_tcp"],
                 name="emulebb-local-e2e",
             )
@@ -373,7 +376,7 @@ def run_protocol_case(
         report["checks"]["client1_server_connect"] = dtt.add_and_connect_server(
             base_url,
             args.api_key,
-            address=p2p_address,
+            address=server_address,
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
