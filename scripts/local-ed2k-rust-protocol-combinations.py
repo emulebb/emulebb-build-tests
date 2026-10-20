@@ -144,6 +144,12 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info["name"]))
 
 
+def rust_transfer_display_name(transfer: dict[str, object]) -> str:
+    """Returns the canonical transfer name across current and legacy REST payloads."""
+
+    return str(transfer.get("displayName") or transfer.get("name") or "")
+
+
 def client_connect_options(case: protocol_matrix.ProtocolCase) -> int:
     """Returns the peer crypt bits represented by one protocol-matrix case."""
 
@@ -950,14 +956,15 @@ def run_protocol_case(
             f"/api/v1/transfers/{hash_only_hash}",
             args.api_key,
         )
-        if hash_only_transfer.get("name") != hash_only_fixture_file.name:
+        hash_only_display_name = rust_transfer_display_name(hash_only_transfer)
+        if hash_only_display_name != hash_only_fixture_file.name:
             raise RuntimeError("Rust hash-only transfer did not recover the canonical file name.")
         if int(hash_only_transfer.get("sizeBytes") or 0) != HASH_ONLY_FIXTURE_SIZE_BYTES:
             raise RuntimeError("Rust hash-only transfer did not recover the canonical file size.")
         report["checks"]["rust_hash_only_transfer_metadata"] = {
             "hashOnlyLink": hash_only_link,
             "hash": hash_only_hash,
-            "name": hash_only_transfer.get("name"),
+            "name": hash_only_display_name,
             "sizeBytes": hash_only_transfer.get("sizeBytes"),
             "state": hash_only_transfer.get("state"),
         }
