@@ -285,6 +285,45 @@ def test_rust_protocol_cases_separate_bind_server_and_peer_addresses() -> None:
     assert "expected_ip=p2p_address" not in script_text
 
 
+def test_rust_search_by_name_uses_canonical_display_name(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, str]] = []
+
+    def request_json(_base_url, method, path, _api_key, _body=None):
+        calls.append((method, path))
+        if method == "POST":
+            return {"id": "search-1", "status": "running", "items": []}
+        return {
+            "id": "search-1",
+            "status": "complete",
+            "items": [
+                {
+                    "displayName": "fixture.bin",
+                    "sizeBytes": 1234,
+                    "hash": "00112233445566778899aabbccddeeff",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(module.rust_emulebb, "request_json", request_json)
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    result = module.wait_for_rust_search_result_by_name(
+        "http://127.0.0.1:4711",
+        "secret",
+        query="fixture.bin",
+        expected_name="fixture.bin",
+        expected_size=1234,
+        timeout_seconds=10.0,
+    )
+
+    assert result["transfer_hash"] == "00112233445566778899aabbccddeeff"
+    assert calls == [
+        ("POST", "/api/v1/searches"),
+        ("GET", "/api/v1/searches/search-1?limit=200&offset=0"),
+    ]
+
+
 def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     module = load_suite_module()
     case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
