@@ -66,6 +66,7 @@ def write_rust_profile(
     p2p_bind_ip: str | None = None,
     p2p_bind_interface: str | None = None,
     ed2k_port: int | None = None,
+    ed2k_nickname: str | None = None,
     kad_port: int | None = None,
     server_endpoint: str | None = None,
     server_entry: dict[str, object] | None = None,
@@ -153,6 +154,8 @@ def write_rust_profile(
             raise ValueError("ED2K Rust serverEntry requires host and port.")
     if ed2k_port is not None:
         ed2k_settings["listenPort"] = ed2k_port
+    if ed2k_nickname is not None:
+        ed2k_settings["nickname"] = ed2k_nickname
     if server_endpoint is not None:
         ed2k_settings.update(
             {
@@ -246,6 +249,20 @@ def start_rust_client_executable(executable: Path, profile_dir: Path, output_pat
         raise RuntimeError(f"eMuleBB Rust executable was not found at '{executable}'.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
+    return start_rust_client_executable_with_output(executable, profile_dir, output_handle)
+
+
+def start_rust_client_executable_append(
+    executable: Path,
+    profile_dir: Path,
+    output_path: Path,
+) -> subprocess.Popen[str]:
+    """Restarts a staged `emulebb-rust` executable while preserving its harness log."""
+
+    if not executable.is_file():
+        raise RuntimeError(f"eMuleBB Rust executable was not found at '{executable}'.")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_handle = output_path.open("a", encoding="utf-8")
     return start_rust_client_executable_with_output(executable, profile_dir, output_handle)
 
 

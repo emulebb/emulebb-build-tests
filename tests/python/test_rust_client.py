@@ -64,6 +64,21 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
         assert mode == 0o600
 
 
+def test_write_rust_profile_persists_ed2k_nickname(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        ed2k_nickname="cl-emulebb-rust-005",
+    )
+
+    assert setting_value(profile_dir, "ed2k", "nickname") == "cl-emulebb-rust-005"
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
 def test_private_profile_settings_restrict_existing_file(tmp_path: Path) -> None:
     settings_path = tmp_path / rust_client.RUST_PROFILE_SETTINGS_FILE
@@ -542,3 +557,32 @@ def test_start_rust_client_executable_uses_staged_binary(monkeypatch: pytest.Mon
     assert calls[0]["cwd"] == executable.parent
     assert calls[0]["stdout"].mode == "w"
     calls[0]["stdout"].close()
+
+
+def test_start_rust_client_executable_append_keeps_restart_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return FakeProcess()
+
+    executable = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"exe")
+    output_path = tmp_path / "rust.out"
+    output_path.write_text("first run\n", encoding="utf-8")
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    rust_client.start_rust_client_executable_append(executable, tmp_path / "profile", output_path)
+
+    assert calls[0]["command"] == [str(executable), "--profile", str(tmp_path / "profile")]
+    assert calls[0]["stdout"].mode == "a"
+    calls[0]["stdout"].write("second run\n")
+    calls[0]["stdout"].close()
+    assert output_path.read_text(encoding="utf-8") == "first run\nsecond run\n"
