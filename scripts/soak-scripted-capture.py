@@ -828,10 +828,11 @@ def _teardown_client(
 
     failures: list[tuple[str, Exception]] = []
     if handles is not None and client == "rust" and handles.get("process") is not None:
+        shutdown_error: Exception | None = None
         try:
             _http(base_url, api_key, "/api/v1/app/shutdown", "POST", {}, timeout=5.0)
         except Exception as error:  # noqa: BLE001 - bounded forced stop remains the fallback
-            failures.append(("rust-clean-teardown", error))
+            shutdown_error = error
         try:
             sleep(8.0)
         except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
@@ -839,6 +840,13 @@ def _teardown_client(
         try:
             process = handles["process"]
             if process.poll() is None:
+                failures.append(
+                    (
+                        "rust-clean-teardown",
+                        shutdown_error
+                        or TimeoutError("Rust process remained alive after graceful shutdown."),
+                    )
+                )
                 stop_process_tree(process)
         except Exception as error:  # noqa: BLE001 - preserve and continue safety cleanup
             failures.append(("rust-process-teardown", error))

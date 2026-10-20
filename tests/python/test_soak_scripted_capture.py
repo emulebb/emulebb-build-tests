@@ -743,7 +743,7 @@ def test_mfc_teardown_retains_clean_close_and_forced_kill_failures() -> None:
     assert "private kill detail" not in str(captured.value)
 
 
-def test_rust_teardown_retains_clean_shutdown_failure(
+def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_capture()
@@ -775,9 +775,48 @@ def test_rust_teardown_retains_clean_shutdown_failure(
         sleep=lambda _seconds: None,
     )
 
+    assert failures == []
+
+
+def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+
+    class Process:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    class LogHandle:
+        @staticmethod
+        def close() -> None:
+            return None
+
+    stopped: list[Process] = []
+    monkeypatch.setattr(
+        module,
+        "_http",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("private shutdown detail")
+        ),
+    )
+    monkeypatch.setattr(module, "stop_process_tree", stopped.append)
+
+    process = Process()
+    failures = module._teardown_client(
+        client="rust",
+        handles={"process": process, "logHandle": LogHandle()},
+        mods={},
+        base_url="http://192.0.2.1:1",
+        api_key="private",
+        sleep=lambda _seconds: None,
+    )
+
     assert [(stage, type(error).__name__) for stage, error in failures] == [
         ("rust-clean-teardown", "RuntimeError")
     ]
+    assert stopped == [process]
     assert "private shutdown detail" not in str(module.PostRunSafetyError(failures))
 
 
