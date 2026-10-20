@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -65,9 +66,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--source-withdraw-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--kad-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--rust-upload-limit-kibps", type=int)
     parser.add_argument("--emulebb-upload-limit-kibps", type=int)
     parser.add_argument(
@@ -96,6 +99,17 @@ def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = F
     candidate = dtt.choose_available_local_port(lan_bind_addr, used_ports, udp=udp)
     used_ports.add(candidate)
     return candidate
+
+
+def resolve_route_bind_ip(server_host: str, server_port: int) -> str:
+    """Returns the non-loopback IPv4 source selected for the managed server route."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((server_host, server_port))
+        address = str(probe.getsockname()[0])
+    if not address or address == "0.0.0.0" or address.startswith("127."):
+        raise RuntimeError(f"Managed ED2K server route resolved to an invalid client bind address: {address!r}")
+    return address
 
 
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None) -> dict[str, object]:
@@ -610,6 +624,118 @@ def publish_rust_shared_tree(
     }
 
 
+def recycle_rust_publisher(
+    *,
+    process: subprocess.Popen[str],
+    executable: Path,
+    profile_dir: Path,
+    output_path: Path,
+    base_url: str,
+    api_key: str,
+    client_nick: str,
+    transfer_hash: str,
+    endpoint_port: int,
+    server_control: ed2k_harness.Ed2kServerControl,
+    rest_ready_timeout_seconds: float,
+    connect_timeout_seconds: float,
+    withdraw_timeout_seconds: float,
+    publish_timeout_seconds: float,
+) -> tuple[subprocess.Popen[str], dict[str, object]]:
+    """Cycles one Rust publisher through clean shutdown and same-profile restart."""
+
+    initial_client = server_control.wait_for_client_shared_files(client_nick, 1, publish_timeout_seconds)
+    observed_host = str(initial_client.get("ip") or "")
+    if not observed_host:
+        raise RuntimeError(f"Rust publisher observation has no server-visible IP: {initial_client!r}")
+    initial_file = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
+    initial_endpoint = server_control.wait_for_file_endpoint(
+        transfer_hash,
+        observed_host,
+        endpoint_port,
+        publish_timeout_seconds,
+        "Rust ED2K publisher endpoint publication",
+    )
+
+    shutdown_request = request_json(
+        base_url,
+        "POST",
+        "/api/v1/app/shutdown",
+        api_key,
+        {"confirmShutdown": True},
+    )
+    try:
+        shutdown_return_code = process.wait(timeout=30.0)
+    except subprocess.TimeoutExpired as exc:
+        rust_client.stop_process_tree(process)
+        raise RuntimeError("eMuleBB Rust did not exit after REST shutdown.") from exc
+    if shutdown_return_code != 0:
+        raise RuntimeError(f"eMuleBB Rust exited {shutdown_return_code} after REST shutdown.")
+    withdrawn_client = server_control.wait_for_client_absent(client_nick, withdraw_timeout_seconds)
+    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+        transfer_hash,
+        observed_host,
+        endpoint_port,
+        withdraw_timeout_seconds,
+    )
+
+    republish_started = time.monotonic()
+    relaunched_process = rust_client.start_rust_client_executable_append(
+        executable,
+        profile_dir,
+        output_path,
+    )
+    try:
+        rest_ready = wait_for_rust_rest(
+            base_url,
+            relaunched_process,
+            output_path,
+            api_key,
+            rest_ready_timeout_seconds,
+        )
+        reconnect = request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)
+        connected = wait_for_rust_ed2k_connected(base_url, api_key, connect_timeout_seconds)
+        reconnected_client = server_control.wait_for_client_shared_files(client_nick, 1, publish_timeout_seconds)
+        republished_file = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
+        republished_endpoint = server_control.wait_for_file_endpoint(
+            transfer_hash,
+            observed_host,
+            endpoint_port,
+            publish_timeout_seconds,
+            "Rust ED2K publisher endpoint republication",
+        )
+    except Exception:
+        rust_client.stop_process_tree(relaunched_process)
+        raise
+
+    return relaunched_process, {
+        "enabled": True,
+        "required_by_adapter": False,
+        "initial": {
+            "client": initial_client,
+            "file": initial_file,
+            "endpoint": initial_endpoint,
+            "observed_host": observed_host,
+        },
+        "withdrawn": {
+            "shutdown_request": shutdown_request,
+            "return_code": shutdown_return_code,
+            "client": withdrawn_client,
+            "endpoint": withdrawn_endpoint,
+        },
+        "reconnected": {
+            "rest_ready": rest_ready,
+            "connect": reconnect,
+            "status": connected,
+            "client": reconnected_client,
+        },
+        "republished": {
+            "file": republished_file,
+            "endpoint": republished_endpoint,
+            "delay_seconds": round(time.monotonic() - republish_started, 3),
+        },
+    }
+
+
 def require_cross_client_requirements(report: dict[str, object]) -> dict[str, object]:
     """Checks the high-level Rust/eMuleBB ED2K parity surfaces proven by the report."""
 
@@ -685,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "clients": [CLIENT_RUST.profile_id, CLIENT_EMULEBB.profile_id],
         "checks": {},
+        "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
     }
     server_process: subprocess.Popen | None = None
     rust_process: subprocess.Popen[str] | None = None
@@ -702,7 +829,6 @@ def main(argv: list[str] | None = None) -> int:
         rust_rest_port = choose_extra_port(args.lan_bind_addr, used_ports)
         rust_ed2k_port = choose_extra_port(args.lan_bind_addr, used_ports)
         rust_kad_port = choose_extra_port(args.lan_bind_addr, used_ports, udp=True)
-        server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
         mfc_spec = local_kad.KadClientSpec(
             index=1, profile_id=CLIENT_EMULEBB.profile_id, nick=CLIENT_EMULEBB.nick,
             tcp_port=ports["client1_tcp"], udp_port=ports["client1_udp"], rest_port=ports["client1_rest"],
@@ -715,7 +841,6 @@ def main(argv: list[str] | None = None) -> int:
             "lan_bind_addr": args.lan_bind_addr,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
-            "server_endpoint": server_endpoint,
             "ports": {**ports, "rust_rest": rust_rest_port, "rust_ed2k": rust_ed2k_port, "rust_kad": rust_kad_port},
         }
         report["limits"] = {
@@ -743,6 +868,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         server_process = ed2k_server.process
         admin_base_url = ed2k_server.admin_base_url
+        server_address = ed2k_server.ed2k_host
+        server_endpoint = f"{server_address}:{ed2k_server.ed2k_port}"
+        client_p2p_address = resolve_route_bind_ip(server_address, ed2k_server.ed2k_port)
+        report["network"]["server_endpoint"] = server_endpoint
+        report["network"]["client_p2p_address"] = client_p2p_address
         report["checks"]["server_build"] = ed2k_server.build
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
@@ -763,8 +893,9 @@ def main(argv: list[str] | None = None) -> int:
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
             api_key=args.api_key,
-            p2p_bind_ip=p2p_address,
+            p2p_bind_ip=client_p2p_address,
             ed2k_port=rust_ed2k_port,
+            ed2k_nickname=rust_spec.nick,
             kad_port=rust_kad_port,
             server_endpoint=server_endpoint,
             # nodes.dat is the sole local bootstrap source. A parallel text
@@ -779,10 +910,10 @@ def main(argv: list[str] | None = None) -> int:
             {"networkKademlia": bool(args.rust_kad_enabled)},
         )
         report["checks"]["rust_local_nodes_fixture"] = local_kad.write_nodes_dat(
-            rust_profile / "nodes.dat", owner=rust_spec, peers=[mfc_spec, rust_spec], peer_address=p2p_address,
+            rust_profile / "nodes.dat", owner=rust_spec, peers=[mfc_spec, rust_spec], peer_address=client_p2p_address,
         )
         report["checks"]["rust_local_nodes_preflight"] = local_kad.validate_local_nodes_dat(
-            rust_profile / "nodes.dat", peer_address=p2p_address, expected_udp_ports={mfc_spec.udp_port},
+            rust_profile / "nodes.dat", peer_address=client_p2p_address, expected_udp_ports={mfc_spec.udp_port},
         )
         current_phase = "launch_rust"
         os.environ["RUST_LOG"] = "info,emulebb_core=debug,emulebb_kad_net=debug,emulebb_kad_dht=debug"
@@ -833,12 +964,32 @@ def main(argv: list[str] | None = None) -> int:
         transfer_hash = str(link_info["hash"])
         report["checks"]["rust_shared_file"] = rust_file
         report["checks"]["rust_server_file"] = ed2k_harness.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
+        if args.verify_source_lifecycle:
+            current_phase = "rust_source_lifecycle"
+            server_control = ed2k_harness.resolve_provider().control(admin_base_url, args.api_key)
+            rust_process, lifecycle = recycle_rust_publisher(
+                process=rust_process,
+                executable=rust_exe,
+                profile_dir=rust_profile,
+                output_path=paths.source_artifacts_dir / "rust.out",
+                base_url=rust_base_url,
+                api_key=args.api_key,
+                client_nick=CLIENT_RUST.nick,
+                transfer_hash=transfer_hash,
+                endpoint_port=rust_ed2k_port,
+                server_control=server_control,
+                rest_ready_timeout_seconds=args.rest_ready_timeout_seconds,
+                connect_timeout_seconds=args.server_connect_timeout_seconds,
+                withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
+                publish_timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            report["source_lifecycle"] = lifecycle
 
         emulebb_seed_dir = materialize_local_profile_seed(
             profile_seed_dir,
             paths.source_artifacts_dir / "emulebb-profile-seed",
-            server_address=p2p_address,
-            server_port=ports["ed2k_tcp"],
+            server_address=server_address,
+            server_port=ed2k_server.ed2k_port,
             server_name="emulebb-local-e2e",
         )
         report["emulebb_profile_seed_dir"] = str(emulebb_seed_dir)
@@ -855,25 +1006,30 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=ports["client1_rest"],
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
-            p2p_bind_addr=p2p_address,
+            p2p_bind_addr=client_p2p_address,
         )
         if args.emulebb_upload_limit_kibps is not None:
             live_common.apply_emule_preferences(
                 Path(emulebb["config_dir"]),
                 (("MaxUpload", str(args.emulebb_upload_limit_kibps)),),
             )
-        dtt.write_server_met(Path(emulebb["config_dir"]) / "server.met", address=p2p_address, port=ports["ed2k_tcp"], name="emulebb-local-e2e")
+        dtt.write_server_met(
+            Path(emulebb["config_dir"]) / "server.met",
+            address=server_address,
+            port=ed2k_server.ed2k_port,
+            name="emulebb-local-e2e",
+        )
         if args.rust_kad_enabled:
             live_common.apply_emule_preferences(
                 Path(emulebb["config_dir"]), (("NetworkKademlia", "1"), ("DebugClientKadUDP", "1")),
             )
         report["checks"]["mfc_local_nodes_fixture"] = local_kad.write_nodes_dat(
             Path(emulebb["config_dir"]) / "nodes.dat",
-            owner=mfc_spec, peers=[mfc_spec, rust_spec], peer_address=p2p_address,
+            owner=mfc_spec, peers=[mfc_spec, rust_spec], peer_address=client_p2p_address,
         )
         report["checks"]["mfc_local_nodes_preflight"] = local_kad.validate_local_nodes_dat(
             Path(emulebb["config_dir"]) / "nodes.dat",
-            peer_address=p2p_address, expected_udp_ports={rust_spec.udp_port},
+            peer_address=client_p2p_address, expected_udp_ports={rust_spec.udp_port},
         )
         current_phase = "launch_emulebb"
         emulebb_app = live_common.launch_app(paths.app_exe, Path(emulebb["profile_base"]), minimized_to_tray=True)
@@ -890,17 +1046,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             report["checks"]["mfc_to_rust_kad_bootstrap"] = kad_request(
                 emulebb_base_url, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
-                {"address": p2p_address, "port": rust_kad_port},
+                {"address": client_p2p_address, "port": rust_kad_port},
             )
             report["checks"]["rust_to_mfc_kad_bootstrap"] = kad_request(
                 rust_base_url, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
-                {"address": p2p_address, "port": ports["client1_udp"]},
+                {"address": client_p2p_address, "port": ports["client1_udp"]},
             )
 
             def local_kad_ready() -> dict[str, object] | None:
                 if args.diagnostics:
                     report["checks"]["local_kad_isolation"] = audit_local_kad_diagnostics(
-                        rust_packet_dir, Path(emulebb["profile_base"]) / "logs", expected_ip=p2p_address,
+                        rust_packet_dir, Path(emulebb["profile_base"]) / "logs", expected_ip=client_p2p_address,
                     )
                 mfc = kad_request(emulebb_base_url, "GET", "/api/v1/kad", args.api_key)
                 rust = kad_request(rust_base_url, "GET", "/api/v1/kad", args.api_key)
@@ -916,8 +1072,8 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["emulebb_server_connect"] = dtt.add_and_connect_server(
             emulebb_base_url,
             args.api_key,
-            address=p2p_address,
-            port=ports["ed2k_tcp"],
+            address=server_address,
+            port=ed2k_server.ed2k_port,
             timeout_seconds=args.server_connect_timeout_seconds,
         )
         report["checks"]["emulebb_transfer_add"] = dtt.add_transfer(emulebb_base_url, args.api_key, link, transfer_hash)

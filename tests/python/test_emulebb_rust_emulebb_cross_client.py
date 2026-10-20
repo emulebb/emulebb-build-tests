@@ -90,6 +90,126 @@ def test_cross_client_disables_rust_kad_by_default() -> None:
     assert args.rust_kad_enabled is False
 
 
+def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
+    module = load_suite_module()
+
+    defaults = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    enabled = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--verify-source-lifecycle",
+            "--source-withdraw-timeout-seconds",
+            "45",
+        ]
+    )
+
+    assert defaults.verify_source_lifecycle is False
+    assert defaults.source_withdraw_timeout_seconds == 30.0
+    assert enabled.verify_source_lifecycle is True
+    assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
+def test_recycle_rust_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls: list[tuple[object, ...]] = []
+    old_process = SimpleNamespace(wait=lambda timeout: calls.append(("wait", timeout)) or 0)
+    new_process = object()
+    transfer_hash = "ab" * 16
+
+    class FakeControl:
+        shared_file_calls = 0
+
+        def wait_for_client_shared_files(self, nick, minimum, timeout):
+            self.shared_file_calls += 1
+            calls.append(("shared_files", self.shared_file_calls, nick, minimum, timeout))
+            return {
+                "client_name": nick,
+                "ip": "172.17.128.1",
+                "shared_files": 1,
+            }
+
+        def wait_for_file(self, file_hash, timeout):
+            calls.append(("file", file_hash, timeout))
+            return {"hash": file_hash, "sources": 1}
+
+        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
+            calls.append(("endpoint", file_hash, host, port, timeout, description))
+            return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
+
+        def wait_for_client_absent(self, nick, timeout):
+            calls.append(("client_absent", nick, timeout))
+            return {"absent": True}
+
+        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
+            calls.append(("endpoint_absent", file_hash, host, port, timeout))
+            return {"absent": True}
+
+    monkeypatch.setattr(
+        module,
+        "request_json",
+        lambda base_url, method, path, api_key, body=None: calls.append(
+            ("request", base_url, method, path, api_key, body)
+        )
+        or {"accepted": True},
+    )
+    monkeypatch.setattr(
+        module.rust_client,
+        "start_rust_client_executable_append",
+        lambda executable, profile, output: calls.append(("launch", executable, profile, output)) or new_process,
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_rust_rest",
+        lambda base_url, process, output, api_key, timeout: calls.append(("rest", process, timeout))
+        or {"ready": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_rust_ed2k_connected",
+        lambda base_url, api_key, timeout: calls.append(("connected", timeout))
+        or {"stats": {"ed2kConnected": True}},
+    )
+
+    relaunched, report = module.recycle_rust_publisher(
+        process=old_process,
+        executable=tmp_path / "emulebb-rust.exe",
+        profile_dir=tmp_path / "profile",
+        output_path=tmp_path / "rust.out",
+        base_url="http://192.0.2.10:4711",
+        api_key="key",
+        client_nick="cl-emulebb-rust-005",
+        transfer_hash=transfer_hash,
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        rest_ready_timeout_seconds=10.0,
+        connect_timeout_seconds=20.0,
+        withdraw_timeout_seconds=30.0,
+        publish_timeout_seconds=40.0,
+    )
+
+    assert relaunched is new_process
+    assert report["required_by_adapter"] is False
+    assert report["withdrawn"]["client"]["absent"] is True
+    assert report["republished"]["file"]["sources"] == 1
+    assert [call[0] for call in calls] == [
+        "shared_files",
+        "file",
+        "endpoint",
+        "request",
+        "wait",
+        "client_absent",
+        "endpoint_absent",
+        "launch",
+        "rest",
+        "request",
+        "connected",
+        "shared_files",
+        "file",
+        "endpoint",
+    ]
+
+
 def test_choose_extra_port_uses_bounded_harness_range_allocator(monkeypatch) -> None:
     module = load_suite_module()
     used_ports = {21000, 21001}
@@ -108,6 +228,29 @@ def test_choose_extra_port_uses_bounded_harness_range_allocator(monkeypatch) -> 
         "udp": True,
     }
     assert used_ports == {21000, 21001, 21002}
+
+
+def test_resolve_route_bind_ip_uses_managed_server_route(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, int]] = []
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def connect(self, endpoint):
+            calls.append(endpoint)
+
+        def getsockname(self):
+            return ("172.17.128.1", 50000)
+
+    monkeypatch.setattr(module.socket, "socket", lambda *_args: FakeSocket())
+
+    assert module.resolve_route_bind_ip("172.17.142.32", 4661) == "172.17.128.1"
+    assert calls == [("172.17.142.32", 4661)]
 
 
 def test_local_kad_diagnostics_audit_rejects_nonlocal_contacts(tmp_path: Path) -> None:
@@ -571,17 +714,21 @@ def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
         return SimpleNamespace(
             process=server_process,
             admin_base_url="http://192.0.2.10:8080",
+            ed2k_host="172.17.142.32",
+            ed2k_port=4661,
             build={"skipped": True},
             health={"ok": True},
             config={"listen_address": f"{kwargs['ed2k_address']}:{kwargs['ed2k_port']}"},
         )
 
     monkeypatch.setattr(module.ed2k_harness, "launch_ed2k_server", fake_launch_ed2k_server)
+    monkeypatch.setattr(module, "resolve_route_bind_ip", lambda _host, _port: "172.17.128.1")
     monkeypatch.setattr(module.ed2k_harness, "stop_process", lambda process: calls["stopped"].append(process))
     monkeypatch.setattr(module.rust_client, "stop_process_tree", lambda process: calls.setdefault("rust_stop", process))
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.10")
 
-    def fail_after_ed2k_server_started(*_args, **_kwargs):
+    def fail_after_ed2k_server_started(*_args, **kwargs):
+        calls["rust_profile"] = kwargs
         raise RuntimeError("stop after shared ED2K harness launch")
 
     monkeypatch.setattr(module.rust_client, "write_rust_profile", fail_after_ed2k_server_started)
@@ -602,4 +749,6 @@ def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
     assert calls["report"]["current_phase"] == "start_ed2k_server"
     assert calls["report"]["network"]["lan_bind_addr"] == "192.0.2.10"
     assert calls["report"]["network"]["p2p_bind_interface_address"] == "198.51.100.20"
-    assert calls["report"]["network"]["server_endpoint"] == "198.51.100.20:4661"
+    assert calls["report"]["network"]["server_endpoint"] == "172.17.142.32:4661"
+    assert calls["rust_profile"]["p2p_bind_ip"] == "172.17.128.1"
+    assert calls["rust_profile"]["ed2k_nickname"] == module.CLIENT_RUST.nick
