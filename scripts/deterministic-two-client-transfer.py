@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server  # noqa: E402
+from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
@@ -998,6 +999,35 @@ def require_published_endpoint(file_row: dict[str, object], *, port: int) -> dic
     return endpoint
 
 
+def require_known_met_fixture(
+    known_met_path: Path,
+    *,
+    file_name: str,
+    file_size: int,
+) -> mfc_known_met.KnownMetEntry:
+    """Returns the unique stock-client hash-cache row for one fixture."""
+
+    matches = [
+        entry
+        for entry in mfc_known_met.parse_known_met(known_met_path)
+        if entry.name == file_name and entry.size_bytes == file_size
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected one known.met row for {file_name!r} size {file_size}, found {len(matches)}."
+        )
+    return matches[0]
+
+
+def known_met_entry_link(entry: mfc_known_met.KnownMetEntry) -> str:
+    """Builds an eD2K file link from one persisted stock hash-cache row."""
+
+    if not entry.name or entry.size_bytes is None:
+        raise RuntimeError(f"known.met fixture row is missing identity fields: {entry!r}")
+    encoded_name = urllib.parse.quote(entry.name, safe="")
+    return f"ed2k://|file|{encoded_name}|{entry.size_bytes}|{entry.ed2k_hash.upper()}|/"
+
+
 def recycle_publisher(
     *,
     app,
@@ -1069,6 +1099,101 @@ def recycle_publisher(
         },
         "republished": {
             "endpoint": republished_endpoint,
+        },
+    }
+
+
+def recycle_stock_publisher(
+    *,
+    app,
+    app_exe: Path,
+    profile_base: Path,
+    config_dir: Path,
+    client_nick: str,
+    fixture_file: Path,
+    endpoint_port: int,
+    server_control: ed2k_server.Ed2kServerControl,
+    withdraw_timeout_seconds: float,
+    publish_timeout_seconds: float,
+) -> tuple[object, str, dict[str, object]]:
+    """Cycles a stock publisher using profile files instead of unavailable REST control."""
+
+    initial_client = server_control.wait_for_client_shared_files(
+        client_nick,
+        1,
+        publish_timeout_seconds,
+    )
+    observed_host = str(initial_client.get("ip") or "")
+    if not observed_host:
+        raise RuntimeError(f"Stock publisher observation has no server-visible IP: {initial_client!r}")
+
+    live_common.close_app_cleanly(app)
+    withdrawn_client = server_control.wait_for_client_absent(
+        client_nick,
+        withdraw_timeout_seconds,
+    )
+    known_entry = require_known_met_fixture(
+        config_dir / "known.met",
+        file_name=fixture_file.name,
+        file_size=fixture_file.stat().st_size,
+    )
+    transfer_hash = known_entry.ed2k_hash
+    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+        transfer_hash,
+        observed_host,
+        endpoint_port,
+        withdraw_timeout_seconds,
+    )
+
+    relaunched_app = live_common.launch_app(
+        app_exe,
+        profile_base,
+        minimized_to_tray=True,
+    )
+    try:
+        reconnected_client = server_control.wait_for_client_shared_files(
+            client_nick,
+            1,
+            publish_timeout_seconds,
+        )
+        republished_file = server_control.wait_for_file(
+            transfer_hash,
+            publish_timeout_seconds,
+        )
+        republished_endpoint = server_control.wait_for_file_endpoint(
+            transfer_hash,
+            observed_host,
+            endpoint_port,
+            publish_timeout_seconds,
+            "stock ED2K publisher endpoint republication",
+        )
+    except Exception:
+        live_common.close_app_cleanly(relaunched_app)
+        raise
+
+    return relaunched_app, known_met_entry_link(known_entry), {
+        "enabled": True,
+        "required_by_adapter": True,
+        "initial": {
+            "connected": initial_client,
+            "published_file_count": int(initial_client.get("shared_files") or 0),
+            "observed_host": observed_host,
+        },
+        "withdrawn": {
+            "client": withdrawn_client,
+            "endpoint": withdrawn_endpoint,
+        },
+        "reconnected": {
+            "client": reconnected_client,
+        },
+        "republished": {
+            "file": republished_file,
+            "endpoint": republished_endpoint,
+        },
+        "known_met": {
+            "hash": transfer_hash,
+            "name": known_entry.name,
+            "size": known_entry.size_bytes,
         },
     }
 
@@ -1194,6 +1319,11 @@ def main(argv: list[str] | None = None) -> int:
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
+        if args.client2_identity == "stock_emule":
+            live_common.write_shared_directories_file(
+                Path(client2["config_dir"]) / "shareddir.dat",
+                [live_common.win_path(fixture_dir, trailing_slash=True)],
+            )
         for profile in (client1, client2):
             write_server_met(
                 Path(profile["config_dir"]) / "server.met",
@@ -1230,32 +1360,65 @@ def main(argv: list[str] | None = None) -> int:
             Path(client2["profile_base"]),
             minimized_to_tray=True,
         )
-        client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
-        report["checks"]["client2_rest_ready"] = rest_smoke.compact_http_result(
-            rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
-        )
-        report["checks"]["client2_shared_file_add"] = add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
-        report["checks"]["client2_shared_files_reload"] = reload_emule_shared_files(client2_base_url, args.api_key)
-        shared_link = wait_for_emule_shared_file_link(
-            client2_base_url,
-            args.api_key,
-            file_name=fixture_file.name,
-            timeout_seconds=args.link_export_timeout_seconds,
-        )
-        exported_link = str(shared_link["link"])
-        link_info = parse_ed2k_file_link(exported_link)
-        report["checks"]["client2_shared_file_link"] = {**shared_link, "parsed": link_info}
-        transfer_hash = str(link_info["hash"])
-        report["checks"]["client2_server_client"] = server_control.wait_for_client(
-            client2_identity.nick,
-            args.server_connect_timeout_seconds,
-        )
-        published_file = server_control.wait_for_file(
-            transfer_hash,
-            args.server_publish_timeout_seconds,
-        )
-        report["checks"]["client2_server_file"] = published_file
-        if args.verify_source_lifecycle:
+        if args.client2_identity == "stock_emule":
+            current_phase = "client2_stock_source_lifecycle"
+            client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
+                app=client2_app,
+                app_exe=client2_app_exe,
+                profile_base=Path(client2["profile_base"]),
+                config_dir=Path(client2["config_dir"]),
+                client_nick=client2_identity.nick,
+                fixture_file=fixture_file,
+                endpoint_port=ports["client2_tcp"],
+                server_control=server_control,
+                withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
+                publish_timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "known.met",
+                "link": exported_link,
+                "parsed": link_info,
+            }
+            report["checks"]["client2_server_client"] = stock_lifecycle["reconnected"]["client"]
+            report["checks"]["client2_server_file"] = stock_lifecycle["republished"]["file"]
+            report["source_lifecycle"] = stock_lifecycle
+            report["network"]["client2_server_observed_address"] = stock_lifecycle["initial"]["observed_host"]
+        else:
+            client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
+            report["checks"]["client2_rest_ready"] = rest_smoke.compact_http_result(
+                rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
+            )
+            report["checks"]["client2_shared_file_add"] = add_emule_shared_file(
+                client2_base_url,
+                args.api_key,
+                fixture_file,
+            )
+            report["checks"]["client2_shared_files_reload"] = reload_emule_shared_files(
+                client2_base_url,
+                args.api_key,
+            )
+            shared_link = wait_for_emule_shared_file_link(
+                client2_base_url,
+                args.api_key,
+                file_name=fixture_file.name,
+                timeout_seconds=args.link_export_timeout_seconds,
+            )
+            exported_link = str(shared_link["link"])
+            link_info = parse_ed2k_file_link(exported_link)
+            report["checks"]["client2_shared_file_link"] = {**shared_link, "parsed": link_info}
+            transfer_hash = str(link_info["hash"])
+            report["checks"]["client2_server_client"] = server_control.wait_for_client(
+                client2_identity.nick,
+                args.server_connect_timeout_seconds,
+            )
+            published_file = server_control.wait_for_file(
+                transfer_hash,
+                args.server_publish_timeout_seconds,
+            )
+            report["checks"]["client2_server_file"] = published_file
+        if args.verify_source_lifecycle and args.client2_identity != "stock_emule":
             current_phase = "client2_source_lifecycle_initial_endpoint"
             source_endpoint = require_published_endpoint(
                 published_file,

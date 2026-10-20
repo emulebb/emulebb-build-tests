@@ -113,6 +113,44 @@ def test_require_published_endpoint_rejects_missing_or_ambiguous_port() -> None:
         )
 
 
+def test_known_met_fixture_builds_stock_ed2k_link(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    known_met = tmp_path / "known.met"
+    expected = SimpleNamespace(
+        name="fixture with spaces.bin",
+        size_bytes=123,
+        ed2k_hash="ab" * 16,
+    )
+    monkeypatch.setattr(
+        module.mfc_known_met,
+        "parse_known_met",
+        lambda path: [SimpleNamespace(name="other.bin", size_bytes=1), expected] if path == known_met else [],
+    )
+
+    entry = module.require_known_met_fixture(
+        known_met,
+        file_name="fixture with spaces.bin",
+        file_size=123,
+    )
+
+    assert entry is expected
+    assert module.known_met_entry_link(entry) == (
+        "ed2k://|file|fixture%20with%20spaces.bin|123|ABABABABABABABABABABABABABABABAB|/"
+    )
+
+
+def test_require_known_met_fixture_rejects_missing_row(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module.mfc_known_met, "parse_known_met", lambda _path: [])
+
+    with pytest.raises(RuntimeError, match="found 0"):
+        module.require_known_met_fixture(
+            tmp_path / "known.met",
+            file_name="fixture.bin",
+            file_size=123,
+        )
+
+
 def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
     assert ed2k_harness.env_ed2k_server_exe_override({ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}) is None
@@ -1036,6 +1074,84 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
             4662,
             30.0,
             "ED2K publisher endpoint republication",
+        ),
+    ]
+
+
+def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    old_app = object()
+    new_app = object()
+    fixture = tmp_path / "fixture.bin"
+    fixture.write_bytes(b"fixture")
+    known_entry = SimpleNamespace(
+        name=fixture.name,
+        size_bytes=fixture.stat().st_size,
+        ed2k_hash="cd" * 16,
+    )
+    calls: list[tuple[object, ...]] = []
+
+    class FakeControl:
+        def wait_for_client_shared_files(self, nick, minimum, timeout):
+            calls.append(("shared_files", nick, minimum, timeout))
+            return {"client_name": nick, "ip": "172.17.128.1", "shared_files": 1}
+
+        def wait_for_client_absent(self, nick, timeout):
+            calls.append(("client_absent", nick, timeout))
+            return {"absent": True}
+
+        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
+            calls.append(("endpoint_absent", file_hash, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_file(self, file_hash, timeout):
+            calls.append(("file", file_hash, timeout))
+            return {"hash": file_hash, "sources": 1}
+
+        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
+            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+            return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
+
+    monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
+    monkeypatch.setattr(
+        module.live_common,
+        "launch_app",
+        lambda exe, profile, **kwargs: calls.append(("launch", exe, profile, kwargs)) or new_app,
+    )
+    monkeypatch.setattr(module, "require_known_met_fixture", lambda *_args, **_kwargs: known_entry)
+
+    relaunched, link, report = module.recycle_stock_publisher(
+        app=old_app,
+        app_exe=tmp_path / "emule.exe",
+        profile_base=tmp_path / "profile",
+        config_dir=tmp_path / "profile" / "config",
+        client_nick="stock publisher",
+        fixture_file=fixture,
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        withdraw_timeout_seconds=20.0,
+        publish_timeout_seconds=30.0,
+    )
+
+    assert relaunched is new_app
+    assert link == "ed2k://|file|fixture.bin|7|CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD|/"
+    assert report["required_by_adapter"] is True
+    assert report["known_met"]["hash"] == "cd" * 16
+    assert calls == [
+        ("shared_files", "stock publisher", 1, 30.0),
+        ("close", old_app),
+        ("client_absent", "stock publisher", 20.0),
+        ("endpoint_absent", "cd" * 16, "172.17.128.1", 4662, 20.0),
+        ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
+        ("shared_files", "stock publisher", 1, 30.0),
+        ("file", "cd" * 16, 30.0),
+        (
+            "endpoint_present",
+            "cd" * 16,
+            "172.17.128.1",
+            4662,
+            30.0,
+            "stock ED2K publisher endpoint republication",
         ),
     ]
 
