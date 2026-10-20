@@ -71,6 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
+    parser.add_argument("--verify-same-session-republish", action="store_true")
     parser.add_argument("--rust-upload-limit-kibps", type=int)
     parser.add_argument("--emulebb-upload-limit-kibps", type=int)
     parser.add_argument(
@@ -624,6 +625,289 @@ def publish_rust_shared_tree(
     }
 
 
+def wait_for_rust_shared_file_absent(
+    base_url: str,
+    api_key: str,
+    *,
+    file_name: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until one Rust shared-file row leaves the local catalog."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+        items = shared_files.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("Rust shared-files response did not expose an items list.")
+        present = find_shared_file_item(items, file_name) is not None
+        observations.append(
+            {
+                "count": len(items),
+                "present": present,
+                "observed_at": round(time.time(), 3),
+            }
+        )
+        if present:
+            return None
+        return {"absent": True, "observations": observations[-20:]}
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"Rust shared-file {file_name!r} removal")
+
+
+def rust_offer_batch_evidence(profile_dir: Path) -> dict[str, object]:
+    """Returns compact structured evidence for nonempty Rust ED2K catalog offers."""
+
+    batches: list[dict[str, object]] = []
+    for path in sorted((profile_dir / "logs").glob("emulebb-rust*.jsonl")):
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            fields = row.get("fields") if isinstance(row, dict) else None
+            if not isinstance(fields, dict):
+                continue
+            if fields.get("message") != "refreshed ED2K shared catalog advertisement":
+                continue
+            entries_sent = fields.get("entries_sent")
+            if not isinstance(entries_sent, int) or isinstance(entries_sent, bool) or entries_sent <= 0:
+                continue
+            batches.append(
+                {
+                    "timestamp": row.get("timestamp"),
+                    "entries_sent": entries_sent,
+                    "total_entries": fields.get("total_entries"),
+                    "published_entries": fields.get("published_entries"),
+                    "pending_entries": fields.get("pending_entries"),
+                    "wrapped": fields.get("wrapped"),
+                    "skipped_duplicate_batch": fields.get("skipped_duplicate_batch"),
+                }
+            )
+    return {"count": len(batches), "latest": batches[-1] if batches else None}
+
+
+def wait_for_rust_offer_batch(
+    profile_dir: Path,
+    previous_count: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for a new nonempty Rust ED2K catalog offer."""
+
+    return live_common.wait_for(
+        lambda: (
+            evidence
+            if int((evidence := rust_offer_batch_evidence(profile_dir))["count"]) > previous_count
+            else None
+        ),
+        timeout_seconds,
+        1.0,
+        "Rust ED2K shared-catalog offer",
+    )
+
+
+def wait_for_rust_published_entry_count(
+    base_url: str,
+    api_key: str,
+    expected_count: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until the active Rust server session reports one publication count."""
+
+    def resolve():
+        status = request_json(base_url, "GET", "/api/v1/status", api_key)
+        servers = status.get("servers") if isinstance(status, dict) else None
+        current = servers.get("currentServer") if isinstance(servers, dict) else None
+        if not isinstance(current, dict):
+            return None
+        published = current.get("offerFilesPublishedEntries")
+        if not isinstance(published, int) or isinstance(published, bool) or published != expected_count:
+            return None
+        return {
+            "published_entries": published,
+            "pending_entries": current.get("offerFilesPendingEntries"),
+            "mode": current.get("offerFilesMode"),
+        }
+
+    return live_common.wait_for(
+        resolve,
+        timeout_seconds,
+        1.0,
+        f"Rust ED2K published-entry count {expected_count}",
+    )
+
+
+def require_single_source_endpoint(
+    row: dict[str, object] | None,
+    *,
+    host: str,
+    port: int,
+) -> dict[str, object]:
+    """Rejects duplicate or substituted sources for one deterministic publisher."""
+
+    if not isinstance(row, dict):
+        raise RuntimeError("Rust publisher file disappeared from the ED2K server index.")
+    endpoints = row.get("endpoints")
+    if (
+        int(row.get("sources") or 0) != 1
+        or int(row.get("complete_sources") or 0) != 1
+        or not isinstance(endpoints, list)
+        or len(endpoints) != 1
+        or not isinstance(endpoints[0], dict)
+        or endpoints[0].get("host") != host
+        or int(endpoints[0].get("port") or 0) != port
+    ):
+        raise RuntimeError(f"Rust publisher did not converge to one exact complete source: {row!r}")
+    return row
+
+
+def verify_rust_same_session_republish(
+    *,
+    profile_dir: Path,
+    base_url: str,
+    api_key: str,
+    shared_root: Path,
+    file_name: str,
+    transfer_hash: str,
+    client_nick: str,
+    endpoint_port: int,
+    server_control: ed2k_harness.Ed2kServerControl,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Unshares and re-shares one file without reconnecting, proving source deduplication."""
+
+    initial_client = server_control.wait_for_client_shared_files(client_nick, 1, timeout_seconds)
+    observed_host = str(initial_client.get("ip") or "")
+    if not observed_host:
+        raise RuntimeError(f"Rust publisher observation has no server-visible IP: {initial_client!r}")
+    initial_connected_seconds = initial_client.get("connected_seconds")
+    if not isinstance(initial_connected_seconds, int) or initial_connected_seconds < 5:
+        raise RuntimeError(
+            f"Rust publisher connection is too new for a continuity proof: {initial_client!r}"
+        )
+    continuity_started = time.monotonic()
+    initial_offer = wait_for_rust_offer_batch(profile_dir, 0, timeout_seconds)
+    initial_publish_state = wait_for_rust_published_entry_count(
+        base_url,
+        api_key,
+        1,
+        timeout_seconds,
+    )
+    initial_file = require_single_source_endpoint(
+        server_control.get_file(transfer_hash),
+        host=observed_host,
+        port=endpoint_port,
+    )
+
+    clear_roots = request_json(
+        base_url,
+        "PATCH",
+        "/api/v1/shared-directories",
+        api_key,
+        {"roots": [], "confirmReplaceRoots": True},
+    )
+    clear_reload = request_json(
+        base_url,
+        "POST",
+        "/api/v1/shared-directories/operations/reload",
+        api_key,
+    )
+    local_absence = wait_for_rust_shared_file_absent(
+        base_url,
+        api_key,
+        file_name=file_name,
+        timeout_seconds=timeout_seconds,
+    )
+    cleared_publish_state = wait_for_rust_published_entry_count(
+        base_url,
+        api_key,
+        0,
+        timeout_seconds,
+    )
+    retained_server_file = require_single_source_endpoint(
+        server_control.get_file(transfer_hash),
+        host=observed_host,
+        port=endpoint_port,
+    )
+
+    restore_roots = request_json(
+        base_url,
+        "PATCH",
+        "/api/v1/shared-directories",
+        api_key,
+        {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": True},
+    )
+    restore_reload = request_json(
+        base_url,
+        "POST",
+        "/api/v1/shared-directories/operations/reload",
+        api_key,
+    )
+    local_republish = wait_for_rust_shared_file(
+        base_url,
+        api_key,
+        file_name=file_name,
+        timeout_seconds=timeout_seconds,
+    )
+    republish_offer = wait_for_rust_offer_batch(
+        profile_dir,
+        int(initial_offer["count"]),
+        timeout_seconds,
+    )
+    republished_state = wait_for_rust_published_entry_count(
+        base_url,
+        api_key,
+        1,
+        timeout_seconds,
+    )
+    final_file = require_single_source_endpoint(
+        server_control.get_file(transfer_hash),
+        host=observed_host,
+        port=endpoint_port,
+    )
+    final_client = server_control.wait_for_client_shared_files(client_nick, 1, timeout_seconds)
+    final_connected_seconds = final_client.get("connected_seconds")
+    continuity_elapsed_seconds = time.monotonic() - continuity_started
+    minimum_continuous_age = initial_connected_seconds + max(0, int(continuity_elapsed_seconds) - 2)
+    if not isinstance(final_connected_seconds, int) or final_connected_seconds < minimum_continuous_age:
+        raise RuntimeError(
+            "Rust publisher reconnected during the same-session republish proof: "
+            f"initial_age={initial_connected_seconds}s final_age={final_connected_seconds!r}s "
+            f"elapsed={continuity_elapsed_seconds:.3f}s"
+        )
+
+    return {
+        "initial": {
+            "client": initial_client,
+            "file": initial_file,
+            "offer": initial_offer,
+            "publish_state": initial_publish_state,
+            "connected_seconds": initial_connected_seconds,
+        },
+        "unshared": {
+            "roots": clear_roots,
+            "reload": clear_reload,
+            "local_file": local_absence,
+            "publish_state": cleared_publish_state,
+            "server_file": retained_server_file,
+        },
+        "republished": {
+            "roots": restore_roots,
+            "reload": restore_reload,
+            "local_file": local_republish,
+            "offer": republish_offer,
+            "publish_state": republished_state,
+            "client": final_client,
+            "server_file": final_file,
+            "connected_seconds": final_connected_seconds,
+            "continuity_elapsed_seconds": round(continuity_elapsed_seconds, 3),
+        },
+        "same_session": True,
+        "source_count": 1,
+    }
+
+
 def recycle_rust_publisher(
     *,
     process: subprocess.Popen[str],
@@ -812,6 +1096,9 @@ def main(argv: list[str] | None = None) -> int:
         "clients": [CLIENT_RUST.profile_id, CLIENT_EMULEBB.profile_id],
         "checks": {},
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
+        "source_negative_cases": {
+            "same_session_republish": {"enabled": bool(args.verify_same_session_republish)},
+        },
     }
     server_process: subprocess.Popen | None = None
     rust_process: subprocess.Popen[str] | None = None
@@ -964,9 +1251,23 @@ def main(argv: list[str] | None = None) -> int:
         transfer_hash = str(link_info["hash"])
         report["checks"]["rust_shared_file"] = rust_file
         report["checks"]["rust_server_file"] = ed2k_harness.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
+        server_control = ed2k_harness.resolve_provider().control(admin_base_url, args.api_key)
+        if args.verify_same_session_republish:
+            current_phase = "rust_same_session_republish"
+            report["source_negative_cases"]["same_session_republish"] = verify_rust_same_session_republish(
+                profile_dir=rust_profile,
+                base_url=rust_base_url,
+                api_key=args.api_key,
+                shared_root=Path(str(rust_shared_tree["root"])),
+                file_name=str(rust_shared_tree["name"]),
+                transfer_hash=transfer_hash,
+                client_nick=CLIENT_RUST.nick,
+                endpoint_port=rust_ed2k_port,
+                server_control=server_control,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
         if args.verify_source_lifecycle:
             current_phase = "rust_source_lifecycle"
-            server_control = ed2k_harness.resolve_provider().control(admin_base_url, args.api_key)
             rust_process, lifecycle = recycle_rust_publisher(
                 process=rust_process,
                 executable=rust_exe,
