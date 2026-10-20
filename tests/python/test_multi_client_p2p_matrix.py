@@ -310,14 +310,26 @@ def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path
     assert option_value(command, "--client2-identity") == "stock_emule"
 
 
-def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> None:
+def test_common_child_args_forward_lifecycle_and_explicit_p2p_interface(tmp_path: Path) -> None:
     module = load_suite_module()
     command: list[str] = []
-    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--p2p-bind-interface-name", "Ethernet"])
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--p2p-bind-interface-name",
+            "Ethernet",
+            "--verify-source-lifecycle",
+            "--source-withdraw-timeout-seconds",
+            "45",
+        ]
+    )
 
     module.add_common_child_args(command, args)
 
     assert option_value(command, "--p2p-bind-interface-name") == "Ethernet"
+    assert option_value(command, "--source-withdraw-timeout-seconds") == "45.0"
+    assert "--verify-source-lifecycle" in command
 
 
 def test_matrix_prepares_one_shared_ed2k_server_binary_for_child_scenarios(monkeypatch, tmp_path: Path) -> None:

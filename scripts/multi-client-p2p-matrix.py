@@ -61,8 +61,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--source-withdraw-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
@@ -123,6 +125,8 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
             str(args.link_export_timeout_seconds),
             "--server-publish-timeout-seconds",
             str(args.server_publish_timeout_seconds),
+            "--source-withdraw-timeout-seconds",
+            str(args.source_withdraw_timeout_seconds),
             "--transfer-completion-timeout-seconds",
             str(args.transfer_completion_timeout_seconds),
             "--fixture-size-bytes",
@@ -143,6 +147,8 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
         command.extend(["--ed2k-server-repo", str(Path(args.ed2k_server_repo).resolve())])
     if args.ed2k_server_exe:
         command.extend(["--ed2k-server-exe", str(Path(args.ed2k_server_exe).resolve())])
+    if args.verify_source_lifecycle:
+        command.append("--verify-source-lifecycle")
 
 
 def prepare_shared_ed2k_server_binary(paths, args: argparse.Namespace) -> dict[str, object]:
