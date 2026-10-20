@@ -209,6 +209,89 @@ def test_rust_control_waits_for_file_and_exact_endpoint(monkeypatch) -> None:
 
 
 @pytest.mark.unit
+def test_rust_control_waits_for_client_withdrawal(monkeypatch) -> None:
+    responses = [
+        [{"client_name": "eMuleBB Lifecycle Publisher"}],
+        [{"client_name": "another client"}],
+    ]
+    monkeypatch.setattr(
+        rust_ed2k.RustEd2kServerControl,
+        "list_clients",
+        lambda *_args: responses.pop(0),
+    )
+    monkeypatch.setattr(
+        rust_ed2k.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve() or resolve(),
+    )
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    result = control.wait_for_client_absent("lifecycle publisher", 1.0)
+
+    assert result["absent"] is True
+    assert [row["matching_count"] for row in result["observations"]] == [1, 0]
+
+
+@pytest.mark.unit
+def test_rust_control_waits_for_exact_endpoint_withdrawal(monkeypatch) -> None:
+    file_hash = "00112233445566778899aabbccddeeff"
+    responses = [
+        {
+            "hash": file_hash.upper(),
+            "endpoints": [{"host": "192.0.2.10", "port": 4662}],
+        },
+        {
+            "hash": file_hash.upper(),
+            "endpoints": [{"host": "192.0.2.11", "port": 4662}],
+        },
+    ]
+    monkeypatch.setattr(
+        rust_ed2k.RustEd2kServerControl,
+        "get_file",
+        lambda *_args: responses.pop(0),
+    )
+    monkeypatch.setattr(
+        rust_ed2k.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve() or resolve(),
+    )
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    result = control.wait_for_file_endpoint_absent(file_hash, "192.0.2.10", 4662, 1.0)
+
+    assert result["absent"] is True
+    assert result["file"]["endpoints"] == [{"host": "192.0.2.11", "port": 4662}]
+    assert [row["endpoint_present"] for row in result["observations"]] == [True, False]
+
+
+@pytest.mark.unit
+def test_rust_control_treats_unindexed_file_as_withdrawn_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        rust_ed2k.RustEd2kServerControl,
+        "get_file",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        rust_ed2k.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve(),
+    )
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    result = control.wait_for_file_endpoint_absent(
+        file_hash="ff" * 16,
+        host="192.0.2.10",
+        port=4662,
+        timeout_seconds=1.0,
+    )
+
+    assert result["absent"] is True
+    assert result["file"] is None
+    assert result["observations"][0]["indexed"] is False
+    assert result["observations"][0]["endpoint_present"] is False
+
+
+@pytest.mark.unit
 def test_prepare_server_binary_accepts_explicit_staged_binary(monkeypatch, tmp_path: Path) -> None:
     server_exe = tmp_path / "tools" / "ed2k-server"
     server_exe.parent.mkdir(parents=True)

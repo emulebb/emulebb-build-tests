@@ -68,6 +68,12 @@ class Ed2kServerControl(Protocol):
 
     def wait_for_client(self, name_fragment: str, timeout_seconds: float) -> dict[str, Any]: ...
 
+    def wait_for_client_absent(
+        self,
+        name_fragment: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
     def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]: ...
 
     def wait_for_file_endpoint(
@@ -77,6 +83,15 @@ class Ed2kServerControl(Protocol):
         port: int,
         timeout_seconds: float,
         description: str = "ED2K server file endpoint publication",
+    ) -> dict[str, Any]: ...
+
+    def wait_for_file_endpoint_absent(
+        self,
+        file_hash: str,
+        host: str,
+        port: int,
+        timeout_seconds: float,
+        description: str = "ED2K server file endpoint withdrawal",
     ) -> dict[str, Any]: ...
 
 
