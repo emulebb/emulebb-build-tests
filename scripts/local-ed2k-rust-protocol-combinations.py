@@ -504,12 +504,10 @@ def run_protocol_case(
         rust_rest_port = rust_emulebb.choose_extra_port(args.lan_bind_addr, used_ports)
         rust_ed2k_port = rust_emulebb.choose_extra_port(args.lan_bind_addr, used_ports)
         rust_kad_port = rust_emulebb.choose_extra_port(args.lan_bind_addr, used_ports)
-        server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
         report["network"] = {
             "lan_bind_addr": args.lan_bind_addr,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
-            "server_endpoint": server_endpoint,
             "ports": {**ports, "rust_rest": rust_rest_port, "rust_ed2k": rust_ed2k_port, "rust_kad": rust_kad_port},
         }
 
@@ -528,6 +526,10 @@ def run_protocol_case(
         )
         server_process = ed2k_server.process
         admin_base_url = ed2k_server.admin_base_url
+        ed2k_server_address = ed2k_server.ed2k_host
+        server_endpoint = f"{ed2k_server_address}:{ports['ed2k_tcp']}"
+        report["network"]["ed2k_server_address"] = ed2k_server_address
+        report["network"]["server_endpoint"] = server_endpoint
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
 
@@ -579,7 +581,7 @@ def run_protocol_case(
         harness_seed_dir = rust_emulebb.materialize_local_profile_seed(
             profile_seed_dir,
             case_dir / "harness-seed-config",
-            server_address=p2p_address,
+            server_address=ed2k_server_address,
             server_port=ports["ed2k_tcp"],
             server_name="emulebb-local-e2e",
         )
@@ -614,7 +616,7 @@ def run_protocol_case(
         )
         dtt.write_server_met(
             Path(harness["config_dir"]) / "server.met",
-            address=p2p_address,
+            address=ed2k_server_address,
             port=ports["ed2k_tcp"],
             name="emulebb-local-e2e",
         )
@@ -656,11 +658,16 @@ def run_protocol_case(
             CLIENT_HARNESS.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = ed2k_harness.wait_for_server_file(
+        harness_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
             args.server_publish_timeout_seconds,
+        )
+        report["checks"]["harness_server_file"] = harness_server_file
+        harness_source_endpoint = ed2k_harness.require_published_endpoint(
+            harness_server_file,
+            port=ports["client2_tcp"],
         )
         secondary_shared_link = dtt.wait_for_emule_shared_file_link(
             client2_base_url,
@@ -681,11 +688,16 @@ def run_protocol_case(
             "parsed": secondary_link_info,
             "decodedName": secondary_decoded_name,
         }
-        report["checks"]["harness_secondary_server_file"] = ed2k_harness.wait_for_server_file(
+        harness_secondary_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             secondary_expected_hash,
             args.server_publish_timeout_seconds,
+        )
+        report["checks"]["harness_secondary_server_file"] = harness_secondary_server_file
+        harness_secondary_source_endpoint = ed2k_harness.require_published_endpoint(
+            harness_secondary_server_file,
+            port=ports["client2_tcp"],
         )
         hash_only_shared_link = dtt.wait_for_emule_shared_file_link(
             client2_base_url,
@@ -706,17 +718,27 @@ def run_protocol_case(
             "parsed": hash_only_link_info,
             "decodedName": hash_only_decoded_name,
         }
-        report["checks"]["harness_hash_only_server_file"] = ed2k_harness.wait_for_server_file(
+        harness_hash_only_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             hash_only_hash,
             args.server_publish_timeout_seconds,
         )
+        report["checks"]["harness_hash_only_server_file"] = harness_hash_only_server_file
+        harness_hash_only_source_endpoint = ed2k_harness.require_published_endpoint(
+            harness_hash_only_server_file,
+            port=ports["client2_tcp"],
+        )
+        report["checks"]["harness_published_endpoints"] = {
+            "primary": harness_source_endpoint,
+            "secondary": harness_secondary_source_endpoint,
+            "hashOnly": harness_hash_only_source_endpoint,
+        }
 
         current_phase = "launch_rust"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
         rust_profile = case_dir / "rust-profile"
-        entry = rust_server_entry(case, p2p_address, ports["ed2k_tcp"])
+        entry = rust_server_entry(case, ed2k_server_address, ports["ed2k_tcp"])
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
@@ -803,8 +825,8 @@ def run_protocol_case(
         report["checks"]["rust_source_metadata"] = require_rust_source_metadata(
             case,
             rust_sources,
-            expected_ip=p2p_address,
-            expected_tcp_port=ports["client2_tcp"],
+            expected_ip=str(harness_source_endpoint["host"]),
+            expected_tcp_port=int(harness_source_endpoint["port"]),
         )
         source_user_hash = (
             str(report["checks"]["rust_source_metadata"]["userHash"])
@@ -836,8 +858,8 @@ def run_protocol_case(
             )
         secondary_source_link = ed2k_link_with_source(
             str(secondary_shared_link["link"]),
-            p2p_address,
-            ports["client2_tcp"],
+            str(harness_secondary_source_endpoint["host"]),
+            int(harness_secondary_source_endpoint["port"]),
             source_user_hash,
             source_connect_options,
         )
@@ -872,8 +894,8 @@ def run_protocol_case(
         report["checks"]["rust_secondary_source_metadata"] = require_rust_source_metadata(
             case,
             secondary_rust_sources,
-            expected_ip=p2p_address,
-            expected_tcp_port=ports["client2_tcp"],
+            expected_ip=str(harness_secondary_source_endpoint["host"]),
+            expected_tcp_port=int(harness_secondary_source_endpoint["port"]),
         )
         report["checks"]["rust_secondary_hashset_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
@@ -884,8 +906,8 @@ def run_protocol_case(
 
         hash_only_link = ed2k_link_with_source(
             f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/",
-            p2p_address,
-            ports["client2_tcp"],
+            str(harness_hash_only_source_endpoint["host"]),
+            int(harness_hash_only_source_endpoint["port"]),
             source_user_hash,
             source_connect_options,
         )
@@ -943,8 +965,8 @@ def run_protocol_case(
         report["checks"]["rust_hash_only_source_metadata"] = require_rust_source_metadata(
             case,
             hash_only_sources,
-            expected_ip=p2p_address,
-            expected_tcp_port=ports["client2_tcp"],
+            expected_ip=str(harness_hash_only_source_endpoint["host"]),
+            expected_tcp_port=int(harness_hash_only_source_endpoint["port"]),
         )
         report["checks"]["rust_hash_only_manifest_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
