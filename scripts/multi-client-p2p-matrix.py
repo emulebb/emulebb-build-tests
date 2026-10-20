@@ -258,6 +258,35 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
     )
 
 
+def run_amule_transfer_scenario(
+    paths,
+    args: argparse.Namespace,
+    daemon_executable: Path,
+    control_executable: Path,
+) -> dict[str, object]:
+    """Runs the deterministic download from the staged official aMule runtime."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "a7"
+    command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    command.extend(
+        [
+            "--client2-app-exe",
+            str(daemon_executable.resolve()),
+            "--client2-control-exe",
+            str(control_executable.resolve()),
+            "--client2-identity",
+            "amule",
+        ]
+    )
+    return run_child_scenario(
+        scenario_id=AMULE_TRANSFER_SCENARIO_ID,
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "deterministic-two-client-transfer-result.json",
+    )
+
+
 def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the existing Rust local-client suite for bidirectional peer exchange."""
 
@@ -451,6 +480,18 @@ def main(argv: list[str] | None = None) -> int:
         ):
             scenarios.append(run_stock_emule_transfer_scenario(paths, args, stock_emule.executable))
             completed_optional_ids.add(STOCK_EMULE_TRANSFER_SCENARIO_ID)
+        amule = inventory["amule"]
+        if (
+            (run_all_optional or AMULE_TRANSFER_SCENARIO_ID in selected_optional_ids)
+            and amule.available
+            and amule.deterministic_transfer_adapter
+            and amule.executable is not None
+            and amule.control_executable is not None
+        ):
+            scenarios.append(
+                run_amule_transfer_scenario(paths, args, amule.executable, amule.control_executable)
+            )
+            completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
         rust = inventory["emulebb_rust"]
         rust_peer = inventory["emulebb_rust_peer"]
         if (

@@ -310,6 +310,31 @@ def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path
     assert option_value(command, "--client2-identity") == "stock_emule"
 
 
+def test_amule_transfer_scenario_uses_daemon_and_control(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    daemon_executable = tmp_path / "amuled.exe"
+    control_executable = tmp_path / "amulecmd.exe"
+
+    result = module.run_amule_transfer_scenario(paths, args, daemon_executable, control_executable)
+
+    assert result["status"] == "passed"
+    assert result["id"] == module.AMULE_TRANSFER_SCENARIO_ID
+    assert result["clients"] == ["cl-emulebb-001", "cl-amule-007"]
+    command = captured["command"]
+    assert option_value(command, "--client2-app-exe") == str(daemon_executable.resolve())
+    assert option_value(command, "--client2-control-exe") == str(control_executable.resolve())
+    assert option_value(command, "--client2-identity") == "amule"
+
+
 def test_common_child_args_forward_lifecycle_and_explicit_p2p_interface(tmp_path: Path) -> None:
     module = load_suite_module()
     command: list[str] = []

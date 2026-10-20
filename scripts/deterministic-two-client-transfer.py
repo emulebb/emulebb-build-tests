@@ -23,11 +23,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server  # noqa: E402
+from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
+    resolve_amule_client,
     resolve_harness_client,
     resolve_stock_emule_client,
 )
@@ -72,7 +74,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--client2-app-exe")
-    parser.add_argument("--client2-identity", choices=["harness", "stock_emule"], default="harness")
+    parser.add_argument("--client2-identity", choices=["harness", "stock_emule", "amule"], default="harness")
+    parser.add_argument("--client2-control-exe")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
@@ -118,11 +121,18 @@ def resolve_client2_app_exe(
     configuration: str,
     override: str | None,
     identity_key: str = "harness",
+    control_override: str | None = None,
 ) -> Path:
     """Resolves the MFC parity peer client executable."""
 
     if identity_key == "stock_emule":
         availability = resolve_stock_emule_client(workspace_root, configuration, override)
+    elif identity_key == "amule":
+        availability = resolve_amule_client(
+            workspace_root,
+            executable_override=override,
+            control_override=control_override,
+        )
     else:
         availability = resolve_harness_client(workspace_root, configuration, override)
     if not availability.available or availability.executable is None:
@@ -130,10 +140,38 @@ def resolve_client2_app_exe(
     return availability.executable
 
 
-def is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+def resolve_client2_control_exe(
+    workspace_root: Path,
+    executable_override: str | None,
+    override: str | None,
+    identity_key: str,
+) -> Path | None:
+    """Resolves the optional control executable required by client2."""
+
+    if identity_key != "amule":
+        return None
+    availability = resolve_amule_client(
+        workspace_root,
+        executable_override=executable_override,
+        control_override=override,
+    )
+    if not availability.available or availability.control_executable is None:
+        raise RuntimeError(f"Client2 {availability.identity.product} control was not found: {availability.reason}.")
+    return availability.control_executable
+
+
+def is_port_available(
+    port: int,
+    *,
+    host: str | None = None,
+    udp: bool = False,
+    allow_loopback: bool = False,
+) -> bool:
     """Reports whether a TCP or UDP port can be bound locally."""
 
-    bind_host = rest_smoke.require_lan_bind_addr(host)
+    bind_host = str(host or "").strip() if allow_loopback else rest_smoke.require_lan_bind_addr(host)
+    if not bind_host:
+        raise ValueError("A bind host is required for local port probes.")
     family = socket.AF_INET
     sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     with socket.socket(family, sock_type) as probe:
@@ -168,13 +206,19 @@ def choose_available_local_port(
     used: set[int],
     *,
     udp: bool = False,
+    allow_loopback: bool = False,
 ) -> int:
     """Chooses an unused local TCP/UDP port outside the Windows ephemeral range."""
 
     start = random.randrange(ED2K_LOCAL_PORT_MIN, ED2K_LOCAL_PORT_MAX + 1)
     candidates = itertools.chain(range(start, ED2K_LOCAL_PORT_MAX + 1), range(ED2K_LOCAL_PORT_MIN, start))
     for candidate in candidates:
-        if candidate not in used and is_port_available(candidate, host=lan_bind_addr, udp=udp):
+        if candidate not in used and is_port_available(
+            candidate,
+            host=lan_bind_addr,
+            udp=udp,
+            allow_loopback=allow_loopback,
+        ):
             return candidate
     raise RuntimeError("Could not allocate a local port in the ED2K harness range.")
 
@@ -203,9 +247,19 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
         "client1_udp",
         "client2_tcp",
         "client2_udp",
+        "client2_ec",
     ):
         try:
-            add(name, choose_available_local_port(lan_bind_addr, used, udp=name.endswith("_udp")))
+            availability_host = "127.0.0.1" if name == "client2_ec" else lan_bind_addr
+            add(
+                name,
+                choose_available_local_port(
+                    availability_host,
+                    used,
+                    udp=name.endswith("_udp"),
+                    allow_loopback=name == "client2_ec",
+                ),
+            )
         except RuntimeError as exc:
             raise RuntimeError(f"Could not allocate port for {name}.") from exc
     return ports
@@ -1198,6 +1252,166 @@ def recycle_stock_publisher(
     }
 
 
+def prepare_amule_profile(source_artifacts_dir: Path, profile_id: str) -> dict[str, Path]:
+    """Creates an empty aMule-native profile layout under one retained run."""
+
+    profile_base = source_artifacts_dir / "profiles" / profile_id
+    profile = {
+        "profile_base": profile_base,
+        "config_dir": profile_base / "config",
+        "incoming_dir": profile_base / "incoming",
+        "temp_dir": profile_base / "temp",
+    }
+    for directory in profile.values():
+        directory.mkdir(parents=True, exist_ok=True)
+    return profile
+
+
+def observe_amule_publisher(
+    *,
+    control_exe: Path,
+    ec_port: int,
+    ec_password: str,
+    client_nick: str,
+    fixture_file: Path,
+    endpoint_port: int,
+    server_control: ed2k_server.Ed2kServerControl,
+    publish_timeout_seconds: float,
+) -> tuple[str, dict[str, object]]:
+    """Observes one official aMule publication without changing its session."""
+
+    control_ready = amule_client.wait_for_control(
+        control_exe,
+        ec_port=ec_port,
+        ec_password=ec_password,
+        timeout_seconds=publish_timeout_seconds,
+    )
+    shared = amule_client.wait_for_shared_file_hash(
+        control_exe,
+        ec_port=ec_port,
+        ec_password=ec_password,
+        file_name=fixture_file.name,
+        timeout_seconds=publish_timeout_seconds,
+    )
+    transfer_hash = str(shared["hash"])
+    connected = server_control.wait_for_client_shared_files(client_nick, 1, publish_timeout_seconds)
+    observed_host = str(connected.get("ip") or "")
+    if not observed_host:
+        raise RuntimeError(f"aMule publisher observation has no server-visible IP: {connected!r}")
+    published = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
+    endpoint = server_control.wait_for_file_endpoint(
+        transfer_hash,
+        observed_host,
+        endpoint_port,
+        publish_timeout_seconds,
+        "aMule ED2K publisher endpoint publication",
+    )
+    link = amule_client.file_link(fixture_file.name, fixture_file.stat().st_size, transfer_hash)
+    return link, {
+        "control": control_ready,
+        "shared": shared,
+        "connected": connected,
+        "published": published,
+        "endpoint": endpoint,
+        "observed_host": observed_host,
+    }
+
+
+def recycle_amule_publisher(
+    *,
+    app,
+    daemon_exe: Path,
+    control_exe: Path,
+    config_dir: Path,
+    ec_port: int,
+    ec_password: str,
+    client_nick: str,
+    fixture_file: Path,
+    endpoint_port: int,
+    server_control: ed2k_server.Ed2kServerControl,
+    withdraw_timeout_seconds: float,
+    publish_timeout_seconds: float,
+) -> tuple[object, str, dict[str, object]]:
+    """Cycles an official aMule publisher through its native EC control surface."""
+
+    link, initial = observe_amule_publisher(
+        control_exe=control_exe,
+        ec_port=ec_port,
+        ec_password=ec_password,
+        client_nick=client_nick,
+        fixture_file=fixture_file,
+        endpoint_port=endpoint_port,
+        server_control=server_control,
+        publish_timeout_seconds=publish_timeout_seconds,
+    )
+    transfer_hash = str(initial["shared"]["hash"])
+    observed_host = str(initial["observed_host"])
+
+    shutdown = amule_client.shutdown_daemon(
+        app,
+        control_exe,
+        ec_port=ec_port,
+        ec_password=ec_password,
+    )
+    withdrawn_client = server_control.wait_for_client_absent(client_nick, withdraw_timeout_seconds)
+    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+        transfer_hash,
+        observed_host,
+        endpoint_port,
+        withdraw_timeout_seconds,
+    )
+
+    republish_started = time.monotonic()
+    relaunched_app = amule_client.launch_daemon(daemon_exe, config_dir)
+    try:
+        reconnected_control = amule_client.wait_for_control(
+            control_exe,
+            ec_port=ec_port,
+            ec_password=ec_password,
+            timeout_seconds=publish_timeout_seconds,
+        )
+        reconnected_client = server_control.wait_for_client_shared_files(client_nick, 1, publish_timeout_seconds)
+        republished_file = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
+        republished_endpoint = server_control.wait_for_file_endpoint(
+            transfer_hash,
+            observed_host,
+            endpoint_port,
+            publish_timeout_seconds,
+            "aMule ED2K publisher endpoint republication",
+        )
+    except Exception:
+        try:
+            amule_client.shutdown_daemon(
+                relaunched_app,
+                control_exe,
+                ec_port=ec_port,
+                ec_password=ec_password,
+            )
+        except Exception:
+            pass
+        raise
+
+    return relaunched_app, link, {
+        "enabled": True,
+        "required_by_adapter": False,
+        "initial": initial,
+        "withdrawn": {
+            "shutdown": shutdown,
+            "client": withdrawn_client,
+            "endpoint": withdrawn_endpoint,
+        },
+        "reconnected": {
+            "control": reconnected_control,
+            "client": reconnected_client,
+        },
+        "republished": {
+            "file": republished_file,
+            "endpoint": republished_endpoint,
+            "delay_seconds": round(time.monotonic() - republish_started, 3),
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the deterministic two-client transfer suite."""
 
@@ -1226,6 +1440,7 @@ def main(argv: list[str] | None = None) -> int:
     server_control: ed2k_server.Ed2kServerControl | None = None
     client1_app = None
     client2_app = None
+    client2_control_exe: Path | None = None
     current_phase = "initializing"
 
     try:
@@ -1281,16 +1496,26 @@ def main(argv: list[str] | None = None) -> int:
             [],
             CLIENT01.profile_id,
         )
-        client2 = live_common.prepare_scenario_profile(
-            profile_seed_dir,
-            paths.source_artifacts_dir,
-            [],
-            client2_identity.profile_id,
-        )
+        if args.client2_identity == "amule":
+            client2 = prepare_amule_profile(paths.source_artifacts_dir, client2_identity.profile_id)
+        else:
+            client2 = live_common.prepare_scenario_profile(
+                profile_seed_dir,
+                paths.source_artifacts_dir,
+                [],
+                client2_identity.profile_id,
+            )
         client2_app_exe = resolve_client2_app_exe(
             paths.workspace_root,
             args.configuration,
             args.client2_app_exe,
+            args.client2_identity,
+            args.client2_control_exe,
+        )
+        client2_control_exe = resolve_client2_control_exe(
+            paths.workspace_root,
+            args.client2_app_exe,
+            args.client2_control_exe,
             args.client2_identity,
         )
         configure_client_profile(
@@ -1306,19 +1531,32 @@ def main(argv: list[str] | None = None) -> int:
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
-        configure_client_profile(
-            config_dir=Path(client2["config_dir"]),
-            app_exe=client2_app_exe,
-            nick=client2_identity.nick,
-            tcp_port=ports["client2_tcp"],
-            udp_port=ports["client2_udp"],
-            ed2k_enabled=True,
-            autoconnect=True,
-            rest_api_key=args.api_key,
-            rest_port=ports["client2_rest"],
-            lan_bind_addr=args.lan_bind_addr,
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
-        )
+        if args.client2_identity == "amule":
+            amule_client.configure_profile(
+                config_dir=Path(client2["config_dir"]),
+                incoming_dir=Path(client2["incoming_dir"]),
+                temp_dir=Path(client2["temp_dir"]),
+                shared_dir=fixture_dir,
+                nick=client2_identity.nick,
+                tcp_port=ports["client2_tcp"],
+                udp_port=ports["client2_udp"],
+                ec_port=ports["client2_ec"],
+                ec_password=args.api_key,
+            )
+        else:
+            configure_client_profile(
+                config_dir=Path(client2["config_dir"]),
+                app_exe=client2_app_exe,
+                nick=client2_identity.nick,
+                tcp_port=ports["client2_tcp"],
+                udp_port=ports["client2_udp"],
+                ed2k_enabled=True,
+                autoconnect=True,
+                rest_api_key=args.api_key,
+                rest_port=ports["client2_rest"],
+                lan_bind_addr=args.lan_bind_addr,
+                p2p_bind_interface_name=args.p2p_bind_interface_name,
+            )
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
                 Path(client2["config_dir"]) / "shareddir.dat",
@@ -1350,16 +1588,24 @@ def main(argv: list[str] | None = None) -> int:
                 "incoming_dir": str(client2["incoming_dir"]),
                 "temp_dir": str(client2["temp_dir"]),
                 "app_exe": str(client2_app_exe),
-                "preferences": read_preferences_snapshot(Path(client2["config_dir"])),
+                "preferences": (
+                    amule_client.profile_snapshot(Path(client2["config_dir"]))
+                    if args.client2_identity == "amule"
+                    else read_preferences_snapshot(Path(client2["config_dir"]))
+                ),
+                "control_exe": str(client2_control_exe) if client2_control_exe is not None else None,
             },
         }
 
         current_phase = "launch_client2"
-        client2_app = live_common.launch_app(
-            client2_app_exe,
-            Path(client2["profile_base"]),
-            minimized_to_tray=True,
-        )
+        if args.client2_identity == "amule":
+            client2_app = amule_client.launch_daemon(client2_app_exe, Path(client2["config_dir"]))
+        else:
+            client2_app = live_common.launch_app(
+                client2_app_exe,
+                Path(client2["profile_base"]),
+                minimized_to_tray=True,
+            )
         if args.client2_identity == "stock_emule":
             current_phase = "client2_stock_source_lifecycle"
             client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
@@ -1385,6 +1631,51 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["client2_server_file"] = stock_lifecycle["republished"]["file"]
             report["source_lifecycle"] = stock_lifecycle
             report["network"]["client2_server_observed_address"] = stock_lifecycle["initial"]["observed_host"]
+        elif args.client2_identity == "amule":
+            if client2_control_exe is None:
+                raise RuntimeError("aMule client2 requires amulecmd control.")
+            if args.verify_source_lifecycle:
+                current_phase = "client2_amule_source_lifecycle"
+                client2_app, exported_link, amule_lifecycle = recycle_amule_publisher(
+                    app=client2_app,
+                    daemon_exe=client2_app_exe,
+                    control_exe=client2_control_exe,
+                    config_dir=Path(client2["config_dir"]),
+                    ec_port=ports["client2_ec"],
+                    ec_password=args.api_key,
+                    client_nick=client2_identity.nick,
+                    fixture_file=fixture_file,
+                    endpoint_port=ports["client2_tcp"],
+                    server_control=server_control,
+                    withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
+                    publish_timeout_seconds=args.server_publish_timeout_seconds,
+                )
+                publication = amule_lifecycle["republished"]
+                report["source_lifecycle"] = amule_lifecycle
+                report["network"]["client2_server_observed_address"] = amule_lifecycle["initial"]["observed_host"]
+            else:
+                current_phase = "client2_amule_publication"
+                exported_link, amule_observation = observe_amule_publisher(
+                    control_exe=client2_control_exe,
+                    ec_port=ports["client2_ec"],
+                    ec_password=args.api_key,
+                    client_nick=client2_identity.nick,
+                    fixture_file=fixture_file,
+                    endpoint_port=ports["client2_tcp"],
+                    server_control=server_control,
+                    publish_timeout_seconds=args.server_publish_timeout_seconds,
+                )
+                publication = amule_observation
+                report["network"]["client2_server_observed_address"] = amule_observation["observed_host"]
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "amule-ec",
+                "link": exported_link,
+                "parsed": link_info,
+            }
+            report["checks"]["client2_server_client"] = publication.get("client", publication.get("connected"))
+            report["checks"]["client2_server_file"] = publication.get("file", publication.get("published"))
         else:
             client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
             report["checks"]["client2_rest_ready"] = rest_smoke.compact_http_result(
@@ -1418,7 +1709,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.server_publish_timeout_seconds,
             )
             report["checks"]["client2_server_file"] = published_file
-        if args.verify_source_lifecycle and args.client2_identity != "stock_emule":
+        if args.verify_source_lifecycle and args.client2_identity not in {"stock_emule", "amule"}:
             current_phase = "client2_source_lifecycle_initial_endpoint"
             source_endpoint = require_published_endpoint(
                 published_file,
@@ -1507,8 +1798,21 @@ def main(argv: list[str] | None = None) -> int:
             if app is None:
                 continue
             try:
-                live_common.close_app_cleanly(app)
-                close_results[name] = {"ok": True}
+                if name == client2_identity.profile_id and args.client2_identity == "amule":
+                    if client2_control_exe is None:
+                        raise RuntimeError("aMule cleanup requires amulecmd control.")
+                    close_results[name] = {
+                        "ok": True,
+                        "result": amule_client.shutdown_daemon(
+                            app,
+                            client2_control_exe,
+                            ec_port=ports["client2_ec"],
+                            ec_password=args.api_key,
+                        ),
+                    }
+                else:
+                    live_common.close_app_cleanly(app)
+                    close_results[name] = {"ok": True}
             except Exception as exc:
                 close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         if server_provider is not None:
