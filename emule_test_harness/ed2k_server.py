@@ -74,6 +74,13 @@ class Ed2kServerControl(Protocol):
         timeout_seconds: float,
     ) -> dict[str, Any]: ...
 
+    def wait_for_client_shared_files(
+        self,
+        name_fragment: str,
+        minimum_shared_files: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
     def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]: ...
 
     def wait_for_file_endpoint(

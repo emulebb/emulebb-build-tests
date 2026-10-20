@@ -601,6 +601,48 @@ class RustEd2kServerControl:
             f"ED2K client {name_fragment!r} withdrawal",
         )
 
+    def wait_for_client_shared_files(
+        self,
+        name_fragment: str,
+        minimum_shared_files: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Waits until a named client publishes at least the requested file count."""
+
+        observations: list[dict[str, object]] = []
+
+        def resolve():
+            rows = self.list_clients()
+            for row in rows:
+                if name_fragment.lower() not in str(row.get("client_name") or "").lower():
+                    continue
+                shared_files = int(row.get("shared_files") or 0)
+                observations.append(
+                    {
+                        "shared_files": shared_files,
+                        "observed_at": round(time.time(), 3),
+                    }
+                )
+                if shared_files >= minimum_shared_files:
+                    result = dict(row)
+                    result["observations"] = observations
+                    return result
+                return None
+            observations.append(
+                {
+                    "shared_files": None,
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            return None
+
+        return live_common.wait_for(
+            resolve,
+            timeout_seconds,
+            1.0,
+            f"ED2K client {name_fragment!r} shared-file publication",
+        )
+
     def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]:
         observations: list[dict[str, object]] = []
 

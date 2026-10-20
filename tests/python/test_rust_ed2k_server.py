@@ -233,6 +233,30 @@ def test_rust_control_waits_for_client_withdrawal(monkeypatch) -> None:
 
 
 @pytest.mark.unit
+def test_rust_control_waits_for_client_shared_files(monkeypatch) -> None:
+    responses = [
+        [{"client_name": "stock publisher", "shared_files": 0}],
+        [{"client_name": "stock publisher", "shared_files": 1}],
+    ]
+    monkeypatch.setattr(
+        rust_ed2k.RustEd2kServerControl,
+        "list_clients",
+        lambda *_args: responses.pop(0),
+    )
+    monkeypatch.setattr(
+        rust_ed2k.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve() or resolve(),
+    )
+    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
+
+    result = control.wait_for_client_shared_files("stock", 1, 1.0)
+
+    assert result["shared_files"] == 1
+    assert [row["shared_files"] for row in result["observations"]] == [0, 1]
+
+
+@pytest.mark.unit
 def test_rust_control_waits_for_exact_endpoint_withdrawal(monkeypatch) -> None:
     file_hash = "00112233445566778899aabbccddeeff"
     responses = [
