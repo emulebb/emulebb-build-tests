@@ -83,6 +83,25 @@ def test_cli_maps_unexpected_failures_to_sanitized_harness_exit(
     assert "private fixture path" not in stderr
 
 
+def test_cli_reports_sanitized_post_run_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_capture()
+    error = module.PostRunSafetyError(
+        [("upnp-absence-audit", RuntimeError("private router detail"))]
+    )
+    monkeypatch.setattr(module, "main", lambda: (_ for _ in ()).throw(error))
+
+    assert module._cli_main() == 2
+    stderr = capsys.readouterr().err
+    assert stderr == (
+        "harness-failure: PostRunSafetyError: Post-run safety failures: "
+        "upnp-absence-audit:RuntimeError\n"
+    )
+    assert "private router detail" not in stderr
+
+
 def test_capture_exception_tracking_keeps_python_310_compatibility() -> None:
     source = CAPTURE_SCRIPT.read_text(encoding="utf-8")
 
