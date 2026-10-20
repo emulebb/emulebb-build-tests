@@ -99,14 +99,17 @@ def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
             "--lan-bind-addr",
             "192.0.2.10",
             "--verify-source-lifecycle",
+            "--verify-same-session-republish",
             "--source-withdraw-timeout-seconds",
             "45",
         ]
     )
 
     assert defaults.verify_source_lifecycle is False
+    assert defaults.verify_same_session_republish is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert enabled.verify_source_lifecycle is True
+    assert enabled.verify_same_session_republish is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
 
@@ -207,6 +210,155 @@ def test_recycle_rust_publisher_proves_withdrawal_and_republication(monkeypatch,
         "shared_files",
         "file",
         "endpoint",
+    ]
+
+
+def test_rust_offer_batch_evidence_counts_only_nonempty_catalog_offers(tmp_path: Path) -> None:
+    module = load_suite_module()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    rows = [
+        {
+            "timestamp": "2026-10-20T12:00:00Z",
+            "fields": {
+                "message": "refreshed ED2K shared catalog advertisement",
+                "entries_sent": 1,
+                "total_entries": 1,
+                "published_entries": 1,
+                "pending_entries": 0,
+                "wrapped": True,
+                "skipped_duplicate_batch": False,
+            },
+        },
+        {
+            "timestamp": "2026-10-20T12:01:00Z",
+            "fields": {
+                "message": "refreshed ED2K shared catalog advertisement",
+                "entries_sent": 0,
+                "total_entries": 1,
+            },
+        },
+    ]
+    (logs / "emulebb-rust.test.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\nnot-json\n",
+        encoding="utf-8",
+    )
+
+    evidence = module.rust_offer_batch_evidence(tmp_path)
+
+    assert evidence["count"] == 1
+    assert evidence["latest"]["entries_sent"] == 1
+    assert evidence["latest"]["skipped_duplicate_batch"] is False
+
+
+def test_wait_for_rust_published_entry_count_reads_current_session(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(
+        module,
+        "request_json",
+        lambda *_args, **_kwargs: {
+            "servers": {
+                "currentServer": {
+                    "offerFilesPublishedEntries": 1,
+                    "offerFilesPendingEntries": 0,
+                    "offerFilesMode": "legacy",
+                }
+            }
+        },
+    )
+
+    result = module.wait_for_rust_published_entry_count(
+        "http://192.0.2.10:4711",
+        "key",
+        1,
+        1.0,
+    )
+
+    assert result == {"published_entries": 1, "pending_entries": 0, "mode": "legacy"}
+
+
+def test_same_session_republish_reoffers_without_duplicate_source(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls: list[tuple[object, ...]] = []
+    clients = iter(
+        [
+            {"client_name": "cl-emulebb-rust-005", "ip": "172.17.128.1", "connected_seconds": 10},
+            {"client_name": "cl-emulebb-rust-005", "ip": "172.17.128.1", "connected_seconds": 12},
+        ]
+    )
+    transfer_hash = "ab" * 16
+
+    class FakeControl:
+        def wait_for_client_shared_files(self, nick, minimum, timeout):
+            calls.append(("client", nick, minimum, timeout))
+            return next(clients)
+
+        def get_file(self, file_hash):
+            calls.append(("file", file_hash))
+            return {
+                "hash": file_hash,
+                "sources": 1,
+                "complete_sources": 1,
+                "endpoints": [{"host": "172.17.128.1", "port": 4662, "complete": True}],
+            }
+
+    monkeypatch.setattr(
+        module,
+        "request_json",
+        lambda _base_url, method, path, _api_key, body=None: calls.append(("request", method, path, body))
+        or {"ok": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_rust_shared_file_absent",
+        lambda *_args, **_kwargs: {"absent": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_rust_shared_file",
+        lambda *_args, **_kwargs: {"count": 1, "matched": {"name": "fixture.bin"}},
+    )
+    offers = iter([{"count": 1, "latest": {"entries_sent": 1}}, {"count": 2, "latest": {"entries_sent": 1}}])
+    monkeypatch.setattr(module, "wait_for_rust_offer_batch", lambda *_args, **_kwargs: next(offers))
+    publish_states = iter(
+        [
+            {"published_entries": 1},
+            {"published_entries": 0},
+            {"published_entries": 1},
+        ]
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_rust_published_entry_count",
+        lambda *_args, **_kwargs: next(publish_states),
+    )
+
+    result = module.verify_rust_same_session_republish(
+        profile_dir=tmp_path / "profile",
+        base_url="http://192.0.2.10:4711",
+        api_key="key",
+        shared_root=tmp_path / "shared",
+        file_name="fixture.bin",
+        transfer_hash=transfer_hash,
+        client_nick="cl-emulebb-rust-005",
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        timeout_seconds=30.0,
+    )
+
+    assert result["same_session"] is True
+    assert result["source_count"] == 1
+    assert result["republished"]["offer"]["count"] == 2
+    assert [call[0] for call in calls] == [
+        "client",
+        "file",
+        "request",
+        "request",
+        "file",
+        "request",
+        "request",
+        "file",
+        "client",
     ]
 
 
