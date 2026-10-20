@@ -56,6 +56,26 @@ def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     assert module.resolve_manifest_repo(workspace, "ed2k_server") == repo.resolve()
 
 
+def test_source_lifecycle_arguments_are_opt_in() -> None:
+    module = load_suite_module()
+
+    defaults = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    enabled = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--verify-source-lifecycle",
+            "--source-withdraw-timeout-seconds",
+            "45",
+        ]
+    )
+
+    assert defaults.verify_source_lifecycle is False
+    assert defaults.source_withdraw_timeout_seconds == 30.0
+    assert enabled.verify_source_lifecycle is True
+    assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
 def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
     assert ed2k_harness.env_ed2k_server_exe_override({ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}) is None
@@ -899,6 +919,88 @@ def test_client2_identity_accepts_stock_baseline() -> None:
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client2-identity", "stock_emule"])
 
     assert args.client2_identity == "stock_emule"
+
+
+def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    old_app = object()
+    new_app = object()
+    calls: list[tuple[object, ...]] = []
+
+    class FakeControl:
+        def wait_for_client_absent(self, nick, timeout):
+            calls.append(("client_absent", nick, timeout))
+            return {"absent": True}
+
+        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
+            calls.append(("endpoint_absent", file_hash, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_client(self, nick, timeout):
+            calls.append(("client_present", nick, timeout))
+            return {"client_name": nick}
+
+        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
+            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+            return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
+
+    monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
+    monkeypatch.setattr(
+        module.live_common,
+        "launch_app",
+        lambda exe, profile, **kwargs: calls.append(("launch", exe, profile, kwargs)) or new_app,
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "wait_for_rest_ready",
+        lambda base_url, api_key, timeout: {
+            "status": 200,
+            "base_url": base_url,
+            "api_key": api_key,
+            "timeout": timeout,
+        },
+    )
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: result)
+    monkeypatch.setattr(
+        module,
+        "reload_emule_shared_files",
+        lambda base_url, api_key: {"base_url": base_url, "api_key": api_key},
+    )
+
+    relaunched, report = module.recycle_publisher(
+        app=old_app,
+        app_exe=tmp_path / "emule.exe",
+        profile_base=tmp_path / "profile",
+        base_url="http://192.0.2.10:4711",
+        api_key="key",
+        client_nick="publisher",
+        transfer_hash="aa" * 16,
+        endpoint_host="192.0.2.10",
+        endpoint_port=4662,
+        server_control=FakeControl(),
+        rest_ready_timeout_seconds=10.0,
+        withdraw_timeout_seconds=20.0,
+        publish_timeout_seconds=30.0,
+    )
+
+    assert relaunched is new_app
+    assert report["withdrawn"]["client"]["absent"] is True
+    assert report["republished"]["endpoint"]["hash"] == "aa" * 16
+    assert calls == [
+        ("close", old_app),
+        ("client_absent", "publisher", 20.0),
+        ("endpoint_absent", "aa" * 16, "192.0.2.10", 4662, 20.0),
+        ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
+        ("client_present", "publisher", 30.0),
+        (
+            "endpoint_present",
+            "aa" * 16,
+            "192.0.2.10",
+            4662,
+            30.0,
+            "ED2K publisher endpoint republication",
+        ),
+    ]
 
 
 def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:

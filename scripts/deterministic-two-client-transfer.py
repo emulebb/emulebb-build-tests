@@ -84,8 +84,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--source-withdraw-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--ed2k-server-provider")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -975,6 +977,81 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     return snapshot
 
 
+def recycle_publisher(
+    *,
+    app,
+    app_exe: Path,
+    profile_base: Path,
+    base_url: str,
+    api_key: str,
+    client_nick: str,
+    transfer_hash: str,
+    endpoint_host: str,
+    endpoint_port: int,
+    server_control: ed2k_server.Ed2kServerControl,
+    rest_ready_timeout_seconds: float,
+    withdraw_timeout_seconds: float,
+    publish_timeout_seconds: float,
+) -> tuple[object, dict[str, object]]:
+    """Closes one publisher, proves withdrawal, then relaunches and republishes it."""
+
+    live_common.close_app_cleanly(app)
+    withdrawn_client = server_control.wait_for_client_absent(
+        client_nick,
+        withdraw_timeout_seconds,
+    )
+    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+        transfer_hash,
+        endpoint_host,
+        endpoint_port,
+        withdraw_timeout_seconds,
+    )
+
+    relaunched_app = live_common.launch_app(
+        app_exe,
+        profile_base,
+        minimized_to_tray=True,
+    )
+    try:
+        rest_ready = rest_smoke.compact_http_result(
+            rest_smoke.wait_for_rest_ready(
+                base_url,
+                api_key,
+                rest_ready_timeout_seconds,
+            )
+        )
+        shared_files_reload = reload_emule_shared_files(base_url, api_key)
+        reconnected_client = server_control.wait_for_client(
+            client_nick,
+            publish_timeout_seconds,
+        )
+        republished_endpoint = server_control.wait_for_file_endpoint(
+            transfer_hash,
+            endpoint_host,
+            endpoint_port,
+            publish_timeout_seconds,
+            "ED2K publisher endpoint republication",
+        )
+    except Exception:
+        live_common.close_app_cleanly(relaunched_app)
+        raise
+
+    return relaunched_app, {
+        "withdrawn": {
+            "client": withdrawn_client,
+            "endpoint": withdrawn_endpoint,
+        },
+        "reconnected": {
+            "rest_ready": rest_ready,
+            "shared_files_reload": shared_files_reload,
+            "client": reconnected_client,
+        },
+        "republished": {
+            "endpoint": republished_endpoint,
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the deterministic two-client transfer suite."""
 
@@ -996,6 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "checks": {},
+        "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
     }
     server_process: subprocess.Popen | None = None
     server_provider: ed2k_server.Ed2kServerProvider | None = None
@@ -1155,6 +1233,38 @@ def main(argv: list[str] | None = None) -> int:
             transfer_hash,
             args.server_publish_timeout_seconds,
         )
+        if args.verify_source_lifecycle:
+            current_phase = "client2_source_lifecycle_initial_endpoint"
+            initial_endpoint = server_control.wait_for_file_endpoint(
+                transfer_hash,
+                p2p_address,
+                ports["client2_tcp"],
+                args.server_publish_timeout_seconds,
+            )
+            current_phase = "client2_source_lifecycle_reconnect"
+            client2_app, lifecycle = recycle_publisher(
+                app=client2_app,
+                app_exe=client2_app_exe,
+                profile_base=Path(client2["profile_base"]),
+                base_url=client2_base_url,
+                api_key=args.api_key,
+                client_nick=client2_identity.nick,
+                transfer_hash=transfer_hash,
+                endpoint_host=p2p_address,
+                endpoint_port=ports["client2_tcp"],
+                server_control=server_control,
+                rest_ready_timeout_seconds=args.rest_ready_timeout_seconds,
+                withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
+                publish_timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            report["source_lifecycle"] = {
+                "enabled": True,
+                "initial": {
+                    "connected": report["checks"]["client2_server_client"],
+                    "published": initial_endpoint,
+                },
+                **lifecycle,
+            }
 
         current_phase = "launch_client1"
         client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=True)
@@ -1192,6 +1302,8 @@ def main(argv: list[str] | None = None) -> int:
                 hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
             ),
         )
+        if args.verify_source_lifecycle:
+            report["source_lifecycle"]["completed"] = report["checks"]["client1_transfer_completed_file"]
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
         report["checks"]["ed2k_server_stats_final"] = server_control.stats()
