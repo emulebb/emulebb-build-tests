@@ -567,6 +567,40 @@ class RustEd2kServerControl:
 
         return live_common.wait_for(resolve, timeout_seconds, 1.0, f"ED2K client {name_fragment!r}")
 
+    def wait_for_client_absent(
+        self,
+        name_fragment: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Waits until no connected client name contains the requested fragment."""
+
+        observations: list[dict[str, object]] = []
+
+        def resolve():
+            rows = self.list_clients()
+            matches = [
+                row
+                for row in rows
+                if name_fragment.lower() in str(row.get("client_name") or "").lower()
+            ]
+            observations.append(
+                {
+                    "count": len(rows),
+                    "matching_count": len(matches),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            if matches:
+                return None
+            return {"absent": True, "observations": observations}
+
+        return live_common.wait_for(
+            resolve,
+            timeout_seconds,
+            1.0,
+            f"ED2K client {name_fragment!r} withdrawal",
+        )
+
     def wait_for_file(self, file_hash: str, timeout_seconds: float) -> dict[str, Any]:
         observations: list[dict[str, object]] = []
 
@@ -604,6 +638,51 @@ class RustEd2kServerControl:
             ):
                 return row
             return None
+
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, description)
+
+    def wait_for_file_endpoint_absent(
+        self,
+        file_hash: str,
+        host: str,
+        port: int,
+        timeout_seconds: float,
+        description: str = "ED2K server file endpoint withdrawal",
+    ) -> dict[str, Any]:
+        """Waits until one exact published endpoint is absent from a file."""
+
+        observations: list[dict[str, object]] = []
+
+        def resolve():
+            row = self.get_file(file_hash)
+            if row is None:
+                observations.append(
+                    {
+                        "indexed": False,
+                        "endpoint_present": False,
+                        "observed_at": round(time.time(), 3),
+                    }
+                )
+                return {"absent": True, "file": None, "observations": observations}
+            endpoints = row.get("endpoints")
+            endpoint_rows = endpoints if isinstance(endpoints, list) else []
+            endpoint_present = any(
+                isinstance(endpoint, dict)
+                and endpoint.get("host") == host
+                and int(endpoint.get("port") or 0) == port
+                for endpoint in endpoint_rows
+            )
+            observations.append(
+                {
+                    "indexed": True,
+                    "endpoint_count": len(endpoint_rows),
+                    "endpoint_present": endpoint_present,
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            if endpoint_present:
+                return None
+            return {"absent": True, "file": row, "observations": observations}
 
         return live_common.wait_for(resolve, timeout_seconds, 1.0, description)
 
