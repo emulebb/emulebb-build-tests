@@ -101,6 +101,18 @@ def test_decoded_ed2k_link_name_preserves_unicode_filename() -> None:
     assert not decoded.isascii()
 
 
+def test_rust_transfer_display_name_prefers_canonical_rest_field() -> None:
+    module = load_suite_module()
+
+    assert (
+        module.rust_transfer_display_name(
+            {"displayName": "canonical.bin", "name": "legacy.bin"}
+        )
+        == "canonical.bin"
+    )
+    assert module.rust_transfer_display_name({"name": "legacy.bin"}) == "legacy.bin"
+
+
 def test_ed2k_link_with_source_appends_stock_source_hint() -> None:
     module = load_suite_module()
 
