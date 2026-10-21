@@ -1526,6 +1526,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=rust_rest_port,
             api_key=args.api_key,
             max_connections=1 if args.verify_completed_download_release else None,
+            network_kademlia=bool(args.rust_kad_enabled),
             p2p_bind_ip=client_p2p_address,
             ed2k_port=rust_ed2k_port,
             ed2k_nickname=rust_spec.nick,
@@ -1536,11 +1537,6 @@ def main(argv: list[str] | None = None) -> int:
             # against the synthetic fixture ID before the real ID is learned.
             kad_bootstrap_nodes=None,
             kad_bootstrap_min_routing_contacts=1 if args.rust_kad_enabled else 10,
-        )
-        rust_metadata.replace_settings_section(
-            rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
-            "core",
-            {"networkKademlia": bool(args.rust_kad_enabled)},
         )
         report["checks"]["rust_local_nodes_fixture"] = local_kad.write_nodes_dat(
             rust_profile / "nodes.dat", owner=rust_spec, peers=[mfc_spec, rust_spec], peer_address=client_p2p_address,

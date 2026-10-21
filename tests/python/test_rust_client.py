@@ -89,9 +89,11 @@ def test_write_rust_profile_persists_connection_cap(tmp_path: Path) -> None:
         rest_port=4711,
         api_key="key",
         max_connections=1,
+        network_kademlia=False,
     )
 
     assert setting_value(profile_dir, "core", "maxConnections") == 1
+    assert setting_value(profile_dir, "core", "networkKademlia") is False
 
 
 def test_write_rust_profile_rejects_zero_connection_cap(tmp_path: Path) -> None:
