@@ -45,4 +45,40 @@ TEST_CASE("ServerSocket seam supplies safe packet log defaults")
 	CHECK(ServerSocketSeams::GetPacketFieldOrDefault(static_cast<const TestServerPacket *>(NULL), &TestServerPacket::size, static_cast<std::uint32_t>(0)) == 0u);
 }
 
+TEST_CASE("ServerSocket seam decodes concatenated outbound TCP frames")
+{
+	const std::uint8_t buffer[] = {
+		0xE3u, 0x03u, 0x00u, 0x00u, 0x00u, 0x23u, 0xAAu, 0xBBu,
+		0xD4u, 0x02u, 0x00u, 0x00u, 0x00u, 0x15u, 0xCCu,
+	};
+
+	CHECK(ServerSocketSeams::IsCompleteEmbeddedTcpFrameBuffer(buffer, sizeof buffer));
+
+	size_t offset = 0;
+	ServerSocketSeams::ServerPacketFrameView frame = {};
+	REQUIRE(ServerSocketSeams::TryReadEmbeddedTcpFrame(buffer, sizeof buffer, &offset, &frame));
+	CHECK(frame.protocol == ServerSocketSeams::kServerProtocolEdonkey);
+	CHECK(frame.opcode == 0x23u);
+	CHECK(frame.payloadSize == 2u);
+	CHECK(frame.payload[0] == 0xAAu);
+	CHECK(frame.payload[1] == 0xBBu);
+
+	REQUIRE(ServerSocketSeams::TryReadEmbeddedTcpFrame(buffer, sizeof buffer, &offset, &frame));
+	CHECK(frame.protocol == ServerSocketSeams::kServerProtocolPacked);
+	CHECK(frame.opcode == 0x15u);
+	CHECK(frame.payloadSize == 1u);
+	CHECK(frame.payload[0] == 0xCCu);
+	CHECK(offset == sizeof buffer);
+}
+
+TEST_CASE("ServerSocket seam rejects incomplete outbound TCP frame batches")
+{
+	const std::uint8_t truncated[] = { 0xE3u, 0x03u, 0x00u, 0x00u, 0x00u, 0x23u, 0xAAu };
+	const std::uint8_t invalidMarker[] = { 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x23u };
+
+	CHECK_FALSE(ServerSocketSeams::IsCompleteEmbeddedTcpFrameBuffer(truncated, sizeof truncated));
+	CHECK_FALSE(ServerSocketSeams::IsCompleteEmbeddedTcpFrameBuffer(invalidMarker, sizeof invalidMarker));
+	CHECK_FALSE(ServerSocketSeams::IsCompleteEmbeddedTcpFrameBuffer(NULL, 0));
+}
+
 TEST_SUITE_END();
