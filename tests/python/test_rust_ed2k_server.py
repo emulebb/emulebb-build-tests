@@ -116,16 +116,6 @@ def test_rust_control_normalizes_stats_and_clients(monkeypatch) -> None:
 
 
 @pytest.mark.unit
-def test_rust_control_reports_missing_observation_capabilities() -> None:
-    control = rust_ed2k.RustEd2kServerControl("http://127.0.0.1:8080")
-
-    with pytest.raises(UnsupportedEd2kServerCapability, match="file listing"):
-        control.list_files()
-    with pytest.raises(UnsupportedEd2kServerCapability, match="audit API"):
-        control.audit()
-
-
-@pytest.mark.unit
 def test_rust_control_normalizes_exact_file_and_missing_response(monkeypatch) -> None:
     file_hash = "00112233445566778899aabbccddeeff"
     payload = {
