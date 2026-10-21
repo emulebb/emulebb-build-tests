@@ -206,6 +206,27 @@ def test_resolve_client2_app_exe_uses_stock_baseline_identity(tmp_path: Path) ->
     assert module.resolve_client2_app_exe(workspace, "Release", None, "stock_emule") == stock_exe.resolve()
 
 
+def test_is_port_available_accepts_explicit_loopback() -> None:
+    module = load_suite_module()
+
+    assert module.is_port_available(0, host="127.0.0.1")
+
+
+def test_is_port_available_rejects_wildcard_bind() -> None:
+    module = load_suite_module()
+
+    with pytest.raises(ValueError, match="all network interfaces"):
+        module.is_port_available(0, host="0.0.0.0")
+
+
+@pytest.mark.parametrize("host", ["", "localhost", "::1"])
+def test_is_port_available_rejects_non_ipv4_address(host: str) -> None:
+    module = load_suite_module()
+
+    with pytest.raises(ValueError, match="explicit IPv4"):
+        module.is_port_available(0, host=host)
+
+
 def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_suite_module()
     availability_checks: list[tuple[int, str | None, bool]] = []
@@ -213,12 +234,10 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     def fake_is_port_available(
         port: int,
         *,
-        host: str | None = None,
+        host: str,
         udp: bool = False,
-        allow_loopback: bool = False,
     ) -> bool:
         availability_checks.append((port, host, udp))
-        assert allow_loopback is (host == "127.0.0.1")
         return True
 
     monkeypatch.setattr(module, "is_port_available", fake_is_port_available)

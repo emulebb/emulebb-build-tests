@@ -163,20 +163,22 @@ def resolve_client2_control_exe(
 def is_port_available(
     port: int,
     *,
-    host: str | None = None,
+    host: str,
     udp: bool = False,
-    allow_loopback: bool = False,
 ) -> bool:
     """Reports whether a TCP or UDP port can be bound locally."""
 
-    bind_host = str(host or "").strip() if allow_loopback else rest_smoke.require_lan_bind_addr(host)
-    if not bind_host:
-        raise ValueError("A bind host is required for local port probes.")
+    try:
+        bind_address = ipaddress.IPv4Address(host.strip())
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("Port probes require an explicit IPv4 bind address.") from exc
+    if bind_address.is_unspecified:
+        raise ValueError("Port probes cannot bind to all network interfaces.")
     family = socket.AF_INET
     sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     with socket.socket(family, sock_type) as probe:
         try:
-            probe.bind((bind_host, port))
+            probe.bind((str(bind_address), port))
         except OSError:
             return False
     return True
@@ -206,7 +208,6 @@ def choose_available_local_port(
     used: set[int],
     *,
     udp: bool = False,
-    allow_loopback: bool = False,
 ) -> int:
     """Chooses an unused local TCP/UDP port outside the Windows ephemeral range."""
 
@@ -217,7 +218,6 @@ def choose_available_local_port(
             candidate,
             host=lan_bind_addr,
             udp=udp,
-            allow_loopback=allow_loopback,
         ):
             return candidate
     raise RuntimeError("Could not allocate a local port in the ED2K harness range.")
@@ -257,7 +257,6 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
                     availability_host,
                     used,
                     udp=name.endswith("_udp"),
-                    allow_loopback=name == "client2_ec",
                 ),
             )
         except RuntimeError as exc:
