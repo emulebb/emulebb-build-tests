@@ -230,6 +230,48 @@ def test_offer_v1_counters_reject_missing_server_shape() -> None:
 
 
 @pytest.mark.unit
+def test_offerfiles_scale_parser_uses_retained_campaign_defaults() -> None:
+    args = subject.build_parser().parse_args(
+        ["offerfiles-scale", "--lan-bind-addr", "192.0.2.10"]
+    )
+
+    assert args.timeout_seconds == 3 * 60 * 60
+    assert args.poll_seconds == 0.25
+    assert args.cancel_after_batches == 3
+    assert args.settle_seconds == 2.0
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_policy_requires_enabled_100k_envelope() -> None:
+    accepted = subject._offerfiles_scale_policy_acceptance(
+        {
+            "data": {
+                "offerfiles_v1": True,
+                "offerfiles_v1_error": None,
+                "offerfiles_v1_policy": "200 files per batch",
+                "soft_limit_files": 100_000,
+                "hard_limit_files": 200_000,
+            }
+        },
+        expected_files=100_000,
+    )
+
+    assert accepted["ok"] is True
+    rejected = subject._offerfiles_scale_policy_acceptance(
+        {
+            "data": {
+                "offerfiles_v1": False,
+                "offerfiles_v1_error": None,
+                "soft_limit_files": 5_000,
+                "hard_limit_files": 200_000,
+            }
+        },
+        expected_files=100_000,
+    )
+    assert rejected["ok"] is False
+
+
+@pytest.mark.unit
 def test_watcher_cohort_is_exactly_one_percent_with_balanced_path_classes() -> None:
     summary = subject.fixture.watcher_cohort_summary()
     paths = [

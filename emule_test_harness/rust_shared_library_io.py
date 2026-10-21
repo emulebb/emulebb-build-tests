@@ -36,6 +36,7 @@ from .script_modules import load_script_module
 REPORT_SCHEMA = "emulebb.rust-shared-library-io.v4"
 MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v1"
 LAN_STARTUP_REPORT_SCHEMA = "emulebb.rust-shared-library-lan-startup.v1"
+OFFERFILES_SCALE_REPORT_SCHEMA = "emulebb.rust-offerfiles-scale.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local"
@@ -43,6 +44,7 @@ DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
+DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
@@ -1006,10 +1008,27 @@ def start_daemon(
         "core",
         {"autoConnect": False, "networkEd2k": False, "networkKademlia": False},
     )
-    process = rust_client.start_rust_client_executable(
-        paths.staged_executable, profile_dir, log_path
+    return start_configured_daemon(
+        paths,
+        profile_dir,
+        log_path,
+        rest_address="127.0.0.1",
+        rest_port=port,
     )
-    client = RestClient(f"http://127.0.0.1:{port}/api/v1", API_KEY)
+
+
+def start_configured_daemon(
+    paths: HarnessPaths,
+    profile_dir: Path,
+    log_path: Path,
+    *,
+    rest_address: str,
+    rest_port: int,
+) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
+    """Start one already-configured profile and attach REST/resource observers."""
+
+    process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
+    client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
     wait_for_rest(client, process, 60.0)
     sampler = ProcessSampler(process, 2.0)
     sampler.maybe_sample(force=True)
@@ -1564,6 +1583,444 @@ def run_lan_startup_campaign(
             "target": stop_daemon(target_process, target_client),
             "seed": stop_daemon(seed_process, seed_client),
         }
+        ed2k_harness.stop_process(server_process)
+        report["finishedAtUtc"] = utc_now()
+        write_json(report_path, report)
+    return report_path, report
+
+
+def _offerfiles_scale_policy_acceptance(
+    server_status: dict[str, object], *, expected_files: int
+) -> dict[str, object]:
+    data = server_status.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    checks = {
+        "enabled": data.get("offerfiles_v1") is True,
+        "valid": data.get("offerfiles_v1_error") is None,
+        "softLimit": data.get("soft_limit_files") == expected_files,
+        "hardLimitAboveBatch": int(data.get("hard_limit_files") or 0)
+        > OFFERFILES_SCALE_BATCH_MAX,
+        "policyReported": bool(str(data.get("offerfiles_v1_policy") or "")),
+    }
+    return {"ok": all(checks.values()), "checks": checks}
+
+
+def _configure_offerfiles_scale_profile(
+    *,
+    paths: HarnessPaths,
+    profile_dir: Path,
+    lan_bind_addr: str,
+    rest_port: int,
+    ed2k_port: int,
+    kad_port: int,
+    server_endpoint: str,
+    client_nick: str,
+) -> None:
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=paths.rust_repo,
+        incoming_dir=profile_dir / "incoming",
+        rest_addr=lan_bind_addr,
+        rest_port=rest_port,
+        api_key=API_KEY,
+        auto_connect=True,
+        network_kademlia=False,
+        p2p_bind_ip=lan_bind_addr,
+        ed2k_port=ed2k_port,
+        ed2k_nickname=client_nick,
+        kad_port=kad_port,
+        server_endpoint=server_endpoint,
+        nat_enabled=False,
+        initial_shared_directory_reload=False,
+        local_only_discovery=True,
+        replace_servers=True,
+    )
+    rust_metadata.replace_settings_section(
+        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        "core",
+        {"autoConnect": True, "networkEd2k": True, "networkKademlia": False},
+    )
+
+
+def _wait_for_offerfiles_batches(
+    *,
+    admin_base_url: str,
+    process: subprocess.Popen[str],
+    sampler: ProcessSampler,
+    before: dict[str, int],
+    minimum_batches: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, object]:
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    observations: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"emulebb-rust exited during OFFERFILES cancellation epoch with code {process.returncode}"
+            )
+        sampler.maybe_sample()
+        status = ed2k_harness.admin_request(
+            admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        counters = offer_v1_counters(status)
+        delta = offer_v1_counter_delta(before, counters)
+        observations.append(
+            {
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+                "counters": counters,
+                "delta": delta,
+            }
+        )
+        if delta.get("batches", 0) >= minimum_batches:
+            sampler.maybe_sample(force=True)
+            return {
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+                "counters": counters,
+                "delta": delta,
+                "process": sampler.summary(),
+                "observations": observations[-30:],
+            }
+        time.sleep(poll_seconds)
+    raise TimeoutError(
+        f"OFFERFILES cancellation epoch did not reach {minimum_batches} batches"
+    )
+
+
+def _wait_for_offerfiles_completion(
+    *,
+    admin_base_url: str,
+    control: ed2k_harness.Ed2kServerControl,
+    client_nick: str,
+    client: RestClient,
+    process: subprocess.Popen[str],
+    sampler: ProcessSampler,
+    before: dict[str, int],
+    expected_records: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, object]:
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    first_batch_at: float | None = None
+    observations: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"emulebb-rust exited during OFFERFILES completion epoch with code {process.returncode}"
+            )
+        sampler.maybe_sample()
+        server_status = ed2k_harness.admin_request(
+            admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        counters = offer_v1_counters(server_status)
+        delta = offer_v1_counter_delta(before, counters)
+        now = time.monotonic()
+        if first_batch_at is None and delta.get("batches", 0) > 0:
+            first_batch_at = now
+        observations.append(
+            {
+                "elapsedSeconds": round(now - started, 3),
+                "counters": counters,
+                "delta": delta,
+            }
+        )
+        if delta.get("records", 0) >= expected_records:
+            status = client.request(
+                "GET", "/status", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            )
+            diagnostics = client.request(
+                "GET", "/diagnostics", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            )
+            current_server = (
+                status.get("currentServer")
+                if isinstance(status.get("currentServer"), dict)
+                else {}
+            )
+            publish = (
+                diagnostics.get("ed2kPublish")
+                if isinstance(diagnostics.get("ed2kPublish"), dict)
+                else {}
+            )
+            server_client = control.wait_for_client_shared_files(
+                client_nick,
+                expected_records,
+                min(30.0, max(1.0, deadline - time.monotonic())),
+            )
+            sampler.maybe_sample(force=True)
+            return {
+                "elapsedSeconds": round(
+                    now - (first_batch_at if first_batch_at is not None else started), 3
+                ),
+                "counters": counters,
+                "delta": delta,
+                "clientEvidence": {
+                    "mode": current_server.get("offerFilesMode"),
+                    "batchMax": current_server.get("offerFilesBatchMax"),
+                    "minIntervalMs": current_server.get("offerFilesMinIntervalMs"),
+                    "publishedEntries": publish.get("publishedEntries"),
+                    "pendingEntries": publish.get("pendingEntries"),
+                    "sessionPumpActive": publish.get("sessionPumpActive"),
+                    "serverSharedFiles": server_client.get("shared_files"),
+                },
+                "process": sampler.summary(),
+                "observations": observations[-30:],
+            }
+        time.sleep(poll_seconds)
+    raise TimeoutError(
+        f"OFFERFILES completion epoch did not publish {expected_records} records"
+    )
+
+
+def run_offerfiles_scale_campaign(
+    paths: HarnessPaths, args: argparse.Namespace
+) -> tuple[Path, dict[str, object]]:
+    """Prove 100k negotiated publication pacing, cancellation, reconnect, and memory."""
+
+    manifest = load_prepared_manifest(paths)
+    if manifest.get("contentGeneration") == "mutation-v2":
+        restore_fixture_baseline(paths.fixture_root)
+        update_fixture_generation(paths, "base-v2")
+    elif manifest.get("contentGeneration") != "base-v2":
+        raise RuntimeError(
+            "fixture content generation is unknown; rerun prepare after cleanup"
+        )
+    validation = validate_fixture(paths.fixture_root)
+    if not validation["ok"]:
+        raise RuntimeError(f"fixture failed pre-run validation: {validation}")
+    if not paths.staged_executable.is_file():
+        raise RuntimeError(
+            f"staged emulebb-rust executable is missing: {paths.staged_executable}"
+        )
+    inventory = physical_disk_inventory()
+    target_disk_row = target_disk(paths, inventory)
+    assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
+
+    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = dtt.choose_distinct_ports(lan_bind_addr)
+    server_endpoint = f"{lan_bind_addr}:{ports['ed2k_tcp']}"
+    client_nick = "rust-offerfiles-scale"
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
+    if storage.is_directory(run_root):
+        raise RuntimeError("generated OFFERFILES scale run directory already exists")
+    storage.make_directories(run_root)
+    profile_dir = run_root / "profile"
+    report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
+    report: dict[str, object] = {
+        "schema": OFFERFILES_SCALE_REPORT_SCHEMA,
+        "status": "running",
+        "runId": run_id,
+        "startedAtUtc": utc_now(),
+        "networkClass": "lan-only",
+        "fixture": {
+            "fingerprint": path_fingerprint(paths.fixture_root),
+            "fileCount": validation["fileCount"],
+            "totalBytes": validation["totalBytes"],
+            "longPathFileCount": validation["longPathFileCount"],
+        },
+        "paths": {
+            "runFingerprint": path_fingerprint(run_root),
+            "outputRootFingerprint": path_fingerprint(paths.output_root),
+        },
+    }
+    process: subprocess.Popen[str] | None = None
+    client: RestClient | None = None
+    server_process: subprocess.Popen | None = None
+    overall_started = time.monotonic()
+    deadline = overall_started + args.timeout_seconds
+
+    def remaining_seconds() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"campaign exceeded the {args.timeout_seconds:.0f}s overall timeout"
+            )
+        return remaining
+
+    try:
+        process, client, sampler = start_daemon(
+            paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
+        )
+        client.request(
+            "PATCH",
+            "/shared-directories",
+            {
+                "confirmReplaceRoots": True,
+                "roots": [{"path": str(paths.fixture_root) + os.sep}],
+            },
+        )
+        offline_scan = wait_for_reload(
+            label="offerfilesOfflineScan",
+            client=client,
+            process=process,
+            sampler=sampler,
+            disk_counter_key=target_disk_row.get("counterKey"),
+            expected_scanned=PRODUCTION_SPEC.file_count,
+            timeout_seconds=remaining_seconds(),
+            poll_seconds=args.poll_seconds,
+        )
+        offline_scan["acceptance"] = phase_acceptance(
+            offline_scan,
+            {
+                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
+                "scannedCount": PRODUCTION_SPEC.file_count,
+                "plannedHashCount": PRODUCTION_SPEC.file_count,
+                "hashedCount": PRODUCTION_SPEC.file_count,
+                "reusedCount": 0,
+                "plannedReadBytes": PRODUCTION_SPEC.total_bytes,
+                "diskCount": 1,
+                "newCount": PRODUCTION_SPEC.file_count,
+            },
+        )
+        report["offlineScan"] = offline_scan
+        report["offlineShutdown"] = stop_daemon(process, client)
+        if report["offlineShutdown"].get("method") != "rest":
+            raise RuntimeError("offline scan process did not stop through REST")
+        process = None
+        client = None
+
+        server_repo = (
+            Path(args.ed2k_server_repo).resolve()
+            if args.ed2k_server_repo
+            else paths.workspace_root / "repos" / "ed2k-server"
+        )
+        if not (server_repo / "Cargo.toml").is_file():
+            raise RuntimeError(f"Rust ed2k-server repo is missing Cargo.toml: {server_repo}")
+        server = ed2k_harness.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=run_root / "ed2k-server",
+            ed2k_port=ports["ed2k_tcp"],
+            admin_port=ports["ed2k_admin"],
+            token=API_KEY,
+            admin_address=lan_bind_addr,
+            ed2k_address=lan_bind_addr,
+            repo_override=str(server_repo),
+            exe_override=args.ed2k_server_exe,
+            offerfiles_v1=True,
+            soft_limit_files=PRODUCTION_SPEC.file_count,
+            hard_limit_files=200_000,
+        )
+        server_process = server.process
+        control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
+        initial_server_status = ed2k_harness.admin_request(
+            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        report["server"] = {
+            "health": server.health,
+            "build": server.build,
+            "policy": _offerfiles_scale_policy_acceptance(
+                initial_server_status, expected_files=PRODUCTION_SPEC.file_count
+            ),
+        }
+        if not report["server"]["policy"]["ok"]:
+            raise RuntimeError("local Rust server did not expose the required v1 scale policy")
+
+        _configure_offerfiles_scale_profile(
+            paths=paths,
+            profile_dir=profile_dir,
+            lan_bind_addr=lan_bind_addr,
+            rest_port=ports["client1_rest"],
+            ed2k_port=ports["client1_tcp"],
+            kad_port=ports["client1_udp"],
+            server_endpoint=server_endpoint,
+            client_nick=client_nick,
+        )
+        cancellation_before = offer_v1_counters(initial_server_status)
+        process, client, sampler = start_configured_daemon(
+            paths,
+            profile_dir,
+            run_root / "cancel-epoch.log",
+            rest_address=lan_bind_addr,
+            rest_port=ports["client1_rest"],
+        )
+        cancellation_progress = _wait_for_offerfiles_batches(
+            admin_base_url=server.admin_base_url,
+            process=process,
+            sampler=sampler,
+            before=cancellation_before,
+            minimum_batches=args.cancel_after_batches,
+            timeout_seconds=min(120.0, remaining_seconds()),
+            poll_seconds=args.poll_seconds,
+        )
+        cancellation_shutdown = stop_daemon(process, client)
+        process = None
+        client = None
+        control.wait_for_client_absent(client_nick, min(30.0, remaining_seconds()))
+        after_shutdown_status = ed2k_harness.admin_request(
+            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        after_shutdown = offer_v1_counters(after_shutdown_status)
+        time.sleep(args.settle_seconds)
+        after_settle_status = ed2k_harness.admin_request(
+            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        after_settle = offer_v1_counters(after_settle_status)
+        cancellation_acceptance = offerfiles_scale_cancellation_acceptance(
+            before=cancellation_before,
+            after_shutdown=after_shutdown,
+            after_settle=after_settle,
+            shutdown=cancellation_shutdown,
+            client_absent=True,
+        )
+        report["cancellationEpoch"] = {
+            "progress": cancellation_progress,
+            "shutdown": cancellation_shutdown,
+            "afterShutdown": after_shutdown,
+            "afterSettle": after_settle,
+            "acceptance": cancellation_acceptance,
+        }
+        if not cancellation_acceptance["ok"]:
+            raise RuntimeError("OFFERFILES cancellation epoch failed acceptance")
+
+        completion_before = after_settle
+        process, client, sampler = start_configured_daemon(
+            paths,
+            profile_dir,
+            run_root / "completion-epoch.log",
+            rest_address=lan_bind_addr,
+            rest_port=ports["client1_rest"],
+        )
+        completion = _wait_for_offerfiles_completion(
+            admin_base_url=server.admin_base_url,
+            control=control,
+            client_nick=client_nick,
+            client=client,
+            process=process,
+            sampler=sampler,
+            before=completion_before,
+            expected_records=PRODUCTION_SPEC.file_count,
+            timeout_seconds=remaining_seconds(),
+            poll_seconds=args.poll_seconds,
+        )
+        completion_acceptance = offerfiles_scale_completion_acceptance(
+            before=completion_before,
+            after=completion["counters"],
+            elapsed_seconds=float(completion["elapsedSeconds"]),
+            client_evidence=completion["clientEvidence"],
+            process_summary=completion["process"],
+        )
+        completion["acceptance"] = completion_acceptance
+        report["completionEpoch"] = completion
+        if not completion_acceptance["ok"]:
+            raise RuntimeError("OFFERFILES completion epoch failed acceptance")
+        completion_shutdown = stop_daemon(process, client)
+        process = None
+        client = None
+        control.wait_for_client_absent(client_nick, min(30.0, remaining_seconds()))
+        report["completionShutdown"] = completion_shutdown
+        if completion_shutdown.get("method") != "rest":
+            raise RuntimeError("OFFERFILES completion process did not stop through REST")
+        report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
+        report["status"] = "passed"
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        raise
+    finally:
+        report["finalShutdown"] = stop_daemon(process, client)
         ed2k_harness.stop_process(server_process)
         report["finishedAtUtc"] = utc_now()
         write_json(report_path, report)
@@ -2948,6 +3405,25 @@ def build_parser() -> argparse.ArgumentParser:
     lan_startup.add_argument("--allow-non-ssd", action="store_true")
     lan_startup.add_argument("--ed2k-server-repo")
     lan_startup.add_argument("--ed2k-server-exe")
+    offerfiles_scale = subparsers.add_parser(
+        "offerfiles-scale",
+        help=(
+            "prove negotiated 100k OFFERFILES pacing, cancellation, reconnect, "
+            "and memory bounds"
+        ),
+    )
+    offerfiles_scale.add_argument("--lan-bind-addr", required=True)
+    offerfiles_scale.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS,
+    )
+    offerfiles_scale.add_argument("--poll-seconds", type=float, default=0.25)
+    offerfiles_scale.add_argument("--cancel-after-batches", type=int, default=3)
+    offerfiles_scale.add_argument("--settle-seconds", type=float, default=2.0)
+    offerfiles_scale.add_argument("--allow-non-ssd", action="store_true")
+    offerfiles_scale.add_argument("--ed2k-server-repo")
+    offerfiles_scale.add_argument("--ed2k-server-exe")
     media_describe = subparsers.add_parser(
         "media-describe",
         help="resolve private existing media roots without scanning their contents",
@@ -3009,6 +3485,22 @@ def main(argv: list[str] | None = None) -> int:
                     "LAN startup timeouts and poll interval must be positive"
                 )
             report_path, report = run_lan_startup_campaign(paths, args)
+            result = {
+                "status": report["status"],
+                "reportPath": str(report_path),
+                "reportFingerprint": path_fingerprint(report_path),
+            }
+        elif args.command == "offerfiles-scale":
+            if (
+                args.timeout_seconds <= 0
+                or args.poll_seconds <= 0
+                or args.cancel_after_batches <= 0
+                or args.settle_seconds <= 0
+            ):
+                raise RuntimeError(
+                    "OFFERFILES scale timeout, poll, cancellation, and settle values must be positive"
+                )
+            report_path, report = run_offerfiles_scale_campaign(paths, args)
             result = {
                 "status": report["status"],
                 "reportPath": str(report_path),
