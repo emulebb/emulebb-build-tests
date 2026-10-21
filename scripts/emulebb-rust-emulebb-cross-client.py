@@ -191,6 +191,164 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
     return counts
 
 
+def load_rust_diag_records(log_dir: Path) -> list[dict[str, object]]:
+    """Loads valid Rust diagnostic events in process sequence order."""
+
+    records: list[dict[str, object]] = []
+    paths = {
+        path.resolve()
+        for pattern in converged_live_wire.RUST_DIAG_DUMP_GLOBS
+        for path in log_dir.glob(pattern)
+        if path.is_file()
+    }
+    for path in sorted(paths, key=lambda item: item.name):
+        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(record, dict)
+                and record.get("schema") == "diag_event_v1"
+                and isinstance(record.get("seq"), int)
+            ):
+                records.append(record)
+    return sorted(records, key=lambda record: int(record["seq"]))
+
+
+def _compact_diag_event(record: dict[str, object]) -> dict[str, object]:
+    """Returns report-safe lifecycle evidence from one diagnostic event."""
+
+    return {
+        "seq": record.get("seq"),
+        "event": record.get("event"),
+        "keys": dict(record.get("keys") or {}),
+        "body": dict(record.get("body") or {}),
+    }
+
+
+def _completed_download_lifecycle(
+    records: list[dict[str, object]],
+    transfer_hash: str,
+    *,
+    admit_after_seq: int = -1,
+) -> dict[str, object] | None:
+    """Finds one completed, cap-one source lifecycle after an optional fence."""
+
+    normalized_hash = transfer_hash.casefold()
+    related = [
+        record
+        for record in records
+        if record.get("family") == "sched"
+        and str((record.get("keys") or {}).get("fileHash") or "").casefold() == normalized_hash
+    ]
+    for admit_index, admit in enumerate(related):
+        admit_body = admit.get("body") or {}
+        if (
+            admit.get("event") != "source_conn_budget"
+            or int(admit["seq"]) <= admit_after_seq
+            or admit_body.get("outcome") != "admit"
+            or admit_body.get("activeConnections") != 1
+            or admit_body.get("connectionCap") != 1
+        ):
+            continue
+        peer = str((admit.get("keys") or {}).get("peer") or "")
+        engaged = next(
+            (
+                record
+                for record in reversed(related[:admit_index])
+                if record.get("event") == "source_engaged"
+                and str((record.get("keys") or {}).get("peer") or "") == peer
+            ),
+            None,
+        )
+        dropped = next(
+            (
+                record
+                for record in related[admit_index + 1 :]
+                if record.get("event") == "source_dropped"
+                and str((record.get("keys") or {}).get("peer") or "") == peer
+            ),
+            None,
+        )
+        if engaged is None or dropped is None:
+            continue
+        settled = next(
+            (
+                record
+                for record in related
+                if int(record["seq"]) > int(dropped["seq"])
+                and record.get("event") == "download_task_settled"
+                and (record.get("body") or {}).get("state") == "completed"
+                and (record.get("body") or {}).get("willReask") is False
+            ),
+            None,
+        )
+        if settled is not None:
+            return {
+                "transferHash": normalized_hash,
+                "peer": peer,
+                "sourceEngaged": _compact_diag_event(engaged),
+                "connectionAdmitted": _compact_diag_event(admit),
+                "sourceDropped": _compact_diag_event(dropped),
+                "taskSettled": _compact_diag_event(settled),
+            }
+    return None
+
+
+def download_connection_reuse_evidence(
+    records: list[dict[str, object]],
+    first_transfer_hash: str,
+    second_transfer_hash: str,
+) -> dict[str, object] | None:
+    """Proves a cap-one connection slot is reused after completion."""
+
+    if first_transfer_hash.casefold() == second_transfer_hash.casefold():
+        raise ValueError("Connection reuse proof requires two distinct transfer hashes.")
+    first = _completed_download_lifecycle(records, first_transfer_hash)
+    if first is None:
+        return None
+    first_settled_seq = int(first["taskSettled"]["seq"])
+    second = _completed_download_lifecycle(
+        records,
+        second_transfer_hash,
+        admit_after_seq=first_settled_seq,
+    )
+    if second is None or second["peer"] != first["peer"]:
+        return None
+    return {
+        "connectionCap": 1,
+        "samePeer": True,
+        "peer": first["peer"],
+        "first": first,
+        "second": second,
+        "secondAdmissionAfterFirstSettlement": True,
+    }
+
+
+def wait_for_rust_download_connection_reuse(
+    log_dir: Path,
+    *,
+    first_transfer_hash: str,
+    second_transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for ordered cap-one connection reuse evidence in Rust diagnostics."""
+
+    return live_common.wait_for(
+        lambda: download_connection_reuse_evidence(
+            load_rust_diag_records(log_dir),
+            first_transfer_hash,
+            second_transfer_hash,
+        ),
+        timeout_seconds,
+        0.25,
+        "Rust completed-download connection reuse diagnostics",
+    )
+
+
 PacketTraceCursor = tuple[Path, int, int]
 
 
