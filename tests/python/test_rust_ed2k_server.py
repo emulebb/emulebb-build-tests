@@ -71,6 +71,8 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
         advertised_address="172.20.0.2",
         protocol_obfuscation=False,
         offerfiles_v1=True,
+        soft_limit_files=100_000,
+        hard_limit_files=200_001,
     )
 
     text = path.read_text(encoding="utf-8")
@@ -81,6 +83,10 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
     assert "support_crypt = false" in text
     assert config["limits"]["offerfiles_v1"] is True
     assert "offerfiles_v1 = true" in text
+    assert config["limits"]["soft_limit_files"] == 100_000
+    assert config["limits"]["hard_limit_files"] == 200_001
+    assert "soft_limit_files = 100000" in text
+    assert "hard_limit_files = 200001" in text
     assert config["network"]["private_highid_probe"] is True
     assert "private_highid_probe = true" in text
     assert "password" not in text
@@ -97,6 +103,21 @@ def test_build_server_config_requires_explicit_addresses(tmp_path: Path) -> None
             listen_address="",
             advertised_address="172.20.0.2",
         )
+
+
+@pytest.mark.unit
+def test_build_server_config_rejects_negative_file_limits(tmp_path: Path) -> None:
+    common = {
+        "ed2k_port": 4661,
+        "admin_port": 8080,
+        "listen_address": "127.0.0.1",
+        "advertised_address": "127.0.0.1",
+    }
+
+    with pytest.raises(ValueError, match="soft_limit_files"):
+        rust_ed2k.build_server_config(tmp_path / "soft.toml", **common, soft_limit_files=-1)
+    with pytest.raises(ValueError, match="hard_limit_files"):
+        rust_ed2k.build_server_config(tmp_path / "hard.toml", **common, hard_limit_files=-1)
 
 
 @pytest.mark.unit
