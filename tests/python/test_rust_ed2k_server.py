@@ -435,7 +435,7 @@ def test_stop_process_signals_wsl_pid_even_after_proxy_exit(monkeypatch, tmp_pat
 
 
 @pytest.mark.unit
-def test_rust_provider_launches_wsl_with_distinct_connect_address(monkeypatch, tmp_path: Path) -> None:
+def test_rust_server_launches_wsl_with_distinct_connect_address(monkeypatch, tmp_path: Path) -> None:
     server_exe = tmp_path / "tools" / "ed2k-server"
     server_exe.parent.mkdir(parents=True)
     server_exe.write_bytes(b"linux")
@@ -444,7 +444,7 @@ def test_rust_provider_launches_wsl_with_distinct_connect_address(monkeypatch, t
 
     monkeypatch.setattr(rust_ed2k, "_is_windows_host", lambda: True)
     monkeypatch.setattr(rust_ed2k, "wsl_ipv4_address", lambda _distribution=None: "172.20.0.2")
-    monkeypatch.setattr(rust_ed2k.RUST_ED2K_PROVIDER, "prepare_binary", lambda *_args, **_kwargs: binary)
+    monkeypatch.setattr(rust_ed2k, "prepare_server_binary", lambda *_args, **_kwargs: binary)
     monkeypatch.setattr(rust_ed2k, "start_server", lambda *_args, **_kwargs: process)
     monkeypatch.setattr(
         rust_ed2k,
@@ -452,7 +452,7 @@ def test_rust_provider_launches_wsl_with_distinct_connect_address(monkeypatch, t
         lambda base_url, _process, timeout: {"ok": True, "data": {"base_url": base_url, "timeout": timeout}},
     )
 
-    launch = rust_ed2k.RUST_ED2K_PROVIDER.launch(
+    launch = rust_ed2k.launch_server(
         workspace_root=tmp_path / "workspace",
         server_dir=tmp_path / "run",
         ed2k_port=4661,
@@ -466,11 +466,11 @@ def test_rust_provider_launches_wsl_with_distinct_connect_address(monkeypatch, t
     assert launch.ed2k_port == 4661
     assert launch.admin_base_url == "http://127.0.0.1:8080"
     assert launch.config["network"]["listen_ip"] == "0.0.0.0"
-    assert isinstance(rust_ed2k.RUST_ED2K_PROVIDER.control(launch.admin_base_url, "unused"), rust_ed2k.RustEd2kServerControl)
+    assert isinstance(rust_ed2k.create_server_control(launch.admin_base_url, "unused"), rust_ed2k.RustEd2kServerControl)
 
 
 @pytest.mark.unit
-def test_rust_provider_rejects_unimplemented_fixture_and_trace_capabilities(tmp_path: Path) -> None:
+def test_rust_server_rejects_unimplemented_fixture_and_trace_capabilities(tmp_path: Path) -> None:
     common = {
         "workspace_root": tmp_path / "workspace",
         "server_dir": tmp_path / "run",
@@ -482,13 +482,13 @@ def test_rust_provider_rejects_unimplemented_fixture_and_trace_capabilities(tmp_
     }
 
     with pytest.raises(UnsupportedEd2kServerCapability, match="static catalog"):
-        rust_ed2k.RUST_ED2K_PROVIDER.launch(**common, fixture_files=[{"hash": "0011"}])
+        rust_ed2k.launch_server(**common, fixture_files=[{"hash": "0011"}])
     with pytest.raises(UnsupportedEd2kServerCapability, match="packet tracing"):
-        rust_ed2k.RUST_ED2K_PROVIDER.launch(**common, packet_trace=True)
+        rust_ed2k.launch_server(**common, packet_trace=True)
 
 
 @pytest.mark.native
-def test_rust_provider_live_wsl_smoke() -> None:
+def test_rust_server_live_wsl_smoke() -> None:
     if shutil.which("wsl.exe") is None:
         pytest.skip("WSL is unavailable")
     output_root = get_workspace_output_root()
@@ -500,7 +500,7 @@ def test_rust_provider_live_wsl_smoke() -> None:
     admin_port = available_local_port()
     launch = None
     try:
-        launch = rust_ed2k.RUST_ED2K_PROVIDER.launch(
+        launch = rust_ed2k.launch_server(
             workspace_root=Path("unused-with-explicit-executable"),
             server_dir=server_dir,
             ed2k_port=ed2k_port,
@@ -511,7 +511,7 @@ def test_rust_provider_live_wsl_smoke() -> None:
             exe_override=str(server_exe),
             health_timeout_seconds=30.0,
         )
-        control = rust_ed2k.RUST_ED2K_PROVIDER.control(launch.admin_base_url, "unused")
+        control = rust_ed2k.create_server_control(launch.admin_base_url, "unused")
         stats = control.stats()
         assert launch.ed2k_host
         assert launch.health["data"]["ready"] is True
@@ -520,5 +520,5 @@ def test_rust_provider_live_wsl_smoke() -> None:
         assert control.get_file("00" * 16) is None
     finally:
         if launch is not None:
-            rust_ed2k.RUST_ED2K_PROVIDER.stop_process(launch.process)
+            rust_ed2k.stop_process(launch.process)
             assert launch.process.poll() is not None
