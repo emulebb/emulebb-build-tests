@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,6 +43,7 @@ def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
 
 @pytest.mark.unit
 def test_production_fixture_is_exactly_100k_and_ten_gib_decimal() -> None:
+    assert len(subject.API_KEY.encode("utf-8")) >= 32
     assert subject.PRODUCTION_SPEC.file_count == 100_000
     assert subject.PRODUCTION_SPEC.total_bytes == 10_485_760_000
     assert len(subject.mutation_indices()) == 1_000
@@ -114,11 +116,246 @@ def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> No
 
 
 @pytest.mark.unit
-def test_lan_startup_uses_rust_ed2k_server_cargo_manifest() -> None:
+def test_shared_library_lanes_leave_canonical_server_builds_to_workspace_tooling() -> None:
     source = Path(subject.__file__).read_text(encoding="utf-8")
 
-    assert 'paths.workspace_root / "repos" / "ed2k-server"' in source
-    assert 'server_repo / "Cargo.toml"' in source
+    assert 'else paths.workspace_root / "repos" / "ed2k-server"' not in source
+    assert source.count(
+        "repo_override=str(server_repo) if server_repo is not None else None"
+    ) == 2
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_cancellation_requires_quiescent_clean_shutdown() -> None:
+    before = {
+        "requested": 0,
+        "sessions": 0,
+        "batches": 0,
+        "records": 0,
+        "oversized": 0,
+        "conn_waits": 0,
+        "conn_wait_ms": 0,
+        "global_waits": 0,
+        "global_wait_ms": 0,
+        "global_wait_max_ms": 0,
+        "global_waiting_now": 0,
+    }
+    stopped = before | {
+        "requested": 1,
+        "sessions": 1,
+        "batches": 3,
+        "records": 600,
+    }
+
+    accepted = subject.offerfiles_scale_cancellation_acceptance(
+        before=before,
+        after_shutdown=stopped,
+        after_settle=dict(stopped),
+        shutdown={"method": "rest", "exitCode": 0},
+        client_absent=True,
+    )
+
+    assert accepted["ok"] is True
+    assert accepted["delta"]["records"] == 600
+    assert accepted["checks"]["oneAdvertisedSession"] is True
+    assert accepted["checks"]["sessionCounterSettled"] is True
+    moving = dict(stopped)
+    moving["records"] = 800
+    assert (
+        subject.offerfiles_scale_cancellation_acceptance(
+            before=before,
+            after_shutdown=stopped,
+            after_settle=moving,
+            shutdown={"method": "rest", "exitCode": 0},
+            client_absent=True,
+        )["ok"]
+        is False
+    )
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_completion_requires_full_paced_reconnect() -> None:
+    before = {
+        "requested": 1,
+        "sessions": 0,
+        "batches": 3,
+        "records": 600,
+        "oversized": 0,
+        "conn_waits": 0,
+        "conn_wait_ms": 0,
+        "global_waits": 0,
+        "global_wait_ms": 0,
+        "global_wait_max_ms": 0,
+        "global_waiting_now": 0,
+    }
+    after = before | {
+        "requested": 2,
+        "sessions": 1,
+        "batches": 503,
+        "records": 100_600,
+    }
+    client_evidence = {
+        "mode": "negotiatedV1",
+        "batchMax": 200,
+        "minIntervalMs": 500,
+        "publishedEntries": 100_000,
+        "pendingEntries": 0,
+        "sessionPumpActive": False,
+        "serverSharedFiles": 100_000,
+    }
+    process_summary = {
+        "peakWorkingSetBytes": 256 * 1024 * 1024,
+        "peakPrivateBytes": 300 * 1024 * 1024,
+    }
+
+    accepted = subject.offerfiles_scale_completion_acceptance(
+        before=before,
+        after=after,
+        elapsed_seconds=249.5,
+        client_evidence=client_evidence,
+        process_summary=process_summary,
+    )
+
+    assert accepted["ok"] is True
+    assert accepted["expectedBatches"] == 500
+    assert accepted["minimumElapsedSeconds"] == 249.5
+    too_fast = subject.offerfiles_scale_completion_acceptance(
+        before=before,
+        after=after,
+        elapsed_seconds=200.0,
+        client_evidence=client_evidence,
+        process_summary=process_summary,
+    )
+    assert too_fast["ok"] is False
+    assert too_fast["checks"]["minimumPacingElapsed"] is False
+
+
+@pytest.mark.unit
+def test_offer_v1_counters_reject_missing_server_shape() -> None:
+    with pytest.raises(RuntimeError, match="offer_v1"):
+        subject.offer_v1_counters({"data": {}})
+
+
+@pytest.mark.unit
+def test_offerfiles_server_stats_uses_policy_and_counter_endpoint(monkeypatch) -> None:
+    calls = []
+
+    def fake_admin_request(base_url, api_key, path, *, timeout_seconds):
+        calls.append((base_url, api_key, path, timeout_seconds))
+        return {"data": {"offer_v1": {}}}
+
+    monkeypatch.setattr(subject.ed2k_harness, "admin_request", fake_admin_request)
+
+    result = subject.read_offerfiles_server_stats("http://127.0.0.1:8080")
+
+    assert result == {"data": {"offer_v1": {}}}
+    assert calls == [
+        ("http://127.0.0.1:8080", subject.API_KEY, "/api/stats", 5.0)
+    ]
+
+
+@pytest.mark.unit
+def test_offerfiles_campaign_uses_launcher_selected_server_endpoint() -> None:
+    server = SimpleNamespace(ed2k_host="172.20.0.2", ed2k_port=4661)
+
+    assert subject.launched_server_endpoint(server) == "172.20.0.2:4661"
+    assert subject.launched_client_bind_address(server, "192.0.2.10") == "192.0.2.10"
+
+    forwarded = SimpleNamespace(ed2k_host="127.0.0.1", ed2k_port=4661)
+    assert subject.launched_client_bind_address(forwarded, "192.0.2.10") == "127.0.0.1"
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_parser_uses_retained_campaign_defaults() -> None:
+    args = subject.build_parser().parse_args(
+        ["offerfiles-scale", "--lan-bind-addr", "192.0.2.10"]
+    )
+
+    assert args.timeout_seconds == 3 * 60 * 60
+    assert args.poll_seconds == 0.25
+    assert args.cancel_after_batches == 3
+    assert args.settle_seconds == 2.0
+    assert args.resume_run_id is None
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_resume_requires_accepted_cold_scan(tmp_path: Path) -> None:
+    paths = harness_paths(tmp_path)
+    run_id = "20261021T204449Z-15648"
+    run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
+    profile_dir = run_root / "profile"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / subject.rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"db")
+    paths.reports_root.mkdir(parents=True)
+    report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": subject.OFFERFILES_SCALE_REPORT_SCHEMA,
+                "runId": run_id,
+                "status": "failed",
+                "startedAtUtc": "2026-10-21T20:44:49Z",
+                "finishedAtUtc": "2026-10-21T21:32:43Z",
+                "error": {"type": "TimeoutError"},
+                "offlineScan": {"acceptance": {"ok": True}},
+                "offlineShutdown": {"method": "rest", "exitCode": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = subject.load_offerfiles_scale_resume(paths, run_id)
+
+    assert resolved[:3] == (run_root, profile_dir, report_path)
+    resumed = resolved[3]
+    assert resumed["status"] == "running"
+    assert resumed["resumeCount"] == 1
+    assert resumed["attempts"][0]["status"] == "failed"
+    assert "error" not in resumed
+
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": subject.OFFERFILES_SCALE_REPORT_SCHEMA,
+                "runId": run_id,
+                "offlineScan": {"acceptance": {"ok": False}},
+                "offlineShutdown": {"method": "rest", "exitCode": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="cold-scan checkpoint"):
+        subject.load_offerfiles_scale_resume(paths, run_id)
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_policy_requires_enabled_100k_envelope() -> None:
+    accepted = subject._offerfiles_scale_policy_acceptance(
+        {
+            "data": {
+                "offerfiles_v1": True,
+                "offerfiles_v1_error": None,
+                "offerfiles_v1_policy": "200 files per batch",
+                "soft_limit_files": 100_000,
+                "hard_limit_files": 200_000,
+            }
+        },
+        expected_files=100_000,
+    )
+
+    assert accepted["ok"] is True
+    rejected = subject._offerfiles_scale_policy_acceptance(
+        {
+            "data": {
+                "offerfiles_v1": False,
+                "offerfiles_v1_error": None,
+                "soft_limit_files": 5_000,
+                "hard_limit_files": 200_000,
+            }
+        },
+        expected_files=100_000,
+    )
+    assert rejected["ok"] is False
 
 
 @pytest.mark.unit

@@ -349,6 +349,8 @@ def build_server_config(
     advertised_address: str,
     protocol_obfuscation: bool = True,
     offerfiles_v1: bool = False,
+    soft_limit_files: int = 5000,
+    hard_limit_files: int = 200000,
     server_name: str = "emulebb-local-e2e",
 ) -> dict[str, object]:
     """Writes a minimal private Rust server configuration for local harness runs."""
@@ -357,6 +359,10 @@ def build_server_config(
         raise ValueError("listen_address must be explicit.")
     if not advertised_address.strip():
         raise ValueError("advertised_address must be explicit.")
+    if soft_limit_files < 0:
+        raise ValueError("soft_limit_files must be non-negative.")
+    if hard_limit_files < 0:
+        raise ValueError("hard_limit_files must be non-negative.")
     config: dict[str, object] = {
         "server": {
             "name": server_name,
@@ -372,8 +378,8 @@ def build_server_config(
         },
         "limits": {
             "max_clients": 1000,
-            "soft_limit_files": 5000,
-            "hard_limit_files": 200000,
+            "soft_limit_files": soft_limit_files,
+            "hard_limit_files": hard_limit_files,
             "ping_delay_seconds": 600,
             "offerfiles_v1": offerfiles_v1,
         },
@@ -420,8 +426,8 @@ def build_server_config(
         "",
         "[limits]",
         "max_clients = 1000",
-        "soft_limit_files = 5000",
-        "hard_limit_files = 200000",
+        f"soft_limit_files = {soft_limit_files}",
+        f"hard_limit_files = {hard_limit_files}",
         "ping_delay_seconds = 600",
         f"offerfiles_v1 = {str(offerfiles_v1).lower()}",
         "",
@@ -739,6 +745,8 @@ def launch_server(
     exe_override: str | None = None,
     protocol_obfuscation: bool = True,
     offerfiles_v1: bool = False,
+    soft_limit_files: int = 5000,
+    hard_limit_files: int = 200000,
     server_udp: bool = True,
     packet_trace: bool = False,
     health_timeout_seconds: float = 30.0,
@@ -768,9 +776,11 @@ def launch_server(
     if _is_windows_host():
         advertised_address = wsl_ipv4_address(distribution)
         listen_address = "0.0.0.0"
+        client_address = "127.0.0.1"
     else:
         advertised_address = ed2k_address
         listen_address = ed2k_address
+        client_address = ed2k_address
     server_dir.mkdir(parents=True, exist_ok=True)
     config_path = server_dir / "config.toml"
     log_path = server_dir / "server.log"
@@ -783,6 +793,8 @@ def launch_server(
         advertised_address=advertised_address,
         protocol_obfuscation=protocol_obfuscation,
         offerfiles_v1=offerfiles_v1,
+        soft_limit_files=soft_limit_files,
+        hard_limit_files=hard_limit_files,
     )
     process = start_server(
         binary.server_exe,
@@ -803,7 +815,7 @@ def launch_server(
     return RustEd2kServerLaunch(
         process=process,
         admin_base_url=admin_base_url,
-        ed2k_host=advertised_address,
+        ed2k_host=client_address,
         ed2k_port=ed2k_port,
         server_exe=binary.server_exe,
         server_dir=server_dir,
