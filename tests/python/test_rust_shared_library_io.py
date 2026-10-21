@@ -219,6 +219,17 @@ def test_offerfiles_scale_completion_requires_full_paced_reconnect() -> None:
     assert accepted["ok"] is True
     assert accepted["expectedBatches"] == 500
     assert accepted["minimumElapsedSeconds"] == 249.5
+    after["batches"] = 507
+    assert (
+        subject.offerfiles_scale_completion_acceptance(
+            before=before,
+            after=after,
+            elapsed_seconds=253.0,
+            client_evidence=client_evidence,
+            process_summary=process_summary,
+        )["ok"]
+        is True
+    )
     too_fast = subject.offerfiles_scale_completion_acceptance(
         before=before,
         after=after,
@@ -228,6 +239,41 @@ def test_offerfiles_scale_completion_requires_full_paced_reconnect() -> None:
     )
     assert too_fast["ok"] is False
     assert too_fast["checks"]["minimumPacingElapsed"] is False
+
+
+@pytest.mark.unit
+def test_offerfiles_client_evidence_uses_nested_server_status() -> None:
+    evidence = subject.offerfiles_client_evidence(
+        {
+            "servers": {
+                "currentServer": {
+                    "offerFilesMode": "negotiatedV1",
+                    "offerFilesBatchMax": 200,
+                    "offerFilesMinIntervalMs": 500,
+                    "offerFilesPublishedEntries": 100_000,
+                    "offerFilesPendingEntries": 0,
+                }
+            }
+        },
+        {
+            "ed2kPublish": {
+                "publishedEntries": 92_888,
+                "pendingEntries": 7_112,
+                "sessionPumpActive": True,
+            }
+        },
+        server_shared_files=100_000,
+    )
+
+    assert evidence == {
+        "mode": "negotiatedV1",
+        "batchMax": 200,
+        "minIntervalMs": 500,
+        "publishedEntries": 100_000,
+        "pendingEntries": 0,
+        "sessionPumpActive": False,
+        "serverSharedFiles": 100_000,
+    }
 
 
 @pytest.mark.unit
