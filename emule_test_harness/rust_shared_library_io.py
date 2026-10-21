@@ -1241,6 +1241,64 @@ def launched_server_endpoint(server: ed2k_harness.Ed2kServerLaunch) -> str:
     return f"{server.ed2k_host}:{server.ed2k_port}"
 
 
+def load_offerfiles_scale_resume(
+    paths: HarnessPaths, run_id: str
+) -> tuple[Path, Path, Path, dict[str, object]]:
+    """Load a retained campaign only after its cold-scan checkpoint passed."""
+
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise RuntimeError("OFFERFILES scale resume run ID must be one path segment")
+    run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
+    report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
+    profile_dir = run_root / "profile"
+    if not storage.is_directory(run_root) or not report_path.is_file():
+        raise RuntimeError(f"retained OFFERFILES scale run was not found: {run_id}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("schema") != OFFERFILES_SCALE_REPORT_SCHEMA or report.get("runId") != run_id:
+        raise RuntimeError("retained OFFERFILES scale report identity is invalid")
+    offline_scan = report.get("offlineScan")
+    offline_shutdown = report.get("offlineShutdown")
+    if (
+        not isinstance(offline_scan, dict)
+        or not isinstance(offline_scan.get("acceptance"), dict)
+        or offline_scan["acceptance"].get("ok") is not True
+        or not isinstance(offline_shutdown, dict)
+        or offline_shutdown.get("method") != "rest"
+        or offline_shutdown.get("exitCode") != 0
+    ):
+        raise RuntimeError("retained OFFERFILES scale cold-scan checkpoint did not pass")
+    metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    if not metadata_path.is_file():
+        raise RuntimeError("retained OFFERFILES scale profile metadata is missing")
+
+    attempts = report.get("attempts")
+    if not isinstance(attempts, list):
+        attempts = []
+    attempts.append(
+        {
+            key: report.get(key)
+            for key in ("status", "startedAtUtc", "finishedAtUtc", "error")
+            if report.get(key) is not None
+        }
+    )
+    report["attempts"] = attempts
+    for key in (
+        "cancellationEpoch",
+        "completionEpoch",
+        "completionShutdown",
+        "elapsedSeconds",
+        "error",
+        "finalShutdown",
+        "finishedAtUtc",
+        "server",
+    ):
+        report.pop(key, None)
+    report["status"] = "running"
+    report["resumedAtUtc"] = utc_now()
+    report["resumeCount"] = len(attempts)
+    return run_root, profile_dir, report_path, report
+
+
 def offerfiles_scale_cancellation_acceptance(
     *,
     before: dict[str, int],
@@ -1809,30 +1867,36 @@ def run_offerfiles_scale_campaign(
     lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
     ports = dtt.choose_distinct_ports(lan_bind_addr)
     client_nick = "rust-offerfiles-scale"
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
-    run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
-    if storage.is_directory(run_root):
-        raise RuntimeError("generated OFFERFILES scale run directory already exists")
-    storage.make_directories(run_root)
-    profile_dir = run_root / "profile"
-    report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
-    report: dict[str, object] = {
-        "schema": OFFERFILES_SCALE_REPORT_SCHEMA,
-        "status": "running",
-        "runId": run_id,
-        "startedAtUtc": utc_now(),
-        "networkClass": "lan-only",
-        "fixture": {
-            "fingerprint": path_fingerprint(paths.fixture_root),
-            "fileCount": validation["fileCount"],
-            "totalBytes": validation["totalBytes"],
-            "longPathFileCount": validation["longPathFileCount"],
-        },
-        "paths": {
-            "runFingerprint": path_fingerprint(run_root),
-            "outputRootFingerprint": path_fingerprint(paths.output_root),
-        },
-    }
+    if args.resume_run_id:
+        run_id = args.resume_run_id
+        run_root, profile_dir, report_path, report = load_offerfiles_scale_resume(
+            paths, run_id
+        )
+    else:
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+        run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
+        if storage.is_directory(run_root):
+            raise RuntimeError("generated OFFERFILES scale run directory already exists")
+        storage.make_directories(run_root)
+        profile_dir = run_root / "profile"
+        report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
+        report = {
+            "schema": OFFERFILES_SCALE_REPORT_SCHEMA,
+            "status": "running",
+            "runId": run_id,
+            "startedAtUtc": utc_now(),
+            "networkClass": "lan-only",
+            "fixture": {
+                "fingerprint": path_fingerprint(paths.fixture_root),
+                "fileCount": validation["fileCount"],
+                "totalBytes": validation["totalBytes"],
+                "longPathFileCount": validation["longPathFileCount"],
+            },
+            "paths": {
+                "runFingerprint": path_fingerprint(run_root),
+                "outputRootFingerprint": path_fingerprint(paths.output_root),
+            },
+        }
     process: subprocess.Popen[str] | None = None
     client: RestClient | None = None
     server_process: subprocess.Popen | None = None
@@ -1879,46 +1943,47 @@ def run_offerfiles_scale_campaign(
         if not report["server"]["policy"]["ok"]:
             raise RuntimeError("local Rust server did not expose the required v1 scale policy")
 
-        process, client, sampler = start_daemon(
-            paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
-        )
-        client.request(
-            "PATCH",
-            "/shared-directories",
-            {
-                "confirmReplaceRoots": True,
-                "roots": [{"path": str(paths.fixture_root) + os.sep}],
-            },
-        )
-        offline_scan = wait_for_reload(
-            label="offerfilesOfflineScan",
-            client=client,
-            process=process,
-            sampler=sampler,
-            disk_counter_key=target_disk_row.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
-            timeout_seconds=remaining_seconds(),
-            poll_seconds=args.poll_seconds,
-        )
-        offline_scan["acceptance"] = phase_acceptance(
-            offline_scan,
-            {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": PRODUCTION_SPEC.file_count,
-                "hashedCount": PRODUCTION_SPEC.file_count,
-                "reusedCount": 0,
-                "plannedReadBytes": PRODUCTION_SPEC.total_bytes,
-                "diskCount": 1,
-                "newCount": PRODUCTION_SPEC.file_count,
-            },
-        )
-        report["offlineScan"] = offline_scan
-        report["offlineShutdown"] = stop_daemon(process, client)
-        if report["offlineShutdown"].get("method") != "rest":
-            raise RuntimeError("offline scan process did not stop through REST")
-        process = None
-        client = None
+        if not args.resume_run_id:
+            process, client, sampler = start_daemon(
+                paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
+            )
+            client.request(
+                "PATCH",
+                "/shared-directories",
+                {
+                    "confirmReplaceRoots": True,
+                    "roots": [{"path": str(paths.fixture_root) + os.sep}],
+                },
+            )
+            offline_scan = wait_for_reload(
+                label="offerfilesOfflineScan",
+                client=client,
+                process=process,
+                sampler=sampler,
+                disk_counter_key=target_disk_row.get("counterKey"),
+                expected_scanned=PRODUCTION_SPEC.file_count,
+                timeout_seconds=remaining_seconds(),
+                poll_seconds=args.poll_seconds,
+            )
+            offline_scan["acceptance"] = phase_acceptance(
+                offline_scan,
+                {
+                    "sharedFilesTotal": PRODUCTION_SPEC.file_count,
+                    "scannedCount": PRODUCTION_SPEC.file_count,
+                    "plannedHashCount": PRODUCTION_SPEC.file_count,
+                    "hashedCount": PRODUCTION_SPEC.file_count,
+                    "reusedCount": 0,
+                    "plannedReadBytes": PRODUCTION_SPEC.total_bytes,
+                    "diskCount": 1,
+                    "newCount": PRODUCTION_SPEC.file_count,
+                },
+            )
+            report["offlineScan"] = offline_scan
+            report["offlineShutdown"] = stop_daemon(process, client)
+            if report["offlineShutdown"].get("method") != "rest":
+                raise RuntimeError("offline scan process did not stop through REST")
+            process = None
+            client = None
 
         _configure_offerfiles_scale_profile(
             paths=paths,
@@ -3422,6 +3487,10 @@ def build_parser() -> argparse.ArgumentParser:
     offerfiles_scale.add_argument("--allow-non-ssd", action="store_true")
     offerfiles_scale.add_argument("--ed2k-server-repo")
     offerfiles_scale.add_argument("--ed2k-server-exe")
+    offerfiles_scale.add_argument(
+        "--resume-run-id",
+        help="resume a retained run after its accepted cold-scan checkpoint",
+    )
     media_describe = subparsers.add_parser(
         "media-describe",
         help="resolve private existing media roots without scanning their contents",

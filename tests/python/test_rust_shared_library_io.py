@@ -268,6 +268,57 @@ def test_offerfiles_scale_parser_uses_retained_campaign_defaults() -> None:
     assert args.poll_seconds == 0.25
     assert args.cancel_after_batches == 3
     assert args.settle_seconds == 2.0
+    assert args.resume_run_id is None
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_resume_requires_accepted_cold_scan(tmp_path: Path) -> None:
+    paths = harness_paths(tmp_path)
+    run_id = "20261021T204449Z-15648"
+    run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
+    profile_dir = run_root / "profile"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / subject.rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"db")
+    paths.reports_root.mkdir(parents=True)
+    report_path = paths.reports_root / f"rust-offerfiles-scale-{run_id}.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": subject.OFFERFILES_SCALE_REPORT_SCHEMA,
+                "runId": run_id,
+                "status": "failed",
+                "startedAtUtc": "2026-10-21T20:44:49Z",
+                "finishedAtUtc": "2026-10-21T21:32:43Z",
+                "error": {"type": "TimeoutError"},
+                "offlineScan": {"acceptance": {"ok": True}},
+                "offlineShutdown": {"method": "rest", "exitCode": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = subject.load_offerfiles_scale_resume(paths, run_id)
+
+    assert resolved[:3] == (run_root, profile_dir, report_path)
+    resumed = resolved[3]
+    assert resumed["status"] == "running"
+    assert resumed["resumeCount"] == 1
+    assert resumed["attempts"][0]["status"] == "failed"
+    assert "error" not in resumed
+
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": subject.OFFERFILES_SCALE_REPORT_SCHEMA,
+                "runId": run_id,
+                "offlineScan": {"acceptance": {"ok": False}},
+                "offlineShutdown": {"method": "rest", "exitCode": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="cold-scan checkpoint"):
+        subject.load_offerfiles_scale_resume(paths, run_id)
 
 
 @pytest.mark.unit
