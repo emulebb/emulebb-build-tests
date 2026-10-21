@@ -256,6 +256,10 @@ def test_offerfiles_campaign_uses_launcher_selected_server_endpoint() -> None:
     server = SimpleNamespace(ed2k_host="172.20.0.2", ed2k_port=4661)
 
     assert subject.launched_server_endpoint(server) == "172.20.0.2:4661"
+    assert subject.launched_client_bind_address(server, "192.0.2.10") == "192.0.2.10"
+
+    forwarded = SimpleNamespace(ed2k_host="127.0.0.1", ed2k_port=4661)
+    assert subject.launched_client_bind_address(forwarded, "192.0.2.10") == "0.0.0.0"
 
 
 @pytest.mark.unit

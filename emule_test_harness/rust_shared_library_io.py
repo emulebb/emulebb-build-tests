@@ -1241,6 +1241,14 @@ def launched_server_endpoint(server: ed2k_harness.Ed2kServerLaunch) -> str:
     return f"{server.ed2k_host}:{server.ed2k_port}"
 
 
+def launched_client_bind_address(
+    server: ed2k_harness.Ed2kServerLaunch, lan_bind_addr: str
+) -> str:
+    """Select a source binding compatible with the managed server route."""
+
+    return "0.0.0.0" if server.ed2k_host == "127.0.0.1" else lan_bind_addr
+
+
 def load_offerfiles_scale_resume(
     paths: HarnessPaths, run_id: str
 ) -> tuple[Path, Path, Path, dict[str, object]]:
@@ -1681,6 +1689,7 @@ def _configure_offerfiles_scale_profile(
     paths: HarnessPaths,
     profile_dir: Path,
     lan_bind_addr: str,
+    p2p_bind_ip: str,
     rest_port: int,
     ed2k_port: int,
     kad_port: int,
@@ -1696,7 +1705,7 @@ def _configure_offerfiles_scale_profile(
         api_key=API_KEY,
         auto_connect=True,
         network_kademlia=False,
-        p2p_bind_ip=lan_bind_addr,
+        p2p_bind_ip=p2p_bind_ip,
         ed2k_port=ed2k_port,
         ed2k_nickname=client_nick,
         kad_port=kad_port,
@@ -1931,6 +1940,7 @@ def run_offerfiles_scale_campaign(
         )
         server_process = server.process
         server_endpoint = launched_server_endpoint(server)
+        p2p_bind_ip = launched_client_bind_address(server, lan_bind_addr)
         control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
         initial_server_status = read_offerfiles_server_stats(server.admin_base_url)
         report["server"] = {
@@ -1989,6 +1999,7 @@ def run_offerfiles_scale_campaign(
             paths=paths,
             profile_dir=profile_dir,
             lan_bind_addr=lan_bind_addr,
+            p2p_bind_ip=p2p_bind_ip,
             rest_port=ports["client1_rest"],
             ed2k_port=ports["client1_tcp"],
             kad_port=ports["client1_udp"],
