@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .ed2k_server import Ed2kServerControl, ManagedProcess, UnsupportedEd2kServerCapability
+from .ed2k_server import ManagedProcess, UnsupportedEd2kServerCapability
 from .multi_client import resolve_manifest_repo
 from .paths import get_workspace_output_root, reject_windows_temp_path
 from .script_modules import load_script_module
@@ -722,135 +722,118 @@ class RustEd2kServerControl:
         return live_common.wait_for(resolve, timeout_seconds, 1.0, description)
 
 
-class RustEd2kServerProvider:
-    """Provider adapter for the upstream-aligned Linux Rust server."""
+def launch_server(
+    *,
+    workspace_root: Path,
+    server_dir: Path,
+    ed2k_port: int,
+    admin_port: int,
+    admin_secret: str,
+    admin_address: str,
+    ed2k_address: str | None = None,
+    fixture_files: list[dict[str, object]] | None = None,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+    protocol_obfuscation: bool = True,
+    server_udp: bool = True,
+    packet_trace: bool = False,
+    health_timeout_seconds: float = 30.0,
+) -> RustEd2kServerLaunch:
+    """Launches the upstream-aligned Linux Rust server."""
 
-    name = "rust"
-
-    def prepare_binary(
-        self,
-        workspace_root: Path,
-        *,
-        repo_override: str | None = None,
-        exe_override: str | None = None,
-    ) -> RustEd2kServerBinary:
-        return prepare_server_binary(
-            workspace_root,
-            repo_override=repo_override,
-            exe_override=exe_override,
+    del admin_secret, admin_address
+    if fixture_files:
+        raise UnsupportedEd2kServerCapability(
+            "Rust ed2k-server fixtures must be published through ED2K; static catalog seeding is unavailable."
         )
-
-    def launch(
-        self,
-        *,
-        workspace_root: Path,
-        server_dir: Path,
-        ed2k_port: int,
-        admin_port: int,
-        admin_secret: str,
-        admin_address: str,
-        ed2k_address: str | None = None,
-        fixture_files: list[dict[str, object]] | None = None,
-        repo_override: str | None = None,
-        exe_override: str | None = None,
-        protocol_obfuscation: bool = True,
-        server_udp: bool = True,
-        packet_trace: bool = False,
-        health_timeout_seconds: float = 30.0,
-    ) -> RustEd2kServerLaunch:
-        del admin_secret, admin_address
-        if fixture_files:
-            raise UnsupportedEd2kServerCapability(
-                "Rust ed2k-server fixtures must be published through ED2K; static catalog seeding is unavailable."
-            )
-        if packet_trace:
-            raise UnsupportedEd2kServerCapability(
-                "Rust ed2k-server structured packet tracing is not implemented yet."
-            )
-        if not server_udp:
-            raise UnsupportedEd2kServerCapability("Rust ed2k-server always enables its protocol UDP sockets.")
-        if not ed2k_address:
-            raise ValueError("ed2k_address must identify the client-side harness interface.")
-
-        binary = self.prepare_binary(
-            workspace_root,
-            repo_override=repo_override,
-            exe_override=exe_override,
+    if packet_trace:
+        raise UnsupportedEd2kServerCapability(
+            "Rust ed2k-server structured packet tracing is not implemented yet."
         )
-        distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
-        if _is_windows_host():
-            advertised_address = wsl_ipv4_address(distribution)
-            listen_address = "0.0.0.0"
-        else:
-            advertised_address = ed2k_address
-            listen_address = ed2k_address
-        server_dir.mkdir(parents=True, exist_ok=True)
-        config_path = server_dir / "config.toml"
-        log_path = server_dir / "server.log"
-        pid_path = server_dir / "server.pid"
-        config = build_server_config(
-            config_path,
-            ed2k_port=ed2k_port,
-            admin_port=admin_port,
-            listen_address=listen_address,
-            advertised_address=advertised_address,
-            protocol_obfuscation=protocol_obfuscation,
-        )
-        process = start_server(
-            binary.server_exe,
-            config_path,
-            log_path,
-            pid_path,
-            distribution=distribution,
-        )
-        admin_base_url = f"http://127.0.0.1:{admin_port}"
-        try:
-            health = wait_for_admin_health(admin_base_url, process, health_timeout_seconds)
-        except Exception as exc:
-            stop_process(process)
-            log_tail = ""
-            if log_path.is_file():
-                log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-            raise RuntimeError(f"Rust ed2k-server failed readiness: {exc}; log_tail={log_tail!r}") from exc
-        return RustEd2kServerLaunch(
-            process=process,
-            admin_base_url=admin_base_url,
-            ed2k_host=advertised_address,
-            ed2k_port=ed2k_port,
-            server_exe=binary.server_exe,
-            server_dir=server_dir,
-            config_path=config_path,
-            log_path=log_path,
-            build=binary.build,
-            config=config,
-            health=health,
-        )
+    if not server_udp:
+        raise UnsupportedEd2kServerCapability("Rust ed2k-server always enables its protocol UDP sockets.")
+    if not ed2k_address:
+        raise ValueError("ed2k_address must identify the client-side harness interface.")
 
-    def control(self, admin_base_url: str, admin_secret: str) -> Ed2kServerControl:
-        del admin_secret
-        return RustEd2kServerControl(admin_base_url)
+    binary = prepare_server_binary(
+        workspace_root,
+        repo_override=repo_override,
+        exe_override=exe_override,
+    )
+    distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
+    if _is_windows_host():
+        advertised_address = wsl_ipv4_address(distribution)
+        listen_address = "0.0.0.0"
+    else:
+        advertised_address = ed2k_address
+        listen_address = ed2k_address
+    server_dir.mkdir(parents=True, exist_ok=True)
+    config_path = server_dir / "config.toml"
+    log_path = server_dir / "server.log"
+    pid_path = server_dir / "server.pid"
+    config = build_server_config(
+        config_path,
+        ed2k_port=ed2k_port,
+        admin_port=admin_port,
+        listen_address=listen_address,
+        advertised_address=advertised_address,
+        protocol_obfuscation=protocol_obfuscation,
+    )
+    process = start_server(
+        binary.server_exe,
+        config_path,
+        log_path,
+        pid_path,
+        distribution=distribution,
+    )
+    admin_base_url = f"http://127.0.0.1:{admin_port}"
+    try:
+        health = wait_for_admin_health(admin_base_url, process, health_timeout_seconds)
+    except Exception as exc:
+        stop_process(process)
+        log_tail = ""
+        if log_path.is_file():
+            log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        raise RuntimeError(f"Rust ed2k-server failed readiness: {exc}; log_tail={log_tail!r}") from exc
+    return RustEd2kServerLaunch(
+        process=process,
+        admin_base_url=admin_base_url,
+        ed2k_host=advertised_address,
+        ed2k_port=ed2k_port,
+        server_exe=binary.server_exe,
+        server_dir=server_dir,
+        config_path=config_path,
+        log_path=log_path,
+        build=binary.build,
+        config=config,
+        health=health,
+    )
 
-    def stop_process(self, process: ManagedProcess | None, *, timeout_seconds: float = 10.0) -> None:
-        stop_process(process, timeout_seconds=timeout_seconds)
 
-    def stop_server_processes(self) -> None:
-        distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
-        if _is_windows_host():
-            subprocess.run(
-                _wsl_command(distribution, "pkill", "-x", "ed2k-server"),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=30,
-                check=False,
-            )
-            return
+def create_server_control(admin_base_url: str, admin_secret: str) -> RustEd2kServerControl:
+    """Returns the Rust server's semantic control surface."""
+
+    del admin_secret
+    return RustEd2kServerControl(admin_base_url)
+
+
+def stop_server_processes() -> None:
+    """Stops stray Rust server processes on the current host."""
+
+    distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
+    if _is_windows_host():
         subprocess.run(
-            ["pkill", "-x", "ed2k-server"],
+            _wsl_command(distribution, "pkill", "-x", "ed2k-server"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
             check=False,
         )
-
-
-RUST_ED2K_PROVIDER = RustEd2kServerProvider()
+        return
+    subprocess.run(
+        ["pkill", "-x", "ed2k-server"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )

@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
-ED2K_SERVER_PROVIDER_ENV = "EMULEBB_TEST_ED2K_SERVER_PROVIDER"
 ED2K_SERVER_EXE_ENV = "EMULEBB_TEST_RUST_ED2K_SERVER_EXE"
-DEFAULT_ED2K_SERVER_PROVIDER = "rust"
 
 
 class Ed2kServerBinary(Protocol):
@@ -99,71 +97,6 @@ class Ed2kServerControl(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class Ed2kServerProvider(Protocol):
-    """Operations required by provider-neutral local ED2K suites."""
-
-    name: str
-
-    def prepare_binary(
-        self,
-        workspace_root: Path,
-        *,
-        repo_override: str | None = None,
-        exe_override: str | None = None,
-    ) -> Ed2kServerBinary: ...
-
-    def launch(
-        self,
-        *,
-        workspace_root: Path,
-        server_dir: Path,
-        ed2k_port: int,
-        admin_port: int,
-        admin_secret: str,
-        admin_address: str,
-        ed2k_address: str | None = None,
-        fixture_files: list[dict[str, object]] | None = None,
-        repo_override: str | None = None,
-        exe_override: str | None = None,
-        protocol_obfuscation: bool = True,
-        server_udp: bool = True,
-        packet_trace: bool = False,
-        health_timeout_seconds: float = 30.0,
-    ) -> Ed2kServerLaunch: ...
-
-    def control(self, admin_base_url: str, admin_secret: str) -> Ed2kServerControl: ...
-
-    def stop_process(self, process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None: ...
-
-    def stop_server_processes(self) -> None: ...
-
-
-def requested_provider_name(
-    provider_name: str | None = None,
-    env: dict[str, str] | None = None,
-) -> str:
-    """Returns the normalized provider requested by an argument or environment."""
-
-    value = provider_name
-    if value is None:
-        value = (env or os.environ).get(ED2K_SERVER_PROVIDER_ENV, DEFAULT_ED2K_SERVER_PROVIDER)
-    return value.strip().lower()
-
-
-def resolve_provider(
-    provider_name: str | None = None,
-    env: dict[str, str] | None = None,
-) -> Ed2kServerProvider:
-    """Resolves the sole supported local ED2K server provider."""
-
-    requested = requested_provider_name(provider_name, env)
-    if requested == "rust":
-        from .rust_ed2k import RUST_ED2K_PROVIDER
-
-        return RUST_ED2K_PROVIDER
-    raise RuntimeError(f"ED2K server provider {requested!r} is unavailable; available provider: rust.")
-
-
 def env_ed2k_server_exe_override(env: dict[str, str] | None = None) -> str | None:
     """Returns the explicit staged Rust server executable override."""
 
@@ -191,7 +124,9 @@ def prepare_ed2k_server_binary(
 ) -> Ed2kServerBinary:
     """Prepares the managed Rust ED2K server binary."""
 
-    return resolve_provider().prepare_binary(
+    from .rust_ed2k import prepare_server_binary
+
+    return prepare_server_binary(
         workspace_root,
         repo_override=repo_override,
         exe_override=exe_override,
@@ -217,7 +152,9 @@ def launch_ed2k_server(
 ) -> Ed2kServerLaunch:
     """Launches the managed Rust ED2K server for a local suite."""
 
-    return resolve_provider().launch(
+    from .rust_ed2k import launch_server
+
+    return launch_server(
         workspace_root=workspace_root,
         server_dir=server_dir,
         ed2k_port=ed2k_port,
@@ -238,7 +175,9 @@ def launch_ed2k_server(
 def ed2k_server_control(admin_base_url: str, admin_secret: str) -> Ed2kServerControl:
     """Returns the semantic control surface for the managed ED2K server."""
 
-    return resolve_provider().control(admin_base_url, admin_secret)
+    from .rust_ed2k import create_server_control
+
+    return create_server_control(admin_base_url, admin_secret)
 
 
 def admin_request(
@@ -266,7 +205,7 @@ def wait_for_server_client(
 ) -> dict[str, Any]:
     """Waits until the Rust server observes a matching client."""
 
-    return resolve_provider().control(admin_base_url, admin_secret).wait_for_client(
+    return ed2k_server_control(admin_base_url, admin_secret).wait_for_client(
         name_fragment,
         timeout_seconds,
     )
@@ -280,7 +219,7 @@ def wait_for_server_file(
 ) -> dict[str, Any]:
     """Waits until the Rust server indexes a file hash."""
 
-    return resolve_provider().control(admin_base_url, admin_secret).wait_for_file(
+    return ed2k_server_control(admin_base_url, admin_secret).wait_for_file(
         file_hash,
         timeout_seconds,
     )
@@ -329,7 +268,7 @@ def wait_for_server_file_endpoint(
 ) -> dict[str, Any]:
     """Waits until the Rust server advertises one exact source endpoint."""
 
-    return resolve_provider().control(admin_base_url, admin_secret).wait_for_file_endpoint(
+    return ed2k_server_control(admin_base_url, admin_secret).wait_for_file_endpoint(
         file_hash,
         host,
         port,
@@ -341,10 +280,14 @@ def wait_for_server_file_endpoint(
 def stop_process(process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None:
     """Stops one Rust server process."""
 
-    resolve_provider().stop_process(process, timeout_seconds=timeout_seconds)
+    from .rust_ed2k import stop_process as stop_rust_server_process
+
+    stop_rust_server_process(process, timeout_seconds=timeout_seconds)
 
 
 def stop_server_processes() -> None:
     """Stops stray managed Rust server processes."""
 
-    resolve_provider().stop_server_processes()
+    from .rust_ed2k import stop_server_processes as stop_rust_server_processes
+
+    stop_rust_server_processes()

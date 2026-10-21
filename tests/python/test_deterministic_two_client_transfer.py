@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from emule_test_harness import ed2k_server as ed2k_harness
+from emule_test_harness import rust_ed2k
 
 
 def load_suite_module():
@@ -136,10 +137,9 @@ def test_with_ed2k_server_exe_env_returns_child_env_copy(tmp_path: Path) -> None
     assert ed2k_harness.ED2K_SERVER_EXE_ENV not in base_env
 
 
-def test_stop_server_processes_delegates_to_selected_provider(monkeypatch) -> None:
+def test_stop_server_processes_delegates_to_rust_runtime(monkeypatch) -> None:
     calls: list[str] = []
-    provider = SimpleNamespace(stop_server_processes=lambda: calls.append("stop"))
-    monkeypatch.setattr(ed2k_harness, "resolve_provider", lambda: provider)
+    monkeypatch.setattr(rust_ed2k, "stop_server_processes", lambda: calls.append("stop"))
 
     ed2k_harness.stop_server_processes()
 
@@ -154,13 +154,9 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     def prepare_binary(workspace_root: Path, **kwargs: object) -> SimpleNamespace:
         calls["workspace_root"] = workspace_root
         calls.update(kwargs)
-        return SimpleNamespace(server_exe=server_exe.resolve(), build={"provider": "rust"})
+        return SimpleNamespace(server_exe=server_exe.resolve(), build={"implementation": "rust"})
 
-    monkeypatch.setattr(
-        ed2k_harness,
-        "resolve_provider",
-        lambda: SimpleNamespace(prepare_binary=prepare_binary),
-    )
+    monkeypatch.setattr(rust_ed2k, "prepare_server_binary", prepare_binary)
 
     prepared = ed2k_harness.prepare_ed2k_server_binary(
         workspace,
@@ -169,7 +165,7 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     )
 
     assert prepared.server_exe == server_exe.resolve()
-    assert prepared.build == {"provider": "rust"}
+    assert prepared.build == {"implementation": "rust"}
     assert calls == {
         "workspace_root": workspace,
         "repo_override": "repo-override",
@@ -400,8 +396,7 @@ def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) 
             calls.append(args)
             return expected
 
-    provider = SimpleNamespace(control=lambda *_args: FakeControl())
-    monkeypatch.setattr(ed2k_harness, "resolve_provider", lambda: provider)
+    monkeypatch.setattr(ed2k_harness, "ed2k_server_control", lambda *_args: FakeControl())
 
     row = ed2k_harness.wait_for_server_file_endpoint(
         "http://192.0.2.10:8080",
