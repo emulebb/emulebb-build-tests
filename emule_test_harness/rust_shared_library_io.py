@@ -1246,7 +1246,7 @@ def launched_client_bind_address(
 ) -> str:
     """Select a source binding compatible with the managed server route."""
 
-    return "0.0.0.0" if server.ed2k_host == "127.0.0.1" else lan_bind_addr
+    return server.ed2k_host if server.ed2k_host == "127.0.0.1" else lan_bind_addr
 
 
 def load_offerfiles_scale_resume(
