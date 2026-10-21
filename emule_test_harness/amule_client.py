@@ -23,8 +23,8 @@ def _config_path(path: Path) -> str:
 def _ec_password_digest(secret: str) -> str:
     """Returns the legacy digest required by aMule's EC configuration format."""
 
-    return hashlib.md5(  # lgtm[py/weak-sensitive-data-hashing]
-        secret.encode("utf-8"),
+    return hashlib.md5(
+        secret.encode("utf-8"),  # lgtm[py/weak-sensitive-data-hashing]
         usedforsecurity=False,
     ).hexdigest()
 
