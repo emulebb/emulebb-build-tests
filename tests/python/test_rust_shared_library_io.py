@@ -250,14 +250,16 @@ def test_offerfiles_client_evidence_uses_nested_server_status() -> None:
                     "offerFilesMode": "negotiatedV1",
                     "offerFilesBatchMax": 200,
                     "offerFilesMinIntervalMs": 500,
+                    "offerFilesPublishedEntries": 100_000,
+                    "offerFilesPendingEntries": 0,
                 }
             }
         },
         {
             "ed2kPublish": {
-                "publishedEntries": 100_000,
-                "pendingEntries": 0,
-                "sessionPumpActive": False,
+                "publishedEntries": 92_888,
+                "pendingEntries": 7_112,
+                "sessionPumpActive": True,
             }
         },
         server_shared_files=100_000,

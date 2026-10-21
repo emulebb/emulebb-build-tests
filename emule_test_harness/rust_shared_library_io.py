@@ -1415,13 +1415,22 @@ def offerfiles_client_evidence(
         if isinstance(diagnostics.get("ed2kPublish"), dict)
         else {}
     )
+    session_published = current_server.get("offerFilesPublishedEntries")
+    session_pending = current_server.get("offerFilesPendingEntries")
+    has_session_progress = isinstance(session_published, int) and isinstance(
+        session_pending, int
+    )
     return {
         "mode": current_server.get("offerFilesMode"),
         "batchMax": current_server.get("offerFilesBatchMax"),
         "minIntervalMs": current_server.get("offerFilesMinIntervalMs"),
-        "publishedEntries": publish.get("publishedEntries"),
-        "pendingEntries": publish.get("pendingEntries"),
-        "sessionPumpActive": publish.get("sessionPumpActive"),
+        "publishedEntries": (
+            session_published if has_session_progress else publish.get("publishedEntries")
+        ),
+        "pendingEntries": session_pending if has_session_progress else publish.get("pendingEntries"),
+        "sessionPumpActive": (
+            session_pending > 0 if has_session_progress else publish.get("sessionPumpActive")
+        ),
         "serverSharedFiles": server_shared_files,
     }
 
