@@ -115,11 +115,13 @@ def test_lan_startup_acceptance_requires_publication_during_partial_scan() -> No
 
 
 @pytest.mark.unit
-def test_lan_startup_uses_rust_ed2k_server_cargo_manifest() -> None:
+def test_shared_library_lanes_leave_canonical_server_builds_to_workspace_tooling() -> None:
     source = Path(subject.__file__).read_text(encoding="utf-8")
 
-    assert 'paths.workspace_root / "repos" / "ed2k-server"' in source
-    assert 'server_repo / "Cargo.toml"' in source
+    assert 'else paths.workspace_root / "repos" / "ed2k-server"' not in source
+    assert source.count(
+        "repo_override=str(server_repo) if server_repo is not None else None"
+    ) == 2
 
 
 @pytest.mark.unit

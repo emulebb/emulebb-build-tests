@@ -1477,12 +1477,8 @@ def run_lan_startup_campaign(
                 shared_root=paths.fixture_root,
             ),
         }
-        server_repo = (
-            Path(args.ed2k_server_repo).resolve()
-            if args.ed2k_server_repo
-            else paths.workspace_root / "repos" / "ed2k-server"
-        )
-        if not (server_repo / "Cargo.toml").is_file():
+        server_repo = Path(args.ed2k_server_repo).resolve() if args.ed2k_server_repo else None
+        if server_repo is not None and not (server_repo / "Cargo.toml").is_file():
             raise RuntimeError(f"Rust ed2k-server repo is missing Cargo.toml: {server_repo}")
         server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
@@ -1492,7 +1488,7 @@ def run_lan_startup_campaign(
             token=API_KEY,
             admin_address=lan_bind_addr,
             ed2k_address=lan_bind_addr,
-            repo_override=str(server_repo),
+            repo_override=str(server_repo) if server_repo is not None else None,
             exe_override=args.ed2k_server_exe,
         )
         server_process = server.process
@@ -1843,6 +1839,38 @@ def run_offerfiles_scale_campaign(
         return remaining
 
     try:
+        server_repo = Path(args.ed2k_server_repo).resolve() if args.ed2k_server_repo else None
+        if server_repo is not None and not (server_repo / "Cargo.toml").is_file():
+            raise RuntimeError(f"Rust ed2k-server repo is missing Cargo.toml: {server_repo}")
+        server = ed2k_harness.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=run_root / "ed2k-server",
+            ed2k_port=ports["ed2k_tcp"],
+            admin_port=ports["ed2k_admin"],
+            token=API_KEY,
+            admin_address=lan_bind_addr,
+            ed2k_address=lan_bind_addr,
+            repo_override=str(server_repo) if server_repo is not None else None,
+            exe_override=args.ed2k_server_exe,
+            offerfiles_v1=True,
+            soft_limit_files=PRODUCTION_SPEC.file_count,
+            hard_limit_files=200_000,
+        )
+        server_process = server.process
+        control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
+        initial_server_status = ed2k_harness.admin_request(
+            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
+        )
+        report["server"] = {
+            "health": server.health,
+            "build": server.build,
+            "policy": _offerfiles_scale_policy_acceptance(
+                initial_server_status, expected_files=PRODUCTION_SPEC.file_count
+            ),
+        }
+        if not report["server"]["policy"]["ok"]:
+            raise RuntimeError("local Rust server did not expose the required v1 scale policy")
+
         process, client, sampler = start_daemon(
             paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
         )
@@ -1883,42 +1911,6 @@ def run_offerfiles_scale_campaign(
             raise RuntimeError("offline scan process did not stop through REST")
         process = None
         client = None
-
-        server_repo = (
-            Path(args.ed2k_server_repo).resolve()
-            if args.ed2k_server_repo
-            else paths.workspace_root / "repos" / "ed2k-server"
-        )
-        if not (server_repo / "Cargo.toml").is_file():
-            raise RuntimeError(f"Rust ed2k-server repo is missing Cargo.toml: {server_repo}")
-        server = ed2k_harness.launch_ed2k_server(
-            workspace_root=paths.workspace_root,
-            server_dir=run_root / "ed2k-server",
-            ed2k_port=ports["ed2k_tcp"],
-            admin_port=ports["ed2k_admin"],
-            token=API_KEY,
-            admin_address=lan_bind_addr,
-            ed2k_address=lan_bind_addr,
-            repo_override=str(server_repo),
-            exe_override=args.ed2k_server_exe,
-            offerfiles_v1=True,
-            soft_limit_files=PRODUCTION_SPEC.file_count,
-            hard_limit_files=200_000,
-        )
-        server_process = server.process
-        control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
-        initial_server_status = ed2k_harness.admin_request(
-            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
-        report["server"] = {
-            "health": server.health,
-            "build": server.build,
-            "policy": _offerfiles_scale_policy_acceptance(
-                initial_server_status, expected_files=PRODUCTION_SPEC.file_count
-            ),
-        }
-        if not report["server"]["policy"]["ok"]:
-            raise RuntimeError("local Rust server did not expose the required v1 scale policy")
 
         _configure_offerfiles_scale_profile(
             paths=paths,
