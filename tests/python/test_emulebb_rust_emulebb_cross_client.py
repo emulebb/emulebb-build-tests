@@ -149,11 +149,22 @@ def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
     assert defaults.verify_source_lifecycle is False
     assert defaults.verify_same_session_republish is False
     assert defaults.verify_reflected_self_source is False
+    assert defaults.verify_completed_download_release is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert enabled.verify_source_lifecycle is True
     assert enabled.verify_same_session_republish is True
     assert enabled.verify_reflected_self_source is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
+def test_completed_download_release_requires_diagnostics() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--verify-completed-download-release"]
+    )
+
+    with pytest.raises(ValueError, match="requires --diagnostics"):
+        module.validate_optional_soak_args(args)
 
 
 def test_reflected_self_source_requires_diagnostics() -> None:
@@ -585,6 +596,87 @@ def test_cross_client_diagnostics_require_both_peer_dumps(tmp_path: Path) -> Non
         module.require_diagnostics(rust, mfc, kad_required=False)
 
 
+def _download_lifecycle_events(
+    transfer_hash: str,
+    peer: str,
+    *,
+    first_seq: int,
+) -> list[dict[str, object]]:
+    def event(seq: int, name: str, body: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": "diag_event_v1",
+            "family": "sched",
+            "seq": seq,
+            "event": name,
+            "keys": {"fileHash": transfer_hash, "peer": peer},
+            "body": body,
+        }
+
+    return [
+        event(first_seq, "source_engaged", {"outcome": "engaged"}),
+        event(
+            first_seq + 1,
+            "source_conn_budget",
+            {"outcome": "admit", "activeConnections": 1, "connectionCap": 1},
+        ),
+        event(first_seq + 2, "source_dropped", {"outcome": "dropped"}),
+        event(
+            first_seq + 3,
+            "download_task_settled",
+            {"state": "completed", "willReask": False},
+        ),
+    ]
+
+
+def test_download_connection_reuse_requires_second_admission_after_settlement() -> None:
+    module = load_suite_module()
+    first_hash = "00112233445566778899aabbccddeeff"
+    second_hash = "ffeeddccbbaa99887766554433221100"
+    peer = "192.0.2.20:4662"
+    records = [
+        *_download_lifecycle_events(first_hash, peer, first_seq=10),
+        *_download_lifecycle_events(second_hash, peer, first_seq=20),
+    ]
+
+    evidence = module.download_connection_reuse_evidence(records, first_hash, second_hash)
+
+    assert evidence is not None
+    assert evidence["connectionCap"] == 1
+    assert evidence["samePeer"] is True
+    assert evidence["first"]["taskSettled"]["seq"] == 13
+    assert evidence["second"]["connectionAdmitted"]["seq"] == 21
+
+
+def test_download_connection_reuse_rejects_pre_settlement_second_admission() -> None:
+    module = load_suite_module()
+    first_hash = "00112233445566778899aabbccddeeff"
+    second_hash = "ffeeddccbbaa99887766554433221100"
+    peer = "192.0.2.20:4662"
+    records = [
+        *_download_lifecycle_events(second_hash, peer, first_seq=10),
+        *_download_lifecycle_events(first_hash, peer, first_seq=20),
+    ]
+
+    assert module.download_connection_reuse_evidence(records, first_hash, second_hash) is None
+
+
+def test_load_rust_diag_records_skips_invalid_lines_and_orders_sequences(tmp_path: Path) -> None:
+    module = load_suite_module()
+    trace = tmp_path / "emulebb-rust-diag-123.jsonl"
+    trace.write_text(
+        "not-json\n"
+        + json.dumps({"schema": "diag_event_v1", "seq": 2, "family": "sched"})
+        + "\n"
+        + json.dumps({"schema": "other", "seq": 1})
+        + "\n"
+        + json.dumps({"schema": "diag_event_v1", "seq": 1, "family": "sched"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert [record["seq"] for record in module.load_rust_diag_records(tmp_path)] == [1, 2]
+
+
 def test_cross_client_rejects_mfc_secure_ident_failure(tmp_path: Path) -> None:
     module = load_suite_module()
     log = tmp_path / "emulebb-verbose.log"
@@ -601,9 +693,11 @@ def test_cross_client_fixture_names_are_unicode() -> None:
     assert "Unicode-\u00e9-\u6f22" in module.rust_to_emulebb_fixture_name()
     assert "Unicode-\u00e9-\u6f22" in module.rust_shared_tree_fixture_name()
     assert "Unicode-\u00e9-\u6f22" in module.emulebb_to_rust_fixture_name()
+    assert "Unicode-\u00e9-\u6f22" in module.emulebb_to_rust_reuse_fixture_name()
     assert not module.rust_to_emulebb_fixture_name().isascii()
     assert not module.rust_shared_tree_fixture_name().isascii()
     assert not module.emulebb_to_rust_fixture_name().isascii()
+    assert not module.emulebb_to_rust_reuse_fixture_name().isascii()
 
 
 def test_cross_client_validate_optional_soak_args_accepts_upload_limits() -> None:

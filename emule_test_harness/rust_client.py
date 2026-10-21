@@ -63,6 +63,8 @@ def write_rust_profile(
     rest_port: int,
     api_key: str,
     auto_connect: bool | None = False,
+    max_connections: int | None = None,
+    network_kademlia: bool | None = None,
     p2p_bind_ip: str | None = None,
     p2p_bind_interface: str | None = None,
     ed2k_port: int | None = None,
@@ -110,6 +112,12 @@ def write_rust_profile(
         # when their scenario asks for it. Consumer-default proofs opt in to the
         # product's automatic first-run connection explicitly.
         core_settings["autoConnect"] = auto_connect
+    if max_connections is not None:
+        if max_connections < 1:
+            raise ValueError("Rust profile max_connections must be at least 1.")
+        core_settings["maxConnections"] = max_connections
+    if network_kademlia is not None:
+        core_settings["networkKademlia"] = network_kademlia
     if local_only_discovery:
         # An empty nodes.dat suppresses first-run URL import, but the DHT still
         # has built-in public fallback contacts. ED2K-only lanes disable Kad.
