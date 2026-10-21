@@ -545,13 +545,6 @@ class RustEd2kServerControl:
             raise RuntimeError(f"Rust ED2K file response was not an object: {payload!r}")
         return normalize_file_response(payload)
 
-    def list_files(self, search: str | None = None) -> dict[str, Any]:
-        detail = f" for {search!r}" if search else ""
-        raise UnsupportedEd2kServerCapability(f"Rust ed2k-server does not yet expose file listing{detail}.")
-
-    def audit(self) -> dict[str, Any]:
-        raise UnsupportedEd2kServerCapability("Rust ed2k-server does not expose the Go server audit API.")
-
     def wait_for_client(self, name_fragment: str, timeout_seconds: float) -> dict[str, Any]:
         observations: list[dict[str, object]] = []
 
