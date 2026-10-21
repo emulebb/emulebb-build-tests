@@ -149,11 +149,22 @@ def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
     assert defaults.verify_source_lifecycle is False
     assert defaults.verify_same_session_republish is False
     assert defaults.verify_reflected_self_source is False
+    assert defaults.verify_completed_download_release is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert enabled.verify_source_lifecycle is True
     assert enabled.verify_same_session_republish is True
     assert enabled.verify_reflected_self_source is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
+def test_completed_download_release_requires_diagnostics() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--verify-completed-download-release"]
+    )
+
+    with pytest.raises(ValueError, match="requires --diagnostics"):
+        module.validate_optional_soak_args(args)
 
 
 def test_reflected_self_source_requires_diagnostics() -> None:
@@ -682,9 +693,11 @@ def test_cross_client_fixture_names_are_unicode() -> None:
     assert "Unicode-\u00e9-\u6f22" in module.rust_to_emulebb_fixture_name()
     assert "Unicode-\u00e9-\u6f22" in module.rust_shared_tree_fixture_name()
     assert "Unicode-\u00e9-\u6f22" in module.emulebb_to_rust_fixture_name()
+    assert "Unicode-\u00e9-\u6f22" in module.emulebb_to_rust_reuse_fixture_name()
     assert not module.rust_to_emulebb_fixture_name().isascii()
     assert not module.rust_shared_tree_fixture_name().isascii()
     assert not module.emulebb_to_rust_fixture_name().isascii()
+    assert not module.emulebb_to_rust_reuse_fixture_name().isascii()
 
 
 def test_cross_client_validate_optional_soak_args_accepts_upload_limits() -> None:

@@ -72,6 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-same-session-republish", action="store_true")
     parser.add_argument("--verify-reflected-self-source", action="store_true")
+    parser.add_argument("--verify-completed-download-release", action="store_true")
     parser.add_argument("--rust-upload-limit-kibps", type=int)
     parser.add_argument("--emulebb-upload-limit-kibps", type=int)
     parser.add_argument(
@@ -91,6 +92,8 @@ def validate_optional_soak_args(args: argparse.Namespace) -> None:
         raise ValueError("Local Kad proof requires --diagnostics for decoded exchange evidence.")
     if getattr(args, "verify_reflected_self_source", False) and not getattr(args, "diagnostics", False):
         raise ValueError("Reflected-self source proof requires --diagnostics for MFC packet evidence.")
+    if getattr(args, "verify_completed_download_release", False) and not getattr(args, "diagnostics", False):
+        raise ValueError("Completed-download release proof requires --diagnostics for Rust lifecycle evidence.")
     if getattr(args, "verify_reflected_self_source", False):
         if args.fixture_size_bytes <= ED2K_PART_SIZE_BYTES:
             raise ValueError(
@@ -619,6 +622,90 @@ def wait_for_rust_search_result(
     return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust server search result {normalized_hash}")
 
 
+def download_emulebb_fixture_to_rust(
+    *,
+    emulebb_base_url: str,
+    rust_base_url: str,
+    admin_base_url: str,
+    api_key: str,
+    fixture_path: Path,
+    fixture_sha256: str,
+    rust_profile: Path,
+    link_export_timeout_seconds: float,
+    server_publish_timeout_seconds: float,
+    transfer_completion_timeout_seconds: float,
+) -> dict[str, object]:
+    """Publishes one MFC fixture and completes its Rust download."""
+
+    shared_file_add = dtt.add_emule_shared_file(emulebb_base_url, api_key, fixture_path)
+    shared_file_reload = dtt.reload_emule_shared_files(emulebb_base_url, api_key)
+    shared_file_link = dtt.wait_for_emule_shared_file_link(
+        emulebb_base_url,
+        api_key,
+        file_name=fixture_path.name,
+        timeout_seconds=link_export_timeout_seconds,
+    )
+    link = str(shared_file_link["link"])
+    link_info = dtt.parse_ed2k_file_link(link)
+    transfer_hash = str(link_info["hash"])
+    server_file = ed2k_harness.wait_for_server_file(
+        admin_base_url,
+        api_key,
+        transfer_hash,
+        server_publish_timeout_seconds,
+    )
+    search = wait_for_rust_search_result(
+        rust_base_url,
+        api_key,
+        query="emulebb-to-emulebb-rust",
+        transfer_hash=transfer_hash,
+        timeout_seconds=server_publish_timeout_seconds,
+    )
+    search_payload = search["search"]
+    download = request_json(
+        rust_base_url,
+        "POST",
+        f"/api/v1/searches/{search_payload['id']}/results/{transfer_hash}/operations/download",
+        api_key,
+        {"paused": False},
+    )
+    resume = request_json(
+        rust_base_url,
+        "POST",
+        f"/api/v1/transfers/{transfer_hash}/operations/resume",
+        api_key,
+    )
+    completed_file = wait_for_rust_transfer_completed(
+        rust_base_url,
+        api_key,
+        transfer_hash,
+        rust_profile,
+        expected_size=int(link_info["size"]),
+        expected_sha256=fixture_sha256,
+        timeout_seconds=transfer_completion_timeout_seconds,
+    )
+    manifest_metadata = require_rust_download_manifest_metadata(
+        rust_profile,
+        transfer_hash=transfer_hash,
+        expected_name=decoded_ed2k_link_name(link_info),
+        expected_size=int(link_info["size"]),
+        require_aich_hashset=True,
+    )
+    return {
+        "transferHash": transfer_hash,
+        "linkInfo": link_info,
+        "sharedFileAdd": shared_file_add,
+        "sharedFileReload": shared_file_reload,
+        "sharedFileLink": shared_file_link,
+        "serverFile": server_file,
+        "search": search,
+        "download": download,
+        "resume": resume,
+        "completedFile": completed_file,
+        "manifestMetadata": manifest_metadata,
+    }
+
+
 def require_rust_download_manifest_metadata(
     profile_dir: Path,
     *,
@@ -720,6 +807,12 @@ def emulebb_to_rust_fixture_name() -> str:
     """Returns the eMuleBB-seeded cross-client Unicode fixture name."""
 
     return f"emulebb-to-emulebb-rust-{UNICODE_FIXTURE_SUFFIX}.bin"
+
+
+def emulebb_to_rust_reuse_fixture_name() -> str:
+    """Returns the second MFC fixture used for completed-task release proof."""
+
+    return f"emulebb-to-emulebb-rust-reuse-{UNICODE_FIXTURE_SUFFIX}.bin"
 
 
 def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
@@ -1350,6 +1443,7 @@ def main(argv: list[str] | None = None) -> int:
             "same_session_republish": {"enabled": bool(args.verify_same_session_republish)},
             "reflected_self": {"enabled": bool(args.verify_reflected_self_source)},
         },
+        "completed_download_release": {"enabled": bool(args.verify_completed_download_release)},
     }
     server_process: subprocess.Popen | None = None
     rust_process: subprocess.Popen[str] | None = None
@@ -1431,6 +1525,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
             api_key=args.api_key,
+            max_connections=1 if args.verify_completed_download_release else None,
             p2p_bind_ip=client_p2p_address,
             ed2k_port=rust_ed2k_port,
             ed2k_nickname=rust_spec.nick,
@@ -1706,66 +1801,70 @@ def main(argv: list[str] | None = None) -> int:
             "sha256": emulebb_fixture_sha256,
             "unicode_name": True,
         }
-        report["checks"]["emulebb_shared_file_add"] = dtt.add_emule_shared_file(
-            emulebb_base_url,
-            args.api_key,
-            emulebb_fixture_path,
+        reverse_transfer = download_emulebb_fixture_to_rust(
+            emulebb_base_url=emulebb_base_url,
+            rust_base_url=rust_base_url,
+            admin_base_url=admin_base_url,
+            api_key=args.api_key,
+            fixture_path=emulebb_fixture_path,
+            fixture_sha256=emulebb_fixture_sha256,
+            rust_profile=rust_profile,
+            link_export_timeout_seconds=args.link_export_timeout_seconds,
+            server_publish_timeout_seconds=args.server_publish_timeout_seconds,
+            transfer_completion_timeout_seconds=args.transfer_completion_timeout_seconds,
         )
-        report["checks"]["emulebb_shared_file_reload"] = dtt.reload_emule_shared_files(emulebb_base_url, args.api_key)
-        emulebb_shared_link = dtt.wait_for_emule_shared_file_link(
-            emulebb_base_url,
-            args.api_key,
-            file_name=emulebb_fixture_path.name,
-            timeout_seconds=args.link_export_timeout_seconds,
-        )
-        report["checks"]["emulebb_shared_file_link"] = emulebb_shared_link
-        emulebb_link = str(emulebb_shared_link["link"])
-        emulebb_link_info = dtt.parse_ed2k_file_link(emulebb_link)
-        emulebb_transfer_hash = str(emulebb_link_info["hash"])
-        report["checks"]["emulebb_server_file"] = ed2k_harness.wait_for_server_file(
-            admin_base_url,
-            args.api_key,
-            emulebb_transfer_hash,
-            args.server_publish_timeout_seconds,
-        )
-        rust_reverse_search = wait_for_rust_search_result(
-            rust_base_url,
-            args.api_key,
-            query="emulebb-to-emulebb-rust",
-            transfer_hash=emulebb_transfer_hash,
-            timeout_seconds=args.server_publish_timeout_seconds,
-        )
-        report["checks"]["rust_reverse_search"] = rust_reverse_search
-        rust_search = rust_reverse_search["search"]
-        report["checks"]["rust_reverse_download"] = request_json(
-            rust_base_url,
-            "POST",
-            f"/api/v1/searches/{rust_search['id']}/results/{emulebb_transfer_hash}/operations/download",
-            args.api_key,
-            {"paused": False},
-        )
-        report["checks"]["rust_reverse_resume"] = request_json(
-            rust_base_url,
-            "POST",
-            f"/api/v1/transfers/{emulebb_transfer_hash}/operations/resume",
-            args.api_key,
-        )
-        report["checks"]["rust_completed_reverse_file"] = wait_for_rust_transfer_completed(
-            rust_base_url,
-            args.api_key,
-            emulebb_transfer_hash,
-            rust_profile,
-            expected_size=int(emulebb_link_info["size"]),
-            expected_sha256=emulebb_fixture_sha256,
-            timeout_seconds=args.transfer_completion_timeout_seconds,
-        )
-        report["checks"]["rust_emulebb_manifest_metadata"] = require_rust_download_manifest_metadata(
-            rust_profile,
-            transfer_hash=emulebb_transfer_hash,
-            expected_name=decoded_ed2k_link_name(emulebb_link_info),
-            expected_size=int(emulebb_link_info["size"]),
-            require_aich_hashset=True,
-        )
+        emulebb_transfer_hash = str(reverse_transfer["transferHash"])
+        report["checks"]["emulebb_shared_file_add"] = reverse_transfer["sharedFileAdd"]
+        report["checks"]["emulebb_shared_file_reload"] = reverse_transfer["sharedFileReload"]
+        report["checks"]["emulebb_shared_file_link"] = reverse_transfer["sharedFileLink"]
+        report["checks"]["emulebb_server_file"] = reverse_transfer["serverFile"]
+        report["checks"]["rust_reverse_search"] = reverse_transfer["search"]
+        report["checks"]["rust_reverse_download"] = reverse_transfer["download"]
+        report["checks"]["rust_reverse_resume"] = reverse_transfer["resume"]
+        report["checks"]["rust_completed_reverse_file"] = reverse_transfer["completedFile"]
+        report["checks"]["rust_emulebb_manifest_metadata"] = reverse_transfer["manifestMetadata"]
+        if args.verify_completed_download_release:
+            current_phase = "verify_completed_download_release"
+            reuse_fixture_path = (
+                paths.source_artifacts_dir / "emulebb-shared" / emulebb_to_rust_reuse_fixture_name()
+            )
+            reuse_fixture_sha256 = dtt.write_fixture_file(
+                reuse_fixture_path,
+                args.fixture_size_bytes,
+                seed=0xE1BB2027,
+            )
+            reuse_fixture = {
+                "path": str(reuse_fixture_path),
+                "name": reuse_fixture_path.name,
+                "size": args.fixture_size_bytes,
+                "sha256": reuse_fixture_sha256,
+                "unicode_name": True,
+            }
+            report["emulebb_reuse_fixture"] = reuse_fixture
+            reuse_transfer = download_emulebb_fixture_to_rust(
+                emulebb_base_url=emulebb_base_url,
+                rust_base_url=rust_base_url,
+                admin_base_url=admin_base_url,
+                api_key=args.api_key,
+                fixture_path=reuse_fixture_path,
+                fixture_sha256=reuse_fixture_sha256,
+                rust_profile=rust_profile,
+                link_export_timeout_seconds=args.link_export_timeout_seconds,
+                server_publish_timeout_seconds=args.server_publish_timeout_seconds,
+                transfer_completion_timeout_seconds=args.transfer_completion_timeout_seconds,
+            )
+            release_evidence = wait_for_rust_download_connection_reuse(
+                rust_packet_dir,
+                first_transfer_hash=emulebb_transfer_hash,
+                second_transfer_hash=str(reuse_transfer["transferHash"]),
+                timeout_seconds=args.source_withdraw_timeout_seconds,
+            )
+            report["completed_download_release"] = {
+                "enabled": True,
+                "fixture": reuse_fixture,
+                "transfer": reuse_transfer,
+                "diagnostics": release_evidence,
+            }
         report["checks"]["rust_emulebb_cross_client_requirements"] = require_cross_client_requirements(report)
         if args.diagnostics:
             report["checks"]["diagnostics_capture"] = require_diagnostics(
