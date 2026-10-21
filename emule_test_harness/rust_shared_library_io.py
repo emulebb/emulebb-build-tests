@@ -1235,6 +1235,12 @@ def read_offerfiles_server_stats(admin_base_url: str) -> dict[str, object]:
     )
 
 
+def launched_server_endpoint(server: ed2k_harness.Ed2kServerLaunch) -> str:
+    """Return the client-reachable endpoint selected by the managed launcher."""
+
+    return f"{server.ed2k_host}:{server.ed2k_port}"
+
+
 def offerfiles_scale_cancellation_acceptance(
     *,
     before: dict[str, int],
@@ -1802,7 +1808,6 @@ def run_offerfiles_scale_campaign(
 
     lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
     ports = dtt.choose_distinct_ports(lan_bind_addr)
-    server_endpoint = f"{lan_bind_addr}:{ports['ed2k_tcp']}"
     client_nick = "rust-offerfiles-scale"
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     run_root = paths.runs_root / f"offerfiles-scale-{run_id}"
@@ -1861,6 +1866,7 @@ def run_offerfiles_scale_campaign(
             hard_limit_files=200_000,
         )
         server_process = server.process
+        server_endpoint = launched_server_endpoint(server)
         control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
         initial_server_status = read_offerfiles_server_stats(server.admin_base_url)
         report["server"] = {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -248,6 +249,13 @@ def test_offerfiles_server_stats_uses_policy_and_counter_endpoint(monkeypatch) -
     assert calls == [
         ("http://127.0.0.1:8080", subject.API_KEY, "/api/stats", 5.0)
     ]
+
+
+@pytest.mark.unit
+def test_offerfiles_campaign_uses_launcher_selected_server_endpoint() -> None:
+    server = SimpleNamespace(ed2k_host="172.20.0.2", ed2k_port=4661)
+
+    assert subject.launched_server_endpoint(server) == "172.20.0.2:4661"
 
 
 @pytest.mark.unit
