@@ -122,6 +122,114 @@ def test_lan_startup_uses_rust_ed2k_server_cargo_manifest() -> None:
 
 
 @pytest.mark.unit
+def test_offerfiles_scale_cancellation_requires_quiescent_clean_shutdown() -> None:
+    before = {
+        "requested": 0,
+        "sessions": 0,
+        "batches": 0,
+        "records": 0,
+        "oversized": 0,
+        "conn_waits": 0,
+        "conn_wait_ms": 0,
+        "global_waits": 0,
+        "global_wait_ms": 0,
+        "global_wait_max_ms": 0,
+        "global_waiting_now": 0,
+    }
+    stopped = before | {
+        "requested": 1,
+        "batches": 3,
+        "records": 600,
+    }
+
+    accepted = subject.offerfiles_scale_cancellation_acceptance(
+        before=before,
+        after_shutdown=stopped,
+        after_settle=dict(stopped),
+        shutdown={"method": "rest", "exitCode": 0},
+        client_absent=True,
+    )
+
+    assert accepted["ok"] is True
+    assert accepted["delta"]["records"] == 600
+    moving = dict(stopped)
+    moving["records"] = 800
+    assert (
+        subject.offerfiles_scale_cancellation_acceptance(
+            before=before,
+            after_shutdown=stopped,
+            after_settle=moving,
+            shutdown={"method": "rest", "exitCode": 0},
+            client_absent=True,
+        )["ok"]
+        is False
+    )
+
+
+@pytest.mark.unit
+def test_offerfiles_scale_completion_requires_full_paced_reconnect() -> None:
+    before = {
+        "requested": 1,
+        "sessions": 0,
+        "batches": 3,
+        "records": 600,
+        "oversized": 0,
+        "conn_waits": 0,
+        "conn_wait_ms": 0,
+        "global_waits": 0,
+        "global_wait_ms": 0,
+        "global_wait_max_ms": 0,
+        "global_waiting_now": 0,
+    }
+    after = before | {
+        "requested": 2,
+        "sessions": 1,
+        "batches": 503,
+        "records": 100_600,
+    }
+    client_evidence = {
+        "mode": "negotiatedV1",
+        "batchMax": 200,
+        "minIntervalMs": 500,
+        "publishedEntries": 100_000,
+        "pendingEntries": 0,
+        "sessionPumpActive": False,
+        "serverSharedFiles": 100_000,
+    }
+    process_summary = {
+        "peakWorkingSetBytes": 256 * 1024 * 1024,
+        "peakPrivateBytes": 300 * 1024 * 1024,
+    }
+
+    accepted = subject.offerfiles_scale_completion_acceptance(
+        before=before,
+        after=after,
+        elapsed_seconds=249.5,
+        client_evidence=client_evidence,
+        process_summary=process_summary,
+    )
+
+    assert accepted["ok"] is True
+    assert accepted["expectedBatches"] == 500
+    assert accepted["minimumElapsedSeconds"] == 249.5
+    too_fast = subject.offerfiles_scale_completion_acceptance(
+        before=before,
+        after=after,
+        elapsed_seconds=200.0,
+        client_evidence=client_evidence,
+        process_summary=process_summary,
+    )
+    assert too_fast["ok"] is False
+    assert too_fast["checks"]["minimumPacingElapsed"] is False
+
+
+@pytest.mark.unit
+def test_offer_v1_counters_reject_missing_server_shape() -> None:
+    with pytest.raises(RuntimeError, match="offer_v1"):
+        subject.offer_v1_counters({"data": {}})
+
+
+@pytest.mark.unit
 def test_watcher_cohort_is_exactly_one_percent_with_balanced_path_classes() -> None:
     summary = subject.fixture.watcher_cohort_summary()
     paths = [

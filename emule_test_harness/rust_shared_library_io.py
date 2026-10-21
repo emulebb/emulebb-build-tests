@@ -44,6 +44,10 @@ DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
+OFFERFILES_SCALE_BATCH_MAX = 200
+OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
+OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
+OFFERFILES_SCALE_PACING_TOLERANCE_SECONDS = 2.0
 DEFAULT_MEDIA_ROOTS_FILE = (
     Path(__file__).resolve().parent.parent
     / "live-wire-emulebb-rust-sharedroots.local.txt"
@@ -1163,6 +1167,129 @@ def lan_startup_overlap_acceptance(
         "kadSourcePublishStarted": int(kad_publish.get("sourceAttempted") or 0) > 0,
     }
     return {"ok": all(checks.values()), "checks": checks}
+
+
+def offer_v1_counters(server_status: dict[str, object]) -> dict[str, int]:
+    """Extract the stable numeric OFFERFILES v1 counters from server status."""
+
+    data = server_status.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("ED2K server status is missing data.")
+    offer_v1 = data.get("offer_v1")
+    if not isinstance(offer_v1, dict):
+        raise RuntimeError("ED2K server status is missing offer_v1 counters.")
+    fields = (
+        "requested",
+        "sessions",
+        "batches",
+        "records",
+        "oversized",
+        "conn_waits",
+        "conn_wait_ms",
+        "global_waits",
+        "global_wait_ms",
+        "global_wait_max_ms",
+        "global_waiting_now",
+    )
+    return {field: int(offer_v1.get(field) or 0) for field in fields}
+
+
+def offer_v1_counter_delta(
+    before: dict[str, int], after: dict[str, int]
+) -> dict[str, int]:
+    """Return monotonic OFFERFILES v1 counter deltas for one connection epoch."""
+
+    return {
+        field: max(0, int(after.get(field, 0)) - int(before.get(field, 0)))
+        for field in before
+        if field != "sessions" and field != "global_waiting_now"
+    }
+
+
+def offerfiles_scale_cancellation_acceptance(
+    *,
+    before: dict[str, int],
+    after_shutdown: dict[str, int],
+    after_settle: dict[str, int],
+    shutdown: dict[str, object],
+    client_absent: bool,
+    expected_total_records: int = 100_000,
+    batch_max: int = OFFERFILES_SCALE_BATCH_MAX,
+) -> dict[str, object]:
+    """Evaluate clean cancellation of a partially completed publication epoch."""
+
+    delta = offer_v1_counter_delta(before, after_shutdown)
+    total_batches = expected_total_records // batch_max
+    checks = {
+        "oneNegotiatedSession": delta.get("requested") == 1,
+        "partialBatchRange": 0 < delta.get("batches", 0) < total_batches,
+        "fullSizedPartialBatches": delta.get("records")
+        == delta.get("batches", 0) * batch_max,
+        "noOversizedBatch": delta.get("oversized") == 0,
+        "clientPacedWithoutServerWait": delta.get("conn_waits") == 0,
+        "noGlobalThrottle": delta.get("global_waits") == 0,
+        "sessionReleased": after_shutdown.get("sessions") == 0,
+        "globalWaiterReleased": after_shutdown.get("global_waiting_now") == 0,
+        "countersSettled": after_settle.get("batches")
+        == after_shutdown.get("batches")
+        and after_settle.get("records") == after_shutdown.get("records"),
+        "restShutdown": shutdown.get("method") == "rest"
+        and shutdown.get("exitCode") == 0,
+        "clientAbsent": client_absent,
+    }
+    return {"ok": all(checks.values()), "checks": checks, "delta": delta}
+
+
+def offerfiles_scale_completion_acceptance(
+    *,
+    before: dict[str, int],
+    after: dict[str, int],
+    elapsed_seconds: float,
+    client_evidence: dict[str, object],
+    process_summary: dict[str, object],
+    expected_records: int = 100_000,
+    batch_max: int = OFFERFILES_SCALE_BATCH_MAX,
+    min_interval_ms: int = OFFERFILES_SCALE_MIN_INTERVAL_MS,
+    memory_limit_bytes: int = OFFERFILES_SCALE_MEMORY_LIMIT_BYTES,
+) -> dict[str, object]:
+    """Evaluate full reconnect publication, pacing, and process-memory bounds."""
+
+    expected_batches = expected_records // batch_max
+    minimum_elapsed_seconds = max(0, expected_batches - 1) * min_interval_ms / 1000
+    delta = offer_v1_counter_delta(before, after)
+    checks = {
+        "oneNegotiatedSession": delta.get("requested") == 1,
+        "allBatchesPublished": delta.get("batches") == expected_batches,
+        "allRecordsPublished": delta.get("records") == expected_records,
+        "noOversizedBatch": delta.get("oversized") == 0,
+        "clientPacedWithoutServerWait": delta.get("conn_waits") == 0,
+        "noGlobalThrottle": delta.get("global_waits") == 0,
+        "minimumPacingElapsed": elapsed_seconds
+        + OFFERFILES_SCALE_PACING_TOLERANCE_SECONDS
+        >= minimum_elapsed_seconds,
+        "negotiatedMode": client_evidence.get("mode") == "negotiatedV1",
+        "negotiatedBatchMax": client_evidence.get("batchMax") == batch_max,
+        "negotiatedMinInterval": client_evidence.get("minIntervalMs")
+        == min_interval_ms,
+        "clientPublishedAll": client_evidence.get("publishedEntries")
+        == expected_records,
+        "clientPendingEmpty": client_evidence.get("pendingEntries") == 0,
+        "clientPumpSettled": client_evidence.get("sessionPumpActive") is False,
+        "serverIndexedAll": client_evidence.get("serverSharedFiles")
+        == expected_records,
+        "workingSetBounded": int(process_summary.get("peakWorkingSetBytes") or 0)
+        <= memory_limit_bytes,
+        "privateBytesBounded": int(process_summary.get("peakPrivateBytes") or 0)
+        <= memory_limit_bytes,
+    }
+    return {
+        "ok": all(checks.values()),
+        "checks": checks,
+        "delta": delta,
+        "expectedBatches": expected_batches,
+        "minimumElapsedSeconds": minimum_elapsed_seconds,
+        "memoryLimitBytes": memory_limit_bytes,
+    }
 
 
 def _lan_startup_observation(
