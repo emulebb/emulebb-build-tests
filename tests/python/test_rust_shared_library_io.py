@@ -233,6 +233,24 @@ def test_offer_v1_counters_reject_missing_server_shape() -> None:
 
 
 @pytest.mark.unit
+def test_offerfiles_server_stats_uses_policy_and_counter_endpoint(monkeypatch) -> None:
+    calls = []
+
+    def fake_admin_request(base_url, api_key, path, *, timeout_seconds):
+        calls.append((base_url, api_key, path, timeout_seconds))
+        return {"data": {"offer_v1": {}}}
+
+    monkeypatch.setattr(subject.ed2k_harness, "admin_request", fake_admin_request)
+
+    result = subject.read_offerfiles_server_stats("http://127.0.0.1:8080")
+
+    assert result == {"data": {"offer_v1": {}}}
+    assert calls == [
+        ("http://127.0.0.1:8080", subject.API_KEY, "/api/stats", 5.0)
+    ]
+
+
+@pytest.mark.unit
 def test_offerfiles_scale_parser_uses_retained_campaign_defaults() -> None:
     args = subject.build_parser().parse_args(
         ["offerfiles-scale", "--lan-bind-addr", "192.0.2.10"]

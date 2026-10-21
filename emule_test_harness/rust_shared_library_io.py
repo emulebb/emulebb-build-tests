@@ -1227,6 +1227,14 @@ def offer_v1_counter_delta(
     }
 
 
+def read_offerfiles_server_stats(admin_base_url: str) -> dict[str, object]:
+    """Read the Rust server endpoint that owns OFFERFILES policy and counters."""
+
+    return ed2k_harness.admin_request(
+        admin_base_url, API_KEY, "/api/stats", timeout_seconds=5.0
+    )
+
+
 def offerfiles_scale_cancellation_acceptance(
     *,
     before: dict[str, int],
@@ -1660,9 +1668,7 @@ def _wait_for_offerfiles_batches(
                 f"emulebb-rust exited during OFFERFILES cancellation epoch with code {process.returncode}"
             )
         sampler.maybe_sample()
-        status = ed2k_harness.admin_request(
-            admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
+        status = read_offerfiles_server_stats(admin_base_url)
         counters = offer_v1_counters(status)
         delta = offer_v1_counter_delta(before, counters)
         observations.append(
@@ -1710,9 +1716,7 @@ def _wait_for_offerfiles_completion(
                 f"emulebb-rust exited during OFFERFILES completion epoch with code {process.returncode}"
             )
         sampler.maybe_sample()
-        server_status = ed2k_harness.admin_request(
-            admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
+        server_status = read_offerfiles_server_stats(admin_base_url)
         counters = offer_v1_counters(server_status)
         delta = offer_v1_counter_delta(before, counters)
         now = time.monotonic()
@@ -1858,9 +1862,7 @@ def run_offerfiles_scale_campaign(
         )
         server_process = server.process
         control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
-        initial_server_status = ed2k_harness.admin_request(
-            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
+        initial_server_status = read_offerfiles_server_stats(server.admin_base_url)
         report["server"] = {
             "health": server.health,
             "build": server.build,
@@ -1943,14 +1945,10 @@ def run_offerfiles_scale_campaign(
         process = None
         client = None
         control.wait_for_client_absent(client_nick, min(30.0, remaining_seconds()))
-        after_shutdown_status = ed2k_harness.admin_request(
-            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
+        after_shutdown_status = read_offerfiles_server_stats(server.admin_base_url)
         after_shutdown = offer_v1_counters(after_shutdown_status)
         time.sleep(args.settle_seconds)
-        after_settle_status = ed2k_harness.admin_request(
-            server.admin_base_url, API_KEY, "/api/status", timeout_seconds=5.0
-        )
+        after_settle_status = read_offerfiles_server_stats(server.admin_base_url)
         after_settle = offer_v1_counters(after_settle_status)
         cancellation_acceptance = offerfiles_scale_cancellation_acceptance(
             before=cancellation_before,
