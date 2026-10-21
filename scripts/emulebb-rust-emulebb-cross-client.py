@@ -71,6 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-same-session-republish", action="store_true")
+    parser.add_argument("--verify-reflected-self-source", action="store_true")
     parser.add_argument("--rust-upload-limit-kibps", type=int)
     parser.add_argument("--emulebb-upload-limit-kibps", type=int)
     parser.add_argument(
@@ -88,6 +89,17 @@ def validate_optional_soak_args(args: argparse.Namespace) -> None:
 
     if getattr(args, "rust_kad_enabled", False) and not getattr(args, "diagnostics", False):
         raise ValueError("Local Kad proof requires --diagnostics for decoded exchange evidence.")
+    if getattr(args, "verify_reflected_self_source", False) and not getattr(args, "diagnostics", False):
+        raise ValueError("Reflected-self source proof requires --diagnostics for MFC packet evidence.")
+    if getattr(args, "verify_reflected_self_source", False):
+        if args.fixture_size_bytes <= ED2K_PART_SIZE_BYTES:
+            raise ValueError(
+                "Reflected-self source proof requires --fixture-size-bytes above one ED2K part."
+            )
+        if args.rust_upload_limit_kibps is None:
+            raise ValueError(
+                "Reflected-self source proof requires --rust-upload-limit-kibps to preserve a partial window."
+            )
 
     for name in ("rust_upload_limit_kibps", "emulebb_upload_limit_kibps"):
         value = getattr(args, name)
@@ -132,6 +144,35 @@ def kad_request(base_url: str, method: str, path: str, api_key: str,
     return data
 
 
+def run_mfc_transfer_operation(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    operation: str,
+) -> dict[str, object]:
+    """Runs one MFC bulk transfer operation and validates its per-item result."""
+
+    result = dtt.rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    summary = dtt.rest_smoke.compact_http_result(result)
+    payload = dtt.response_payload(result, 200)
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    item = rows[0] if isinstance(rows, list) and rows else None
+    if (
+        not isinstance(item, dict)
+        or item.get("ok") is not True
+        or str(item.get("hash") or "").lower() != transfer_hash.lower()
+    ):
+        raise AssertionError(summary)
+    return {"response": summary, "item": item}
+
+
 def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) -> dict[str, object]:
     """Reject silent diagnostics builds and keep only compact capture counts."""
 
@@ -157,6 +198,78 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
             raise RuntimeError("Rust Kad diagnostics did not capture UDP packets")
         counts["rustKadUdpPackets"] = kad_count
     return counts
+
+
+PacketTraceCursor = tuple[Path, int, int]
+
+
+def capture_mfc_packet_cursor(log_dir: Path, timeout_seconds: float) -> PacketTraceCursor:
+    """Captures the current MFC packet trace position after self-publication."""
+
+    def resolve() -> PacketTraceCursor | None:
+        trace = converged_live_wire.find_packet_trace(log_dir, side="emule")
+        if trace is None:
+            return None
+        records = packet_trace_diff.load_trace(trace)
+        max_event_seq = max(
+            (
+                int(record["event_seq"])
+                for record in records
+                if isinstance(record.get("event_seq"), int)
+            ),
+            default=-1,
+        )
+        return trace, len(records), max_event_seq
+
+    return live_common.wait_for(
+        resolve,
+        timeout_seconds,
+        0.25,
+        "MFC packet diagnostics cursor",
+    )
+
+
+def packet_records_after_cursor(log_dir: Path, cursor: PacketTraceCursor) -> list[dict[str, object]]:
+    """Reads the active MFC packet records written after one captured cursor."""
+
+    cursor_path, cursor_count, cursor_event_seq = cursor
+    trace = converged_live_wire.find_packet_trace(log_dir, side="emule")
+    if trace is None:
+        return []
+    records = packet_trace_diff.load_trace(trace)
+    if trace == cursor_path:
+        return records[cursor_count:]
+    if cursor_event_seq >= 0:
+        return [
+            record
+            for record in records
+            if isinstance(record.get("event_seq"), int) and int(record["event_seq"]) > cursor_event_seq
+        ]
+    return records
+
+
+def wait_for_reflected_self_source_evidence(
+    log_dir: Path,
+    cursor: PacketTraceCursor,
+    *,
+    transfer_hash: str,
+    requester_port: int,
+    expected_publisher_port: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for a real MFC source request and a reply that excludes MFC itself."""
+
+    return live_common.wait_for(
+        lambda: packet_trace_diff.reflected_self_source_evidence(
+            packet_records_after_cursor(log_dir, cursor),
+            file_hash=transfer_hash,
+            requester_port=requester_port,
+            expected_publisher_port=expected_publisher_port,
+        ),
+        timeout_seconds,
+        0.25,
+        "post-publication MFC source reply excluding its own endpoint",
+    )
 
 
 def require_mfc_secure_ident_clean(log_path: Path) -> dict[str, int]:
@@ -1086,6 +1199,7 @@ def main(argv: list[str] | None = None) -> int:
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
         "source_negative_cases": {
             "same_session_republish": {"enabled": bool(args.verify_same_session_republish)},
+            "reflected_self": {"enabled": bool(args.verify_reflected_self_source)},
         },
     }
     server_process: subprocess.Popen | None = None
@@ -1365,7 +1479,56 @@ def main(argv: list[str] | None = None) -> int:
             port=ed2k_server.ed2k_port,
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["emulebb_transfer_add"] = dtt.add_transfer(emulebb_base_url, args.api_key, link, transfer_hash)
+        report["checks"]["emulebb_transfer_add"] = dtt.add_transfer(
+            emulebb_base_url, args.api_key, link, transfer_hash
+        )
+        if args.verify_reflected_self_source:
+            current_phase = "mfc_reflected_self_source"
+            server_control.wait_for_file_endpoint(
+                transfer_hash,
+                client_p2p_address,
+                ports["client1_tcp"],
+                args.server_publish_timeout_seconds,
+                "MFC requester source publication",
+            )
+            run_mfc_transfer_operation(
+                emulebb_base_url,
+                args.api_key,
+                transfer_hash,
+                "pause",
+            )
+            mfc_log_dir = Path(emulebb["profile_base"]) / "logs"
+            packet_cursor = capture_mfc_packet_cursor(
+                mfc_log_dir,
+                args.server_publish_timeout_seconds,
+            )
+            run_mfc_transfer_operation(
+                emulebb_base_url,
+                args.api_key,
+                transfer_hash,
+                "resume",
+            )
+            server_control.wait_for_file_endpoint(
+                transfer_hash,
+                client_p2p_address,
+                ports["client1_tcp"],
+                args.server_publish_timeout_seconds,
+                "MFC requester source republication",
+            )
+            reflected_self = wait_for_reflected_self_source_evidence(
+                mfc_log_dir,
+                packet_cursor,
+                transfer_hash=transfer_hash,
+                requester_port=ports["client1_tcp"],
+                expected_publisher_port=rust_ed2k_port,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            report["source_negative_cases"]["reflected_self"] = {
+                "enabled": True,
+                "requester": "mfc",
+                "requester_published": True,
+                **reflected_self,
+            }
         completed_path = completed_incoming_path(Path(emulebb["incoming_dir"]), link_info)
         report["checks"]["emulebb_completed_file"] = dtt.wait_for_completed_file(
             completed_path,
