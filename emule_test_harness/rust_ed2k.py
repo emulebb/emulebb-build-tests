@@ -348,6 +348,7 @@ def build_server_config(
     listen_address: str,
     advertised_address: str,
     protocol_obfuscation: bool = True,
+    offerfiles_v1: bool = False,
     server_name: str = "emulebb-local-e2e",
 ) -> dict[str, object]:
     """Writes a minimal private Rust server configuration for local harness runs."""
@@ -374,6 +375,7 @@ def build_server_config(
             "soft_limit_files": 5000,
             "hard_limit_files": 200000,
             "ping_delay_seconds": 600,
+            "offerfiles_v1": offerfiles_v1,
         },
         "content_filter": {
             "hash_banlist": [],
@@ -421,6 +423,7 @@ def build_server_config(
         "soft_limit_files = 5000",
         "hard_limit_files = 200000",
         "ping_delay_seconds = 600",
+        f"offerfiles_v1 = {str(offerfiles_v1).lower()}",
         "",
         "[content_filter]",
         "hash_banlist = []",
@@ -735,6 +738,7 @@ def launch_server(
     repo_override: str | None = None,
     exe_override: str | None = None,
     protocol_obfuscation: bool = True,
+    offerfiles_v1: bool = False,
     server_udp: bool = True,
     packet_trace: bool = False,
     health_timeout_seconds: float = 30.0,
@@ -778,6 +782,7 @@ def launch_server(
         listen_address=listen_address,
         advertised_address=advertised_address,
         protocol_obfuscation=protocol_obfuscation,
+        offerfiles_v1=offerfiles_v1,
     )
     process = start_server(
         binary.server_exe,
