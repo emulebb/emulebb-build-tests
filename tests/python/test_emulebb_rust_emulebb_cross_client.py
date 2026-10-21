@@ -71,19 +71,17 @@ def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch)
     assert result["result"]["name"] == "fixture.bin"
 
 
-def test_run_mfc_transfer_operation_accepts_bulk_item_response(monkeypatch) -> None:
+def test_disconnect_mfc_servers_accepts_successful_rest_response(monkeypatch) -> None:
     module = load_suite_module()
-    transfer_hash = "00112233445566778899aabbccddeeff"
     calls: list[tuple[str, str, dict[str, object]]] = []
 
     def fake_http_request(_base_url, path, *, method, json_body, **_kwargs):
         calls.append((method, path, json_body))
-        item = {"hash": transfer_hash.upper(), "ok": True}
         return {
             "status": 200,
             "content_type": "application/json",
-            "json": {"items": [item]},
-            "raw_json": {"data": {"items": [item]}, "meta": {"apiVersion": "v1"}},
+            "json": {"serverCount": 1},
+            "raw_json": {"data": {"serverCount": 1}, "meta": {"apiVersion": "v1"}},
         }
 
     monkeypatch.setattr(module.dtt.rest_smoke, "http_request", fake_http_request)
@@ -93,18 +91,16 @@ def test_run_mfc_transfer_operation_accepts_bulk_item_response(monkeypatch) -> N
         lambda result: {"status": result["status"]},
     )
 
-    result = module.run_mfc_transfer_operation(
+    result = module.disconnect_mfc_servers(
         "http://192.0.2.10:4711",
         "key",
-        transfer_hash,
-        "pause",
     )
 
-    assert result["item"]["ok"] is True
+    assert result["status"] == 200
     assert calls == [
         (
             "POST",
-            f"/api/v1/transfers/{transfer_hash}/operations/pause",
+            "/api/v1/servers/operations/disconnect",
             {},
         )
     ]
@@ -222,6 +218,7 @@ def test_wait_for_reflected_self_source_uses_only_post_cursor_packets(monkeypatc
         "reflected_self_source_evidence",
         lambda records, **_kwargs: observed.append(records)
         or {
+            "requester_offer_seen": True,
             "request_seen": True,
             "reply_seen": True,
             "matching_reply_count": 1,
@@ -243,6 +240,7 @@ def test_wait_for_reflected_self_source_uses_only_post_cursor_packets(monkeypatc
 
     assert observed == [new_records]
     assert evidence == {
+        "requester_offer_seen": True,
         "request_seen": True,
         "reply_seen": True,
         "matching_reply_count": 1,

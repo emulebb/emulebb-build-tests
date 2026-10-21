@@ -24,6 +24,7 @@ from typing import Any
 
 PACKET_SCHEMA = "ed2k_packet_v1"
 _PACKET_DIRECTIONS = ("send", "recv")
+_OFFERFILES_OPCODE = 0x15
 _SOURCE_REQUEST_OPCODES = {0x19, 0x23}
 _SOURCE_REPLY_OPCODES = {0x42, 0x44}
 _OBFUSCATED_SOURCE_REPLY_OPCODE = 0x44
@@ -154,14 +155,24 @@ def reflected_self_source_evidence(
     """Returns sanitized evidence for one request/reply excluding the requester."""
 
     expected_hash = file_hash.upper()
+    expected_hash_bytes = bytes.fromhex(expected_hash)
+    requester_offer_seen = False
     request_seen = False
     matching_replies: list[dict[str, Any]] = []
     for record in records:
+        if _is_server_packet(record, direction="send", opcodes={_OFFERFILES_OPCODE}):
+            payload = _packet_payload(record)
+            requester_offer_seen = (
+                len(payload) >= 20
+                and int.from_bytes(payload[:4], "little") >= 1
+                and payload[4:20] == expected_hash_bytes
+            )
+            continue
         if _is_server_packet(record, direction="send", opcodes=_SOURCE_REQUEST_OPCODES):
             payload = _packet_payload(record)
             if len(payload) < 16:
                 raise ValueError(f"GETSOURCES payload is too short: {len(payload)} bytes.")
-            if payload[:16].hex().upper() == expected_hash:
+            if requester_offer_seen and payload[:16] == expected_hash_bytes:
                 request_seen = True
             continue
         reply = decode_found_sources_record(record)
@@ -184,6 +195,7 @@ def reflected_self_source_evidence(
     if accepted is None:
         return None
     return {
+        "requester_offer_seen": True,
         "request_seen": True,
         "reply_seen": True,
         "matching_reply_count": len(matching_replies),

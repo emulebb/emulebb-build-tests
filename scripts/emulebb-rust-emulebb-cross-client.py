@@ -144,33 +144,24 @@ def kad_request(base_url: str, method: str, path: str, api_key: str,
     return data
 
 
-def run_mfc_transfer_operation(
+def disconnect_mfc_servers(
     base_url: str,
     api_key: str,
-    transfer_hash: str,
-    operation: str,
 ) -> dict[str, object]:
-    """Runs one MFC bulk transfer operation and validates its per-item result."""
+    """Disconnects MFC from ED2K servers through the canonical REST operation."""
 
     result = dtt.rest_smoke.http_request(
         base_url,
-        f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
+        "/api/v1/servers/operations/disconnect",
         method="POST",
         api_key=api_key,
         json_body={},
         request_timeout_seconds=30.0,
     )
     summary = dtt.rest_smoke.compact_http_result(result)
-    payload = dtt.response_payload(result, 200)
-    rows = payload.get("items") if isinstance(payload, dict) else None
-    item = rows[0] if isinstance(rows, list) and rows else None
-    if (
-        not isinstance(item, dict)
-        or item.get("ok") is not True
-        or str(item.get("hash") or "").lower() != transfer_hash.lower()
-    ):
+    if int(result.get("status") or 0) != 200:
         raise AssertionError(summary)
-    return {"response": summary, "item": item}
+    return summary
 
 
 def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) -> dict[str, object]:
@@ -1491,22 +1482,25 @@ def main(argv: list[str] | None = None) -> int:
                 args.server_publish_timeout_seconds,
                 "MFC requester source publication",
             )
-            run_mfc_transfer_operation(
-                emulebb_base_url,
-                args.api_key,
+            disconnect_mfc_servers(emulebb_base_url, args.api_key)
+            server_control.wait_for_file_endpoint_absent(
                 transfer_hash,
-                "pause",
+                client_p2p_address,
+                ports["client1_tcp"],
+                args.source_withdraw_timeout_seconds,
+                "MFC requester source withdrawal before reconnect",
             )
             mfc_log_dir = Path(emulebb["profile_base"]) / "logs"
             packet_cursor = capture_mfc_packet_cursor(
                 mfc_log_dir,
                 args.server_publish_timeout_seconds,
             )
-            run_mfc_transfer_operation(
+            dtt.add_and_connect_server(
                 emulebb_base_url,
                 args.api_key,
-                transfer_hash,
-                "resume",
+                address=server_address,
+                port=ed2k_server.ed2k_port,
+                timeout_seconds=args.server_connect_timeout_seconds,
             )
             server_control.wait_for_file_endpoint(
                 transfer_hash,
@@ -1527,6 +1521,7 @@ def main(argv: list[str] | None = None) -> int:
                 "enabled": True,
                 "requester": "mfc",
                 "requester_published": True,
+                "requester_republished": True,
                 **reflected_self,
             }
         completed_path = completed_incoming_path(Path(emulebb["incoming_dir"]), link_info)

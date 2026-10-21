@@ -129,16 +129,18 @@ def test_decode_found_sources_record_rejects_truncated_records() -> None:
 
 def test_reflected_self_source_evidence_requires_request_and_expected_publisher() -> None:
     file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    offer = _pkt("server", "send", 0x15, ((1).to_bytes(4, "little") + file_hash).hex())
     request = _pkt("server", "send", 0x19, (file_hash + (123).to_bytes(4, "little")).hex())
     reply_payload = file_hash + b"\x01" + bytes([192, 0, 2, 10]) + (4662).to_bytes(2, "little")
     reply = _pkt("server", "recv", 0x42, reply_payload.hex())
 
     assert reflected_self_source_evidence(
-        [request, reply],
+        [offer, request, reply],
         file_hash=file_hash.hex(),
         requester_port=4663,
         expected_publisher_port=4662,
     ) == {
+        "requester_offer_seen": True,
         "request_seen": True,
         "reply_seen": True,
         "matching_reply_count": 1,
@@ -146,6 +148,12 @@ def test_reflected_self_source_evidence_requires_request_and_expected_publisher(
         "expected_publisher_present": True,
         "requester_present": False,
     }
+    assert reflected_self_source_evidence(
+        [request, reply],
+        file_hash=file_hash.hex(),
+        requester_port=4663,
+        expected_publisher_port=4662,
+    ) is None
     assert reflected_self_source_evidence(
         [reply],
         file_hash=file_hash.hex(),
@@ -156,6 +164,7 @@ def test_reflected_self_source_evidence_requires_request_and_expected_publisher(
 
 def test_reflected_self_source_evidence_rejects_requester_endpoint() -> None:
     file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    offer = _pkt("server", "send", 0x15, ((1).to_bytes(4, "little") + file_hash).hex())
     request = _pkt("server", "send", 0x23, (file_hash + (123).to_bytes(4, "little")).hex())
     reply_payload = (
         file_hash
@@ -171,7 +180,7 @@ def test_reflected_self_source_evidence_rejects_requester_endpoint() -> None:
 
     with pytest.raises(RuntimeError, match="reflected the requester endpoint"):
         reflected_self_source_evidence(
-            [request, reply],
+            [offer, request, reply],
             file_hash=file_hash.hex(),
             requester_port=4663,
             expected_publisher_port=4662,
