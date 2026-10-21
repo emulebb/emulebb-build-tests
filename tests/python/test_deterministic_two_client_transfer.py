@@ -449,7 +449,8 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "ed2k_server.ed2k_server_control(" in script_text
     assert "ed2k_server.stop_process(server_process)" in script_text
     assert "server_provider" not in script_text
-    assert "admin_secret=args.api_key" in script_text
+    assert "token=args.api_key" in script_text
+    assert "admin_secret=args.api_key" not in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
 
