@@ -375,16 +375,15 @@ def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_
     assert b"10.44.55.66" in data
 
 
-def test_deterministic_transfer_uses_provider_neutral_server_launcher() -> None:
+def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
-    assert "ed2k_server.resolve_provider(args.ed2k_server_provider)" in script_text
-    assert "server_provider.launch(" in script_text
+    assert "ed2k_server.launch_ed2k_server(" in script_text
+    assert "ed2k_server.ed2k_server_control(" in script_text
     assert "admin_secret=args.api_key" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert "ed2k_harness.launch_ed2k_server(" not in script_text
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -973,14 +972,6 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
     assert args.client2_identity == "harness"
-    assert args.ed2k_server_provider is None
-
-
-def test_ed2k_server_provider_accepts_migration_target() -> None:
-    module = load_suite_module()
-    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--ed2k-server-provider", "rust"])
-
-    assert args.ed2k_server_provider == "rust"
 
 
 def test_client2_identity_accepts_stock_baseline() -> None:

@@ -235,6 +235,12 @@ def launch_ed2k_server(
     )
 
 
+def ed2k_server_control(admin_base_url: str, admin_secret: str) -> Ed2kServerControl:
+    """Returns the semantic control surface for the managed ED2K server."""
+
+    return resolve_provider().control(admin_base_url, admin_secret)
+
+
 def admin_request(
     admin_base_url: str,
     _admin_secret: str,

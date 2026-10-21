@@ -1239,7 +1239,7 @@ def main(argv: list[str] | None = None) -> int:
         transfer_hash = str(link_info["hash"])
         report["checks"]["rust_shared_file"] = rust_file
         report["checks"]["rust_server_file"] = ed2k_harness.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
-        server_control = ed2k_harness.resolve_provider().control(admin_base_url, args.api_key)
+        server_control = ed2k_harness.ed2k_server_control(admin_base_url, args.api_key)
         if args.verify_same_session_republish:
             current_phase = "rust_same_session_republish"
             report["source_negative_cases"]["same_session_republish"] = verify_rust_same_session_republish(

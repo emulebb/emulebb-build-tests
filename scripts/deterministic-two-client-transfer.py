@@ -92,7 +92,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
-    parser.add_argument("--ed2k-server-provider")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
@@ -1414,7 +1413,6 @@ def main(argv: list[str] | None = None) -> int:
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
     }
     server_process: subprocess.Popen | None = None
-    server_provider: ed2k_server.Ed2kServerProvider | None = None
     server_control: ed2k_server.Ed2kServerControl | None = None
     client1_app = None
     client2_app = None
@@ -1436,9 +1434,7 @@ def main(argv: list[str] | None = None) -> int:
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
-        server_provider = ed2k_server.resolve_provider(args.ed2k_server_provider)
-        report["ed2k_server_provider"] = server_provider.name
-        server_launch = server_provider.launch(
+        server_launch = ed2k_server.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
@@ -1452,7 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
-        server_control = server_provider.control(admin_base_url, args.api_key)
+        server_control = ed2k_server.ed2k_server_control(admin_base_url, args.api_key)
         report["checks"]["server_build"] = server_launch.build
         report["checks"]["ed2k_server_health"] = server_launch.health
         report["ed2k_server"] = server_launch.config
