@@ -20,6 +20,15 @@ def _config_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "\\\\")
 
 
+def _ec_password_digest(secret: str) -> str:
+    """Returns the legacy digest required by aMule's EC configuration format."""
+
+    return hashlib.md5(  # lgtm[py/weak-sensitive-data-hashing]
+        secret.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
+
+
 def configure_profile(
     *,
     config_dir: Path,
@@ -36,7 +45,7 @@ def configure_profile(
 
     for directory in (config_dir, incoming_dir, temp_dir, shared_dir):
         directory.mkdir(parents=True, exist_ok=True)
-    password_hash = hashlib.md5(ec_password.encode("utf-8"), usedforsecurity=False).hexdigest()
+    password_hash = _ec_password_digest(ec_password)
     config = f"""[eMule]
 Nick={nick}
 MaxUpload=0
