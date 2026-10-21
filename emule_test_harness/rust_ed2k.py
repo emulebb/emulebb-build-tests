@@ -776,9 +776,11 @@ def launch_server(
     if _is_windows_host():
         advertised_address = wsl_ipv4_address(distribution)
         listen_address = "0.0.0.0"
+        client_address = "127.0.0.1"
     else:
         advertised_address = ed2k_address
         listen_address = ed2k_address
+        client_address = ed2k_address
     server_dir.mkdir(parents=True, exist_ok=True)
     config_path = server_dir / "config.toml"
     log_path = server_dir / "server.log"
@@ -813,7 +815,7 @@ def launch_server(
     return RustEd2kServerLaunch(
         process=process,
         admin_base_url=admin_base_url,
-        ed2k_host=advertised_address,
+        ed2k_host=client_address,
         ed2k_port=ed2k_port,
         server_exe=binary.server_exe,
         server_dir=server_dir,
