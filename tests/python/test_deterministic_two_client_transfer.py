@@ -72,9 +72,79 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     )
 
     assert defaults.verify_source_lifecycle is False
+    assert defaults.verify_offerfiles_v1_stock_fallback is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert enabled.verify_source_lifecycle is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
+def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--verify-source-lifecycle",
+            "--verify-offerfiles-v1-stock-fallback",
+        ]
+    )
+    missing_lifecycle = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--verify-offerfiles-v1-stock-fallback",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="stock_emule or amule"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="requires --verify-source-lifecycle"):
+        module.validate_args(missing_lifecycle)
+
+
+def test_offerfiles_v1_fallback_accepts_zero_negotiation_counters() -> None:
+    module = load_suite_module()
+    stats = {
+        "ok": True,
+        "data": {
+            "offerfiles_v1": True,
+            "offerfiles_v1_error": None,
+            "offerfiles_v1_policy": "max 200 records every 500 ms",
+            "offer_v1": {
+                "requested": 0,
+                "sessions": 0,
+                "batches": 0,
+                "records": 0,
+                "oversized": 0,
+            },
+        },
+    }
+
+    evidence = module.require_offerfiles_v1_stock_fallback(
+        stats,
+        client_identity="stock_emule",
+    )
+
+    assert evidence["serverExtensionEnabled"] is True
+    assert evidence["customCapabilityRequested"] is False
+    assert evidence["customAdvertisementSent"] is False
+
+
+def test_offerfiles_v1_fallback_rejects_negotiated_session() -> None:
+    module = load_suite_module()
+    stats = {
+        "data": {
+            "offerfiles_v1": True,
+            "offerfiles_v1_error": None,
+            "offerfiles_v1_policy": "valid",
+            "offer_v1": {"requested": 1, "sessions": 1},
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="leaked into OFFERFILES v1 negotiation"):
+        module.require_offerfiles_v1_stock_fallback(stats, client_identity="amule")
 
 
 def test_known_met_fixture_builds_stock_ed2k_link(monkeypatch, tmp_path: Path) -> None:

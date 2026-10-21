@@ -92,9 +92,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
+    parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    """Rejects unsupported deterministic transfer evidence combinations."""
+
+    if not args.verify_offerfiles_v1_stock_fallback:
+        return
+    if args.client2_identity not in {"stock_emule", "amule"}:
+        raise ValueError("OFFERFILES v1 fallback proof requires stock_emule or amule client2.")
+    if not args.verify_source_lifecycle:
+        raise ValueError("OFFERFILES v1 fallback proof requires --verify-source-lifecycle.")
+
+
+def require_offerfiles_v1_stock_fallback(
+    stats: dict[str, object],
+    *,
+    client_identity: str,
+) -> dict[str, object]:
+    """Requires a valid v1 server to keep stock-family sessions legacy."""
+
+    data = stats.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"ED2K server stats payload is missing data: {stats!r}")
+    if data.get("offerfiles_v1") is not True:
+        raise RuntimeError("OFFERFILES v1 fallback proof requires an enabled server extension.")
+    if data.get("offerfiles_v1_error") is not None or not data.get("offerfiles_v1_policy"):
+        raise RuntimeError("OFFERFILES v1 fallback proof requires a valid advertised policy.")
+    counters = data.get("offer_v1")
+    if not isinstance(counters, dict):
+        raise RuntimeError("ED2K server stats are missing OFFERFILES v1 counters.")
+    observed = {
+        name: int(counters.get(name) or 0)
+        for name in ("requested", "sessions", "batches", "records", "oversized")
+    }
+    nonzero = {name: value for name, value in observed.items() if value != 0}
+    if nonzero:
+        raise RuntimeError(
+            f"Stock-family client leaked into OFFERFILES v1 negotiation: {nonzero!r}"
+        )
+    return {
+        "clientIdentity": client_identity,
+        "serverExtensionEnabled": True,
+        "serverPolicyValid": True,
+        "customCapabilityRequested": False,
+        "customAdvertisementSent": False,
+        "negotiatedBatches": 0,
+        "negotiatedRecords": 0,
+        "oversizedNegotiatedBatches": 0,
+    }
 
 
 def workspace_manifest_path(workspace_root: Path) -> Path:
@@ -1393,6 +1443,7 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the deterministic two-client transfer suite."""
 
     args = parse_args(argv)
+    validate_args(args)
     client2_identity = CLIENT_IDENTITIES[args.client2_identity]
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -1411,6 +1462,9 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "checks": {},
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
+        "offerfiles_v1_stock_fallback": {
+            "enabled": bool(args.verify_offerfiles_v1_stock_fallback),
+        },
     }
     server_process: subprocess.Popen | None = None
     server_control: ed2k_server.Ed2kServerControl | None = None
@@ -1444,6 +1498,7 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
+            offerfiles_v1=args.verify_offerfiles_v1_stock_fallback,
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
@@ -1756,7 +1811,16 @@ def main(argv: list[str] | None = None) -> int:
             report["source_lifecycle"]["completed"] = report["checks"]["client1_transfer_completed_file"]
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = server_control.stats()
+        server_stats = server_control.stats()
+        report["checks"]["ed2k_server_stats_final"] = server_stats
+        if args.verify_offerfiles_v1_stock_fallback:
+            report["offerfiles_v1_stock_fallback"] = {
+                "enabled": True,
+                **require_offerfiles_v1_stock_fallback(
+                    server_stats,
+                    client_identity=args.client2_identity,
+                ),
+            }
         report["status"] = "passed"
         return 0
     except Exception as exc:
