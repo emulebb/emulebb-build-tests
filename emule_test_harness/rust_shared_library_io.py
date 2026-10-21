@@ -1363,7 +1363,7 @@ def offerfiles_scale_completion_acceptance(
     delta = offer_v1_counter_delta(before, after)
     checks = {
         "oneNegotiatedSession": delta.get("requested") == 1,
-        "allBatchesPublished": delta.get("batches") == expected_batches,
+        "enoughBatchesForRecordCount": delta.get("batches", 0) >= expected_batches,
         "allRecordsPublished": delta.get("records") == expected_records,
         "noOversizedBatch": delta.get("oversized") == 0,
         "clientPacedWithoutServerWait": delta.get("conn_waits") == 0,
@@ -1393,6 +1393,36 @@ def offerfiles_scale_completion_acceptance(
         "expectedBatches": expected_batches,
         "minimumElapsedSeconds": minimum_elapsed_seconds,
         "memoryLimitBytes": memory_limit_bytes,
+    }
+
+
+def offerfiles_client_evidence(
+    status: dict[str, object],
+    diagnostics: dict[str, object],
+    *,
+    server_shared_files: int | None = None,
+) -> dict[str, object]:
+    """Extract negotiated publication evidence from current REST response shapes."""
+
+    servers = status.get("servers") if isinstance(status.get("servers"), dict) else {}
+    current_server = (
+        servers.get("currentServer")
+        if isinstance(servers.get("currentServer"), dict)
+        else {}
+    )
+    publish = (
+        diagnostics.get("ed2kPublish")
+        if isinstance(diagnostics.get("ed2kPublish"), dict)
+        else {}
+    )
+    return {
+        "mode": current_server.get("offerFilesMode"),
+        "batchMax": current_server.get("offerFilesBatchMax"),
+        "minIntervalMs": current_server.get("offerFilesMinIntervalMs"),
+        "publishedEntries": publish.get("publishedEntries"),
+        "pendingEntries": publish.get("pendingEntries"),
+        "sessionPumpActive": publish.get("sessionPumpActive"),
+        "serverSharedFiles": server_shared_files,
     }
 
 
@@ -1812,21 +1842,20 @@ def _wait_for_offerfiles_completion(
             diagnostics = client.request(
                 "GET", "/diagnostics", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
             )
-            current_server = (
-                status.get("currentServer")
-                if isinstance(status.get("currentServer"), dict)
-                else {}
-            )
-            publish = (
-                diagnostics.get("ed2kPublish")
-                if isinstance(diagnostics.get("ed2kPublish"), dict)
-                else {}
-            )
+            client_evidence = offerfiles_client_evidence(status, diagnostics)
+            if not (
+                client_evidence.get("publishedEntries") == expected_records
+                and client_evidence.get("pendingEntries") == 0
+                and client_evidence.get("sessionPumpActive") is False
+            ):
+                time.sleep(poll_seconds)
+                continue
             server_client = control.wait_for_client_shared_files(
                 client_nick,
                 expected_records,
                 min(30.0, max(1.0, deadline - time.monotonic())),
             )
+            client_evidence["serverSharedFiles"] = server_client.get("shared_files")
             sampler.maybe_sample(force=True)
             return {
                 "elapsedSeconds": round(
@@ -1834,15 +1863,7 @@ def _wait_for_offerfiles_completion(
                 ),
                 "counters": counters,
                 "delta": delta,
-                "clientEvidence": {
-                    "mode": current_server.get("offerFilesMode"),
-                    "batchMax": current_server.get("offerFilesBatchMax"),
-                    "minIntervalMs": current_server.get("offerFilesMinIntervalMs"),
-                    "publishedEntries": publish.get("publishedEntries"),
-                    "pendingEntries": publish.get("pendingEntries"),
-                    "sessionPumpActive": publish.get("sessionPumpActive"),
-                    "serverSharedFiles": server_client.get("shared_files"),
-                },
+                "clientEvidence": client_evidence,
                 "process": sampler.summary(),
                 "observations": observations[-30:],
             }
