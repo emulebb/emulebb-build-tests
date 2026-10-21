@@ -70,6 +70,7 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
         listen_address="0.0.0.0",
         advertised_address="172.20.0.2",
         protocol_obfuscation=False,
+        offerfiles_v1=True,
     )
 
     text = path.read_text(encoding="utf-8")
@@ -78,6 +79,8 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
     assert 'this_ip = "172.20.0.2"' in text
     assert 'listen_ip = "0.0.0.0"' in text
     assert "support_crypt = false" in text
+    assert config["limits"]["offerfiles_v1"] is True
+    assert "offerfiles_v1 = true" in text
     assert config["network"]["private_highid_probe"] is True
     assert "private_highid_probe = true" in text
     assert "password" not in text
