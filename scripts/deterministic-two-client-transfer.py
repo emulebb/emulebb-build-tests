@@ -1853,8 +1853,7 @@ def main(argv: list[str] | None = None) -> int:
                     close_results[name] = {"ok": True}
             except Exception as exc:
                 close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        if server_provider is not None:
-            server_provider.stop_process(server_process)
+        ed2k_server.stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "deterministic-two-client-transfer-result.json"
