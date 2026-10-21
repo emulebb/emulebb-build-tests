@@ -142,6 +142,7 @@ def test_offerfiles_scale_cancellation_requires_quiescent_clean_shutdown() -> No
     }
     stopped = before | {
         "requested": 1,
+        "sessions": 1,
         "batches": 3,
         "records": 600,
     }
@@ -156,6 +157,8 @@ def test_offerfiles_scale_cancellation_requires_quiescent_clean_shutdown() -> No
 
     assert accepted["ok"] is True
     assert accepted["delta"]["records"] == 600
+    assert accepted["checks"]["oneAdvertisedSession"] is True
+    assert accepted["checks"]["sessionCounterSettled"] is True
     moving = dict(stopped)
     moving["records"] = 800
     assert (

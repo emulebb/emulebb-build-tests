@@ -1323,13 +1323,16 @@ def offerfiles_scale_cancellation_acceptance(
     total_batches = expected_total_records // batch_max
     checks = {
         "oneNegotiatedSession": delta.get("requested") == 1,
+        "oneAdvertisedSession": after_shutdown.get("sessions")
+        == before.get("sessions", 0) + 1,
         "partialBatchRange": 0 < delta.get("batches", 0) < total_batches,
         "fullSizedPartialBatches": delta.get("records")
         == delta.get("batches", 0) * batch_max,
         "noOversizedBatch": delta.get("oversized") == 0,
         "clientPacedWithoutServerWait": delta.get("conn_waits") == 0,
         "noGlobalThrottle": delta.get("global_waits") == 0,
-        "sessionReleased": after_shutdown.get("sessions") == 0,
+        "sessionCounterSettled": after_settle.get("sessions")
+        == after_shutdown.get("sessions"),
         "globalWaiterReleased": after_shutdown.get("global_waiting_now") == 0,
         "countersSettled": after_settle.get("batches")
         == after_shutdown.get("batches")
