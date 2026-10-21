@@ -42,6 +42,7 @@ def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
 
 @pytest.mark.unit
 def test_production_fixture_is_exactly_100k_and_ten_gib_decimal() -> None:
+    assert len(subject.API_KEY.encode("utf-8")) >= 32
     assert subject.PRODUCTION_SPEC.file_count == 100_000
     assert subject.PRODUCTION_SPEC.total_bytes == 10_485_760_000
     assert len(subject.mutation_indices()) == 1_000
