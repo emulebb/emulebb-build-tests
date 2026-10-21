@@ -262,8 +262,9 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
     assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
 
 
-def test_resolve_client2_app_exe_uses_stock_baseline_identity(tmp_path: Path) -> None:
+def test_resolve_client2_app_exe_uses_stock_baseline_identity(tmp_path: Path, monkeypatch) -> None:
     module = load_suite_module()
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
     workspace = tmp_path / "workspaces" / "workspace"
     stock_exe = workspace / "app" / "emulebb-community-baseline" / "srchybrid" / "x64" / "Release" / "emule.exe"
     stock_exe.parent.mkdir(parents=True)

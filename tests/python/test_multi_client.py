@@ -72,7 +72,7 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["emulebb_rust_peer"].available is False
     assert inventory["amule"].available is False
     assert "no built eMuleAI executable" in inventory["emuleai"].reason
-    assert "no built stock baseline executable" in inventory["stock_emule"].reason
+    assert "no staged stock baseline executable" in inventory["stock_emule"].reason
     assert "missing Cargo.toml" in inventory["emulebb_rust"].reason
     assert "no staged aMule executable" in inventory["amule"].reason
     assert inventory["emuleai"].launch_adapter == "emuleai-gui-profile"
@@ -113,12 +113,14 @@ def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, 
 def test_resolve_stock_emule_client_accepts_fixed_baseline_build(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
     baseline_root = workspace / "app" / "emulebb-community-baseline"
-    stock_exe = baseline_root / "srchybrid" / "x64" / "Release" / "emule.exe"
+    output_root = tmp_path / "output"
+    stock_exe = output_root / "builds" / "app" / "community" / "x64" / "Release" / "standard" / "bin" / "emule.exe"
     stock_exe.parent.mkdir(parents=True)
     stock_exe.write_bytes(b"")
+    baseline_root.mkdir(parents=True)
     monkeypatch.setattr(multi_client, "git_head_revision", lambda root: "a" * 40 if root == baseline_root else None)
 
-    stock = multi_client.resolve_stock_emule_client(workspace, "Release")
+    stock = multi_client.resolve_stock_emule_client(workspace, "Release", output_root=output_root)
 
     assert stock.available is True
     assert stock.executable == stock_exe.resolve()

@@ -309,12 +309,17 @@ def resolve_stock_emule_client(
     workspace_root: Path,
     configuration: str,
     override: str | None = None,
+    output_root: Path | None = None,
 ) -> ClientAvailability:
     """Resolves the fixed stock-compatible Community 0.72a baseline worktree."""
 
     identity = CLIENT_IDENTITIES["stock_emule"]
     root = (workspace_root / "app" / "emulebb-community-baseline").resolve()
+    staged_bin = (
+        output_root.resolve() if output_root is not None else get_workspace_output_root()
+    ) / "builds" / "app" / "community" / "x64" / configuration / "standard" / "bin"
     candidates = [Path(override)] if override else [
+        staged_bin / "emule.exe",
         root / "srchybrid" / "x64" / configuration / "emule.exe",
         root / "srchybrid" / "x64" / configuration / "emulebb.exe",
     ]
@@ -323,7 +328,11 @@ def resolve_stock_emule_client(
         identity=identity,
         available=executable is not None,
         executable=executable,
-        reason="available" if executable is not None else f"no built stock baseline executable found under {root}",
+        reason=(
+            "available"
+            if executable is not None
+            else f"no staged stock baseline executable found under {staged_bin}"
+        ),
         launch_adapter="emule-community-baseline-rest-profile",
         deterministic_transfer_adapter=executable is not None,
         source_repo=root,
