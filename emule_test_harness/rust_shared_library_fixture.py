@@ -161,6 +161,45 @@ def relative_file_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> 
     return relative
 
 
+def superseded_unicode_baseline_paths(
+    spec: FixtureSpec = PRODUCTION_SPEC,
+) -> tuple[Path, ...]:
+    """Return the v2 baseline paths replaced by the deterministic Unicode cohort."""
+
+    if spec != PRODUCTION_SPEC:
+        return ()
+    paths = []
+    files_per_top = spec.leaf_directories_per_top * spec.files_per_leaf
+    for index in range(UNICODE_COHORT_START, UNICODE_COHORT_START + len(UNICODE_FILE_NAMES)):
+        top = index // files_per_top
+        leaf = (index % files_per_top) // spec.files_per_leaf
+        paths.append(
+            Path(f"group-{top:03d}")
+            / f"leaf-{leaf:03d}"
+            / f"file-{index:06d}.bin"
+        )
+    return tuple(paths)
+
+
+def prune_superseded_fixture_paths(
+    root: Path, spec: FixtureSpec = PRODUCTION_SPEC
+) -> int:
+    """Remove only known harness paths superseded by the current fixture mapping."""
+
+    removed = 0
+    parents: set[Path] = set()
+    for relative in superseded_unicode_baseline_paths(spec):
+        path = root / relative
+        if not storage.is_file(path):
+            continue
+        storage.unlink(path)
+        parents.add(path.parent)
+        removed += 1
+    for parent in sorted(parents, key=lambda path: len(path.parts), reverse=True):
+        storage.remove_empty_directory(parent)
+    return removed
+
+
 def iter_fixture_files(
     root: Path, spec: FixtureSpec = PRODUCTION_SPEC
 ) -> Iterator[tuple[int, Path, int]]:

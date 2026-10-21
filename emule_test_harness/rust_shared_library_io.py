@@ -399,6 +399,7 @@ def prepare_fixture(
 
     created = 0
     reused = 0
+    pruned = fixture.prune_superseded_fixture_paths(paths.fixture_root, spec)
     started = time.monotonic()
     for index, path, size in iter_fixture_files(paths.fixture_root, spec):
         if storage.is_file(path) and storage.stat(path).st_size == size:
@@ -423,6 +424,7 @@ def prepare_fixture(
         "status": "prepared",
         "createdCount": created,
         "reusedCount": reused,
+        "prunedCount": pruned,
         "elapsedSeconds": round(time.monotonic() - started, 3),
         "fixture": validation,
         "targetRoots": [

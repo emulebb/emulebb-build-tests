@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import shutil
@@ -117,6 +118,20 @@ def remove_tree(path: Path) -> None:
     prepared = filesystem_path(path)
     if os.path.isdir(prepared):
         shutil.rmtree(prepared)
+
+
+def remove_empty_directory(path: Path) -> bool:
+    """Remove one directory only when empty; return whether it was removed."""
+
+    try:
+        os.rmdir(filesystem_path(path))
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            return False
+        raise
 
 
 def walk(path: Path) -> Iterator[tuple[Path, list[str], list[str]]]:
