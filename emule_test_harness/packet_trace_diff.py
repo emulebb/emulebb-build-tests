@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import ipaddress
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,11 @@ from typing import Any
 
 PACKET_SCHEMA = "ed2k_packet_v1"
 _PACKET_DIRECTIONS = ("send", "recv")
+_OFFERFILES_OPCODE = 0x15
+_SOURCE_REQUEST_OPCODES = {0x19, 0x23}
+_SOURCE_REPLY_OPCODES = {0x42, 0x44}
+_OBFUSCATED_SOURCE_REPLY_OPCODE = 0x44
+_IPV6_SOURCE_SENTINEL = b"\xff\xff\xff\xff"
 
 
 def canonical_channel(flow: str | None) -> str:
@@ -67,6 +73,136 @@ def load_trace(path: Path) -> list[dict[str, Any]]:
             continue
         records.append(record)
     return records
+
+
+def _packet_payload(record: dict[str, Any]) -> bytes:
+    if record.get("payload_hex_truncated") is True:
+        raise ValueError("ED2K packet payload is truncated.")
+    payload_hex = record.get("payload_hex")
+    if not isinstance(payload_hex, str):
+        raise ValueError("ED2K packet payload_hex is missing.")
+    try:
+        payload = bytes.fromhex(payload_hex)
+    except ValueError as exc:
+        raise ValueError("ED2K packet payload_hex is invalid.") from exc
+    payload_len = record.get("payload_len")
+    if isinstance(payload_len, int) and payload_len != len(payload):
+        raise ValueError(
+            f"ED2K packet payload length mismatch: declared {payload_len}, decoded {len(payload)}."
+        )
+    return payload
+
+
+def _is_server_packet(record: dict[str, Any], *, direction: str, opcodes: set[int]) -> bool:
+    return (
+        record.get("schema") == PACKET_SCHEMA
+        and canonical_channel(record.get("flow")) == "server"
+        and record.get("direction") == direction
+        and record.get("opcode") in opcodes
+    )
+
+
+def decode_found_sources_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Decodes one classic or obfuscated server source reply."""
+
+    if not _is_server_packet(record, direction="recv", opcodes=_SOURCE_REPLY_OPCODES):
+        return None
+    payload = _packet_payload(record)
+    if len(payload) < 17:
+        raise ValueError(f"FOUNDSOURCES payload is too short: {len(payload)} bytes.")
+    source_count = payload[16]
+    offset = 17
+    sources: list[dict[str, Any]] = []
+    for _ in range(source_count):
+        if len(payload) - offset < 6:
+            raise ValueError("FOUNDSOURCES source record is truncated.")
+        address_bytes = payload[offset : offset + 4]
+        port = int.from_bytes(payload[offset + 4 : offset + 6], "little")
+        offset += 6
+        if record.get("opcode") == _OBFUSCATED_SOURCE_REPLY_OPCODE:
+            if len(payload) - offset < 1:
+                raise ValueError("FOUNDSOURCES_OBFU crypt options are truncated.")
+            crypt_options = payload[offset]
+            offset += 1
+            if crypt_options & 0x80:
+                if len(payload) - offset < 16:
+                    raise ValueError("FOUNDSOURCES_OBFU user hash is truncated.")
+                offset += 16
+        if address_bytes == _IPV6_SOURCE_SENTINEL:
+            if len(payload) - offset < 16:
+                raise ValueError("FOUNDSOURCES IPv6 address is truncated.")
+            address = str(ipaddress.IPv6Address(payload[offset : offset + 16]))
+            offset += 16
+        else:
+            address = str(ipaddress.IPv4Address(address_bytes))
+        sources.append({"address": address, "port": port})
+    if offset != len(payload):
+        raise ValueError(f"FOUNDSOURCES payload has {len(payload) - offset} trailing bytes.")
+    return {
+        "file_hash": payload[:16].hex().upper(),
+        "source_count": source_count,
+        "sources": sources,
+    }
+
+
+def reflected_self_source_evidence(
+    records: list[dict[str, Any]],
+    *,
+    file_hash: str,
+    requester_port: int,
+    expected_publisher_port: int,
+) -> dict[str, object] | None:
+    """Returns sanitized evidence for one request/reply excluding the requester."""
+
+    expected_hash = file_hash.upper()
+    expected_hash_bytes = bytes.fromhex(expected_hash)
+    requester_offer_seen = False
+    request_seen = False
+    matching_replies: list[dict[str, Any]] = []
+    for record in records:
+        if _is_server_packet(record, direction="send", opcodes={_OFFERFILES_OPCODE}):
+            payload = _packet_payload(record)
+            requester_offer_seen = (
+                len(payload) >= 20
+                and int.from_bytes(payload[:4], "little") >= 1
+                and payload[4:20] == expected_hash_bytes
+            )
+            continue
+        if _is_server_packet(record, direction="send", opcodes=_SOURCE_REQUEST_OPCODES):
+            payload = _packet_payload(record)
+            if len(payload) < 16:
+                raise ValueError(f"GETSOURCES payload is too short: {len(payload)} bytes.")
+            if requester_offer_seen and payload[:16] == expected_hash_bytes:
+                request_seen = True
+            continue
+        reply = decode_found_sources_record(record)
+        if request_seen and reply is not None and reply["file_hash"] == expected_hash:
+            matching_replies.append(reply)
+    if not request_seen or not matching_replies:
+        return None
+    for reply in matching_replies:
+        ports = {int(source["port"]) for source in reply["sources"]}
+        if requester_port in ports:
+            raise RuntimeError("FOUNDSOURCES reflected the requester endpoint.")
+    accepted = next(
+        (
+            reply
+            for reply in matching_replies
+            if {int(source["port"]) for source in reply["sources"]} == {expected_publisher_port}
+        ),
+        None,
+    )
+    if accepted is None:
+        return None
+    return {
+        "requester_offer_seen": True,
+        "request_seen": True,
+        "reply_seen": True,
+        "matching_reply_count": len(matching_replies),
+        "returned_source_count": accepted["source_count"],
+        "expected_publisher_present": True,
+        "requester_present": False,
+    }
 
 
 def _wire_key(record: dict[str, Any]) -> str:

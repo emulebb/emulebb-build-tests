@@ -71,6 +71,41 @@ def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch)
     assert result["result"]["name"] == "fixture.bin"
 
 
+def test_disconnect_mfc_servers_accepts_successful_rest_response(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def fake_http_request(_base_url, path, *, method, json_body, **_kwargs):
+        calls.append((method, path, json_body))
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"serverCount": 1},
+            "raw_json": {"data": {"serverCount": 1}, "meta": {"apiVersion": "v1"}},
+        }
+
+    monkeypatch.setattr(module.dtt.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module.dtt.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+
+    result = module.disconnect_mfc_servers(
+        "http://192.0.2.10:4711",
+        "key",
+    )
+
+    assert result["status"] == 200
+    assert calls == [
+        (
+            "POST",
+            "/api/v1/servers/operations/disconnect",
+            {},
+        )
+    ]
+
+
 def test_cross_client_script_uses_shared_ed2k_harness_launcher_boundary() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
@@ -100,6 +135,12 @@ def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
             "192.0.2.10",
             "--verify-source-lifecycle",
             "--verify-same-session-republish",
+            "--verify-reflected-self-source",
+            "--diagnostics",
+            "--fixture-size-bytes",
+            "19456000",
+            "--rust-upload-limit-kibps",
+            "512",
             "--source-withdraw-timeout-seconds",
             "45",
         ]
@@ -107,10 +148,106 @@ def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
 
     assert defaults.verify_source_lifecycle is False
     assert defaults.verify_same_session_republish is False
+    assert defaults.verify_reflected_self_source is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert enabled.verify_source_lifecycle is True
     assert enabled.verify_same_session_republish is True
+    assert enabled.verify_reflected_self_source is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
+
+
+def test_reflected_self_source_requires_diagnostics() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--verify-reflected-self-source"]
+    )
+
+    with pytest.raises(ValueError, match="requires --diagnostics"):
+        module.validate_optional_soak_args(args)
+
+
+def test_reflected_self_source_requires_partial_transfer_window() -> None:
+    module = load_suite_module()
+    too_small = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--diagnostics",
+            "--verify-reflected-self-source",
+            "--rust-upload-limit-kibps",
+            "512",
+        ]
+    )
+    unbounded = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--diagnostics",
+            "--verify-reflected-self-source",
+            "--fixture-size-bytes",
+            "19456000",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="above one ED2K part"):
+        module.validate_optional_soak_args(too_small)
+    with pytest.raises(ValueError, match="requires --rust-upload-limit-kibps"):
+        module.validate_optional_soak_args(unbounded)
+
+
+def test_wait_for_reflected_self_source_uses_only_post_cursor_packets(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    trace = tmp_path / "emule-packets.jsonl"
+    old_record = {"schema": "ed2k_packet_v1", "event_seq": 10}
+    new_records = [
+        {"schema": "ed2k_packet_v1", "event_seq": 11},
+        {"schema": "ed2k_packet_v1", "event_seq": 12},
+    ]
+    loads = iter([[old_record], [old_record, *new_records]])
+    observed: list[list[dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        module.converged_live_wire,
+        "find_packet_trace",
+        lambda *_args, **_kwargs: trace,
+    )
+    monkeypatch.setattr(module.packet_trace_diff, "load_trace", lambda _path: next(loads))
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    monkeypatch.setattr(
+        module.packet_trace_diff,
+        "reflected_self_source_evidence",
+        lambda records, **_kwargs: observed.append(records)
+        or {
+            "requester_offer_seen": True,
+            "request_seen": True,
+            "reply_seen": True,
+            "matching_reply_count": 1,
+            "returned_source_count": 1,
+            "expected_publisher_present": True,
+            "requester_present": False,
+        },
+    )
+
+    cursor = module.capture_mfc_packet_cursor(tmp_path, 1.0)
+    evidence = module.wait_for_reflected_self_source_evidence(
+        tmp_path,
+        cursor,
+        transfer_hash="AA" * 16,
+        requester_port=4662,
+        expected_publisher_port=5662,
+        timeout_seconds=1.0,
+    )
+
+    assert observed == [new_records]
+    assert evidence == {
+        "requester_offer_seen": True,
+        "request_seen": True,
+        "reply_seen": True,
+        "matching_reply_count": 1,
+        "returned_source_count": 1,
+        "expected_publisher_present": True,
+        "requester_present": False,
+    }
 
 
 def test_recycle_rust_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:

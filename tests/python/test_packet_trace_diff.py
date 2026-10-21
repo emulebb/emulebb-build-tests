@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from emule_test_harness.packet_trace_diff import diff_traces, load_trace
+import pytest
+
+from emule_test_harness.packet_trace_diff import (
+    decode_found_sources_record,
+    diff_traces,
+    load_trace,
+    reflected_self_source_evidence,
+)
 
 
 def _pkt(flow, direction, opcode, payload_hex, *, marker=229, name=None):
@@ -84,6 +91,100 @@ def test_load_trace_filters_non_packet_records(tmp_path: Path) -> None:
     records = load_trace(path)
     assert len(records) == 1
     assert records[0]["opcode"] == 0x01
+
+
+def test_decode_found_sources_record_supports_classic_and_obfuscated_replies() -> None:
+    file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    classic_payload = file_hash + b"\x01" + bytes([192, 0, 2, 10]) + (4662).to_bytes(2, "little")
+    obfuscated_payload = (
+        file_hash
+        + b"\x01"
+        + bytes([192, 0, 2, 11])
+        + (4663).to_bytes(2, "little")
+        + b"\x80"
+        + bytes([0xAA]) * 16
+    )
+
+    classic = decode_found_sources_record(_pkt("server", "recv", 0x42, classic_payload.hex()))
+    obfuscated = decode_found_sources_record(_pkt("server", "recv", 0x44, obfuscated_payload.hex()))
+
+    assert classic == {
+        "file_hash": file_hash.hex().upper(),
+        "source_count": 1,
+        "sources": [{"address": "192.0.2.10", "port": 4662}],
+    }
+    assert obfuscated == {
+        "file_hash": file_hash.hex().upper(),
+        "source_count": 1,
+        "sources": [{"address": "192.0.2.11", "port": 4663}],
+    }
+
+
+def test_decode_found_sources_record_rejects_truncated_records() -> None:
+    payload = bytes.fromhex("00112233445566778899AABBCCDDEEFF") + b"\x01\x7f"
+
+    with pytest.raises(ValueError, match="source record is truncated"):
+        decode_found_sources_record(_pkt("server", "recv", 0x42, payload.hex()))
+
+
+def test_reflected_self_source_evidence_requires_request_and_expected_publisher() -> None:
+    file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    offer = _pkt("server", "send", 0x15, ((1).to_bytes(4, "little") + file_hash).hex())
+    request = _pkt("server", "send", 0x19, (file_hash + (123).to_bytes(4, "little")).hex())
+    reply_payload = file_hash + b"\x01" + bytes([192, 0, 2, 10]) + (4662).to_bytes(2, "little")
+    reply = _pkt("server", "recv", 0x42, reply_payload.hex())
+
+    assert reflected_self_source_evidence(
+        [offer, request, reply],
+        file_hash=file_hash.hex(),
+        requester_port=4663,
+        expected_publisher_port=4662,
+    ) == {
+        "requester_offer_seen": True,
+        "request_seen": True,
+        "reply_seen": True,
+        "matching_reply_count": 1,
+        "returned_source_count": 1,
+        "expected_publisher_present": True,
+        "requester_present": False,
+    }
+    assert reflected_self_source_evidence(
+        [request, reply],
+        file_hash=file_hash.hex(),
+        requester_port=4663,
+        expected_publisher_port=4662,
+    ) is None
+    assert reflected_self_source_evidence(
+        [reply],
+        file_hash=file_hash.hex(),
+        requester_port=4663,
+        expected_publisher_port=4662,
+    ) is None
+
+
+def test_reflected_self_source_evidence_rejects_requester_endpoint() -> None:
+    file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    offer = _pkt("server", "send", 0x15, ((1).to_bytes(4, "little") + file_hash).hex())
+    request = _pkt("server", "send", 0x23, (file_hash + (123).to_bytes(4, "little")).hex())
+    reply_payload = (
+        file_hash
+        + b"\x02"
+        + bytes([192, 0, 2, 10])
+        + (4662).to_bytes(2, "little")
+        + b"\x00"
+        + bytes([192, 0, 2, 11])
+        + (4663).to_bytes(2, "little")
+        + b"\x00"
+    )
+    reply = _pkt("server", "recv", 0x44, reply_payload.hex())
+
+    with pytest.raises(RuntimeError, match="reflected the requester endpoint"):
+        reflected_self_source_evidence(
+            [offer, request, reply],
+            file_hash=file_hash.hex(),
+            requester_port=4663,
+            expected_publisher_port=4662,
+        )
 
 
 def _kad(opcode, direction, name=None):
