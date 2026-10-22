@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import json
+import stat
+
+import pytest
 
 from emule_test_harness.script_modules import load_script_module
 
 
 smoke = load_script_module("smoke_rust_release_package", "smoke-rust-release-package.py")
+
+
+def test_temporary_root_does_not_suppress_body_error() -> None:
+    with pytest.raises(RuntimeError, match="body failed"):
+        with smoke._temporary_root() as temp_root:
+            assert temp_root.is_dir()
+            raise RuntimeError("body failed")
 
 
 def test_api_key_meets_daemon_production_validation() -> None:
@@ -108,3 +118,34 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     assert report["deliveredPathWithinIncoming"] is True
     assert str(tmp_path) not in json.dumps(report)
+
+
+def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> None:
+    asset = tmp_path / "package.AppImage"
+    asset.write_bytes(b"appimage")
+    chmod_calls = []
+
+    def fake_chmod(path, mode):
+        chmod_calls.append((path, mode))
+
+    def fake_run(command, *, cwd, **_kwargs):
+        assert command == [str(asset), "--appimage-extract"]
+        package = cwd / "squashfs-root" / "usr" / "lib" / "emulebb-rust"
+        package.mkdir(parents=True)
+        (cwd / "squashfs-root" / "AppRun").write_text("launcher", encoding="utf-8")
+
+    monkeypatch.setattr(smoke.os, "chmod", fake_chmod)
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(smoke, "_smoke_binary", lambda *_args, **_kwargs: {"status": "passed"})
+    smoke_root = tmp_path / "smoke"
+    smoke_root.mkdir()
+
+    report = smoke._smoke_linux_appimage(
+        asset,
+        smoke_root,
+        rust_repo=tmp_path / "rust",
+        render_webui=False,
+    )
+
+    assert report == {"status": "passed"}
+    assert chmod_calls == [(asset, asset.stat().st_mode | stat.S_IXUSR)]
