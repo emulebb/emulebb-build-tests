@@ -19,6 +19,7 @@ from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness.rust_local_ed2k import ed2k_link_with_source  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -158,29 +159,6 @@ def client_connect_options(case: protocol_matrix.ProtocolCase) -> int:
         | (int(case.client_crypt_requested) << 1)
         | (int(case.client_crypt_required) << 2)
     )
-
-
-def ed2k_link_with_source(
-    link: str,
-    source_ip: str,
-    source_port: int,
-    user_hash: str | None = None,
-    connect_options: int | None = None,
-) -> str:
-    """Appends a deterministic Rust ED2K source hint with explicit crypt metadata."""
-
-    if not link.endswith("|/"):
-        raise RuntimeError(f"Cannot append source hint to malformed ED2K link: {link!r}")
-    if connect_options is not None and user_hash is None:
-        raise RuntimeError("ED2K source connect options require a peer user hash.")
-    if connect_options is not None and not 0 <= connect_options <= 0xFF:
-        raise RuntimeError(f"ED2K source connect options must fit in one byte, got {connect_options}.")
-    source = f"{source_ip}:{source_port}"
-    if user_hash:
-        source = f"{source}:{user_hash}"
-    if connect_options is not None:
-        source = f"{source}:{connect_options}"
-    return f"{link[:-2]}|sources,{source}|/"
 
 
 def require_protocol_coverage(
