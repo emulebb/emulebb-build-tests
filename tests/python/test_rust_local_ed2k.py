@@ -1,8 +1,49 @@
 from __future__ import annotations
 
+import io
+import urllib.error
 from pathlib import Path
 
+import pytest
+
 from emule_test_harness import rust_local_ed2k
+
+
+def test_ed2k_link_with_source_appends_plain_source_hint() -> None:
+    link = "ed2k://|file|payload.bin|4096|00112233445566778899aabbccddeeff|/"
+
+    assert rust_local_ed2k.ed2k_link_with_source(link, "127.0.0.1", 41001) == (
+        "ed2k://|file|payload.bin|4096|00112233445566778899aabbccddeeff|"
+        "sources,127.0.0.1:41001|/"
+    )
+
+
+@pytest.mark.parametrize(
+    "link",
+    (
+        "https://example.test/payload.bin",
+        "ed2k://|file|payload.bin|4096|00112233445566778899aabbccddeeff",
+    ),
+)
+def test_ed2k_link_with_source_rejects_malformed_link(link: str) -> None:
+    with pytest.raises(RuntimeError, match="malformed ED2K link"):
+        rust_local_ed2k.ed2k_link_with_source(link, "127.0.0.1", 41001)
+
+
+def test_request_json_includes_http_error_body(monkeypatch) -> None:
+    def fail_request(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1/api/v1/test",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"error":{"message":"exact failure"}}'),
+        )
+
+    monkeypatch.setattr(rust_local_ed2k.urllib.request, "urlopen", fail_request)
+
+    with pytest.raises(RuntimeError, match="HTTP 400.*exact failure"):
+        rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
 def test_start_client_prefers_staged_executable(monkeypatch, tmp_path: Path) -> None:

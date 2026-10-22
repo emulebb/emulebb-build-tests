@@ -31,8 +31,14 @@ def request_json(
     )
     if payload is not None:
         request.add_header("Content-Type", "application/json; charset=utf-8")
-    with urllib.request.urlopen(request, timeout=10.0) as response:
-        text = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=10.0) as response:
+            text = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"Rust REST {method} {path} returned HTTP {exc.code}: {detail or exc.reason}"
+        ) from exc
     data = json.loads(text) if text else {}
     if isinstance(data, dict) and isinstance(data.get("data"), dict):
         return data["data"]
@@ -117,6 +123,29 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def ed2k_link_with_source(
+    link: str,
+    source_ip: str,
+    source_port: int,
+    user_hash: str | None = None,
+    connect_options: int | None = None,
+) -> str:
+    """Appends one stock-compatible direct source hint to an ED2K file link."""
+
+    if not link.startswith("ed2k://|file|") or not link.endswith("|/"):
+        raise RuntimeError(f"Cannot append source hint to malformed ED2K link: {link!r}")
+    if connect_options is not None and user_hash is None:
+        raise RuntimeError("ED2K source connect options require a peer user hash.")
+    if connect_options is not None and not 0 <= connect_options <= 0xFF:
+        raise RuntimeError(f"ED2K source connect options must fit in one byte, got {connect_options}.")
+    source = f"{source_ip}:{source_port}"
+    if user_hash:
+        source = f"{source}:{user_hash}"
+    if connect_options is not None:
+        source = f"{source}:{connect_options}"
+    return f"{link[:-2]}|sources,{source}|/"
 
 
 def wait_for_transfer_completed(
