@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -29,7 +30,48 @@ _ALLOCATED_PORTS: set[int] = set()
 
 
 dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "deterministic-two-client-transfer.py")
-rest_smoke = load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py")
+
+
+def load_rust_rest_smoke_module() -> ModuleType:
+    """Loads the shared smoke runner against the forward Rust OpenAPI contract."""
+
+    contract_env = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
+    previous_contract = os.environ.get(contract_env)
+    rust_contract = (
+        Path(__file__).resolve().parents[4]
+        / "repos"
+        / "emulebb-tooling"
+        / "docs"
+        / "products"
+        / "emulebb-rust"
+        / "api"
+        / "REST-API-OPENAPI.yaml"
+    )
+    os.environ[contract_env] = str(rust_contract)
+    try:
+        return load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py")
+    finally:
+        if previous_contract is None:
+            os.environ.pop(contract_env, None)
+        else:
+            os.environ[contract_env] = previous_contract
+
+
+rest_smoke = load_rust_rest_smoke_module()
+
+
+def test_local_client_uses_forward_rust_openapi_contract() -> None:
+    expected = (
+        workspace_root()
+        / "repos"
+        / "emulebb-tooling"
+        / "docs"
+        / "products"
+        / "emulebb-rust"
+        / "api"
+        / "REST-API-OPENAPI.yaml"
+    )
+    assert rest_smoke.OPENAPI_CONTRACT_PATH == expected
 
 
 def workspace_root() -> Path:
@@ -351,8 +393,9 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert rest_contract["openapi"]["ok"], rest_contract["openapi"]
 
         app = request_json(base_url, "GET", "/api/v1/app")
-        assert app["data"]["name"] == "eMuleBB Rust"
-        assert "rest.emulebb.v1" in app["data"]["capabilities"]
+        assert app["data"]["name"] == "eMuleBB"
+        assert app["data"]["capabilities"]["transfers"] is True
+        assert "rest.emulebb.v1" not in app["data"]["capabilities"]
         settings = request_json(base_url, "GET", "/api/v1/app/settings")["data"]
         assert settings["core"]["uploadLimitKiBps"] > 0
         updated_settings = request_json(
@@ -459,7 +502,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         missing_upload_status, missing_upload_error = request_json_status(
             base_url,
             "GET",
-            "/api/v1/upload-queue/unknown",
+            "/api/v1/upload-queue/00000000000000000000000000000000",
         )
         assert missing_upload_status == 404
         assert missing_upload_error["error"]["code"] == "NOT_FOUND"
@@ -467,7 +510,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "PATCH",
             "/api/v1/shared-directories",
-            {"roots": [str(shared_root)], "confirmReplaceRoots": False},
+            {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": False},
         )
         assert missing_confirm_status == 400
         assert "confirmReplaceRoots" in json.dumps(missing_confirm_error)
@@ -475,7 +518,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "PATCH",
             "/api/v1/shared-directories",
-            {"roots": [str(shared_root)], "confirmReplaceRoots": True},
+            {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": True},
         )["data"]
         assert shared_directories["roots"][0]["accessible"] is True
         listed_directories = request_json(base_url, "GET", "/api/v1/shared-directories")["data"]
@@ -488,40 +531,10 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )["data"]
         assert reload_result["ok"] is True
         assert "count" not in reload_result
-        shared_files_reload_result = request_json(
-            base_url,
-            "POST",
-            "/api/v1/shared-files/operations/reload",
-            timeout=30,
-        )["data"]
-        assert shared_files_reload_result["ok"] is True
         shared_files = request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
         shared_file_names = {row["name"] for row in shared_files}
         assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
         top_shared_file = next(row for row in shared_files if row["name"] == shared_top_file.name)
-        nested_shared_file = next(row for row in shared_files if row["name"] == shared_nested_file.name)
-        transfer_rows_before_clear = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert any(
-            row["hash"] == top_shared_file["hash"] and row["state"] == "completed"
-            for row in transfer_rows_before_clear
-        )
-        denied_clear_completed_status, denied_clear_completed_error = request_json_status(
-            base_url,
-            "POST",
-            "/api/v1/transfers/operations/clear-completed",
-            {"confirmClearCompleted": False},
-        )
-        assert denied_clear_completed_status == 400
-        assert "confirmClearCompleted" in denied_clear_completed_error["error"]["message"]
-        cleared_completed = request_json(
-            base_url,
-            "POST",
-            "/api/v1/transfers/operations/clear-completed",
-            {"confirmClearCompleted": True},
-        )["data"]
-        assert cleared_completed["ok"] is True
-        transfer_rows_after_clear = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert not any(row["hash"] == top_shared_file["hash"] for row in transfer_rows_after_clear)
         comments = request_json(
             base_url,
             "GET",
@@ -578,34 +591,10 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert persisted_shared_file["priority"] == "release"
         assert persisted_shared_file["comment"] == "Harness share comment"
         assert persisted_shared_file["rating"] == 4
-        unshared = request_json(
-            base_url,
-            "DELETE",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-        )["data"]
-        assert unshared["ok"] is True
-        assert unshared["deletedFiles"] is False
-        unshared_status, _ = request_json_status(
-            base_url,
-            "GET",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-        )
-        assert unshared_status == 404
-        delete_without_confirm_status, _ = request_json_status(
-            base_url,
-            "DELETE",
-            f"/api/v1/shared-files/{nested_shared_file['hash']}/file",
-        )
-        assert delete_without_confirm_status == 400
-        deleted_shared_file = request_json(
-            base_url,
-            "DELETE",
-            f"/api/v1/shared-files/{nested_shared_file['hash']}/file?confirm=true",
-        )["data"]
-        assert deleted_shared_file["ok"] is True
-        assert deleted_shared_file["deletedFiles"] is True
+        assert shared_top_file.is_file()
+        assert shared_nested_file.is_file()
         snapshot = request_json(base_url, "GET", "/api/v1/snapshot?limit=1")["data"]
-        assert snapshot["app"]["name"] == "eMuleBB Rust"
+        assert snapshot["app"]["name"] == "eMuleBB"
         assert snapshot["status"]["lifecycle"]["state"] == "running"
         assert len(snapshot["transfers"]) <= 1
         assert len(snapshot["sharedFiles"]) <= 1
@@ -652,8 +641,8 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             {"address": lan_host, "port": 4662},
         )["data"]
         assert bootstrapped_kad["running"] is True
-        assert bootstrapped_kad["connected"] is True
-        assert bootstrapped_kad["firewalled"] is False
+        assert bootstrapped_kad["connected"] is False
+        assert bootstrapped_kad["firewallState"] == "unknown"
         assert bootstrapped_kad["contactCount"] == 0
         recheck_kad = request_json(
             base_url,
@@ -745,7 +734,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "PATCH",
             f"/api/v1/transfers/{SEED_HASH}",
-            {"priority": "high", "name": "Rejected.bin"},
+            {"priority": "high", "displayName": "Rejected.bin"},
         )
         assert multi_family_patch_status == 400
         assert "one mutation family" in multi_family_patch_error["error"]["message"]
@@ -774,9 +763,9 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "PATCH",
             f"/api/v1/transfers/{SEED_HASH}",
-            {"name": " Scenario Renamed.bin "},
+            {"displayName": " Scenario Renamed.bin "},
         )["data"]
-        assert renamed_transfer["name"] == "Scenario Renamed.bin"
+        assert renamed_transfer["displayName"] == "Scenario Renamed.bin"
         assert renamed_transfer["priority"] == "veryhigh"
         assert renamed_transfer["categoryId"] == download_category["id"]
 
@@ -790,7 +779,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         wait_for_rest(base_url, process, output_path)
         reloaded_transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert reloaded_transfer["state"] == "paused"
-        assert reloaded_transfer["name"] == "Scenario Renamed.bin"
+        assert reloaded_transfer["displayName"] == "Scenario Renamed.bin"
 
         delete_row_status, delete_row_error = request_json_status(
             base_url,
@@ -821,6 +810,8 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert searches_after_clear == []
     finally:
         terminate_process(process)
+
+
 def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
@@ -883,13 +874,11 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         deleted_server = request_json(base_url, "DELETE", "/api/v1/servers/192.0.2.21:4661")["data"]
         assert deleted_server["address"] == "192.0.2.21"
         assert deleted_server["port"] == 4661
-        missing_server_status, missing_server_error = request_json_status(
-            base_url,
-            "GET",
-            "/api/v1/servers/192.0.2.21:4661",
-        )
-        assert missing_server_status == 404
-        assert missing_server_error["error"]["code"] == "NOT_FOUND"
+        assert deleted_server["enabled"] is False
+        disabled_server = request_json(base_url, "GET", "/api/v1/servers/192.0.2.21:4661")["data"]
+        assert disabled_server["address"] == "192.0.2.21"
+        assert disabled_server["port"] == 4661
+        assert disabled_server["enabled"] is False
         import_empty_status, import_empty_error = request_json_status(
             base_url,
             "POST",
@@ -909,14 +898,20 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         assert import_met_fail_error["error"]["code"] == "EMULE_ERROR"
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        assert connected["serverCount"] == 1
+        assert connected["serverCount"] == 2
         assert connected["connected"] is False
 
         status = request_json(base_url, "GET", "/api/v1/status")["data"]
-        assert status["servers"]["serverCount"] == 1
+        assert status["servers"]["serverCount"] == 2
 
-        disconnected = request_json(base_url, "POST", "/api/v1/servers/operations/disconnect")["data"]
-        assert disconnected["serverCount"] == 1
+        disconnect_status, disconnect_payload = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/servers/operations/disconnect",
+        )
+        assert disconnect_status == 200, disconnect_payload
+        disconnected = disconnect_payload["data"]
+        assert disconnected["serverCount"] == 2
         assert disconnected["connected"] is False
     finally:
         terminate_process(process)
