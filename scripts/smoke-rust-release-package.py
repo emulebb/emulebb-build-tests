@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -75,14 +76,15 @@ def _temporary_root():
             try:
                 gc.collect()
                 shutil.rmtree(path)
-                return
+                break
             except FileNotFoundError:
-                return
+                break
             except PermissionError as exc:
                 last_error = exc
                 time.sleep(1)
-        if last_error is not None:
-            raise last_error
+        else:
+            if last_error is not None:
+                raise last_error
 
 
 def _webui_asset_paths(html: str) -> list[str]:
@@ -512,6 +514,7 @@ def _smoke_linux_appimage(
 ) -> dict[str, object]:
     extracted = temp_root / "appimage"
     extracted.mkdir()
+    os.chmod(asset, asset.stat().st_mode | stat.S_IXUSR)
     subprocess.run(
         [str(asset), "--appimage-extract"],
         cwd=extracted,
