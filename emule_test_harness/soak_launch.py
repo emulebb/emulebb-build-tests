@@ -685,6 +685,7 @@ def bring_up_rust(
     vpn_guard_allowed_public_ip_cidrs: str = "",
     enable_packet_dump: bool = True,
     apply_shared_directories: bool = True,
+    ctrl_c_shutdown: bool = False,
     replace_servers: bool = False,
     fallback_server_endpoints: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -735,7 +736,15 @@ def bring_up_rust(
     else:
         os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
     handle = (profile_dir / "daemon.out").open("a", encoding="utf-8")
-    process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
+    if ctrl_c_shutdown:
+        process = start_rust_client_executable_with_output(
+            exe_path,
+            profile_dir,
+            handle,
+            new_process_group=True,
+        )
+    else:
+        process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
 
     try:
         wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)

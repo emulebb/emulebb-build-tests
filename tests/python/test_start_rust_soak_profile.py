@@ -61,6 +61,30 @@ def test_background_starter_can_request_diagnostics_with_fallback_server() -> No
     assert "--no-mfc" in command
 
 
+def test_background_starter_can_reuse_imported_profile_and_request_ctrl_c(tmp_path: Path) -> None:
+    module = load_start_soak_module()
+    profile_dir = tmp_path / "imported-profile"
+    args = module.build_parser().parse_args(
+        [
+            "--seconds",
+            "3600",
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--rust-profile-dir",
+            str(profile_dir),
+            "--reuse-rust-shared-profile",
+            "--rust-shutdown-trigger",
+            "ctrl-c",
+        ]
+    )
+
+    command = module.build_launch_command(args)
+
+    assert command[command.index("--rust-profile-dir") + 1] == str(profile_dir.resolve())
+    assert "--reuse-rust-shared-profile" in command
+    assert command[command.index("--rust-shutdown-trigger") + 1] == "ctrl-c"
+
+
 def test_background_starter_rejects_short_operator_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_start_soak_module()
 

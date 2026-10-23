@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import struct
 import subprocess
 from pathlib import Path
@@ -282,6 +283,7 @@ def spawn_rust_daemon(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     detached: bool = False,
+    new_process_group: bool = False,
     text: bool = True,
 ) -> subprocess.Popen:
     """Spawns the `emulebb-rust` daemon with the shared argv/stdio wiring.
@@ -292,8 +294,10 @@ def spawn_rust_daemon(
     """
 
     creationflags = 0
-    if detached and os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    if os.name == "nt" and (detached or new_process_group):
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        if detached:
+            creationflags |= subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     return subprocess.Popen(
         [str(executable), "--profile", str(profile_dir)],
         cwd=cwd if cwd is not None else executable.parent,
@@ -309,10 +313,28 @@ def start_rust_client_executable_with_output(
     executable: Path,
     profile_dir: Path,
     output_handle,
+    *,
+    new_process_group: bool = False,
 ) -> subprocess.Popen[str]:
     """Starts a staged `emulebb-rust` executable with an already-open output handle."""
 
-    return spawn_rust_daemon(executable, profile_dir, output_handle=output_handle)
+    return spawn_rust_daemon(
+        executable,
+        profile_dir,
+        output_handle=output_handle,
+        new_process_group=new_process_group,
+    )
+
+
+def request_ctrl_c(process: subprocess.Popen) -> None:
+    """Send the platform Ctrl-C signal to one managed Rust daemon."""
+
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        process.send_signal(signal.CTRL_C_EVENT)
+    else:
+        process.send_signal(signal.SIGINT)
 
 
 def start_rust_client_with_output(

@@ -173,7 +173,9 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
         },
         "inputs": str(inputs_path),
         "vpnGuardConfig": str(default_vpn_guard_path()),
-        "rustProfileDir": str(inputs.rust_profile_dir) if inputs.rust_profile_dir is not None else None,
+        "rustProfileDir": str(args.rust_profile_dir.resolve())
+        if args.rust_profile_dir is not None
+        else (str(inputs.rust_profile_dir) if inputs.rust_profile_dir is not None else None),
         "rustExe": str(diagnostics_rust_exe(output_root) if args.diagnostics else regular_rust_exe(output_root)),
         "rustRest": f"{rust_rest_base_url}/api/v1",
         "rustRestBaseUrl": rust_rest_base_url,
@@ -196,6 +198,9 @@ def build_effective_profile(args: argparse.Namespace, env: dict[str, Path | str]
                 diagnostics=args.diagnostics,
                 rust_fallback_server=list(args.rust_fallback_server),
                 rest_timeout_seconds=args.rest_timeout_seconds,
+                rust_profile_dir=args.rust_profile_dir,
+                reuse_rust_shared_profile=args.reuse_rust_shared_profile,
+                rust_shutdown_trigger=args.rust_shutdown_trigger,
             )
         ),
         "restOpenApiConformanceCommand": build_rest_conformance_command(
@@ -258,9 +263,15 @@ def build_launch_command(args: argparse.Namespace) -> list[str]:
         str(args.seconds),
         "--cpu-profile-stack",
         "--process-metrics",
+        "--rust-shutdown-trigger",
+        args.rust_shutdown_trigger,
         "--rest-timeout-seconds",
         str(args.rest_timeout_seconds),
     ]
+    if args.rust_profile_dir is not None:
+        command.extend(["--rust-profile-dir", str(args.rust_profile_dir.resolve())])
+    if args.reuse_rust_shared_profile:
+        command.append("--reuse-rust-shared-profile")
     if not args.diagnostics:
         command.append("--rust-regular")
     if args.single_server:
@@ -280,6 +291,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, epilog=epilog)
     parser.add_argument("--seconds", type=int, default=3600, help="CPU profile/run window; minimum 3600.")
     parser.add_argument("--lan-bind-addr", required=True, help="REST LAN bind address; pass inherited X_LOCAL_IP.")
+    parser.add_argument(
+        "--rust-profile-dir",
+        type=Path,
+        help="Existing Rust profile below EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+    )
+    parser.add_argument(
+        "--reuse-rust-shared-profile",
+        action="store_true",
+        help="Preserve the selected profile's imported shared roots.",
+    )
+    parser.add_argument(
+        "--rust-shutdown-trigger",
+        choices=("rest", "ctrl-c"),
+        default="rest",
+        help="Graceful shutdown trigger used when the soak duration ends.",
+    )
     parser.add_argument(
         "--single-server",
         action="store_true",

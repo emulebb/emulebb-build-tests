@@ -40,6 +40,25 @@ def setting_value(profile_dir: Path, section: str, key: str) -> object:
     return json.loads(row[0])
 
 
+def test_request_ctrl_c_sends_sigint_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    signals: list[int] = []
+
+    class FakeProcess:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+        @staticmethod
+        def send_signal(value: int) -> None:
+            signals.append(value)
+
+    monkeypatch.setattr(rust_client.os, "name", "posix")
+
+    rust_client.request_ctrl_c(FakeProcess())
+
+    assert signals == [rust_client.signal.SIGINT]
+
+
 def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 

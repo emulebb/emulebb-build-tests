@@ -161,22 +161,12 @@ def parse_known2_64_met(path: Path, wanted_roots: set[str] | None = None) -> dic
     return entries
 
 
-def import_mfc_known_met_cache(
+def build_imported_known_rows(
     *,
-    rust_repo: Path,
-    metadata_db: Path,
     known_met: Path,
-    known2_64_met: Path | None = None,
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    """Import stock ``known.met`` as pathless reusable hash metadata.
-
-    No shared roots are walked and no payload files are inspected. Runtime shared
-    scans promote a cached row only when the exact stock identity is unique.
-    """
-
-    if not dry_run and not metadata_db.exists():
-        rust_metadata.create_metadata_db(rust_repo, metadata_db)
+    known2_met: Path | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build validated pathless Rust import rows from stock-compatible metadata."""
 
     entries = parse_known_met(known_met)
     wanted_aich_roots = {
@@ -190,8 +180,8 @@ def import_mfc_known_met_cache(
         and len(entry.md4_hashset) == expected_md4_hash_count(entry.size_bytes)
     }
     known2_aich = (
-        parse_known2_64_met(known2_64_met, wanted_roots=wanted_aich_roots)
-        if wanted_aich_roots and known2_64_met is not None and known2_64_met.is_file()
+        parse_known2_64_met(known2_met, wanted_roots=wanted_aich_roots)
+        if wanted_aich_roots and known2_met is not None and known2_met.is_file()
         else {}
     )
 
@@ -243,17 +233,44 @@ def import_mfc_known_met_cache(
                 "last_upload_request_ms": entry.last_upload_request_ms,
             }
         )
-    if imported_rows and not dry_run:
-        rust_metadata.seed_imported_known_files(metadata_db, imported_rows)
 
-    return {
+    return imported_rows, {
         "knownMetRecords": len(entries),
         "importedKnownRecords": len(imported_rows),
         "known2AichRecords": len(known2_aich),
         "known2AichUsed": known2_aich_used,
         "statsRecords": stats_records,
-        "dryRun": dry_run,
         "skipped": reason_counts,
+    }
+
+
+def import_mfc_known_met_cache(
+    *,
+    rust_repo: Path,
+    metadata_db: Path,
+    known_met: Path,
+    known2_64_met: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Import stock ``known.met`` as pathless reusable hash metadata.
+
+    No shared roots are walked and no payload files are inspected. Runtime shared
+    scans promote a cached row only when the exact stock identity is unique.
+    """
+
+    if not dry_run and not metadata_db.exists():
+        rust_metadata.create_metadata_db(rust_repo, metadata_db)
+
+    imported_rows, summary = build_imported_known_rows(
+        known_met=known_met,
+        known2_met=known2_64_met,
+    )
+    if imported_rows and not dry_run:
+        rust_metadata.seed_imported_known_files(metadata_db, imported_rows)
+
+    return {
+        **summary,
+        "dryRun": dry_run,
         "metadataDb": str(metadata_db),
     }
 
