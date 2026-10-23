@@ -1,0 +1,17 @@
+schema_version = 1
+
+[source]
+profile = 'C:\path\to\emule-profile'
+flavor = "auto"
+
+[target]
+platform = "windows"
+
+[output]
+manifest = 'C:\path\to\emule-profile-import.json'
+
+# Windows-to-Windows imports preserve unmatched paths. For Docker/Linux, set
+# target.platform = "linux" and map every discovered source root.
+# [[path_mappings]]
+# source = 'D:\Shared'
+# target = '/data/shared'

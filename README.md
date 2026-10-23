@@ -38,6 +38,35 @@ Supported branch:
 
 - `main`
 
+## eMule profile hash import
+
+Use `scripts\export-emule-profile.py` to convert a stopped stock eMule or
+eMuleBB MFC profile into the portable manifest consumed by `emulebb-rust`.
+The exporter carries reusable `known.met`/`known2*.met` hashes, upload
+statistics, Incoming, and shared roots. It intentionally does not migrate
+identity, credits, server/Kad state, settings, or partial downloads.
+
+Copy `manifests\emule-profile-import.example.toml` to operator-local or output
+storage, then set its source, target platform, manifest path, and optional
+`[[path_mappings]]` entries. Windows-to-Windows imports preserve unmatched
+paths. Docker/Linux imports require every discovered Windows root to match a
+mapping; mappings use longest-prefix, path-boundary matching.
+
+```powershell
+$job = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "inputs\emule-profile-import.toml"
+$manifest = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "inputs\emule-profile-import.json"
+$profile = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "profiles\imported-rust"
+$rust = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "tools\emulebb-rust\bin\emulebb-rust.exe"
+python scripts\export-emule-profile.py check --config $job
+python scripts\export-emule-profile.py export --config $job
+& $rust --profile $profile import-emule-profile $manifest
+```
+
+Stop both clients before exporting or applying. The Rust command creates a
+fresh explicit target profile when needed, merges into an initialized target,
+applies one SQLite transaction, and exits without starting networking. Re-run
+the same command safely when validating or resuming an operator workflow.
+
 Rust live OpenVPN lane:
 
 - `scripts/smoke-rust-openvpn.py` is the preferred public-network live path for
