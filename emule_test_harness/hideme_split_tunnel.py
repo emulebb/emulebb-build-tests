@@ -195,7 +195,7 @@ def ensure_vpn_ready(exe_path: Path, *, name: str | None = None) -> dict[str, An
     # tunnel while eD2K/Kad still tunnel. Must be applied deterministically every run
     # — a hide.me reconnect can reset ExcludeIPRanges.
     exclude_added = ensure_excluded_ip_ranges()
-    if whitelist_added or exclude_added:
+    if whitelist_added or exclude_added or not hideme_adapter_up():
         restart_hideme()
     else:
         wait_for_tunnel()
