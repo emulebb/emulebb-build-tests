@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import traceback
@@ -42,7 +41,7 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.rust_client import stop_process_tree
+from emule_test_harness.rust_client import request_ctrl_c, stop_process_tree
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
@@ -88,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
+    parser.add_argument(
+        "--rust-profile-dir",
+        type=Path,
+        help="Override rust_profile.profile_dir with an existing profile below the workspace output root.",
+    )
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
@@ -169,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Stop the soak after this many seconds with the same graceful teardown path as Ctrl-C.",
+    )
+    parser.add_argument(
+        "--rust-shutdown-trigger",
+        choices=("rest", "ctrl-c"),
+        default="rest",
+        help="Graceful Rust shutdown trigger used at the end of the soak.",
     )
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
@@ -368,8 +378,9 @@ def graceful_teardown(
     mfc_handles: dict | None,
     live_common,
     rust_base: str,
+    rust_shutdown_trigger: str = "rest",
     wait_seconds: float = 15.0,
-) -> None:
+) -> dict[str, object]:
     """Stops everything the launcher started, gracefully, with a bounded fallback.
 
     Asks each component to stop cleanly (rust via ``POST /api/v1/app/shutdown`` →
@@ -379,15 +390,29 @@ def graceful_teardown(
     A second Ctrl-C during the wait jumps straight to the kill.
     """
 
+    started = time.monotonic()
+    summary: dict[str, object] = {
+        "trigger": rust_shutdown_trigger,
+        "requestAttempted": False,
+        "requestSucceeded": False,
+        "forced": False,
+        "exitCode": None,
+    }
     if rust_handles is not None and rust_handles["process"].poll() is None:
-        log("rust: requesting graceful shutdown (POST /api/v1/app/shutdown)...")
+        summary["requestAttempted"] = True
         try:
-            retry_http_json(
-                "rust shutdown", 1, rust_base, "/api/v1/app/shutdown",
-                api_key=RUST_API_KEY, method="POST", body={"confirmShutdown": True}, timeout_seconds=5.0,
-            )
-        except Exception:  # noqa: BLE001 - rust may already be tearing down
-            pass
+            if rust_shutdown_trigger == "ctrl-c":
+                log("rust: requesting graceful shutdown via Ctrl-C...")
+                request_ctrl_c(rust_handles["process"])
+            else:
+                log("rust: requesting graceful shutdown (POST /api/v1/app/shutdown)...")
+                retry_http_json(
+                    "rust shutdown", 1, rust_base, "/api/v1/app/shutdown",
+                    api_key=RUST_API_KEY, method="POST", body={"confirmShutdown": True}, timeout_seconds=5.0,
+                )
+            summary["requestSucceeded"] = True
+        except Exception as error:  # noqa: BLE001 - cleanup must continue to the bounded fallback
+            summary["requestError"] = f"{type(error).__name__}: {error}"
     if mfc_handles is not None and mfc_handles.get("app") is not None:
         log("MFC: closing the diagnostics GUI cleanly...")
         try:
@@ -412,11 +437,20 @@ def graceful_teardown(
     if rust_handles is not None:
         if rust_handles["process"].poll() is None:
             log("rust did not exit in time - force-killing.")
+            summary["forced"] = True
             stop_process_tree(rust_handles["process"])
+        summary["exitCode"] = rust_handles["process"].poll()
         try:
             rust_handles["logHandle"].close()
         except Exception:  # noqa: BLE001
             pass
+    summary["elapsedSeconds"] = round(time.monotonic() - started, 3)
+    summary["clean"] = bool(
+        summary["requestSucceeded"]
+        and not summary["forced"]
+        and summary["exitCode"] == 0
+    )
+    return summary
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
@@ -464,7 +498,16 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
-    rust_profile_dir = resolve_direct_rust_profile(inputs)
+    if args.rust_profile_dir is not None:
+        rust_profile_dir = args.rust_profile_dir.resolve()
+    else:
+        rust_profile_dir = resolve_direct_rust_profile(inputs)
+    try:
+        rust_profile_dir.relative_to(output_root.resolve())
+    except ValueError as error:
+        raise RuntimeError(
+            f"Rust profile must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {rust_profile_dir}"
+        ) from error
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -533,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     process_metrics: RustProcessMetrics | None = None
     status = "stopped"
     failure: dict[str, object] | None = None
+    shutdown_report: dict[str, object] | None = None
     try:
         profile_tools, profile_paths, profile_report = initialize_cpu_profile(
             args=args,
@@ -549,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
             enable_packet_dump=not args.rust_regular,
             apply_shared_directories=not args.reuse_rust_shared_profile,
+            ctrl_c_shutdown=args.rust_shutdown_trigger == "ctrl-c",
             replace_servers=args.single_rust_server,
             fallback_server_endpoints=list(args.rust_fallback_server),
             vpn_guard_mode=str(vpn_guard_profile["mode"]),
@@ -643,12 +688,20 @@ def main(argv: list[str] | None = None) -> int:
                 process_metrics_summary = process_metrics.write_summary()
             finally:
                 process_metrics.close()
-        graceful_teardown(
+        shutdown_report = graceful_teardown(
             rust_handles=rust_handles,
             mfc_handles=mfc_handles,
             live_common=mods["live_common"],
             rust_base=rust_base,
+            rust_shutdown_trigger=args.rust_shutdown_trigger,
         )
+        if args.rust_shutdown_trigger == "ctrl-c" and not shutdown_report.get("clean"):
+            status = "failed"
+            if failure is None:
+                failure = {
+                    "type": "CtrlCShutdownError",
+                    "message": f"Ctrl-C shutdown was not clean: {shutdown_report}",
+                }
     soak_run_layout.mark_run_finished(
         run_paths,
         status=status,
@@ -660,6 +713,7 @@ def main(argv: list[str] | None = None) -> int:
             "rustFallbackServers": list(args.rust_fallback_server),
             "durationSeconds": args.duration_seconds,
             "reuseRustSharedProfile": bool(args.reuse_rust_shared_profile),
+            "shutdown": shutdown_report,
             "error": failure,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,

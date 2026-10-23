@@ -101,7 +101,11 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "90",
             "--rust-fallback-server",
             "176.123.5.89:4725",
+            "--rust-profile-dir",
+            "C:/profiles/imported",
             "--reuse-rust-shared-profile",
+            "--rust-shutdown-trigger",
+            "ctrl-c",
             "--vpn-guard-live-config",
             "vpn-guard-live.local.json",
             "--vpn-guard-scenario",
@@ -118,8 +122,51 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.rest_timeout_seconds == 30
     assert args.connect_timeout_seconds == 90
     assert args.rust_fallback_server == ["176.123.5.89:4725"]
+    assert args.rust_profile_dir == Path("C:/profiles/imported")
     assert args.reuse_rust_shared_profile is True
+    assert args.rust_shutdown_trigger == "ctrl-c"
     assert args.vpn_guard_scenario == "success"
+
+
+def test_graceful_teardown_can_use_ctrl_c(monkeypatch) -> None:
+    module = load_launch_soak_module()
+
+    class FakeProcess:
+        exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+    class FakeLogHandle:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    process = FakeProcess()
+    log_handle = FakeLogHandle()
+
+    def fake_request_ctrl_c(target) -> None:
+        assert target is process
+        target.exit_code = 0
+
+    monkeypatch.setattr(module, "request_ctrl_c", fake_request_ctrl_c)
+
+    result = module.graceful_teardown(
+        rust_handles={"process": process, "logHandle": log_handle},
+        mfc_handles=None,
+        live_common=None,
+        rust_base="http://192.0.2.10:4731",
+        rust_shutdown_trigger="ctrl-c",
+        wait_seconds=0.1,
+    )
+
+    assert result["trigger"] == "ctrl-c"
+    assert result["requestSucceeded"] is True
+    assert result["forced"] is False
+    assert result["exitCode"] == 0
+    assert result["clean"] is True
+    assert log_handle.closed is True
 
 
 def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None:
