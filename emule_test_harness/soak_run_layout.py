@@ -16,12 +16,8 @@ from .paths import path_is_relative_to
 
 CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
-RUST_DIAGNOSTIC_GLOBS = (
-    "*.jsonl",
-)
-RUST_PROFILE_VOLATILE_FILES = (
-    "daemon.out",
-)
+RUST_DIAGNOSTIC_GLOBS = ("*.jsonl",)
+RUST_PROFILE_VOLATILE_FILES = ("daemon.out",)
 MFC_LOG_GLOBS = (
     "emulebb*.log",
     "emulebb*.trace.json",
@@ -38,11 +34,11 @@ class SoakRunPaths:
 
     soak_root: Path
     campaign_id: str
-    reports_root: Path
+    campaigns_root: Path
+    campaign_dir: Path
     report_dir: Path
     actions_dir: Path
     checkpoints_dir: Path
-    archives_root: Path
     archive_dir: Path
     preflight_archive_dir: Path
     last_run_dir: Path
@@ -61,7 +57,9 @@ def validate_campaign_id(campaign_id: str) -> str:
     """Returns a campaign id or raises if it does not use the canonical format."""
 
     if not CAMPAIGN_ID_RE.match(campaign_id):
-        raise ValueError(f"campaign_id must use UTC YYYYMMDDTHHMMSSZ format, got {campaign_id!r}.")
+        raise ValueError(
+            f"campaign_id must use UTC YYYYMMDDTHHMMSSZ format, got {campaign_id!r}."
+        )
     return campaign_id
 
 
@@ -69,22 +67,24 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
     """Builds the stable converged-soak path set for one campaign."""
 
     campaign_id = validate_campaign_id(campaign_id)
-    reports_root = soak_root / "reports"
-    report_dir = reports_root / campaign_id
-    archive_dir = soak_root / "archives" / campaign_id
+    campaigns_root = soak_root / "campaigns"
+    campaign_dir = campaigns_root / campaign_id
+    report_dir = campaign_dir / "report"
+    archive_dir = campaign_dir / "archive"
+    last_run_dir = soak_root / "last-run"
     return SoakRunPaths(
         soak_root=soak_root,
         campaign_id=campaign_id,
-        reports_root=reports_root,
+        campaigns_root=campaigns_root,
+        campaign_dir=campaign_dir,
         report_dir=report_dir,
         actions_dir=report_dir / "actions",
         checkpoints_dir=report_dir / "checkpoints",
-        archives_root=soak_root / "archives",
         archive_dir=archive_dir,
         preflight_archive_dir=archive_dir / "preflight",
-        last_run_dir=soak_root / "last-run",
-        last_run_manifest=soak_root / "last-run" / "manifest.json",
-        latest_report_pointer=reports_root / "latest.json",
+        last_run_dir=last_run_dir,
+        last_run_manifest=last_run_dir / "manifest.json",
+        latest_report_pointer=last_run_dir / "latest-report.json",
     )
 
 
@@ -95,13 +95,19 @@ def require_output_soak_root(soak_root: Path, output_root: Path) -> Path:
     resolved_soak = soak_root.resolve()
     expected = (resolved_output / "soak").resolve()
     if resolved_soak != expected:
-        raise RuntimeError(f"converged soak output must be under EMULEBB_WORKSPACE_OUTPUT_ROOT\\soak: {resolved_soak}")
+        raise RuntimeError(
+            f"converged soak output must be under EMULEBB_WORKSPACE_OUTPUT_ROOT\\soak: {resolved_soak}"
+        )
     if not path_is_relative_to(resolved_soak, resolved_output):
-        raise RuntimeError(f"converged soak output escaped EMULEBB_WORKSPACE_OUTPUT_ROOT: {resolved_soak}")
+        raise RuntimeError(
+            f"converged soak output escaped EMULEBB_WORKSPACE_OUTPUT_ROOT: {resolved_soak}"
+        )
     return resolved_soak
 
 
-def mfc_soak_log_dir(*, mfc_artifacts_dir: Path, direct_profile_dir: Path | None) -> Path:
+def mfc_soak_log_dir(
+    *, mfc_artifacts_dir: Path, direct_profile_dir: Path | None
+) -> Path:
     """Returns the MFC log directory used by the converged soak profile."""
 
     if direct_profile_dir is not None:
@@ -126,7 +132,9 @@ def _command_contains_path(command_line: str, path: Path | None) -> bool:
     return bool(marker) and marker in command_line.replace("/", "\\").casefold()
 
 
-def current_process_and_ancestor_pids(processes: list[windows_processes.WindowsProcessInfo]) -> set[int]:
+def current_process_and_ancestor_pids(
+    processes: list[windows_processes.WindowsProcessInfo],
+) -> set[int]:
     """Returns the current process and parent-chain pids for self-protection."""
 
     by_pid = {process.pid: process for process in processes}
@@ -164,8 +172,12 @@ def select_stale_soak_process_roots(
             or "launch-soak.py" in command_lower
             or "scripts\\launch-soak.py" in command_lower
         )
-        is_rust = name == "emulebb-rust-diagnostics.exe" and _command_contains_path(command_line, rust_profile_dir)
-        is_mfc = name == "emulebb-diagnostics.exe" and _command_contains_path(command_line, mfc_profile_base)
+        is_rust = name == "emulebb-rust-diagnostics.exe" and _command_contains_path(
+            command_line, rust_profile_dir
+        )
+        is_mfc = name == "emulebb-diagnostics.exe" and _command_contains_path(
+            command_line, mfc_profile_base
+        )
         if is_runner or is_rust or is_mfc:
             selected.append(process)
 
@@ -216,7 +228,9 @@ def _relative_move_target(source: Path, source_root: Path, archive_root: Path) -
     return archive_root / relative
 
 
-def _archive_files(files: Iterable[Path], *, source_root: Path, archive_root: Path) -> list[dict[str, Any]]:
+def _archive_files(
+    files: Iterable[Path], *, source_root: Path, archive_root: Path
+) -> list[dict[str, Any]]:
     archived: list[dict[str, Any]] = []
     for source in sorted({path.resolve() for path in files if path.is_file()}):
         target = _relative_move_target(source, source_root.resolve(), archive_root)
@@ -272,13 +286,22 @@ def archive_rust_volatile_outputs(
     }
 
 
-def archive_mfc_log_outputs(*, mfc_log_dir: Path | None, archive_dir: Path) -> dict[str, Any]:
+def archive_mfc_log_outputs(
+    *, mfc_log_dir: Path | None, archive_dir: Path
+) -> dict[str, Any]:
     """Archives known eMuleBB MFC log files while preserving unrelated files."""
 
     if mfc_log_dir is None:
-        return {"enabled": False, "reason": "no-mfc-log-dir", "archivedFiles": [], "archivedCount": 0}
+        return {
+            "enabled": False,
+            "reason": "no-mfc-log-dir",
+            "archivedFiles": [],
+            "archivedCount": 0,
+        }
     files = _glob_files(mfc_log_dir, MFC_LOG_GLOBS)
-    archived = _archive_files(files, source_root=mfc_log_dir, archive_root=archive_dir / "mfc-logs")
+    archived = _archive_files(
+        files, source_root=mfc_log_dir, archive_root=archive_dir / "mfc-logs"
+    )
     mfc_log_dir.mkdir(parents=True, exist_ok=True)
     return {
         "enabled": True,
@@ -303,7 +326,9 @@ def prepare_clean_run(
     paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
     preflight = paths.preflight_archive_dir
     processes = (
-        stop_stale_soak_processes(rust_profile_dir=rust_profile_dir, mfc_log_dir=mfc_log_dir)
+        stop_stale_soak_processes(
+            rust_profile_dir=rust_profile_dir, mfc_log_dir=mfc_log_dir
+        )
         if stop_process_cleanup
         else {"enabled": False, "reason": "disabled", "targets": [], "results": []}
     )
@@ -318,6 +343,7 @@ def prepare_clean_run(
         "campaignId": paths.campaign_id,
         "status": "starting",
         "soakRoot": str(paths.soak_root),
+        "campaignDir": str(paths.campaign_dir),
         "reportDir": str(paths.report_dir),
         "archiveDir": str(paths.archive_dir),
         "rustProfileDir": str(rust_profile_dir),
@@ -334,7 +360,9 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Writes one UTF-8 JSON file with stable formatting."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def write_last_run_manifest(paths: SoakRunPaths, manifest: dict[str, Any]) -> None:
@@ -351,13 +379,16 @@ def write_latest_report_pointer(paths: SoakRunPaths) -> None:
         {
             "schema": "emulebb.converged-soak.latest-report.v1",
             "campaignId": paths.campaign_id,
+            "campaignDir": str(paths.campaign_dir),
             "reportDir": str(paths.report_dir),
             "summary": str(paths.report_dir / "summary.json"),
         },
     )
 
 
-def mark_run_finished(paths: SoakRunPaths, *, status: str, extra: dict[str, Any] | None = None) -> None:
+def mark_run_finished(
+    paths: SoakRunPaths, *, status: str, extra: dict[str, Any] | None = None
+) -> None:
     """Updates the last-run manifest status without dropping preflight evidence."""
 
     manifest: dict[str, Any] = {}
