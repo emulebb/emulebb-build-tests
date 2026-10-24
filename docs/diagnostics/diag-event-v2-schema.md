@@ -46,6 +46,35 @@ Every retained record contains:
 Sequence numbers advance only after a complete JSONL record is retained. A
 dropped event is reflected in writer health instead of creating a sequence gap.
 
+## Client UDP Family
+
+`ed2k_client_udp` is a mixed packet-and-lifecycle family inside the same
+`diag_event_v2` envelope. It does not define another diagnostic schema.
+
+Packet records use `event: "packet"`. Their body includes `direction`, exact
+wire `rawHex`, and `rawLen`; decoded fields such as `protocolMarker`, `opcode`,
+`opcodeName`, `role`, and encryption state are retained when known. Receive
+records classify processing as `accepted`, `ignored`, or `dropped`. Malformed
+or unknown datagrams still retain the exact wire bytes even when no opcode can
+be decoded.
+
+Every socket-boundary send is represented by:
+
+1. one `packet` record with `direction: "send"`, `outcome: "attempted"`, and a
+   positive `sendAttemptId`;
+2. exactly one `send_outcome` record carrying the same `sendAttemptId` and an
+   outcome of `send_succeeded`, `send_failed`, or `send_cancelled`.
+
+`deliveryKnown` is `true` for success and failure and `false` for cancellation.
+A retry after a would-block result cancels the first attempt and creates a new
+attempt ID. Attempt IDs are process-local correlation keys; semantic diffs
+audit each side independently and never require IDs to match across clients.
+
+Complete-capture conformance requires this family on both clients and rejects
+missing, duplicate, orphaned, invalid, or out-of-order send terminals. Narrow
+action-window comparisons remain sampling-tolerant because a valid attempt or
+terminal may fall outside the selected window.
+
 ## Files
 
 ```text
