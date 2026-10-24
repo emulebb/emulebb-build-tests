@@ -234,8 +234,8 @@ def start_rust_client(
     """Starts `emulebb-rust` through Cargo using the shared workspace target directory.
 
     ``features`` forwards a Cargo feature list (e.g. ``packet-diagnostics``) so a
-    harness can compile in the ed2k_packet_v1 / Kad udp_packet_v1 dumps; default
-    None keeps the plain build for existing callers.
+    harness can compile in exact packet events within the unified diagnostic
+    stream; default None keeps the plain build for existing callers.
     """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -299,29 +299,6 @@ def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
     )
 
 
-def test_find_packet_trace_discovers_each_side(tmp_path: Path) -> None:
-    rust_dir = tmp_path / "rust"
-    emule_dir = tmp_path / "emule"
-    rust_dir.mkdir()
-    emule_dir.mkdir()
-    rust_trace = rust_dir / "emulebb-rust-ed2k-tcp-dump-001.jsonl"
-    emule_trace = emule_dir / "emulebb-diagnostics-packet.log"
-    rust_trace.write_text("{}\n", encoding="utf-8")
-    emule_trace.write_text("{}\n", encoding="utf-8")
-
-    assert clw.find_packet_trace(rust_dir, side="rust") == rust_trace
-    assert clw.find_packet_trace(emule_dir, side="emule") == emule_trace
-
-
-def test_find_packet_trace_returns_none_when_absent(tmp_path: Path) -> None:
-    assert clw.find_packet_trace(tmp_path, side="rust") is None
-
-
-def test_find_packet_trace_rejects_unknown_side(tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
-        clw.find_packet_trace(tmp_path, side="bogus")
-
-
 def test_find_diag_traces_selects_one_rust_run_in_segment_order(tmp_path: Path) -> None:
     stale = tmp_path / "emulebb-rust-diag-41-stale-000000.jsonl"
     first = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
@@ -481,14 +458,6 @@ def test_load_current_diag_rejects_empty_selected_run(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="contains no complete events"):
         clw.load_current_diag_records(tmp_path, side="rust")
-
-
-def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:
-    path = tmp_path / "dump.jsonl"
-    path.write_text('{"a":1}\n\n{"b":2}\n', encoding="utf-8")
-    assert clw.count_jsonl_records(path) == 2
-    assert clw.count_jsonl_records(None) == 0
-    assert clw.count_jsonl_records(tmp_path / "missing.jsonl") == 0
 
 
 def test_build_converged_report_ok_when_both_captured_and_diffs_pass(tmp_path: Path) -> None:

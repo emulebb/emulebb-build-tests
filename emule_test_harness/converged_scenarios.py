@@ -2,7 +2,7 @@
 
 The converged orchestrator (``scripts/converged-live-wire-diff.py``) drives the
 eMuleBB Rust client and the eMuleBB MFC diagnostics client over the same gentle
-live exchange and diffs their ``ed2k_packet_v1`` packet dumps. This module holds
+live exchange and diffs their unified ``diag_event_v2`` packet events. This module holds
 the side-effect-free knobs that select WHICH exchange runs, so the matrix of
 scenario variants can be unit-tested without launching a client, binding
 hide.me, or touching the live network.
