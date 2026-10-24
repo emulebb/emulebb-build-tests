@@ -539,38 +539,61 @@ def test_local_kad_diagnostics_audit_rejects_nonlocal_contacts(tmp_path: Path) -
     mfc_dir = tmp_path / "mfc"
     rust_dir.mkdir()
     mfc_dir.mkdir()
-    packet = rust_dir / "emulebb-rust-kad-udp-dump-test.jsonl"
-    contact = mfc_dir / "emulebb-diagnostics-kad.log"
-    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "10.1.2.3:4000"}) + "\n", encoding="utf-8")
-    contact.write_text(json.dumps({"contact": {"address": "10.1.2.3"}}) + "\n", encoding="utf-8")
-    assert module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3") == {
-        "rustPackets": 1, "mfcContacts": 1,
+    peers = {"rust": "10.1.2.3:4000", "emule": "10.1.2.3:4001"}
+
+    def current_packets(_directory, *, side, process_id):
+        assert process_id in {41, 42}
+        return [{"keys": {"peer": peers[side]}}]
+
+    module.current_kad_packet_records = current_packets
+    assert module.audit_local_kad_diagnostics(
+        rust_dir,
+        mfc_dir,
+        expected_ip="10.1.2.3",
+        rust_process_id=41,
+        mfc_process_id=42,
+    ) == {
+        "rustPackets": 1, "mfcPackets": 1,
     }
 
-    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "8.8.8.8:4000"}) + "\n", encoding="utf-8")
+    peers["rust"] = "8.8.8.8:4000"
     with pytest.raises(RuntimeError, match="nonlocal peer"):
-        module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3")
-    packet.write_text(json.dumps({"schema": "udp_packet_v1", "peer": "10.1.2.3:4000"}) + "\n", encoding="utf-8")
-    contact.write_text(json.dumps({"contact": {"address": "8.8.8.8"}}) + "\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="nonlocal contact"):
-        module.audit_local_kad_diagnostics(rust_dir, mfc_dir, expected_ip="10.1.2.3")
+        module.audit_local_kad_diagnostics(
+            rust_dir,
+            mfc_dir,
+            expected_ip="10.1.2.3",
+            rust_process_id=41,
+            mfc_process_id=42,
+        )
+    peers["rust"] = "10.1.2.3:4000"
+    peers["emule"] = "8.8.8.8:4001"
+    with pytest.raises(RuntimeError, match="nonlocal peer"):
+        module.audit_local_kad_diagnostics(
+            rust_dir,
+            mfc_dir,
+            expected_ip="10.1.2.3",
+            rust_process_id=41,
+            mfc_process_id=42,
+        )
 
 
 def test_local_kad_exchange_requires_decoded_two_way_bootstrap(tmp_path: Path) -> None:
     module = load_suite_module()
-    dump = tmp_path / "emulebb-rust-kad-udp-dump-test.jsonl"
     pairs = [
         ("send", "KADEMLIA2_BOOTSTRAP_REQ"),
         ("recv", "KADEMLIA2_BOOTSTRAP_REQ"),
         ("send", "KADEMLIA2_BOOTSTRAP_RES"),
     ]
-    dump.write_text("".join(json.dumps({"schema": "udp_packet_v1", "direction": direction,
-                                        "opcode_name": opcode}) + "\n" for direction, opcode in pairs), encoding="utf-8")
-    assert module.local_kad_exchange_evidence(tmp_path) is None
-    with dump.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"schema": "udp_packet_v1", "direction": "recv",
-                                 "opcode_name": "KADEMLIA2_BOOTSTRAP_RES"}) + "\n")
-    assert module.local_kad_exchange_evidence(tmp_path) == {
+    records = [
+        {"body": {"direction": direction, "opcodeName": opcode}}
+        for direction, opcode in pairs
+    ]
+    module.current_kad_packet_records = lambda *_args, **_kwargs: list(records)
+    assert module.local_kad_exchange_evidence(tmp_path, process_id=41) is None
+    records.append(
+        {"body": {"direction": "recv", "opcodeName": "KADEMLIA2_BOOTSTRAP_RES"}}
+    )
+    assert module.local_kad_exchange_evidence(tmp_path, process_id=41) == {
         f"{direction}:{opcode}": 1 for direction, opcode in pairs + [("recv", "KADEMLIA2_BOOTSTRAP_RES")]
     }
 

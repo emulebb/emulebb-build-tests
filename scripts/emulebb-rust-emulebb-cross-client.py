@@ -447,38 +447,68 @@ def require_mfc_secure_ident_clean(log_path: Path) -> dict[str, int]:
     return {"failureLines": 0}
 
 
-def audit_local_kad_diagnostics(rust_dir: Path, mfc_dir: Path, *, expected_ip: str) -> dict[str, int]:
-    """Fail a local-only run as soon as Kad sees a nonlocal peer/contact."""
+def current_kad_packet_records(
+    diagnostics_dir: Path,
+    *,
+    side: str,
+    process_id: int,
+) -> list[dict[str, object]]:
+    """Returns current-process unified Kad packet events for one client."""
 
-    counts = {"rustPackets": 0, "mfcContacts": 0}
-    for path in rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"):
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:  # a final line may still be in flight
-                continue
-            if row.get("schema") != "udp_packet_v1":
-                continue
-            counts["rustPackets"] += 1
-            peer = str(row.get("peer") or "")
+    if not converged_live_wire.find_diag_traces(
+        diagnostics_dir,
+        side=side,
+        process_id=process_id,
+    ):
+        return []
+    records = converged_live_wire.load_current_diag_records(
+        diagnostics_dir,
+        side=side,
+        process_id=process_id,
+        allow_incomplete_active_tail=True,
+    )
+    return [
+        record
+        for record in records
+        if record.get("family") == "kad_udp" and record.get("event") == "packet"
+    ]
+
+
+def audit_local_kad_diagnostics(
+    rust_dir: Path,
+    mfc_dir: Path,
+    *,
+    expected_ip: str,
+    rust_process_id: int,
+    mfc_process_id: int,
+) -> dict[str, int]:
+    """Fail a local-only run as soon as either client reaches a nonlocal Kad peer."""
+
+    counts = {"rustPackets": 0, "mfcPackets": 0}
+    for side, directory, process_id, count_key in (
+        ("rust", rust_dir, rust_process_id, "rustPackets"),
+        ("emule", mfc_dir, mfc_process_id, "mfcPackets"),
+    ):
+        for record in current_kad_packet_records(
+            directory,
+            side=side,
+            process_id=process_id,
+        ):
+            counts[count_key] += 1
+            keys = record.get("keys") or {}
+            peer = str(keys.get("peer") or "") if isinstance(keys, dict) else ""
             if peer.rsplit(":", 1)[0] != expected_ip:
-                raise RuntimeError("Local Kad isolation failed: Rust packet reached a nonlocal peer.")
-    for path in mfc_dir.glob("emulebb-diagnostics-kad.log"):
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            contact = row.get("contact")
-            if not isinstance(contact, dict) or not contact.get("address"):
-                continue
-            counts["mfcContacts"] += 1
-            if contact["address"] != expected_ip:
-                raise RuntimeError("Local Kad isolation failed: MFC learned a nonlocal contact.")
+                raise RuntimeError(
+                    f"Local Kad isolation failed: {side} packet reached a nonlocal peer."
+                )
     return counts
 
 
-def local_kad_exchange_evidence(rust_dir: Path) -> dict[str, int] | None:
+def local_kad_exchange_evidence(
+    rust_dir: Path,
+    *,
+    process_id: int,
+) -> dict[str, int] | None:
     """Require decoded two-way Kad bootstrap, not contact-count-only readiness."""
 
     required = {
@@ -488,16 +518,16 @@ def local_kad_exchange_evidence(rust_dir: Path) -> dict[str, int] | None:
         "send:KADEMLIA2_BOOTSTRAP_RES",
     }
     counts: dict[str, int] = {}
-    for path in rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"):
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("schema") != "udp_packet_v1":
-                continue
-            key = f"{row.get('direction')}:{row.get('opcode_name')}"
-            counts[key] = counts.get(key, 0) + 1
+    for record in current_kad_packet_records(
+        rust_dir,
+        side="rust",
+        process_id=process_id,
+    ):
+        body = record.get("body") or {}
+        if not isinstance(body, dict):
+            continue
+        key = f"{body.get('direction')}:{body.get('opcodeName')}"
+        counts[key] = counts.get(key, 0) + 1
     return {key: counts[key] for key in sorted(required)} if required.issubset(counts) else None
 
 
@@ -1562,11 +1592,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.diagnostics else converged_live_wire.resolve_rust_regular_exe(output_root)
         )
         if args.diagnostics:
-            # Capture both clients' converged packet dumps for upload-path parity:
-            # rust writes ed2k_packet_v1 / Kad udp_packet_v1 when EMULEBB_RUST_LOG_DIR
-            # is set AND it is built with the packet-diagnostics feature; the MFC side
-            # must be the diagnostics exe (--app-exe ...emulebb-diagnostics.exe), which
-            # emits its packet log from the EMULEBB_ENABLE_PACKET_DIAGNOSTICS build.
+            # Capture Rust's unified diagnostic segments for upload-path parity.
+            # The MFC diagnostics executable writes its unified segments under
+            # the isolated profile log directory.
             rust_packet_dir = paths.source_artifacts_dir / "rust-packet-dump"
             rust_packet_dir.mkdir(parents=True, exist_ok=True)
             os.environ["EMULEBB_RUST_LOG_DIR"] = str(rust_packet_dir)
@@ -1686,6 +1714,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         current_phase = "launch_emulebb"
         emulebb_app = live_common.launch_app(paths.app_exe, Path(emulebb["profile_base"]), minimized_to_tray=True)
+        mfc_process_id = live_common.resolve_app_process_id(emulebb_app)
+        if mfc_process_id is None:
+            raise RuntimeError("Could not resolve the launched MFC process id.")
         emulebb_base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["emulebb_rest_ready"] = dtt.rest_smoke.compact_http_result(
             dtt.rest_smoke.wait_for_rest_ready(emulebb_base_url, args.api_key, args.rest_ready_timeout_seconds)
@@ -1709,11 +1740,22 @@ def main(argv: list[str] | None = None) -> int:
             def local_kad_ready() -> dict[str, object] | None:
                 if args.diagnostics:
                     report["checks"]["local_kad_isolation"] = audit_local_kad_diagnostics(
-                        rust_packet_dir, Path(emulebb["profile_base"]) / "logs", expected_ip=client_p2p_address,
+                        rust_packet_dir,
+                        Path(emulebb["profile_base"]) / "logs",
+                        expected_ip=client_p2p_address,
+                        rust_process_id=rust_process.pid,
+                        mfc_process_id=mfc_process_id,
                     )
                 mfc = kad_request(emulebb_base_url, "GET", "/api/v1/kad", args.api_key)
                 rust = kad_request(rust_base_url, "GET", "/api/v1/kad", args.api_key)
-                exchange = local_kad_exchange_evidence(rust_packet_dir) if args.diagnostics else None
+                exchange = (
+                    local_kad_exchange_evidence(
+                        rust_packet_dir,
+                        process_id=rust_process.pid,
+                    )
+                    if args.diagnostics
+                    else None
+                )
                 if exchange and all(bool(row.get("connected")) and int(row.get("contactCount") or 0) > 0 for row in (mfc, rust)):
                     return {"mfc": local_kad.compact_local_kad_status(mfc),
                             "rust": local_kad.compact_local_kad_status(rust), "exchange": exchange}
