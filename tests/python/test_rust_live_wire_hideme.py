@@ -62,6 +62,32 @@ def ed2k_tcp_packet_event(
     }
 
 
+def client_udp_packet_event(
+    *, opcode_name: str, direction: str, transport_mode: str = "obfuscated"
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "runId": "active",
+        "processId": 42,
+        "segmentId": 0,
+        "seq": 2,
+        "streamSeq": 2,
+        "ts": "2026-10-24T12:00:01.000Z",
+        "family": "ed2k_client_udp",
+        "event": "packet",
+        "severity": "info",
+        "keys": {"peer": "192.0.2.20:4672"},
+        "body": {
+            "direction": direction,
+            "transportMode": transport_mode,
+            "opcodeName": opcode_name,
+            "rawLen": 2,
+            "rawHex": "aabb",
+        },
+    }
+
+
 def test_udp_reask_protocol_log_counts_outbound_reasks_only(tmp_path: Path) -> None:
     module = load_live_wire_module()
     log_path = tmp_path / "daemon.out"
@@ -277,6 +303,25 @@ def test_peer_packet_diagnostics_use_selected_unified_run_not_legacy_dump(
     summary = module.summarize_source_exchange_packets(packets)
     assert summary["requestSources2Sent"] == 0
     assert summary["answerSources2Received"] == 1
+
+
+def test_client_udp_summary_uses_unified_packet_events_only() -> None:
+    module = load_live_wire_module()
+    records = [
+        client_udp_packet_event(opcode_name="OP_REASKFILEPING", direction="send"),
+        client_udp_packet_event(opcode_name="OP_REASKACK", direction="recv"),
+        {**client_udp_packet_event(opcode_name="OP_QUEUEFULL", direction="recv"), "event": "state"},
+        ed2k_tcp_packet_event(opcode=0x01, payload=b"", direction="send"),
+    ]
+
+    summary = module.summarize_client_udp_packets(records)
+
+    assert summary["records"] == 2
+    assert summary["captured"] is True
+    assert summary["reaskFilePingSent"] == 1
+    assert summary["reaskAckObserved"] == 1
+    assert summary["queueFullObserved"] == 0
+    assert summary["transportModes"] == {"obfuscated": 2}
 
 
 def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
