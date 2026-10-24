@@ -2107,28 +2107,38 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "udp_packet_v1",
+                        "schema": "diag_event_v2",
                         "ts": "2026-01-01T00:00:05Z",
-                        "peer": "203.0.113.10:4662",
-                        "drop_reason": "tracker_drop",
-                        "tracker_bucket": "search_req",
-                        "tracker_action": "drop",
-                        "tracker_observed_packets": 3,
-                        "tracker_max_packets": 3,
-                        "opcode_name": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                        "family": "kad_udp",
+                        "event": "packet",
+                        "severity": "warning",
+                        "keys": {"peer": "203.0.113.10:4662"},
+                        "body": {
+                            "dropReason": "tracker_drop",
+                            "trackerBucket": "search_req",
+                            "trackerAction": "drop",
+                            "trackerObservedPackets": 3,
+                            "trackerMaxPackets": 3,
+                            "opcodeName": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                        },
                     }
                 ),
                 json.dumps(
                     {
-                        "schema": "udp_packet_v1",
+                        "schema": "diag_event_v2",
                         "ts": "2026-01-01T00:00:05Z",
-                        "peer": "203.0.113.10:4662",
-                        "drop_reason": "tracker_drop",
-                        "tracker_bucket": "publish_source_req",
-                        "tracker_action": "drop",
-                        "tracker_observed_packets": 3,
-                        "tracker_max_packets": 3,
-                        "opcode_name": "KADEMLIA2_PUBLISH_SOURCE_REQ",
+                        "family": "kad_udp",
+                        "event": "packet",
+                        "severity": "warning",
+                        "keys": {"peer": "203.0.113.10:4662"},
+                        "body": {
+                            "dropReason": "tracker_drop",
+                            "trackerBucket": "publish_source_req",
+                            "trackerAction": "drop",
+                            "trackerObservedPackets": 3,
+                            "trackerMaxPackets": 3,
+                            "opcodeName": "KADEMLIA2_PUBLISH_SOURCE_REQ",
+                        },
                     }
                 ),
             ]
@@ -2624,15 +2634,20 @@ def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -
                 ),
                 json.dumps(
                     {
-                        "schema": "udp_packet_v1",
+                        "schema": "diag_event_v2",
                         "ts": "2026-01-01T00:00:00Z",
-                        "peer": "203.0.113.20:4672",
-                        "drop_reason": "tracker_drop",
-                        "tracker_bucket": "search_req",
-                        "tracker_action": "drop",
-                        "tracker_observed_packets": 3,
-                        "tracker_max_packets": 3,
-                        "opcode_name": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                        "family": "kad_udp",
+                        "event": "packet",
+                        "severity": "warning",
+                        "keys": {"peer": "203.0.113.20:4672"},
+                        "body": {
+                            "dropReason": "tracker_drop",
+                            "trackerBucket": "search_req",
+                            "trackerAction": "drop",
+                            "trackerObservedPackets": 3,
+                            "trackerMaxPackets": 3,
+                            "opcodeName": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                        },
                     }
                 ),
             ]
