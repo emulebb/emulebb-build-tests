@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import converged_live_wire
+from emule_test_harness import converged_live_wire, diag_event_diff
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root
@@ -164,46 +164,39 @@ def _answer_sources2_source_count(payload: bytes) -> int | None:
     return int.from_bytes(payload[17:19], "little")
 
 
-def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
+def summarize_source_exchange_packets(packets: list[dict[str, Any]]) -> dict[str, Any]:
     counts: Counter[str] = Counter()
-    for dump_file in packet_dump_dir.glob("emulebb-rust-ed2k-tcp-dump-*.jsonl"):
-        for line in dump_file.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
+    for record in packets:
+        direction = str(record.get("direction") or "")
+        opcode = record.get("opcode")
+        try:
+            opcode_int = int(opcode)
+        except (TypeError, ValueError):
+            continue
+        if opcode_int == OP_REQUESTSOURCES2:
+            counts[f"{direction}RequestSources2"] += 1
+        elif opcode_int == OP_ANSWERSOURCES2:
+            payload_hex = str(record.get("payload_hex") or "")
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            direction = str(record.get("direction") or "")
-            opcode = record.get("opcode")
+                payload = bytes.fromhex(payload_hex)
+            except ValueError:
+                payload = b""
+            counts[f"{direction}AnswerSources2"] += 1
+            source_count = _answer_sources2_source_count(payload)
+            if source_count is None:
+                counts[f"{direction}MalformedAnswerSources2"] += 1
+            else:
+                counts[f"{direction}AnswerSources2SourceCount"] += source_count
+                if source_count == 0:
+                    counts[f"{direction}EmptyAnswerSources2"] += 1
+        elif opcode_int in {OP_MULTIPACKET, OP_MULTIPACKET_EXT, OP_MULTIPACKET_EXT2}:
+            payload_hex = str(record.get("payload_hex") or "")
             try:
-                opcode_int = int(opcode)
-            except (TypeError, ValueError):
+                payload = bytes.fromhex(payload_hex)
+            except ValueError:
                 continue
-            if opcode_int == OP_REQUESTSOURCES2:
-                counts[f"{direction}RequestSources2"] += 1
-            elif opcode_int == OP_ANSWERSOURCES2:
-                counts[f"{direction}AnswerSources2"] += 1
-                payload_hex = str(record.get("payload_hex") or "")
-                try:
-                    payload = bytes.fromhex(payload_hex)
-                except ValueError:
-                    payload = b""
-                source_count = _answer_sources2_source_count(payload)
-                if source_count is None:
-                    counts[f"{direction}MalformedAnswerSources2"] += 1
-                else:
-                    counts[f"{direction}AnswerSources2SourceCount"] += source_count
-                    if source_count == 0:
-                        counts[f"{direction}EmptyAnswerSources2"] += 1
-            elif opcode_int in {OP_MULTIPACKET, OP_MULTIPACKET_EXT, OP_MULTIPACKET_EXT2}:
-                payload_hex = str(record.get("payload_hex") or "")
-                try:
-                    payload = bytes.fromhex(payload_hex)
-                except ValueError:
-                    continue
-                for key, value in _multipacket_subop_counts(opcode_int, payload).items():
-                    counts[f"{direction}{key[0].upper()}{key[1:]}"] += value
+            for key, value in _multipacket_subop_counts(opcode_int, payload).items():
+                counts[f"{direction}{key[0].upper()}{key[1:]}"] += value
 
     return {
         "requestSources2Sent": counts["sendRequestSources2"] + counts["sendEmbeddedRequestSources2"],
@@ -215,6 +208,28 @@ def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
         "standaloneRequestSources2Sent": counts["sendRequestSources2"],
         "counts": dict(sorted(counts.items())),
     }
+
+
+def load_peer_packet_diagnostics(
+    diagnostics_dir: Path,
+    *,
+    process_id: int,
+) -> tuple[list[Path], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Loads the selected unified run and extracts complete peer TCP packets."""
+
+    if not converged_live_wire.find_diag_traces(
+        diagnostics_dir, side="rust", process_id=process_id
+    ):
+        return [], [], []
+    capture = converged_live_wire.load_current_diag_capture(
+        diagnostics_dir,
+        side="rust",
+        process_id=process_id,
+        allow_incomplete_active_tail=True,
+    )
+    records = list(capture.records)
+    packets = diag_event_diff.ed2k_tcp_packet_views(records)
+    return list(capture.selected_segments), records, packets
 
 
 def summarize_client_udp_packets(packet_dump_dir: Path) -> dict[str, Any]:
@@ -781,7 +796,7 @@ def run_pass(
     if enable_reask:
         rust_log += ",emulebb_ed2k::ed2k_client_udp=trace"
     os.environ["RUST_LOG"] = rust_log
-    # Capture the converged ed2k_packet_v1 packet dump for this pass so the live
+    # Capture the converged diag_event_v2 stream for this pass so the live
     # eD2k wire traffic against the emule-security server can be diffed against an
     # eMuleBB diagnostic-build trace of the same exchange.
     packet_dump_dir = pass_dir / "packet-dump"
@@ -866,7 +881,7 @@ def run_pass(
         # configured duration so the slow protocol legs actually fire — eD2k UDP
         # source reasks (~29 min FILE_REASK cadence), organic uploads (peers
         # downloading our now-partial/complete files), and Kad maintenance —
-        # all captured to the packet dumps. Read-only polling only; NO new
+        # all captured to diagnostics. Read-only polling only; NO new
         # searches or reconnects, so it stays within the gentle server policy.
         if soak_seconds > 0:
             evidence["soak"] = hold_soak(base_url, soak_seconds)
@@ -888,58 +903,55 @@ def run_pass(
     finally:
         stop_process_tree(process)
         handle.close()
-    # Summarize the converged ed2k_packet_v1 captures so a silently-empty dump
+    # Summarize unified peer packets so a silently-empty diagnostic stream
     # (release exe built without --features packet-diagnostics) is visible.
-    ed2k_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-*-dump-*.jsonl"))
     udp_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
-    diag_dump_files = converged_live_wire.find_diag_traces(
-        packet_dump_dir, side="rust", process_id=process.pid
-    )
-    ed2k_dump_lines = sum(
-        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
-        for f in ed2k_dump_files
+    diag_dump_files, diag_records, peer_packets = load_peer_packet_diagnostics(
+        packet_dump_dir,
+        process_id=process.pid,
     )
     udp_dump_lines = sum(
         sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
         for f in udp_dump_files
     )
-    diag_dump_lines = len(
-        converged_live_wire.load_current_diag_records(
-            packet_dump_dir, side="rust", process_id=process.pid
-        )
-    )
+    peer_packet_count = len(peer_packets)
+    diag_dump_lines = len(diag_records)
     evidence["packetDump"] = {
         "dir": str(packet_dump_dir),
-        "files": len(ed2k_dump_files),
-        "records": ed2k_dump_lines,
-        "captured": ed2k_dump_lines > 0,
-        "ed2kFiles": len(ed2k_dump_files),
-        "ed2kRecords": ed2k_dump_lines,
+        "source": "diag_event_v2",
+        "files": len(diag_dump_files),
+        "records": peer_packet_count,
+        "captured": peer_packet_count > 0,
+        "ed2kFiles": len(diag_dump_files),
+        "ed2kRecords": peer_packet_count,
         "udpFiles": len(udp_dump_files),
         "udpRecords": udp_dump_lines,
         "diagFiles": len(diag_dump_files),
         "diagRecords": diag_dump_lines,
     }
-    source_exchange_packets = summarize_source_exchange_packets(packet_dump_dir)
+    source_exchange_packets = summarize_source_exchange_packets(peer_packets)
     evidence["packetDump"]["sourceExchange"] = source_exchange_packets
     evidence["packetDump"]["clientUdp"] = summarize_client_udp_packets(packet_dump_dir)
     if source_exchange_packets["requestSources2Sent"] > 0 and isinstance(evidence.get("download"), dict):
         evidence["download"]["sourceExchangeObserved"] = True
-        evidence["download"]["sourceExchangeEvidence"] = "ed2k_packet_v1"
-    if ed2k_dump_lines == 0:
+        evidence["download"]["sourceExchangeEvidence"] = "diag_event_v2"
+    if peer_packet_count == 0:
         log(
-            "WARN: no ed2k_packet_v1 records captured; run "
+            "WARN: no diag_event_v2 ed2k_tcp packet records captured; run "
             "`python -m emule_workspace build clients --client emulebb-rust --diagnostics` "
             "to stage a packet-diagnostics build."
         )
         if require_packet_diagnostics:
             evidence["status"] = "failed"
-            packet_error = "packet diagnostics were required but no ed2k_packet_v1 records were captured"
+            packet_error = (
+                "packet diagnostics were required but no diag_event_v2 ed2k_tcp "
+                "packet records were captured"
+            )
             if "error" in evidence:
                 evidence["packetDiagnosticsError"] = packet_error
             else:
                 evidence["error"] = packet_error
-    log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {ed2k_dump_lines})")
+    log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {peer_packet_count})")
     return evidence
 
 
@@ -965,7 +977,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-packet-diagnostics",
         action="store_true",
-        help="Fail the pass unless the staged Rust binary emits ed2k_packet_v1 packet diagnostics.",
+        help="Fail the pass unless the staged Rust binary emits diag_event_v2 ed2k_tcp packet diagnostics.",
     )
     parser.add_argument(
         "--ephemeral-profile",
