@@ -36,6 +36,74 @@ def transfer(name: str, file_hash: str) -> dict[str, object]:
     }
 
 
+def diagnostic_event(
+    sequence: int,
+    *,
+    family: str,
+    event: str,
+    body: dict[str, object],
+    keys: dict[str, object] | None = None,
+    process_id: int = 123,
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "processId": process_id,
+        "runId": "test-run",
+        "segmentId": 1,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "ts": "2026-10-24T12:00:00.000Z",
+        "severity": "info",
+        "family": family,
+        "event": event,
+        "keys": keys or {},
+        "body": body,
+    }
+
+
+def ed2k_tcp_packet(sequence: int = 1) -> dict[str, object]:
+    return diagnostic_event(
+        sequence,
+        family="ed2k_tcp",
+        event="packet",
+        keys={"peer": "192.0.2.1:4662", "protocolMarker": 227, "opcode": 1},
+        body={
+            "direction": "recv",
+            "flow": "client",
+            "transportMode": "plain",
+            "protocolMarker": 227,
+            "protocolName": "ed2k",
+            "opcode": 1,
+            "opcodeName": "OP_HELLO",
+            "rawLen": 2,
+            "rawHex": "e301",
+            "payloadLen": 0,
+            "payloadHex": "",
+            "payloadHexTruncated": False,
+            "obfuscated": False,
+        },
+    )
+
+
+def kad_udp_packet(sequence: int = 2) -> dict[str, object]:
+    return diagnostic_event(
+        sequence,
+        family="kad_udp",
+        event="packet",
+        keys={"peer": "192.0.2.2:4672", "protocolMarker": 228, "opcode": 17},
+        body={
+            "direction": "recv",
+            "protocolMarker": 228,
+            "opcode": 17,
+            "opcodeName": "KADEMLIA_RES",
+            "payloadLen": 2,
+            "decodedHex": "e411",
+            "wireHex": "e411",
+        },
+    )
+
+
 def test_safe_transfers_require_requested_types_and_put_pdf_first(tmp_path: Path) -> None:
     module = load_module()
     inputs = tmp_path / "inputs.json"
@@ -257,41 +325,64 @@ def test_delivery_audit_requires_an_explicit_type(tmp_path: Path) -> None:
         module.audit_existing_delivery(tmp_path, tmp_path / "inputs.json", set(), tmp_path)
 
 
-def test_packet_dump_monitor_counts_only_complete_fresh_records(tmp_path: Path) -> None:
+def test_diagnostic_run_monitor_requires_current_peer_and_kad_packets(tmp_path: Path) -> None:
     module = load_module()
-    process = SimpleNamespace(poll=lambda: None)
-    monitor = module.PacketDumpMonitor(tmp_path, process)
-    dump = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
-    dump.write_bytes(b'{"schema":"ed2k_packet_v1"}\n{"schema":"diag_event_v2"')
+    process = SimpleNamespace(pid=123, poll=lambda: None)
+    monitor = module.DiagnosticRunMonitor(tmp_path, process)
+    dump = tmp_path / "emulebb-rust-diag-123-test-run-000001.jsonl"
+    incomplete_kad = json.dumps(kad_udp_packet())[:-1]
+    dump.write_text(json.dumps(ed2k_tcp_packet()) + "\n" + incomplete_kad, encoding="utf-8")
 
-    assert monitor.sample()["schemas"] == {"ed2k_packet_v1": 1}
-    with dump.open("ab") as handle:
-        handle.write(b"}\n")
-    assert monitor.sample()["schemas"] == {"diag_event_v2": 1, "ed2k_packet_v1": 1}
-    assert monitor.sample()["records"] == 2
+    first = monitor.sample()
+    assert first["schema"] == "diag_event_v2"
+    assert first["selectedSegments"] == [dump.name]
+    assert first["requiredEvidence"] == {"ed2k_tcp/packet": 1, "kad_udp/packet": 0}
+    assert first["requiredEvidenceComplete"] is False
+    assert monitor.has_required_evidence() is False
+
+    with dump.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("}\n")
+    complete = monitor.sample()
+    assert complete["familyEvents"] == {
+        "ed2k_tcp": {"packet": 1},
+        "kad_udp": {"packet": 1},
+    }
+    assert complete["requiredEvidence"] == {"ed2k_tcp/packet": 1, "kad_udp/packet": 1}
+    assert complete["requiredEvidenceComplete"] is True
+    assert complete["records"] == 2
+    assert monitor.has_required_evidence() is True
 
 
-def test_packet_dump_monitor_rejects_malformed_record(tmp_path: Path) -> None:
+def test_diagnostic_run_monitor_rejects_malformed_current_segment(tmp_path: Path) -> None:
     module = load_module()
-    monitor = module.PacketDumpMonitor(tmp_path, SimpleNamespace(poll=lambda: None))
-    (tmp_path / "emulebb-rust-kad-udp-dump-test.jsonl").write_bytes(b"not-json\n")
+    monitor = module.DiagnosticRunMonitor(tmp_path, SimpleNamespace(pid=123, poll=lambda: None))
+    (tmp_path / "emulebb-rust-diag-123-test-run-000001.jsonl").write_bytes(b"not-json\n")
 
-    with pytest.raises(RuntimeError, match="Malformed live diagnostic"):
+    with pytest.raises(module.diag_event_runs.DiagnosticTraceError, match="malformed JSON"):
         monitor.sample()
 
 
-def test_packet_dump_monitor_attributes_only_accepted_payload(tmp_path: Path) -> None:
+def test_diagnostic_run_monitor_attributes_only_accepted_payload(tmp_path: Path) -> None:
     module = load_module()
-    monitor = module.PacketDumpMonitor(tmp_path, SimpleNamespace(poll=lambda: None))
+    monitor = module.DiagnosticRunMonitor(tmp_path, SimpleNamespace(pid=123, poll=lambda: None))
     rows = [
-        {"schema": "diag_event_v2", "event": "source_count", "body": {"sourceCount": 4}},
-        {"schema": "diag_event_v2", "event": "download_payload_accepted",
-         "keys": {"fileHash": "a" * 32, "peer": "192.0.2.1:4662"}, "body": {"bytes": 128}},
-        {"schema": "diag_event_v2", "event": "download_source_software",
-         "keys": {"fileHash": "a" * 32, "peer": "192.0.2.1:4662"},
-         "body": {"clientSoftware": "eMule v0.50a"}},
+        diagnostic_event(1, family="transfer", event="source_count", body={"sourceCount": 4}),
+        diagnostic_event(
+            2,
+            family="transfer",
+            event="download_payload_accepted",
+            keys={"fileHash": "a" * 32, "peer": "192.0.2.1:4662"},
+            body={"bytes": 128},
+        ),
+        diagnostic_event(
+            3,
+            family="transfer",
+            event="download_source_software",
+            keys={"fileHash": "a" * 32, "peer": "192.0.2.1:4662"},
+            body={"clientSoftware": "eMule v0.50a"},
+        ),
     ]
-    dump = tmp_path / "emulebb-rust-diag-test.jsonl"
+    dump = tmp_path / "emulebb-rust-diag-123-test-run-000001.jsonl"
     dump.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     summary = monitor.sample()
