@@ -1,10 +1,64 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from emule_test_harness import soak_launch, vpn_guard_live
+
+
+def write_diag_segment(path: Path, records: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(f"{json.dumps(record, separators=(',', ':'))}\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def diag_record(
+    *,
+    sequence: int,
+    stream_sequence: int,
+    family: str,
+    flow: str,
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "ts": "2026-10-24T00:00:00.000Z",
+        "runId": "run-a",
+        "processId": 42,
+        "segmentId": 1,
+        "seq": sequence,
+        "streamSeq": stream_sequence,
+        "family": family,
+        "event": "packet",
+        "severity": "info",
+        "keys": {"peer": "198.51.100.1:4661"},
+        "body": {"flow": flow},
+    }
+
+
+def test_latest_server_diagnostic_uses_unified_current_run(tmp_path: Path) -> None:
+    write_diag_segment(
+        tmp_path / "emulebb-rust-diag-42-run-a-000001.jsonl",
+        [
+            diag_record(sequence=1, stream_sequence=1, family="ed2k_tcp", flow="client"),
+            diag_record(sequence=2, stream_sequence=1, family="ed2k_server_udp", flow="server"),
+            diag_record(sequence=3, stream_sequence=2, family="ed2k_tcp", flow="server"),
+        ],
+    )
+
+    latest = soak_launch.latest_diag_event_record(
+        tmp_path,
+        client="rust",
+        families={"ed2k_tcp", "ed2k_server_udp"},
+        flow="server",
+    )
+
+    assert latest is not None
+    assert latest["seq"] == 3
+    assert latest["family"] == "ed2k_tcp"
 
 
 def test_soak_api_keys_meet_current_rust_secret_length() -> None:
