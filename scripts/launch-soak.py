@@ -200,6 +200,10 @@ def resolve_vpn_guard_profile(args: argparse.Namespace) -> dict[str, str | None]
     """Resolves the VPN Guard mode and approved CIDRs for one launcher run."""
 
     if args.vpn_guard_scenario == "off":
+        if args.vpn_topology == "full-tunnel":
+            raise RuntimeError(
+                "Full-tunnel soaks require --vpn-guard-scenario success so both clients start in Block mode."
+            )
         return {"mode": "off", "allowed_public_ip_cidrs": "", "config_path": None}
 
     config_path = Path(args.vpn_guard_live_config).resolve() if args.vpn_guard_live_config else None
