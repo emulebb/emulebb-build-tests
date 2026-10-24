@@ -93,6 +93,30 @@ def resolve_lan_rest_bind_addr(
     return candidate
 
 
+def require_rust_profile_location(
+    rust_profile_dir: Path,
+    *,
+    output_root: Path,
+    vpn_topology: str,
+) -> dict[str, object]:
+    """Validate the managed or operator-owned profile boundary for one soak."""
+
+    if vpn_topology not in VPN_TOPOLOGIES:
+        raise ValueError(f"Unsupported hide.me topology: {vpn_topology!r}.")
+    profile = rust_profile_dir.resolve()
+    output = output_root.resolve()
+    try:
+        profile.relative_to(output)
+    except ValueError as error:
+        if vpn_topology != hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL:
+            raise RuntimeError(
+                "Rust profiles outside EMULEBB_WORKSPACE_OUTPUT_ROOT are allowed only for explicit full-tunnel soaks: "
+                f"{profile}"
+            ) from error
+        return {"profileDir": str(profile), "ownership": "operator-external", "external": True}
+    return {"profileDir": str(profile), "ownership": "harness-managed", "external": False}
+
+
 def require_operator_server_endpoint(endpoint: str, *, label: str = "server") -> str:
     """Returns the fixed live-wire operator eD2K server endpoint or raises."""
 

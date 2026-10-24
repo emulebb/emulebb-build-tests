@@ -2059,6 +2059,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     rust_profile_dir = Path(rust_profile_selection["profileDir"])
     rust_packet_dump = Path(rust_profile_selection["packetDumpDir"])
+    rust_profile_location = soak_launch.require_rust_profile_location(
+        rust_profile_dir,
+        output_root=output_root,
+        vpn_topology=args.vpn_topology,
+    )
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,
@@ -2149,6 +2154,7 @@ def main(argv: list[str] | None = None) -> int:
         "freshRustProfile": bool(args.fresh_rust_profile),
         "rustProfileMode": rust_profile_selection["mode"],
         "rustProfileDirName": rust_profile_dir.name,
+        "rustProfileLocation": rust_profile_location,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
         "preserveDiagnosticEvidence": not bool(args.trim_diagnostic_evidence),

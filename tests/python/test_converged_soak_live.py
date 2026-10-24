@@ -118,6 +118,29 @@ def test_resolve_lan_rest_bind_addr_rejects_missing_loopback_wildcard_or_host(
         soak_launch.resolve_lan_rest_bind_addr(candidate)
 
 
+def test_rust_profile_location_allows_external_only_for_full_tunnel(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    managed = output_root / "soak" / "rust-profile"
+    external = tmp_path / "operator" / "EMULE_RUST_PROFILE_PERSISTED"
+
+    assert soak_launch.require_rust_profile_location(
+        managed,
+        output_root=output_root,
+        vpn_topology="split-tunnel",
+    )["ownership"] == "harness-managed"
+    assert soak_launch.require_rust_profile_location(
+        external,
+        output_root=output_root,
+        vpn_topology="full-tunnel",
+    )["ownership"] == "operator-external"
+    with pytest.raises(RuntimeError, match="only for explicit full-tunnel soaks"):
+        soak_launch.require_rust_profile_location(
+            external,
+            output_root=output_root,
+            vpn_topology="split-tunnel",
+        )
+
+
 def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
     runner = _load_soak_runner()
     args = runner.build_parser().parse_args(

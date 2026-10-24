@@ -518,12 +518,11 @@ def main(argv: list[str] | None = None) -> int:
         rust_profile_dir = args.rust_profile_dir.resolve()
     else:
         rust_profile_dir = resolve_direct_rust_profile(inputs)
-    try:
-        rust_profile_dir.relative_to(output_root.resolve())
-    except ValueError as error:
-        raise RuntimeError(
-            f"Rust profile must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {rust_profile_dir}"
-        ) from error
+    rust_profile_location = soak_launch.require_rust_profile_location(
+        rust_profile_dir,
+        output_root=output_root,
+        vpn_topology=args.vpn_topology,
+    )
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -719,6 +718,7 @@ def main(argv: list[str] | None = None) -> int:
         status=status,
         extra={
             "rustProfileDir": str(rust_profile_dir),
+            "rustProfileLocation": rust_profile_location,
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustServer": args.rust_server,
