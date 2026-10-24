@@ -6,6 +6,23 @@
   "rust_profile": {
     "profile_dir": "%EMULEBB_RUST_SOAK_PROFILE_DIR%"
   },
+  "soak_storage": {
+    "schema": "emulebb-build-tests.soak-storage-policy.v1",
+    "max_total_bytes": 34359738368,
+    "max_age_seconds": 604800,
+    "minimum_free_bytes": 21474836480,
+    "bundle_interval_seconds": 3600,
+    "streams": {
+      "controller_output": {
+        "max_segment_bytes": 8388608,
+        "retained_segments": 4
+      },
+      "daemon_output": {
+        "max_segment_bytes": 67108864,
+        "retained_segments": 8
+      }
+    }
+  },
   "search_terms": {
     "generic_open": [
       "linux",

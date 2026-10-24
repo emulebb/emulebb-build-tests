@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import live_wire_inputs
+from emule_test_harness import live_wire_inputs, soak_storage
 
 
 def payload() -> dict[str, object]:
@@ -38,17 +38,24 @@ def payload() -> dict[str, object]:
 
 
 def test_parse_live_wire_inputs_normalizes_runtime_values() -> None:
-    inputs = live_wire_inputs.parse_live_wire_inputs(payload(), path=Path("inputs.json"))
+    inputs = live_wire_inputs.parse_live_wire_inputs(
+        payload(), path=Path("inputs.json")
+    )
 
     assert inputs.generic_open_terms == ("linux", "ubuntu")
     assert inputs.document_terms == ("debian",)
     assert inputs.radarr_movie_terms == ("public domain movie",)
     assert inputs.sonarr_series_terms == ("public domain series",)
-    assert tuple(str(path) for path in inputs.video_roots) == (str(Path("C:\\media\\movies").resolve()), str(Path("D:\\samples").resolve()))
+    assert tuple(str(path) for path in inputs.video_roots) == (
+        str(Path("C:\\media\\movies").resolve()),
+        str(Path("D:\\samples").resolve()),
+    )
     assert inputs.bootstrap_transfer_hashes == ("28EAB1A0AB1B9416AAF534E27A234941",)
     assert inputs.direct_bootstrap_transfers[0]["name"] == "ubuntu.iso"
     assert live_wire_inputs.summarize_terms(inputs.generic_open_terms) == {"count": 2}
-    assert live_wire_inputs.summarize_direct_transfers(inputs.direct_bootstrap_transfers) == {
+    assert live_wire_inputs.summarize_direct_transfers(
+        inputs.direct_bootstrap_transfers
+    ) == {
         "count": 1,
         "methods": ["direct_ed2k"],
         "sizes": [42],
@@ -126,7 +133,29 @@ def test_parse_live_wire_inputs_rejects_blank_rust_profile_dir() -> None:
         live_wire_inputs.parse_live_wire_inputs(bad_profile)
 
 
-def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> None:
+def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
+    with_storage = payload()
+    with_storage["soak_storage"] = {
+        "schema": soak_storage.SCHEMA,
+        "max_total_bytes": 1_000,
+        "max_age_seconds": 3_600,
+        "minimum_free_bytes": 500,
+        "bundle_interval_seconds": 900,
+        "streams": {
+            "controller_output": {"max_segment_bytes": 100, "retained_segments": 4},
+            "daemon_output": {"max_segment_bytes": 200, "retained_segments": 8},
+        },
+    }
+
+    inputs = live_wire_inputs.parse_live_wire_inputs(with_storage)
+
+    assert inputs.soak_storage is not None
+    assert inputs.soak_storage.minimum_free_bytes == 500
+
+
+def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> (
+    None
+):
     old_payload = payload()
     old_payload["schema"] = live_wire_inputs.LEGACY_SCHEMAS[0]
 
@@ -147,7 +176,9 @@ def test_select_daily_and_redaction_are_deterministic() -> None:
     }
 
 
-def test_update_live_wire_bootstrap_inputs_replaces_placeholders(tmp_path: Path) -> None:
+def test_update_live_wire_bootstrap_inputs_replaces_placeholders(
+    tmp_path: Path,
+) -> None:
     update_payload = payload()
     auto_browse = update_payload["auto_browse"]
     assert isinstance(auto_browse, dict)
@@ -181,7 +212,9 @@ def test_update_live_wire_bootstrap_inputs_replaces_placeholders(tmp_path: Path)
     }
     assert updated["schema"] == live_wire_inputs.SCHEMA
     assert updated["search_terms"] == update_payload["search_terms"]
-    assert updated["auto_browse"]["bootstrap_transfer_hashes"] == ["abcdef0123456789abcdef0123456789"]
+    assert updated["auto_browse"]["bootstrap_transfer_hashes"] == [
+        "abcdef0123456789abcdef0123456789"
+    ]
     assert updated["auto_browse"]["direct_bootstrap_transfers"] == [
         {
             "hash": "abcdef0123456789abcdef0123456789",
@@ -192,7 +225,9 @@ def test_update_live_wire_bootstrap_inputs_replaces_placeholders(tmp_path: Path)
     ]
 
 
-def test_update_live_wire_bootstrap_inputs_prepends_and_deduplicates(tmp_path: Path) -> None:
+def test_update_live_wire_bootstrap_inputs_prepends_and_deduplicates(
+    tmp_path: Path,
+) -> None:
     update_payload = payload()
     path = tmp_path / "live-wire-inputs.local.json"
     path.write_text(json.dumps(update_payload, indent=2) + "\n", encoding="utf-8")
@@ -220,7 +255,9 @@ def test_update_live_wire_bootstrap_inputs_prepends_and_deduplicates(tmp_path: P
         "0031c9cba65c50dd2015c184b2ca2c88",
         "28eab1a0ab1b9416aaf534e27a234941",
     ]
-    assert [row["hash"] for row in updated["auto_browse"]["direct_bootstrap_transfers"]] == [
+    assert [
+        row["hash"] for row in updated["auto_browse"]["direct_bootstrap_transfers"]
+    ] == [
         "11111111111111111111111111111111",
         "0031c9cba65c50dd2015c184b2ca2c88",
     ]
@@ -232,4 +269,6 @@ def test_build_direct_bootstrap_transfer_rejects_incomplete_rows() -> None:
     with pytest.raises(RuntimeError, match="name"):
         live_wire_inputs.build_direct_bootstrap_transfer({"hash": "0" * 32, "size": 1})
     with pytest.raises(RuntimeError, match="size"):
-        live_wire_inputs.build_direct_bootstrap_transfer({"hash": "0" * 32, "name": "bad.iso", "size": 0})
+        live_wire_inputs.build_direct_bootstrap_transfer(
+            {"hash": "0" * 32, "name": "bad.iso", "size": 0}
+        )
