@@ -2065,6 +2065,17 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         vpn_topology=args.vpn_topology,
     )
+    log(f"preparing hide.me {args.vpn_topology} routing for both clients...")
+    vpn_routing = soak_launch.prepare_hideme_routing(
+        args.vpn_topology,
+        [
+            ("rust", "eMuleBB Rust", rust_exe),
+            ("mfc", "eMuleBB MFC", mfc_exe),
+        ],
+    )
+    bind_ip = str(vpn_routing["bindIp"])
+    log(f"hide.me {args.vpn_topology} routing ready")
+
     if rust_profile_selection["fresh"]:
         rust_profile_setup: dict[str, Any] = {
             "schemaVersion": 1,
@@ -2123,17 +2134,6 @@ def main(argv: list[str] | None = None) -> int:
         f"MFC TCP {args.mfc_ed2k_port}/UDP {args.mfc_kad_port}"
     )
     log(f"reports under {report_dir}")
-
-    log(f"preparing hide.me {args.vpn_topology} routing for both clients...")
-    vpn_routing = soak_launch.prepare_hideme_routing(
-        args.vpn_topology,
-        [
-            ("rust", "eMuleBB Rust", rust_exe),
-            ("mfc", "eMuleBB MFC", mfc_exe),
-        ],
-    )
-    bind_ip = str(vpn_routing["bindIp"])
-    log(f"hide.me {args.vpn_topology} routing ready")
 
     bootstrap_selection = resolve_kad_bootstrap_endpoints(
         mfc_profile_dir=mfc_profile_dir,

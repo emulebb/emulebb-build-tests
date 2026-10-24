@@ -161,8 +161,10 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
 def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
     source = SOAK_RUNNER.read_text(encoding="utf-8")
 
+    vpn_index = source.index("soak_launch.prepare_hideme_routing(")
     import_index = source.index("mfc_profile_import.ensure_persisted_rust_profile(")
     cleanup_index = source.index("soak_run_layout.prepare_clean_run(")
+    assert vpn_index < import_index
     assert import_index < cleanup_index
     assert '"rustProfileSetup": rust_profile_setup' in source
 

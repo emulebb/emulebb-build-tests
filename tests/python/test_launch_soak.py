@@ -254,6 +254,12 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "rust_profile_dir = resolve_direct_rust_profile(inputs)" in source
     assert "rust_profile_location = soak_launch.require_rust_profile_location(" in source
     assert "rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(" in source
+    assert source.index("soak_launch.prepare_hideme_routing(") < source.index(
+        "mfc_profile_import.ensure_persisted_rust_profile("
+    )
+    assert source.index("mfc_profile_import.ensure_persisted_rust_profile(") < source.index(
+        "soak_run_layout.prepare_clean_run("
+    )
     assert "resolve_rust_ui_exe" not in source
     assert "launch_rust_ui(" not in source
     assert "direct_profile_dir=direct_mfc_profile" in source
