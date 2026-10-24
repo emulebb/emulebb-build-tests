@@ -215,16 +215,18 @@ def test_rust_soak_uses_single_staged_runtime_resolver() -> None:
 
 
 def test_rust_live_wire_can_require_packet_diagnostics() -> None:
-    """Diagnostic live-wire runs must fail when the staged Rust binary lacks packet dumps."""
+    """Diagnostic live-wire runs fail when unified peer packet evidence is absent."""
 
     text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
     assert "--require-packet-diagnostics" in text
     assert "packetDiagnosticsRequired" in text
     assert "require_packet_diagnostics" in text
     assert "python -m emule_workspace build clients --client emulebb-rust --diagnostics" in text
-    assert 'glob("emulebb-rust-ed2k-*-dump-*.jsonl")' in text
-    assert '"ed2kRecords": ed2k_dump_lines' in text
-    assert '"udpRecords": udp_dump_lines' in text
+    assert "load_peer_packet_diagnostics(" in text
+    assert "diag_event_diff.ed2k_tcp_packet_views(records)" in text
+    assert '"source": "diag_event_v2"' in text
+    assert '"peerTcp"' in text
+    assert "emulebb-rust-ed2k-*-dump-*.jsonl" not in text
 
 
 def test_rust_live_wire_seeds_ed2k_server_list_before_search() -> None:
