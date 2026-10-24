@@ -523,6 +523,14 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         vpn_topology=args.vpn_topology,
     )
+    vpn_clients = [("rust", "eMuleBB Rust", rust_exe)]
+    if not args.no_mfc:
+        vpn_clients.append(("mfc", "eMuleBB MFC", mfc_exe))
+    log(f"preparing hide.me {args.vpn_topology} routing...")
+    vpn_routing = soak_launch.prepare_hideme_routing(args.vpn_topology, vpn_clients)
+    bind_ip = str(vpn_routing["bindIp"])
+    log(f"hide.me {args.vpn_topology} routing ready")
+
     source_mfc_profile = inputs.mfc_profile_dir.resolve() if inputs.mfc_profile_dir is not None else None
     rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(
         rust_repo=REPO_ROOT.parent / "emulebb-rust",
@@ -575,14 +583,6 @@ def main(argv: list[str] | None = None) -> int:
         f"rust TCP {endpoint_ports['rust']['ed2kTcpPort']}/UDP {endpoint_ports['rust']['kadUdpPort']}; "
         f"MFC TCP {endpoint_ports['mfc']['ed2kTcpPort']}/UDP {endpoint_ports['mfc']['kadUdpPort']}"
     )
-
-    vpn_clients = [("rust", "eMuleBB Rust", rust_exe)]
-    if not args.no_mfc:
-        vpn_clients.append(("mfc", "eMuleBB MFC", mfc_exe))
-    log(f"preparing hide.me {args.vpn_topology} routing...")
-    vpn_routing = soak_launch.prepare_hideme_routing(args.vpn_topology, vpn_clients)
-    bind_ip = str(vpn_routing["bindIp"])
-    log(f"hide.me {args.vpn_topology} routing ready")
 
     if args.reuse_kad_bootstrap:
         bootstrap_nodes = []
