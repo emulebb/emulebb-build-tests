@@ -2,8 +2,8 @@
 
 Unlike ``converged-live-wire-diff.py`` (which *issues* one gentle automated pass
 to both clients and diffs the whole capture), this orchestrator brings both
-diagnostics builds up on **persistent, isolated** profiles under
-``$EMULEBB_WORKSPACE_OUTPUT_ROOT/soak/`` and leaves them running for a long soak.
+diagnostics builds up on selected **persistent, isolated** profiles and leaves
+them running for a long soak.
 Both connect to the SAME operator eD2K server, bootstrap Kad from the SAME
 nodes.dat, and share the SAME library roots from the gitignored live-wire inputs.
 
@@ -17,8 +17,8 @@ converged ``ed2k_packet_v1`` / ``diag_event_v1`` diff over each action's time
 window (see ``emule_test_harness.soak_action_diff``). A manual ``begin``/``end``
 marker brackets actions the auto-correlator can't pair.
 
-REST control plane binds ``X_LOCAL_IP``; the P2P data plane binds the hide.me
-tunnel; build artifacts and the soak profiles live under
+REST control binds ``X_LOCAL_IP`` for split-tunnel or loopback for full-tunnel;
+the P2P data plane binds the hide.me tunnel. Campaign artifacts remain under
 ``EMULEBB_WORKSPACE_OUTPUT_ROOT``. Nothing machine-specific is baked in.
 
 GENTLE LIVE DISCIPLINE: keep searches few and widely spaced. The unattended driver
@@ -52,6 +52,7 @@ from emule_test_harness import (
     live_process_monitor,
     mfc_diag_adapter,
     mfc_known_met,
+    mfc_profile_import,
     packet_trace_diff,
     rust_metadata,
     upload_parity_monitor,
@@ -2064,6 +2065,26 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         vpn_topology=args.vpn_topology,
     )
+    if rust_profile_selection["fresh"]:
+        rust_profile_setup: dict[str, Any] = {
+            "schemaVersion": 1,
+            "mode": "fresh-campaign",
+            "imported": False,
+            "rustProfileDir": str(rust_profile_dir),
+        }
+    else:
+        rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(
+            rust_repo=resolve_rust_repo(),
+            mfc_profile_dir=mfc_profile_dir,
+            rust_profile_dir=rust_profile_dir,
+            kad_bootstrap_limit=args.bootstrap_limit,
+            rest_addr=rest_addr,
+            rest_port=args.rust_rest_port,
+            api_key=RUST_API_KEY,
+            p2p_bind_interface="hide.me",
+            ed2k_port=args.rust_ed2k_port,
+            kad_port=args.rust_kad_port,
+        )
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,
@@ -2095,6 +2116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
     log(f"rust profile mode: {rust_profile_selection['mode']} ({rust_profile_dir.name})")
+    log(f"rust persisted profile setup: {rust_profile_setup['mode']}")
     log(
         "P2P endpoint ports: "
         f"rust TCP {args.rust_ed2k_port}/UDP {args.rust_kad_port}; "
@@ -2155,6 +2177,7 @@ def main(argv: list[str] | None = None) -> int:
         "rustProfileMode": rust_profile_selection["mode"],
         "rustProfileDirName": rust_profile_dir.name,
         "rustProfileLocation": rust_profile_location,
+        "rustProfileSetup": rust_profile_setup,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
         "preserveDiagnosticEvidence": not bool(args.trim_diagnostic_evidence),
