@@ -13,8 +13,8 @@ unattended overnight run. Automated downloads are opt-in only. In both modes the
 harness OBSERVES the clients:
 it polls both ``/api/v1/searches`` and ``/api/v1/transfers``, correlates the same
 search term / ed2k hash across the two clients within a window, and runs the
-converged ``ed2k_packet_v1`` / ``diag_event_v2`` diff over each action's time
-window (see ``emule_test_harness.soak_action_diff``). A manual ``begin``/``end``
+unified ``diag_event_v2`` packet/event diff over each action's time window (see
+``emule_test_harness.soak_action_diff``). A manual ``begin``/``end``
 marker brackets actions the auto-correlator can't pair.
 
 REST control binds ``X_LOCAL_IP`` for split-tunnel or loopback for full-tunnel;
@@ -52,7 +52,6 @@ from emule_test_harness import (
     live_process_monitor,
     mfc_known_met,
     mfc_profile_import,
-    packet_trace_diff,
     profile_overlay,
     rust_metadata,
     upload_parity_monitor,
@@ -1028,34 +1027,12 @@ def checkpoint_operator_reconnect(
 # --------------------------------------------------------------------------- #
 
 
-def _glob_all(
-    dump_dir: Path, globs: tuple[str, ...], *, min_mtime: float | None = None
-) -> list[Path]:
-    found: list[Path] = []
-    seen: set[Path] = set()
-    for pattern in globs:
-        for path in sorted(dump_dir.glob(pattern)):
-            if path in seen:
-                continue
-            # MFC rotates its logs by size; without a bound the rotated-file globs
-            # would ingest the whole run's hundreds of files each diff. Load only
-            # files whose mtime overlaps the recent action window (rust is one
-            # growing file whose mtime is always current, so it is never excluded).
-            if min_mtime is not None and path.stat().st_mtime < min_mtime:
-                continue
-            seen.add(path)
-            found.append(path)
-    return found
-
-
 def load_packets(
     dump_dir: Path, *, side: str, min_mtime: float | None = None
 ) -> list[dict[str, Any]]:
-    globs = clw.RUST_PACKET_DUMP_GLOBS if side == "rust" else clw.EMULE_PACKET_DUMP_GLOBS
-    records: list[dict[str, Any]] = []
-    for path in _glob_all(dump_dir, globs, min_mtime=min_mtime):
-        records.extend(packet_trace_diff.load_trace(path))
-    return records
+    return diag_event_diff.ed2k_tcp_packet_views(
+        load_diag(dump_dir, side=side, min_mtime=min_mtime)
+    )
 
 
 def load_diag(
@@ -2632,10 +2609,10 @@ def main(argv: list[str] | None = None) -> int:
                     + args.lead_seconds
                     + 120.0
                 )
-                rust_pkts = load_packets(rust_dump_dir, side="rust", min_mtime=load_since)
-                mfc_pkts = load_packets(mfc_dump_dir, side="emule", min_mtime=load_since)
                 rust_dg = load_diag(rust_dump_dir, side="rust", min_mtime=load_since)
                 mfc_dg = load_diag(mfc_dump_dir, side="emule", min_mtime=load_since)
+                rust_pkts = diag_event_diff.ed2k_tcp_packet_views(rust_dg)
+                mfc_pkts = diag_event_diff.ed2k_tcp_packet_views(mfc_dg)
                 for pair in pairs:
                     process_report(
                         sad.diff_action(

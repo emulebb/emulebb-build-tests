@@ -2316,6 +2316,66 @@ def test_load_diag_mtime_filter_applies_to_common_segments(tmp_path: Path) -> No
     ]
 
 
+def test_load_packets_uses_unified_peer_tcp_events_only(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    diag = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    base = {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "runId": "active",
+        "processId": 42,
+        "segmentId": 0,
+        "ts": "2026-07-06T12:00:00.000Z",
+    }
+    packet = {
+        **base,
+        "seq": 1,
+        "streamSeq": 1,
+        "family": "ed2k_tcp",
+        "event": "packet",
+        "keys": {"peer": "198.51.100.2:4662", "protocolMarker": 0xE3, "opcode": 0x01},
+        "body": {
+            "direction": "recv",
+            "outcome": "accepted",
+            "flow": "listener",
+            "phase": "hello",
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "protocolMarker": 0xE3,
+            "protocolName": "ed2k",
+            "opcode": 0x01,
+            "opcodeName": "OP_HELLO",
+            "rawLen": 8,
+            "rawHex": "e30200000001aabb",
+            "payloadLen": 2,
+            "payloadHex": "aabb",
+            "payloadHexTruncated": False,
+            "traceKey": "listener:198.51.100.2:4662",
+            "stateId": "listener.hello",
+            "stateLabel": "hello",
+        },
+    }
+    state = {
+        **base,
+        "seq": 2,
+        "streamSeq": 2,
+        "family": "ed2k_tcp",
+        "event": "state",
+        "keys": {"peer": "198.51.100.2:4662"},
+        "body": {"flow": "listener"},
+    }
+    diag.write_text(
+        "\n".join(json.dumps(record) for record in (packet, state)) + "\n",
+        encoding="utf-8",
+    )
+
+    records = runner.load_packets(tmp_path, side="rust")
+
+    assert len(records) == 1
+    assert records[0]["opcode_name"] == "OP_HELLO"
+    assert records[0]["payload_hex"] == "aabb"
+
+
 def test_share_warmup_parity_risk_reports_cold_fresh_rust_profile(tmp_path: Path) -> None:
     runner = _load_soak_runner()
     checkpoints = tmp_path / "checkpoints"
