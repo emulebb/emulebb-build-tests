@@ -972,7 +972,7 @@ def manual_dump_check(base_url: str) -> dict[str, Any]:
             "/api/v1/diagnostics/dumps",
             api_key=API_KEY,
             method="POST",
-            body={"confirmDump": True, "fullMemory": False},
+            body={"confirmDump": True},
             timeout_seconds=60.0,
         )
         data = payload.get("data") if isinstance(payload, dict) else None

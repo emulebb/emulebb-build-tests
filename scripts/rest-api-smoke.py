@@ -3742,7 +3742,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"app_shutdown", "shutdownApp"}:
         return {"confirmShutdown": True}
     if route_name == "captureDiagnosticDump":
-        return {"confirmDump": True, "fullMemory": False}
+        return {"confirmDump": True}
     if route_name == "triggerDiagnosticCrashTest":
         return {"confirmCrash": True}
     if route_name == "patchSettings":

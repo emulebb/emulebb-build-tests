@@ -165,7 +165,11 @@ def collect_dumps_in_directory(dump_dir: Path, *, recursive: bool = False) -> di
     }
 
 
-def capture_manual_dump(base_url: str, api_key: str, request_timeout_seconds: float, *, full_memory: bool = True) -> dict[str, object]:
+def capture_manual_dump(
+    base_url: str,
+    api_key: str,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
     """Calls the gated diagnostic dump endpoint and verifies the returned file."""
 
     try:
@@ -174,7 +178,7 @@ def capture_manual_dump(base_url: str, api_key: str, request_timeout_seconds: fl
             "/api/v1/diagnostics/dumps",
             method="POST",
             api_key=api_key,
-            json_body={"confirmDump": True, "fullMemory": full_memory},
+            json_body={"confirmDump": True},
             request_timeout_seconds=request_timeout_seconds,
         )
         row: dict[str, object] = {
@@ -188,7 +192,6 @@ def capture_manual_dump(base_url: str, api_key: str, request_timeout_seconds: fl
             if isinstance(data, dict):
                 dump_path = Path(str(data.get("path") or ""))
                 row["dump_path"] = str(dump_path)
-                row["full_memory"] = bool(data.get("fullMemory"))
                 row["dump_exists"] = dump_path.is_file()
                 row["size_bytes"] = dump_path.stat().st_size if dump_path.is_file() else 0
                 row["ok"] = bool(row["dump_exists"]) and int(row["size_bytes"]) > 0
@@ -502,7 +505,11 @@ def main(argv: list[str] | None = None) -> int:
         report["main_window_title"] = main_window.window_text()
         ready = rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         report["checks"]["ready"] = rest_smoke.compact_http_result(ready)
-        report["checks"]["manual_dump"] = capture_manual_dump(base_url, args.api_key, args.request_timeout_seconds, full_memory=True)
+        report["checks"]["manual_dump"] = capture_manual_dump(
+            base_url,
+            args.api_key,
+            args.request_timeout_seconds,
+        )
         report["checks"]["procdump_monitor"], procdump_process = start_procdump_crash_monitor(process_id, procdump_dump_dir)
         if procdump_process is not None:
             time.sleep(2.0)

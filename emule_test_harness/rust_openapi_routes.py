@@ -23,7 +23,6 @@ ERROR_RESPONSE_STATUSES = ("400", "401", "404", "default")
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
-DIAGNOSTIC_DUMP_REQUEST_COMPONENT = "DiagnosticDumpRequest"
 QUERY_NUMERIC_PARAMETER_SCHEMAS = {
     "Limit": ("limit", 1, 1000),
     "LogsLimit": ("limit", 1, 1000),
@@ -1177,8 +1176,6 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             )
     if TRANSFER_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
         append_transfer_event_schema_drift(drift, schemas)
-    if DIAGNOSTIC_DUMP_REQUEST_COMPONENT in schemas:
-        append_diagnostic_dump_schema_drift(drift, schemas)
     if TRANSFER_STATE_COMPONENT in schemas:
         assert_priority_enum_schema(
             drift,
@@ -1456,41 +1453,6 @@ def assert_transfer_link_text_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
-            )
-        )
-
-
-def append_diagnostic_dump_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-) -> None:
-    schema = schemas.get(DIAGNOSTIC_DUMP_REQUEST_COMPONENT)
-    if not isinstance(schema, dict):
-        return
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return
-    assert_diagnostic_full_memory_schema(drift, properties.get("fullMemory"))
-
-
-def assert_diagnostic_full_memory_schema(
-    drift: list[SchemaComponentDrift],
-    schema: object,
-) -> None:
-    component = "DiagnosticDumpRequest.properties.fullMemory"
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="diagnostic dump fullMemory schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "boolean":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="diagnostic dump fullMemory type must be boolean",
             )
         )
 

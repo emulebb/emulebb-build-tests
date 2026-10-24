@@ -51,6 +51,42 @@ def test_trigger_crash_records_expected_disconnect(monkeypatch) -> None:
     assert result["exception"]["type"] == "ConnectionResetError"
 
 
+def test_capture_manual_dump_sends_only_confirmation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = load_script_module()
+    dump_path = tmp_path / "manual-diagnostic-dump.json"
+    dump_path.write_text("{}", encoding="utf-8")
+    requests = []
+
+    def fake_http_request(*_args, **kwargs):
+        requests.append(kwargs)
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "raw_json": {
+                "data": {"path": str(dump_path)},
+                "meta": {"apiVersion": "v1"},
+            },
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.capture_manual_dump("http://127.0.0.1:1", "api-key", 1.0)
+
+    assert requests == [
+        {
+            "method": "POST",
+            "api_key": "api-key",
+            "json_body": {"confirmDump": True},
+            "request_timeout_seconds": 1.0,
+        }
+    ]
+    assert result["ok"] is True
+    assert "full_memory" not in result
+
+
 def test_wait_for_emule_local_dump_accepts_non_empty_dump(monkeypatch) -> None:
     module = load_script_module()
 
