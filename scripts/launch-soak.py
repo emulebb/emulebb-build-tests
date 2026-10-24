@@ -35,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, vpn_guard_live
+from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, profile_overlay, vpn_guard_live
 from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
@@ -562,6 +562,20 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
     )
+    mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
+    mfc_preferences_path = (
+        direct_mfc_profile / "config" / "preferences.ini"
+        if direct_mfc_profile is not None
+        else None
+    )
+    mfc_overlay_recovery = (
+        profile_overlay.recover_file_overlay(
+            target=mfc_preferences_path,
+            journal_dir=mfc_overlay_journal,
+        )
+        if mfc_preferences_path is not None
+        else {"enabled": False, "status": "not-operator-profile"}
+    )
     log(
         "preflight cleanup archived "
         f"{preflight_manifest['preflightCleanup']['rust']['archivedCount']} rust file(s) and "
@@ -604,7 +618,14 @@ def main(argv: list[str] | None = None) -> int:
     status = "stopped"
     failure: dict[str, object] | None = None
     shutdown_report: dict[str, object] | None = None
+    mfc_preferences_overlay: profile_overlay.FileOverlay | None = None
+    mfc_overlay_restore: dict[str, object] | None = None
     try:
+        if mfc_preferences_path is not None:
+            mfc_preferences_overlay = profile_overlay.begin_file_overlay(
+                target=mfc_preferences_path,
+                journal_dir=mfc_overlay_journal,
+            )
         profile_tools, profile_paths, profile_report = initialize_cpu_profile(
             args=args,
             run_paths=run_paths,
@@ -722,6 +743,16 @@ def main(argv: list[str] | None = None) -> int:
             rust_base=rust_base,
             rust_shutdown_trigger=args.rust_shutdown_trigger,
         )
+        if mfc_preferences_overlay is not None:
+            try:
+                mfc_overlay_restore = mfc_preferences_overlay.restore()
+            except Exception as exc:  # noqa: BLE001 - report restore failure after process cleanup
+                status = "failed"
+                failure = {
+                    "type": type(exc).__name__,
+                    "message": f"MFC preferences restore failed: {exc}",
+                    "traceback": traceback.format_exc(),
+                }
         if args.rust_shutdown_trigger == "ctrl-c" and not shutdown_report.get("clean"):
             status = "failed"
             if failure is None:
@@ -736,6 +767,13 @@ def main(argv: list[str] | None = None) -> int:
             "rustProfileDir": str(rust_profile_dir),
             "rustProfileLocation": rust_profile_location,
             "rustProfileSetup": rust_profile_setup,
+            "mfcProfileOverlay": {
+                "enabled": mfc_preferences_path is not None,
+                "target": str(mfc_preferences_path) if mfc_preferences_path is not None else None,
+                "journalDir": str(mfc_overlay_journal) if mfc_preferences_path is not None else None,
+                "recovery": mfc_overlay_recovery,
+                "restore": mfc_overlay_restore,
+            },
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustServer": args.rust_server,

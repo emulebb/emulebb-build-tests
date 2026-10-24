@@ -260,6 +260,14 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert source.index("mfc_profile_import.ensure_persisted_rust_profile(") < source.index(
         "soak_run_layout.prepare_clean_run("
     )
+    assert source.index("soak_run_layout.prepare_clean_run(") < source.index(
+        "profile_overlay.recover_file_overlay("
+    )
+    assert source.index("profile_overlay.recover_file_overlay(") < source.index(
+        "profile_overlay.begin_file_overlay("
+    )
+    assert source.index("profile_overlay.begin_file_overlay(") < source.index("bring_up_mfc(")
+    assert source.index("graceful_teardown(") < source.rindex("mfc_preferences_overlay.restore()")
     assert "resolve_rust_ui_exe" not in source
     assert "launch_rust_ui(" not in source
     assert "direct_profile_dir=direct_mfc_profile" in source
@@ -271,6 +279,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "\"reuseRustSharedProfile\": bool(args.reuse_rust_shared_profile)" in source
     assert "\"rustFallbackServers\": list(args.rust_fallback_server)" in source
     assert "\"rustProfileSetup\": rust_profile_setup" in source
+    assert "\"mfcProfileOverlay\":" in source
     assert "except Exception as exc:" in source
     assert "\"error\": failure" in source
     assert "return 1 if status == \"failed\" else 0" in source
