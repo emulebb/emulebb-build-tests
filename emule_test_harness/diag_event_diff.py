@@ -185,7 +185,154 @@ def _packet_describe(record: dict[str, Any]) -> dict[str, Any]:
 
 def _is_wire_packet(record: dict[str, Any]) -> bool:
     body = record.get("body") or {}
-    return body.get("direction") in _PACKET_DIRECTIONS and body.get("opcode") is not None
+    return (
+        record.get("event") == "packet"
+        and body.get("direction") in _PACKET_DIRECTIONS
+        and body.get("opcode") is not None
+    )
+
+
+def _is_non_negative_int(value: Any, *, maximum: int | None = None) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+        and (maximum is None or value <= maximum)
+    )
+
+
+def _has_exact_hex(body: dict[str, Any], length_key: str, hex_key: str) -> bool:
+    declared_length = body.get(length_key)
+    encoded = body.get(hex_key)
+    if not _is_non_negative_int(declared_length) or not isinstance(encoded, str):
+        return False
+    if len(encoded) != declared_length * 2:
+        return False
+    try:
+        bytes.fromhex(encoded)
+    except ValueError:
+        return False
+    return True
+
+
+def _optional_exact_hex(body: dict[str, Any], length_key: str, hex_key: str) -> bool:
+    if length_key not in body and hex_key not in body:
+        return True
+    return _has_exact_hex(body, length_key, hex_key)
+
+
+def ed2k_tcp_packet_view(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalizes one complete unified eD2K TCP packet event for harness use."""
+
+    keys = record.get("keys")
+    body = record.get("body")
+    if (
+        record.get("schema") != DIAG_EVENT_SCHEMA
+        or record.get("family") != "ed2k_tcp"
+        or record.get("event") != "packet"
+        or not isinstance(keys, dict)
+        or not isinstance(body, dict)
+    ):
+        return None
+
+    timestamp = record.get("ts")
+    peer = keys.get("peer")
+    direction = body.get("direction")
+    outcome = body.get("outcome")
+    flow = body.get("flow")
+    transport_mode = body.get("transportMode")
+    protocol_marker = body.get("protocolMarker")
+    protocol_name = body.get("protocolName")
+    opcode = body.get("opcode")
+    opcode_name = body.get("opcodeName")
+    trace_key = body.get("traceKey")
+    state_id = body.get("stateId")
+    state_label = body.get("stateLabel")
+    obfuscated = body.get("obfuscated")
+    required_strings = (
+        timestamp,
+        peer,
+        flow,
+        transport_mode,
+        protocol_name,
+        opcode_name,
+    )
+    optional_strings = (outcome, body.get("phase"), trace_key, state_id, state_label)
+    if (
+        not all(isinstance(value, str) and value for value in required_strings)
+        or not all(value is None or isinstance(value, str) and value for value in optional_strings)
+        or direction not in _PACKET_DIRECTIONS
+        or not _is_non_negative_int(protocol_marker, maximum=0xFF)
+        or not _is_non_negative_int(opcode, maximum=0xFF)
+        or not isinstance(obfuscated, bool)
+        or keys.get("protocolMarker") != protocol_marker
+        or keys.get("opcode") != opcode
+        or not _has_exact_hex(body, "rawLen", "rawHex")
+        or not _optional_exact_hex(body, "clearFrameLen", "clearFrameHex")
+        or not _has_exact_hex(body, "payloadLen", "payloadHex")
+        or body.get("payloadHexTruncated") is not False
+    ):
+        return None
+
+    send_attempt_id = body.get("sendAttemptId", keys.get("sendAttemptId"))
+    if send_attempt_id is not None:
+        if not _is_non_negative_int(send_attempt_id) or send_attempt_id == 0:
+            return None
+        if keys.get("sendAttemptId", send_attempt_id) != send_attempt_id:
+            return None
+
+    event_sequence = record.get("streamSeq", record.get("seq"))
+    if event_sequence is not None and not _is_non_negative_int(event_sequence):
+        return None
+
+    packet = {
+        "source": record.get("client"),
+        "ts_utc": timestamp,
+        "event_seq": event_sequence,
+        "trace_key": trace_key,
+        "state_id": state_id,
+        "state_label": state_label,
+        "flow": flow,
+        "phase": body.get("phase"),
+        "direction": direction,
+        "outcome": outcome,
+        "remote_addr": peer,
+        "transport_mode": transport_mode,
+        "obfuscated": obfuscated,
+        "protocol": protocol_name,
+        "protocol_marker": protocol_marker,
+        "opcode": opcode,
+        "opcode_name": opcode_name,
+        "raw_len": body.get("rawLen"),
+        "raw_hex": body.get("rawHex"),
+        "clear_frame_len": body.get("clearFrameLen"),
+        "clear_frame_hex": body.get("clearFrameHex"),
+        "attempted_len": body.get("attemptedLen"),
+        "written_len": body.get("writtenLen"),
+        "payload_len": body["payloadLen"],
+        "payload_hex": body["payloadHex"],
+        "payload_hex_truncated": body.get("payloadHexTruncated"),
+        "note": body.get("note"),
+    }
+    if send_attempt_id is not None:
+        packet["send_attempt_id"] = send_attempt_id
+    return packet
+
+
+def ed2k_tcp_packet_views(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Returns internal packet views for complete unified eD2K TCP events.
+
+    State, send-outcome, obfuscation-handshake, and malformed records are
+    intentionally excluded so packet and action coverage consume wire packets
+    only.
+    """
+
+    packets = []
+    for record in records:
+        packet = ed2k_tcp_packet_view(record)
+        if packet is not None:
+            packets.append(packet)
+    return packets
 
 
 def _diff_packet_family(

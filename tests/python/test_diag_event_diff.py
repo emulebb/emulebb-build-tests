@@ -7,6 +7,8 @@ import pytest
 
 from emule_test_harness.diag_event_diff import (
     diff_traces,
+    ed2k_tcp_packet_view,
+    ed2k_tcp_packet_views,
     family_conformance,
     full_run_conformance,
     load_trace,
@@ -44,6 +46,47 @@ def _pkt(family, direction, opcode, payload, *, marker=227):
             "payloadLen": len(payload) // 2,
         },
     )
+
+
+def _peer_tcp_packet_event(event: str = "packet") -> dict:
+    record = _env(
+        "ed2k_tcp",
+        event,
+        keys={
+            "peer": "198.51.100.2:4662",
+            "protocolMarker": 0xE3,
+            "opcode": 0x01,
+            "sendAttemptId": 17,
+        },
+        body={
+            "direction": "send",
+            "outcome": "attempted",
+            "flow": "native_upload",
+            "phase": "hello",
+            "transportMode": "obfuscated",
+            "obfuscated": True,
+            "protocolMarker": 0xE3,
+            "protocolName": "ed2k",
+            "opcode": 0x01,
+            "opcodeName": "OP_HELLO",
+            "rawLen": 8,
+            "rawHex": "aabbccddeeff0011",
+            "clearFrameLen": 8,
+            "clearFrameHex": "e30200000001aabb",
+            "attemptedLen": 8,
+            "writtenLen": 8,
+            "payloadLen": 2,
+            "payloadHex": "aabb",
+            "payloadHexTruncated": False,
+            "traceKey": "native_upload:198.51.100.2:4662",
+            "stateId": "native_upload.hello",
+            "stateLabel": "hello",
+            "sendAttemptId": 17,
+            "note": "queued",
+        },
+    )
+    record["streamSeq"] = 23
+    return record
 
 
 def _client_udp_packet(
@@ -112,6 +155,86 @@ def _family(report, name):
 
 
 # --- packet families (wire identity) --------------------------------------- #
+
+
+def test_ed2k_tcp_packets_extracts_complete_packet_shape() -> None:
+    expected = {
+            "source": "rust",
+            "ts_utc": "2026-06-16T00:00:00.000Z",
+            "event_seq": 23,
+            "trace_key": "native_upload:198.51.100.2:4662",
+            "state_id": "native_upload.hello",
+            "state_label": "hello",
+            "flow": "native_upload",
+            "phase": "hello",
+            "direction": "send",
+            "outcome": "attempted",
+            "remote_addr": "198.51.100.2:4662",
+            "transport_mode": "obfuscated",
+            "obfuscated": True,
+            "protocol": "ed2k",
+            "protocol_marker": 0xE3,
+            "opcode": 0x01,
+            "opcode_name": "OP_HELLO",
+            "raw_len": 8,
+            "raw_hex": "aabbccddeeff0011",
+            "clear_frame_len": 8,
+            "clear_frame_hex": "e30200000001aabb",
+            "attempted_len": 8,
+            "written_len": 8,
+            "payload_len": 2,
+            "payload_hex": "aabb",
+            "payload_hex_truncated": False,
+            "note": "queued",
+            "send_attempt_id": 17,
+    }
+
+    record = _peer_tcp_packet_event()
+    assert ed2k_tcp_packet_view(record) == expected
+    assert ed2k_tcp_packet_views([record]) == [expected]
+
+
+def test_ed2k_tcp_packets_accepts_mfc_packet_without_rust_only_context() -> None:
+    record = _peer_tcp_packet_event()
+    record["client"] = "mfc"
+    record["keys"].pop("sendAttemptId")
+    for key in (
+        "clearFrameLen",
+        "clearFrameHex",
+        "attemptedLen",
+        "writtenLen",
+        "outcome",
+        "phase",
+        "traceKey",
+        "stateId",
+        "stateLabel",
+        "sendAttemptId",
+        "note",
+    ):
+        record["body"].pop(key)
+
+    packet = ed2k_tcp_packet_view(record)
+
+    assert packet is not None
+    assert packet["source"] == "mfc"
+    assert packet["payload_hex"] == "aabb"
+    assert packet["trace_key"] is None
+    assert "send_attempt_id" not in packet
+
+
+@pytest.mark.parametrize("event", ["state", "send_outcome", "obfuscation_handshake"])
+def test_ed2k_tcp_packets_rejects_non_packet_events(event: str) -> None:
+    record = _peer_tcp_packet_event(event)
+    assert ed2k_tcp_packet_view(record) is None
+    assert ed2k_tcp_packet_views([record]) == []
+
+
+def test_ed2k_tcp_packets_rejects_malformed_packet_records() -> None:
+    malformed = _peer_tcp_packet_event()
+    malformed["body"]["payloadLen"] = 3
+
+    assert ed2k_tcp_packet_view(malformed) is None
+    assert ed2k_tcp_packet_views([malformed]) == []
 
 
 def test_identical_packet_traces_match() -> None:
@@ -555,6 +678,7 @@ def test_family_conformance_can_require_full_run_family_presence() -> None:
 
 def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
     rust = [
+        _peer_tcp_packet_event(),
         _client_udp_packet(
             "send",
             "c590",
@@ -564,6 +688,7 @@ def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
         )
     ]
     mfc = [
+        _peer_tcp_packet_event(),
         _client_udp_packet(
             "send",
             "c590",
