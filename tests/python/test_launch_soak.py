@@ -97,6 +97,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "--cpu-profile-stack",
             "--duration-seconds",
             "3600",
+            "--stop-file",
+            "C:/output/soak/control/stop.requested",
             "--rest-timeout-seconds",
             "30",
             "--connect-timeout-seconds",
@@ -123,6 +125,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.cpu_profile_seconds == 60
     assert args.cpu_profile_stack is True
     assert args.duration_seconds == 3600
+    assert args.stop_file == Path("C:/output/soak/control/stop.requested")
     assert args.rest_timeout_seconds == 30
     assert args.connect_timeout_seconds == 90
     assert args.rust_fallback_server == ["176.123.5.89:4725"]
@@ -273,7 +276,9 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "direct_profile_dir=direct_mfc_profile" in source
     assert "vpn_guard_mode=str(vpn_guard_profile[\"mode\"])" in source
     assert "duration_deadline = time.monotonic() + args.duration_seconds" in source
+    assert "stop_file is not None and stop_file.exists()" in source
     assert "\"durationSeconds\": args.duration_seconds" in source
+    assert "\"stopFile\": str(stop_file)" in source
     assert "apply_shared_directories=not args.reuse_rust_shared_profile" in source
     assert "fallback_server_endpoints=list(args.rust_fallback_server)" in source
     assert "\"reuseRustSharedProfile\": bool(args.reuse_rust_shared_profile)" in source
