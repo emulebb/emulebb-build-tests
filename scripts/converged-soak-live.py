@@ -54,6 +54,7 @@ from emule_test_harness import (
     mfc_known_met,
     mfc_profile_import,
     packet_trace_diff,
+    profile_overlay,
     rust_metadata,
     upload_parity_monitor,
 )
@@ -2111,6 +2112,20 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_log_dir,
     )
+    mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
+    mfc_preferences_path = (
+        mfc_profile_dir / "config" / "preferences.ini"
+        if mfc_profile_dir is not None
+        else None
+    )
+    mfc_overlay_recovery = (
+        profile_overlay.recover_file_overlay(
+            target=mfc_preferences_path,
+            journal_dir=mfc_overlay_journal,
+        )
+        if mfc_preferences_path is not None
+        else {"enabled": False, "status": "not-operator-profile"}
+    )
     summary_path = report_dir / "summary.json"
     summary = sad.empty_summary(campaign_id)
     summary["driver"] = {
@@ -2198,6 +2213,13 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
     summary["preflightCleanup"] = preflight_manifest["preflightCleanup"]
+    summary["mfcProfileOverlay"] = {
+        "enabled": mfc_preferences_path is not None,
+        "target": str(mfc_preferences_path) if mfc_preferences_path is not None else None,
+        "journalDir": str(mfc_overlay_journal) if mfc_preferences_path is not None else None,
+        "recovery": mfc_overlay_recovery,
+        "restore": None,
+    }
     known_met_import = import_mfc_known_met_for_rust_profile(
         mfc_profile_dir=mfc_profile_dir,
         rust_profile_dir=rust_profile_dir,
@@ -2247,7 +2269,14 @@ def main(argv: list[str] | None = None) -> int:
 
     rust_handles: dict[str, Any] | None = None
     mfc_handles: dict[str, Any] | None = None
+    mfc_preferences_overlay: profile_overlay.FileOverlay | None = None
+    mfc_overlay_restore_error: Exception | None = None
     try:
+        if mfc_preferences_path is not None:
+            mfc_preferences_overlay = profile_overlay.begin_file_overlay(
+                target=mfc_preferences_path,
+                journal_dir=mfc_overlay_journal,
+            )
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
             rest_port=args.rust_rest_port, profile_dir=rust_profile_dir, packet_dump_dir=rust_packet_dump,
@@ -2753,12 +2782,19 @@ def main(argv: list[str] | None = None) -> int:
                     mfc_handles["app"].kill()
                 except Exception:  # noqa: BLE001
                     pass
+        if mfc_preferences_overlay is not None:
+            try:
+                summary["mfcProfileOverlay"]["restore"] = mfc_preferences_overlay.restore()
+            except Exception as exc:  # noqa: BLE001 - cleanup continues before surfacing the fatal restore failure
+                mfc_overlay_restore_error = exc
         if rust_handles is not None:
             stop_process_tree(rust_handles["process"])
             try:
                 rust_handles["logHandle"].close()
             except Exception:  # noqa: BLE001
                 pass
+        if mfc_overlay_restore_error is not None:
+            raise RuntimeError(f"MFC preferences restore failed: {mfc_overlay_restore_error}") from mfc_overlay_restore_error
 
     summary["server"] = OPERATOR_SERVER
     summary["rustServer"] = args.rust_server

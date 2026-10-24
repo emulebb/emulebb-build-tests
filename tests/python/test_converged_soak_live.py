@@ -164,9 +164,15 @@ def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
     vpn_index = source.index("soak_launch.prepare_hideme_routing(")
     import_index = source.index("mfc_profile_import.ensure_persisted_rust_profile(")
     cleanup_index = source.index("soak_run_layout.prepare_clean_run(")
+    recover_index = source.index("profile_overlay.recover_file_overlay(")
+    begin_index = source.index("profile_overlay.begin_file_overlay(")
+    mfc_launch_index = source.index("mfc_handles = bring_up_mfc(")
+    restore_index = source.index('summary["mfcProfileOverlay"]["restore"] = mfc_preferences_overlay.restore()')
     assert vpn_index < import_index
     assert import_index < cleanup_index
+    assert cleanup_index < recover_index < begin_index < mfc_launch_index < restore_index
     assert '"rustProfileSetup": rust_profile_setup' in source
+    assert 'summary["mfcProfileOverlay"] = {' in source
 
 
 def test_soak_endpoint_ports_are_distinct_by_default() -> None:
