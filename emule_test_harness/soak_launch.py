@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from . import hideme_split_tunnel, hideme_vpn
+from . import hideme_split_tunnel, hideme_vpn, vpn_guard_live
 from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
@@ -46,6 +46,29 @@ ED2K_PORT = RUST_ED2K_PORT
 KAD_PORT = RUST_KAD_PORT
 RUST_API_KEY = "converged-soak-rust-api-key-0001"
 MFC_API_KEY = "converged-soak-mfc-api-key-00001"
+
+
+def require_blocking_vpn_guard_config(
+    config_path: Path,
+    *,
+    allowed_public_ip_cidrs: str = "",
+) -> dict[str, str]:
+    """Returns one validated fail-closed VPN Guard profile for both clients."""
+
+    resolved_path = config_path.resolve()
+    if not resolved_path.is_file():
+        raise RuntimeError(f"VPN Guard live config was not found: {resolved_path}")
+    config = vpn_guard_live.load_config(resolved_path)
+    interface_name = str(config.get("p2pBindInterfaceName") or "").strip()
+    if interface_name.casefold() != vpn_guard_live.HIDEME_INTERFACE_NAME:
+        raise RuntimeError(f"VPN Guard live config must bind P2P to hide.me, got {interface_name!r}.")
+    cidrs = allowed_public_ip_cidrs.strip() or str(config.get("allowedPublicIpCidrs") or "").strip()
+    vpn_guard_live.require_hideme_public_cidrs(cidrs)
+    return {
+        "mode": "block",
+        "allowed_public_ip_cidrs": cidrs,
+        "config_path": str(resolved_path),
+    }
 DEFAULT_UPLOAD_LIMIT_KIBPS = 3072
 DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
 

@@ -4,12 +4,33 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import soak_launch
+from emule_test_harness import soak_launch, vpn_guard_live
 
 
 def test_soak_api_keys_meet_current_rust_secret_length() -> None:
     assert len(soak_launch.RUST_API_KEY.encode("utf-8")) >= 32
     assert len(soak_launch.MFC_API_KEY.encode("utf-8")) >= 32
+
+
+def test_blocking_vpn_guard_config_requires_hideme_and_cidrs(tmp_path: Path) -> None:
+    config_path = tmp_path / "vpn-guard-live.local.json"
+    vpn_guard_live.write_config(
+        config_path,
+        {
+            "schema": vpn_guard_live.SCHEMA,
+            "p2pBindInterfaceName": "hide.me",
+            "allowedPublicIpCidrs": ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS),
+            "commands": {},
+        },
+    )
+
+    result = soak_launch.require_blocking_vpn_guard_config(config_path)
+
+    assert result == {
+        "mode": "block",
+        "allowed_public_ip_cidrs": ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS),
+        "config_path": str(config_path.resolve()),
+    }
 
 
 def test_rust_stats_connected_requires_ed2k() -> None:
