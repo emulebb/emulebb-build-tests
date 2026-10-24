@@ -563,7 +563,7 @@ class PacketDumpMonitor:
                 self.schemas[record["schema"]] += 1
                 if record.get("severity") == "error":
                     self.error_events[str(record.get("event") or "unknown")] += 1
-                if record.get("schema") == "diag_event_v1":
+                if record.get("schema") in {"diag_event_v1", "diag_event_v2"}:
                     keys = record.get("keys") or {}
                     body = record.get("body") or {}
                     if isinstance(keys, dict) and isinstance(body, dict):

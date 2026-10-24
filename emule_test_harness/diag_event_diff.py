@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 DIAG_SCHEMA = "diag_event_v1"
+DIAG_SCHEMAS = frozenset({DIAG_SCHEMA, "diag_event_v2"})
 
 PACKET_FAMILIES = ("ed2k_tcp", "kad_udp")
 EVENT_FAMILIES = ("kad_event", "bad_peer")
@@ -128,7 +129,7 @@ _CONDITIONAL_ORACLE_BODY_KEYS: dict[str, frozenset[str]] = {
 
 
 def load_trace(path: Path) -> list[dict[str, Any]]:
-    """Loads ``diag_event_v1`` records from a JSONL dump (``\\n`` or ``\\r\\n``)."""
+    """Loads supported diagnostic-event records from one JSONL segment."""
 
     records: list[dict[str, Any]] = []
     for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
@@ -139,7 +140,7 @@ def load_trace(path: Path) -> list[dict[str, Any]]:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("schema") != DIAG_SCHEMA:
+        if record.get("schema") not in DIAG_SCHEMAS:
             continue
         records.append(record)
     return records

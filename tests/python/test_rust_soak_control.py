@@ -24,6 +24,20 @@ def _load_rust_soak_control() -> ModuleType:
     return module
 
 
+def test_latest_diag_log_prefers_the_requested_segmented_process(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    requested_old = tmp_path / "emulebb-rust-diag-42-run-000000.jsonl"
+    requested_new = tmp_path / "emulebb-rust-diag-42-run-000001.jsonl"
+    other = tmp_path / "emulebb-rust-diag-43-other-000000.jsonl"
+    for path in (requested_old, requested_new, other):
+        path.write_text("", encoding="utf-8")
+    os.utime(requested_old, ns=(1, 1))
+    os.utime(requested_new, ns=(2, 2))
+    os.utime(other, ns=(3, 3))
+
+    assert control.latest_diag_log(tmp_path, 42) == requested_new.resolve()
+
+
 def test_shared_directory_summary_redacts_paths_and_keeps_flags() -> None:
     control = _load_rust_soak_control()
 
