@@ -294,6 +294,43 @@ def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> 
     )
 
 
+def test_rust_openapi_stages_diagnostic_writer_health_as_optional() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    runtime = schemas["RuntimeDiagnostics"]
+    assert "diagnosticWriter" not in runtime["required"]
+    assert runtime["properties"]["diagnosticWriter"] == {
+        "$ref": "#/components/schemas/DiagnosticWriterHealth"
+    }
+    writer = schemas["DiagnosticWriterHealth"]
+    assert writer["additionalProperties"] is False
+    assert writer["properties"]["schema"]["enum"] == ["diag_event_v2"]
+    assert writer["required"] == [
+        "schema",
+        "enabled",
+        "configured",
+        "initialized",
+        "runId",
+        "processId",
+        "activeSegmentId",
+        "activeFileName",
+        "activeSegmentBytes",
+        "recordsWritten",
+        "bytesWritten",
+        "droppedEvents",
+        "encodeErrors",
+        "writeErrors",
+        "rotations",
+        "retentionDeletes",
+        "retentionDeleteErrors",
+        "maxSegmentBytes",
+        "maxSegmentSeconds",
+        "retainedSegments",
+        "initializationFailure",
+    ]
+
+
 def test_run_response_conformance_rejects_api_root_base_url() -> None:
     def exercise(_base_url: str, _api_key: str, _budget: str) -> dict[str, object]:
         raise AssertionError("exercise should not run after base-url preflight failure")
