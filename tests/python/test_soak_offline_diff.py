@@ -82,6 +82,25 @@ def _segmented_diag(
     }
 
 
+def test_full_run_diagnostics_require_client_udp_without_narrow_window_penalty() -> None:
+    mod = _load_offline_diff()
+    rust = [_diag("sched", "source_count", 0.0, body={"sourceCount": 1})]
+    mfc = [_diag("sched", "source_count", 0.0, body={"sourceCount": 1})]
+
+    assert mod.diag_event_diff.family_conformance(rust, mfc)["ok"] is True
+    gate = mod._full_run_diagnostic_gate(rust, mfc)
+
+    assert gate["ok"] is False
+    assert gate["familyConformance"]["requiredFamilies"] == [
+        {
+            "family": "ed2k_client_udp",
+            "rustPresent": False,
+            "mfcPresent": False,
+            "ok": False,
+        }
+    ]
+
+
 def _window(at: float = 0.0) -> dict:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=at)
     return {"kind": "search", "t0": stamp, "t1": stamp + timedelta(seconds=10)}

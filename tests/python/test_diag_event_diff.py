@@ -8,6 +8,7 @@ import pytest
 from emule_test_harness.diag_event_diff import (
     diff_traces,
     family_conformance,
+    full_run_conformance,
     load_trace,
     load_traces,
 )
@@ -528,6 +529,58 @@ def test_family_conformance_one_sided_families_are_informational() -> None:
     families = {f["family"]: f for f in gate["families"]}
     assert families["sched"]["presentOnBoth"] is False
     assert families["bad_peer"]["presentOnBoth"] is False
+
+
+def test_family_conformance_can_require_full_run_family_presence() -> None:
+    rust = [_env("sched", "upload_request_outcome", body={"outcome": "served"})]
+    mfc = [_env("sched", "upload_request_outcome", body={"outcome": "served"})]
+
+    gate = family_conformance(
+        rust,
+        mfc,
+        required_families={"ed2k_client_udp"},
+    )
+
+    assert gate["ok"] is False
+    assert gate["requiredFamiliesOk"] is False
+    assert gate["requiredFamilies"] == [
+        {
+            "family": "ed2k_client_udp",
+            "rustPresent": False,
+            "mfcPresent": False,
+            "ok": False,
+        }
+    ]
+
+
+def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
+    rust = [
+        _client_udp_packet(
+            "send",
+            "c590",
+            outcome="attempted",
+            attempt_id=4,
+            role="reask_request",
+        )
+    ]
+    mfc = [
+        _client_udp_packet(
+            "send",
+            "c590",
+            outcome="attempted",
+            attempt_id=9,
+            role="reask_request",
+        ),
+        _client_udp_terminal(9),
+    ]
+
+    gate = full_run_conformance(rust, mfc)
+
+    assert gate["ok"] is False
+    assert gate["familyConformance"]["requiredFamiliesOk"] is True
+    assert gate["clientUdpLifecycle"]["rust"]["violations"] == [
+        {"kind": "missing_terminal", "sendAttemptId": 4}
+    ]
 
 
 def test_family_conformance_oracle_only_event_is_reported_not_failed() -> None:
