@@ -197,6 +197,68 @@ def test_parse_checkpoint_lines_tolerates_missing_log(tmp_path: Path) -> None:
     assert soak_report_summary.log_finished(tmp_path / "missing.log") is False
 
 
+def test_summarize_full_run_diagnostics_exposes_missing_family_and_lifecycle_counts() -> None:
+    summary = soak_report_summary.summarize_full_run_diagnostics(
+        {
+            "ok": False,
+            "familyConformance": {
+                "requiredFamiliesOk": False,
+                "requiredFamilies": [
+                    {
+                        "family": "ed2k_client_udp",
+                        "rustPresent": True,
+                        "mfcPresent": False,
+                        "ok": False,
+                    }
+                ],
+            },
+            "clientUdpLifecycle": {
+                "rust": {
+                    "ok": False,
+                    "attemptCount": 3,
+                    "terminalCount": 2,
+                    "outcomes": {"send_succeeded": 2},
+                    "violations": [
+                        {"kind": "missing_terminal", "sendAttemptId": 7},
+                        {"kind": "missing_terminal", "sendAttemptId": 9},
+                    ],
+                },
+                "mfc": {
+                    "ok": False,
+                    "attemptCount": 1,
+                    "terminalCount": 2,
+                    "outcomes": {"send_cancelled": 2},
+                    "violations": [{"kind": "orphan_terminal", "sendAttemptId": 2}],
+                },
+            },
+        }
+    )
+
+    assert summary == {
+        "ok": False,
+        "requiredFamiliesOk": False,
+        "missingRequiredFamilies": [
+            {"family": "ed2k_client_udp", "rustPresent": True, "mfcPresent": False}
+        ],
+        "clientUdpLifecycle": {
+            "rust": {
+                "ok": False,
+                "attempts": 3,
+                "terminals": 2,
+                "outcomes": {"send_succeeded": 2},
+                "violationCounts": {"missing_terminal": 2},
+            },
+            "mfc": {
+                "ok": False,
+                "attempts": 1,
+                "terminals": 2,
+                "outcomes": {"send_cancelled": 2},
+                "violationCounts": {"orphan_terminal": 1},
+            },
+        },
+    }
+
+
 def test_summarize_report_flags_missing_action_reports(tmp_path: Path) -> None:
     report_dir = tmp_path / "report"
     _write_json(report_dir / "summary.json", {"campaignId": "camp-1", "totals": {"actions": 2}})

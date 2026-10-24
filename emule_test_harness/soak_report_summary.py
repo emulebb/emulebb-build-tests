@@ -77,6 +77,51 @@ def _counter_dict(counter: Counter[str]) -> dict[str, int]:
     return {key: counter[key] for key in sorted(counter)}
 
 
+def summarize_full_run_diagnostics(gate: dict[str, Any]) -> dict[str, Any]:
+    """Compacts required-family and client-UDP lifecycle gate evidence."""
+
+    family_gate = (
+        gate.get("familyConformance")
+        if isinstance(gate.get("familyConformance"), dict)
+        else {}
+    )
+    required_failures = [
+        {
+            "family": row.get("family"),
+            "rustPresent": row.get("rustPresent"),
+            "mfcPresent": row.get("mfcPresent"),
+        }
+        for row in family_gate.get("requiredFamilies") or []
+        if isinstance(row, dict) and row.get("ok") is not True
+    ]
+    lifecycle_gate = (
+        gate.get("clientUdpLifecycle")
+        if isinstance(gate.get("clientUdpLifecycle"), dict)
+        else {}
+    )
+    lifecycle: dict[str, Any] = {}
+    for side in ("rust", "mfc"):
+        audit = lifecycle_gate.get(side) if isinstance(lifecycle_gate.get(side), dict) else {}
+        violation_counts = Counter(
+            str(violation.get("kind") or "unknown")
+            for violation in audit.get("violations") or []
+            if isinstance(violation, dict)
+        )
+        lifecycle[side] = {
+            "ok": audit.get("ok"),
+            "attempts": int(audit.get("attemptCount") or 0),
+            "terminals": int(audit.get("terminalCount") or 0),
+            "outcomes": audit.get("outcomes") if isinstance(audit.get("outcomes"), dict) else {},
+            "violationCounts": _counter_dict(violation_counts),
+        }
+    return {
+        "ok": gate.get("ok"),
+        "requiredFamiliesOk": family_gate.get("requiredFamiliesOk"),
+        "missingRequiredFamilies": required_failures,
+        "clientUdpLifecycle": lifecycle,
+    }
+
+
 def _gap_counts(report: dict[str, Any]) -> list[dict[str, Any]]:
     coverage = (report.get("packetDiff") or {}).get("opcodeCoverage")
     if not isinstance(coverage, dict):
