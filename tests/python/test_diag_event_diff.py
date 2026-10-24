@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from emule_test_harness.diag_event_diff import diff_traces, load_trace
+from emule_test_harness.diag_event_diff import diff_traces, load_trace, load_traces
 
 
 def _env(family, event, *, keys=None, body=None, severity="info"):
@@ -201,6 +201,17 @@ def test_load_trace_accepts_diag_event_v2(tmp_path: Path) -> None:
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
     assert load_trace(path) == [record]
+
+
+def test_load_traces_preserves_segment_order(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    first_record = _pkt("ed2k_tcp", "recv", 0x01, "aabb")
+    second_record = _pkt("ed2k_tcp", "recv", 0x02, "ccdd")
+    first.write_text(json.dumps(first_record) + "\n", encoding="utf-8")
+    second.write_text(json.dumps(second_record) + "\n", encoding="utf-8")
+
+    assert load_traces([first, second]) == [first_record, second_record]
 
 
 def test_self_diff_of_mixed_trace_is_ok() -> None:

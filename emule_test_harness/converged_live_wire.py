@@ -26,6 +26,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness.diag_event_runs import select_latest_rust_diag_run
+
 # Canonical MFC output build layout dimensions (see WORKSPACE-POLICY build root).
 # The packet-diagnostics MFC exe is the `main` variant built with --diagnostics:
 # builds/app/main/x64/Release/diagnostics/bin/emulebb-diagnostics.exe (verified).
@@ -221,17 +223,23 @@ def find_packet_trace(dump_dir: Path, *, side: str) -> Path | None:
 
 
 def find_diag_trace(dump_dir: Path, *, side: str) -> Path | None:
-    """Returns the first ``diag_event_v1`` JSONL dump for one client side."""
+    """Returns the active diagnostic-event segment for one client side."""
+
+    matches = find_diag_traces(dump_dir, side=side)
+    return matches[-1] if matches else None
+
+
+def find_diag_traces(dump_dir: Path, *, side: str) -> list[Path]:
+    """Returns ordered diagnostic-event segments for one current client run."""
 
     if side == "rust":
         matches = _first_existing_glob(dump_dir, RUST_DIAG_DUMP_GLOBS)
+        return select_latest_rust_diag_run(matches)
     elif side == "emule":
         matches = _first_existing_glob(dump_dir, EMULE_DIAG_DUMP_GLOBS)
     else:
         raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
-    # With a rotated-file glob, the most-recently-written file is the live window;
-    # matches[0] (name-sorted) would pick the oldest rotated slice.
-    return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
+    return sorted(matches, key=lambda path: (path.stat().st_mtime_ns, path.name))
 
 
 def count_jsonl_records(path: Path | None) -> int:

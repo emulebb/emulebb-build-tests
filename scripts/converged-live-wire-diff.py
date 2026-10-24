@@ -751,12 +751,12 @@ def diff_scenario_traces(
             packet_trace_diff.load_trace(emule_trace),
         )
     diag_diff: dict[str, Any] | None = None
-    rust_diag = clw.find_diag_trace(rust_dump_dir, side="rust")
-    emule_diag = clw.find_diag_trace(emule_dump_dir, side="emule")
-    if rust_diag is not None and emule_diag is not None:
+    rust_diag = clw.find_diag_traces(rust_dump_dir, side="rust")
+    emule_diag = clw.find_diag_traces(emule_dump_dir, side="emule")
+    if rust_diag and emule_diag:
         diag_diff = diag_event_diff.diff_traces(
-            diag_event_diff.load_trace(rust_diag),
-            diag_event_diff.load_trace(emule_diag),
+            diag_event_diff.load_traces(rust_diag),
+            diag_event_diff.load_traces(emule_diag),
         )
     return rust_trace, emule_trace, packet_diff, diag_diff
 
