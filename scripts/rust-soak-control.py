@@ -1082,30 +1082,37 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
         for line in tail_text_lines(path, max_bytes=args.max_bytes):
             stripped = line.strip()
             if not stripped.startswith("{") or (
-                "anti_flood" not in stripped and "tracker_action" not in stripped
+                "anti_flood" not in stripped and "trackerAction" not in stripped
             ):
                 continue
             try:
                 parsed = json.loads(stripped)
             except json.JSONDecodeError:
                 continue
-            if isinstance(parsed, dict) and parsed.get("schema") == "udp_packet_v1":
-                tracker_action = diagnostic_json_bucket_value(parsed.get("tracker_action"))
+            if (
+                isinstance(parsed, dict)
+                and parsed.get("schema") == "diag_event_v2"
+                and parsed.get("family") == "kad_udp"
+                and parsed.get("event") == "packet"
+            ):
+                body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
+                keys = parsed.get("keys") if isinstance(parsed.get("keys"), dict) else {}
+                tracker_action = diagnostic_json_bucket_value(body.get("trackerAction"))
                 if tracker_action not in {"drop", "massive_drop"}:
                     continue
                 udp_tracker_rows += 1
-                tracker_bucket = diagnostic_json_bucket_value(parsed.get("tracker_bucket"))
-                drop_reason = diagnostic_json_bucket_value(parsed.get("drop_reason"))
-                opcode_name = diagnostic_json_bucket_value(parsed.get("opcode_name"))
-                observed_packets = diagnostic_json_numeric_value(parsed.get("tracker_observed_packets"))
-                max_packets = diagnostic_json_numeric_value(parsed.get("tracker_max_packets"))
+                tracker_bucket = diagnostic_json_bucket_value(body.get("trackerBucket"))
+                drop_reason = diagnostic_json_bucket_value(body.get("dropReason"))
+                opcode_name = diagnostic_json_bucket_value(body.get("opcodeName"))
+                observed_packets = diagnostic_json_numeric_value(body.get("trackerObservedPackets"))
+                max_packets = diagnostic_json_numeric_value(body.get("trackerMaxPackets"))
                 timestamp = parse_iso_timestamp(
                     parsed.get("ts")
                     or parsed.get("ts_utc")
                     or parsed.get("timestamp")
                     or parsed.get("timestampUtc")
                 )
-                peer = parsed.get("peer") if isinstance(parsed.get("peer"), str) else ""
+                peer = keys.get("peer") if isinstance(keys.get("peer"), str) else ""
                 peer_fingerprint = private_path_fingerprint(peer)
                 if tracker_bucket is not None:
                     udp_tracker_bucket_counts[tracker_bucket] += 1
