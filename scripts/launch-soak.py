@@ -35,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, profile_overlay, vpn_guard_live
+from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, profile_overlay
 from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
@@ -212,17 +212,12 @@ def resolve_vpn_guard_profile(args: argparse.Namespace) -> dict[str, str | None]
         return {"mode": "off", "allowed_public_ip_cidrs": "", "config_path": None}
 
     config_path = Path(args.vpn_guard_live_config).resolve() if args.vpn_guard_live_config else None
-    if config_path is None or not config_path.is_file():
+    if config_path is None:
         raise RuntimeError("--vpn-guard-live-config is required for --vpn-guard-scenario success.")
-
-    config = vpn_guard_live.load_config(config_path)
-    interface_name = str(config.get("p2pBindInterfaceName") or "").strip()
-    if interface_name.casefold() != vpn_guard_live.HIDEME_INTERFACE_NAME:
-        raise RuntimeError(f"VPN Guard live config must bind P2P to hide.me, got {interface_name!r}.")
-
-    cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip() or str(config.get("allowedPublicIpCidrs") or "").strip()
-    vpn_guard_live.require_hideme_public_cidrs(cidrs)
-    return {"mode": "block", "allowed_public_ip_cidrs": cidrs, "config_path": str(config_path)}
+    return soak_launch.require_blocking_vpn_guard_config(
+        config_path,
+        allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+    )
 
 
 def initialize_cpu_profile(
