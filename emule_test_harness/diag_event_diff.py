@@ -36,6 +36,7 @@ from emule_test_harness.diag_event_schema import (
     DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
     DIAG_EVENT_SCHEMA,
     DIAG_EVENT_SCHEMA_AUDIT_REPORT_SCHEMA,
+    ED2K_CLIENT_UDP_FAMILY,
 )
 
 PACKET_FAMILIES = ("ed2k_tcp", "kad_udp")
@@ -269,6 +270,252 @@ def _diff_packet_family(
 
 
 # --------------------------------------------------------------------------- #
+# eD2K client UDP: exact datagrams plus correlated send lifecycles.
+# --------------------------------------------------------------------------- #
+
+
+_CLIENT_UDP_TERMINAL_OUTCOMES = frozenset(
+    {"send_succeeded", "send_failed", "send_cancelled"}
+)
+
+
+def _is_client_udp_packet(record: dict[str, Any]) -> bool:
+    body = record.get("body") or {}
+    return (
+        record.get("event") == "packet"
+        and body.get("direction") in _PACKET_DIRECTIONS
+        and isinstance(body.get("rawHex"), str)
+    )
+
+
+def _client_udp_packet_description(record: dict[str, Any]) -> dict[str, Any]:
+    body = record.get("body") or {}
+    return {
+        "direction": body.get("direction"),
+        "outcome": body.get("outcome"),
+        "opcode": body.get("opcode"),
+        "opcodeName": body.get("opcodeName"),
+        "rawLen": body.get("rawLen"),
+        "rawHex": body.get("rawHex"),
+    }
+
+
+def _diff_client_udp_packets(
+    rust_recs: list[dict[str, Any]],
+    mfc_recs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    groups: list[dict[str, Any]] = []
+    matched = wire_mismatches = only_rust = only_mfc = 0
+    for direction in _PACKET_DIRECTIONS:
+        rust_block = [
+            record
+            for record in rust_recs
+            if _is_client_udp_packet(record)
+            and (record.get("body") or {}).get("direction") == direction
+        ]
+        mfc_block = [
+            record
+            for record in mfc_recs
+            if _is_client_udp_packet(record)
+            and (record.get("body") or {}).get("direction") == direction
+        ]
+        if not rust_block and not mfc_block:
+            continue
+
+        rust_keys = [(record.get("body") or {}).get("rawHex") for record in rust_block]
+        mfc_keys = [(record.get("body") or {}).get("rawHex") for record in mfc_block]
+        matcher = difflib.SequenceMatcher(a=rust_keys, b=mfc_keys, autojunk=False)
+        group_matched = 0
+        group_mismatches: list[dict[str, Any]] = []
+        group_only_rust: list[dict[str, Any]] = []
+        group_only_mfc: list[dict[str, Any]] = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                group_matched += i2 - i1
+                continue
+            rust_part = rust_block[i1:i2]
+            mfc_part = mfc_block[j1:j2]
+            paired = min(len(rust_part), len(mfc_part))
+            for offset in range(paired):
+                group_mismatches.append(
+                    {
+                        "rust": _client_udp_packet_description(rust_part[offset]),
+                        "mfc": _client_udp_packet_description(mfc_part[offset]),
+                    }
+                )
+            group_only_rust.extend(
+                _client_udp_packet_description(record) for record in rust_part[paired:]
+            )
+            group_only_mfc.extend(
+                _client_udp_packet_description(record) for record in mfc_part[paired:]
+            )
+
+        matched += group_matched
+        wire_mismatches += len(group_mismatches)
+        only_rust += len(group_only_rust)
+        only_mfc += len(group_only_mfc)
+        groups.append(
+            {
+                "direction": direction,
+                "rustCount": len(rust_block),
+                "mfcCount": len(mfc_block),
+                "matched": group_matched,
+                "wireMismatches": group_mismatches,
+                "onlyRust": group_only_rust,
+                "onlyMfc": group_only_mfc,
+            }
+        )
+
+    return {
+        "ok": wire_mismatches == 0 and only_rust == 0 and only_mfc == 0,
+        "totals": {
+            "matched": matched,
+            "wireMismatches": wire_mismatches,
+            "onlyRust": only_rust,
+            "onlyMfc": only_mfc,
+        },
+        "directions": groups,
+    }
+
+
+def _send_attempt_id(record: dict[str, Any]) -> Any:
+    body = record.get("body") or {}
+    keys = record.get("keys") or {}
+    return body.get("sendAttemptId", keys.get("sendAttemptId"))
+
+
+def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]:
+    attempts: dict[int, tuple[int, dict[str, Any]]] = {}
+    terminals: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    violations: list[dict[str, Any]] = []
+
+    for index, record in enumerate(records):
+        event = record.get("event")
+        body = record.get("body") or {}
+        direction = body.get("direction")
+        outcome = body.get("outcome")
+        if event == "packet" and direction == "send":
+            attempt_id = _send_attempt_id(record)
+            if outcome != "attempted":
+                violations.append(
+                    {"kind": "invalid_attempt_outcome", "index": index, "outcome": outcome}
+                )
+                continue
+            if not isinstance(attempt_id, int) or isinstance(attempt_id, bool) or attempt_id <= 0:
+                violations.append(
+                    {"kind": "invalid_attempt_id", "index": index, "sendAttemptId": attempt_id}
+                )
+                continue
+            if attempt_id in attempts:
+                violations.append(
+                    {"kind": "duplicate_attempt", "index": index, "sendAttemptId": attempt_id}
+                )
+                continue
+            attempts[attempt_id] = (index, record)
+        elif event == "send_outcome":
+            attempt_id = _send_attempt_id(record)
+            if not isinstance(attempt_id, int) or isinstance(attempt_id, bool) or attempt_id <= 0:
+                violations.append(
+                    {"kind": "invalid_terminal_id", "index": index, "sendAttemptId": attempt_id}
+                )
+                continue
+            terminals.setdefault(attempt_id, []).append((index, record))
+            if outcome not in _CLIENT_UDP_TERMINAL_OUTCOMES:
+                violations.append(
+                    {"kind": "invalid_terminal_outcome", "index": index, "outcome": outcome}
+                )
+            expected_delivery_known = outcome != "send_cancelled"
+            if body.get("deliveryKnown") is not expected_delivery_known:
+                violations.append(
+                    {
+                        "kind": "invalid_delivery_known",
+                        "index": index,
+                        "outcome": outcome,
+                        "deliveryKnown": body.get("deliveryKnown"),
+                    }
+                )
+
+    for attempt_id, (attempt_index, _record) in sorted(attempts.items()):
+        matching = terminals.get(attempt_id, [])
+        if not matching:
+            violations.append({"kind": "missing_terminal", "sendAttemptId": attempt_id})
+        elif len(matching) > 1:
+            violations.append(
+                {
+                    "kind": "duplicate_terminal",
+                    "sendAttemptId": attempt_id,
+                    "count": len(matching),
+                }
+            )
+        elif matching[0][0] < attempt_index:
+            violations.append(
+                {"kind": "terminal_before_attempt", "sendAttemptId": attempt_id}
+            )
+    for attempt_id in sorted(set(terminals) - set(attempts)):
+        violations.append({"kind": "orphan_terminal", "sendAttemptId": attempt_id})
+
+    coverage = sorted(
+        {
+            (
+                (record.get("body") or {}).get("role"),
+                (record.get("body") or {}).get("opcode"),
+                (record.get("body") or {}).get("outcome"),
+            )
+            for matching in terminals.values()
+            for _index, record in matching
+        },
+        key=repr,
+    )
+    return {
+        "ok": not violations,
+        "attemptCount": len(attempts),
+        "terminalCount": sum(len(matching) for matching in terminals.values()),
+        "violations": violations,
+        "coverage": [
+            {"role": role, "opcode": opcode, "outcome": outcome}
+            for role, opcode, outcome in coverage
+        ],
+        "coverageKeys": coverage,
+    }
+
+
+def _diff_client_udp_family(
+    rust_recs: list[dict[str, Any]],
+    mfc_recs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    packet_diff = _diff_client_udp_packets(rust_recs, mfc_recs)
+    rust_lifecycle = _client_udp_lifecycle_audit(rust_recs)
+    mfc_lifecycle = _client_udp_lifecycle_audit(mfc_recs)
+    rust_coverage = set(rust_lifecycle.pop("coverageKeys"))
+    mfc_coverage = set(mfc_lifecycle.pop("coverageKeys"))
+    only_rust_coverage = sorted(rust_coverage - mfc_coverage, key=repr)
+    only_mfc_coverage = sorted(mfc_coverage - rust_coverage, key=repr)
+
+    def describe_coverage(items: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
+        return [
+            {"role": role, "opcode": opcode, "outcome": outcome}
+            for role, opcode, outcome in items
+        ]
+
+    coverage = {
+        "ok": not only_rust_coverage and not only_mfc_coverage,
+        "onlyRust": describe_coverage(only_rust_coverage),
+        "onlyMfc": describe_coverage(only_mfc_coverage),
+    }
+    return {
+        "family": ED2K_CLIENT_UDP_FAMILY,
+        "strategy": "client_udp_mixed",
+        "ok": packet_diff["ok"]
+        and rust_lifecycle["ok"]
+        and mfc_lifecycle["ok"]
+        and coverage["ok"],
+        "packets": packet_diff,
+        "lifecycle": {"rust": rust_lifecycle, "mfc": mfc_lifecycle},
+        "coverage": coverage,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Event families (kad_event / bad_peer): multiset match over comparable tuple.
 # --------------------------------------------------------------------------- #
 
@@ -476,6 +723,8 @@ def diff_traces(
         mfc_recs = _by_family(mfc_trace, family)
         if family in PACKET_FAMILIES:
             families.append(_diff_packet_family(family, rust_recs, mfc_recs))
+        elif family == ED2K_CLIENT_UDP_FAMILY:
+            families.append(_diff_client_udp_family(rust_recs, mfc_recs))
         elif family in EVENT_FAMILIES:
             families.append(_diff_event_family(family, rust_recs, mfc_recs))
         elif family == SCHED_FAMILY:

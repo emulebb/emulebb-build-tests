@@ -45,6 +45,67 @@ def _pkt(family, direction, opcode, payload, *, marker=227):
     )
 
 
+def _client_udp_packet(
+    direction: str,
+    raw_hex: str,
+    *,
+    opcode: int | None = 0x90,
+    outcome: str = "accepted",
+    attempt_id: int | None = None,
+    role: str | None = None,
+):
+    keys = {"peer": "10.0.0.1:4672"}
+    body = {
+        "direction": direction,
+        "outcome": outcome,
+        "rawHex": raw_hex,
+        "rawLen": len(raw_hex) // 2,
+    }
+    if opcode is not None:
+        keys.update({"opcode": opcode, "protocolMarker": 0xC5})
+        body.update(
+            {
+                "opcode": opcode,
+                "opcodeName": f"OP_{opcode:02X}",
+                "protocolMarker": 0xC5,
+            }
+        )
+    if attempt_id is not None:
+        keys["sendAttemptId"] = attempt_id
+        body["sendAttemptId"] = attempt_id
+    if role is not None:
+        body["role"] = role
+    return _env("ed2k_client_udp", "packet", keys=keys, body=body)
+
+
+def _client_udp_terminal(
+    attempt_id: int,
+    outcome: str = "send_succeeded",
+    *,
+    delivery_known: bool | None = None,
+):
+    if delivery_known is None:
+        delivery_known = outcome != "send_cancelled"
+    return _env(
+        "ed2k_client_udp",
+        "send_outcome",
+        keys={
+            "peer": "10.0.0.1:4672",
+            "opcode": 0x90,
+            "protocolMarker": 0xC5,
+            "sendAttemptId": attempt_id,
+        },
+        body={
+            "direction": "send",
+            "outcome": outcome,
+            "deliveryKnown": delivery_known,
+            "sendAttemptId": attempt_id,
+            "role": "reask_request",
+            "opcode": 0x90,
+        },
+    )
+
+
 def _family(report, name):
     return next(f for f in report["families"] if f["family"] == name)
 
@@ -114,6 +175,96 @@ def test_packet_meta_records_ignored() -> None:
     report = diff_traces(rust, [])
     assert report["ok"] is True
     assert _family(report, "ed2k_tcp")["totals"]["matched"] == 0
+
+
+# --- eD2K client UDP mixed packet/lifecycle family ------------------------- #
+
+
+def test_client_udp_uses_dedicated_mixed_strategy() -> None:
+    trace = [
+        _client_udp_packet(
+            "send",
+            "c590aabb",
+            outcome="attempted",
+            attempt_id=7,
+            role="reask_request",
+        ),
+        _client_udp_terminal(7),
+        _client_udp_packet("recv", "c5910001", outcome="accepted"),
+    ]
+
+    report = diff_traces(trace, list(trace))
+    family = _family(report, "ed2k_client_udp")
+
+    assert report["ok"] is True
+    assert family["strategy"] == "client_udp_mixed"
+    assert family["packets"]["totals"]["matched"] == 2
+    assert family["lifecycle"]["rust"]["attemptCount"] == 1
+    assert family["lifecycle"]["rust"]["terminalCount"] == 1
+
+
+def test_client_udp_packet_identity_uses_raw_hex_without_opcode() -> None:
+    rust = [_client_udp_packet("recv", "112233", opcode=None, outcome="dropped")]
+    mfc = [_client_udp_packet("recv", "112244", opcode=None, outcome="dropped")]
+
+    family = _family(diff_traces(rust, mfc), "ed2k_client_udp")
+
+    assert family["ok"] is False
+    assert family["packets"]["totals"]["wireMismatches"] == 1
+
+
+@pytest.mark.parametrize(
+    ("trace", "violation"),
+    [
+        ([_client_udp_terminal(1)], "orphan_terminal"),
+        (
+            [
+                _client_udp_packet(
+                    "send",
+                    "c590",
+                    outcome="attempted",
+                    attempt_id=1,
+                    role="reask_request",
+                )
+            ],
+            "missing_terminal",
+        ),
+        (
+            [
+                _client_udp_packet(
+                    "send",
+                    "c590",
+                    outcome="attempted",
+                    attempt_id=1,
+                    role="reask_request",
+                ),
+                _client_udp_terminal(1),
+                _client_udp_terminal(1),
+            ],
+            "duplicate_terminal",
+        ),
+        (
+            [
+                _client_udp_packet(
+                    "send",
+                    "c590",
+                    outcome="attempted",
+                    attempt_id=1,
+                    role="reask_request",
+                ),
+                _client_udp_terminal(1, "send_cancelled", delivery_known=True),
+            ],
+            "invalid_delivery_known",
+        ),
+    ],
+)
+def test_client_udp_rejects_broken_send_lifecycles(trace, violation) -> None:
+    family = _family(diff_traces(trace, list(trace)), "ed2k_client_udp")
+
+    assert family["ok"] is False
+    assert violation in {
+        item["kind"] for item in family["lifecycle"]["rust"]["violations"]
+    }
 
 
 # --- event families (multiset) --------------------------------------------- #
