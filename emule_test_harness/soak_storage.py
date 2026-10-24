@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 SCHEMA = "emulebb-build-tests.soak-storage-policy.v1"
 REQUIRED_STREAMS = ("controller_output", "daemon_output")
@@ -75,6 +76,217 @@ class DiskSpaceSnapshot:
     total_bytes: int
     used_bytes: int
     free_bytes: int
+
+
+@dataclass(frozen=True)
+class PlannedDeletion:
+    """One whole immutable artifact selected for a single pruning trigger."""
+
+    artifact: ArtifactFile
+    reason: str
+
+
+@dataclass(frozen=True)
+class StoragePrunePlan:
+    """Deterministic projection for enforcing one storage policy."""
+
+    inventory: ArtifactInventory
+    disk_space: DiskSpaceSnapshot
+    deletions: tuple[PlannedDeletion, ...]
+    protected_files: tuple[ArtifactFile, ...]
+    projected_total_bytes: int
+    projected_free_bytes: int
+    triggered_constraints: tuple[str, ...]
+    unresolved_constraints: tuple[str, ...]
+
+    @property
+    def within_limits(self) -> bool:
+        """Returns whether the projected store satisfies every hard limit."""
+
+        return not self.unresolved_constraints
+
+
+@dataclass(frozen=True)
+class StorageEnforcementResult:
+    """Applied whole-file deletions and any fail-closed removal errors."""
+
+    plan: StoragePrunePlan
+    deleted_paths: tuple[Path, ...]
+    failures: tuple[str, ...]
+
+    @property
+    def within_limits(self) -> bool:
+        """Returns whether planning succeeded and every deletion was applied."""
+
+        return self.plan.within_limits and not self.failures
+
+
+class BoundedArtifactStore:
+    """Plans and applies whole-artifact retention below one owned root."""
+
+    def __init__(
+        self,
+        root: Path,
+        policy: SoakStoragePolicy,
+        *,
+        inventory: Callable[[Path], ArtifactInventory] | None = None,
+        disk_space: Callable[[Path], DiskSpaceSnapshot] | None = None,
+        remove_file: Callable[[Path], None] | None = None,
+    ) -> None:
+        self.root = root.resolve()
+        self.policy = policy
+        self._inventory = inventory or inventory_artifacts
+        self._disk_space = disk_space or disk_space_snapshot
+        self._remove_file = remove_file or _unlink_artifact
+
+    def plan(
+        self,
+        *,
+        active_campaign: Path | None = None,
+        pinned_paths: Iterable[Path] = (),
+        now_ns: int | None = None,
+    ) -> StoragePrunePlan:
+        """Builds one oldest-first byte, age, and reserve enforcement plan."""
+
+        inventory = self._inventory(self.root)
+        disk_space = self._disk_space(self.root)
+        protected_roots = self._protected_roots(active_campaign, pinned_paths)
+        protected_files: list[ArtifactFile] = []
+        candidates: list[ArtifactFile] = []
+        seen_paths: set[Path] = set()
+        for artifact in inventory.files:
+            artifact_path = artifact.path.resolve()
+            if artifact_path in seen_paths:
+                raise RuntimeError(
+                    f"Soak artifact inventory contains a duplicate path: {artifact_path}"
+                )
+            seen_paths.add(artifact_path)
+            if not _path_is_relative_to(artifact_path, self.root):
+                raise RuntimeError(
+                    f"Soak artifact inventory escaped its store root: {artifact_path}"
+                )
+            if any(
+                _path_is_relative_to(artifact_path, protected)
+                for protected in protected_roots
+            ):
+                protected_files.append(artifact)
+            else:
+                candidates.append(artifact)
+
+        candidates.sort(
+            key=lambda item: (
+                item.modified_ns,
+                item.relative_path.as_posix().casefold(),
+            )
+        )
+        selected: list[PlannedDeletion] = []
+        selected_paths: set[Path] = set()
+        triggered: list[str] = []
+        projected_total = inventory.total_bytes
+        projected_free = disk_space.free_bytes
+
+        def select(artifact: ArtifactFile, reason: str) -> None:
+            nonlocal projected_free, projected_total
+            if artifact.path in selected_paths:
+                return
+            selected_paths.add(artifact.path)
+            selected.append(PlannedDeletion(artifact=artifact, reason=reason))
+            projected_total -= artifact.size_bytes
+            projected_free = min(
+                disk_space.total_bytes, projected_free + artifact.size_bytes
+            )
+
+        current_ns = time.time_ns() if now_ns is None else now_ns
+        oldest_allowed_ns = current_ns - self.policy.max_age_seconds * 1_000_000_000
+        expired = [
+            artifact
+            for artifact in candidates
+            if artifact.modified_ns < oldest_allowed_ns
+        ]
+        if expired:
+            triggered.append("max_age_seconds")
+            for artifact in expired:
+                select(artifact, "max_age_seconds")
+
+        remaining = [
+            artifact for artifact in candidates if artifact.path not in selected_paths
+        ]
+        if projected_total > self.policy.max_total_bytes:
+            triggered.append("max_total_bytes")
+            while projected_total > self.policy.max_total_bytes and remaining:
+                select(remaining.pop(0), "max_total_bytes")
+
+        remaining = [
+            artifact for artifact in remaining if artifact.path not in selected_paths
+        ]
+        if projected_free < self.policy.minimum_free_bytes:
+            triggered.append("minimum_free_bytes")
+            while projected_free < self.policy.minimum_free_bytes and remaining:
+                select(remaining.pop(0), "minimum_free_bytes")
+
+        unresolved: list[str] = []
+        if projected_total > self.policy.max_total_bytes:
+            unresolved.append("max_total_bytes")
+        if projected_free < self.policy.minimum_free_bytes:
+            unresolved.append("minimum_free_bytes")
+
+        return StoragePrunePlan(
+            inventory=inventory,
+            disk_space=disk_space,
+            deletions=tuple(selected),
+            protected_files=tuple(protected_files),
+            projected_total_bytes=projected_total,
+            projected_free_bytes=projected_free,
+            triggered_constraints=tuple(triggered),
+            unresolved_constraints=tuple(unresolved),
+        )
+
+    def enforce(
+        self,
+        *,
+        active_campaign: Path | None = None,
+        pinned_paths: Iterable[Path] = (),
+        now_ns: int | None = None,
+    ) -> StorageEnforcementResult:
+        """Deletes only whole planned artifacts and reports every failure."""
+
+        plan = self.plan(
+            active_campaign=active_campaign,
+            pinned_paths=pinned_paths,
+            now_ns=now_ns,
+        )
+        deleted_paths: list[Path] = []
+        failures: list[str] = []
+        for deletion in plan.deletions:
+            try:
+                self._remove_file(deletion.artifact.path)
+            except OSError as exc:
+                failures.append(
+                    f"{deletion.artifact.relative_path.as_posix()}: {type(exc).__name__}: {exc}"
+                )
+            else:
+                deleted_paths.append(deletion.artifact.path)
+        return StorageEnforcementResult(
+            plan=plan,
+            deleted_paths=tuple(deleted_paths),
+            failures=tuple(failures),
+        )
+
+    def _protected_roots(
+        self, active_campaign: Path | None, pinned_paths: Iterable[Path]
+    ) -> tuple[Path, ...]:
+        protected = list(pinned_paths)
+        if active_campaign is not None:
+            protected.append(active_campaign)
+        roots: list[Path] = []
+        for path in protected:
+            resolved = path.resolve()
+            if not _path_is_relative_to(resolved, self.root):
+                raise RuntimeError(
+                    f"Protected soak artifact path escaped its store root: {resolved}"
+                )
+            roots.append(resolved)
+        return tuple(roots)
 
 
 def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
@@ -231,6 +443,18 @@ def nearest_existing_ancestor(path: Path) -> Path:
             )
         candidate = parent
     return candidate
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _unlink_artifact(path: Path) -> None:
+    path.unlink()
 
 
 def _positive_integer(payload: dict[str, Any], key: str, *, context: str) -> int:
