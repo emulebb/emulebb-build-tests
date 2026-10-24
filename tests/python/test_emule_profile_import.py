@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import mfc_known_met, mfc_profile_import, rust_metadata
+from emule_test_harness import mfc_known_met, mfc_profile_import, rust_client, rust_metadata
 
 
 def _rust_repo() -> Path:
@@ -223,6 +223,122 @@ def test_import_stock_mfc_profile_rejects_existing_non_empty_target(tmp_path: Pa
             emule_config_dir=config,
             rust_profile_dir=target,
         )
+
+
+def test_ensure_persisted_rust_profile_imports_empty_target_transactionally(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mfc_profile = tmp_path / "EMULE_BIN"
+    config = mfc_profile / "config"
+    config.mkdir(parents=True)
+    (config / "known.met").write_bytes(b"known")
+    (config / "shareddir.dat").write_bytes(b"shared")
+    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    target.mkdir()
+    staged_targets: list[Path] = []
+
+    def fake_import(**kwargs: object) -> dict[str, object]:
+        staged = Path(str(kwargs["rust_profile_dir"]))
+        staged_targets.append(staged)
+        (staged / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
+        (staged / rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"database")
+        return {
+            "schemaVersion": 1,
+            "sharedRoots": 3,
+            "servers": 2,
+            "kadBootstrapEndpoints": 4,
+            "importedUserHash": False,
+        }
+
+    monkeypatch.setattr(mfc_profile_import, "import_stock_mfc_profile", fake_import)
+
+    result = mfc_profile_import.ensure_persisted_rust_profile(
+        rust_repo=tmp_path / "emulebb-rust",
+        mfc_profile_dir=mfc_profile,
+        rust_profile_dir=target,
+        rest_addr="127.0.0.1",
+    )
+
+    assert result["mode"] == "imported-mfc"
+    assert result["imported"] is True
+    assert staged_targets and staged_targets[0] != target
+    assert not staged_targets[0].exists()
+    assert (target / rust_client.RUST_PROFILE_SETTINGS_FILE).is_file()
+    assert (target / rust_metadata.RUST_PROFILE_METADATA_FILE).is_file()
+    marker = json.loads((target / mfc_profile_import.PERSISTED_PROFILE_IMPORT_MARKER).read_text(encoding="utf-8"))
+    assert marker["sourceMfcProfileDir"] == str(mfc_profile.resolve())
+    assert marker["sharedRoots"] == 3
+
+
+def test_ensure_persisted_rust_profile_reuses_valid_nonempty_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    target.mkdir()
+    (target / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
+    (target / rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"database")
+    monkeypatch.setattr(
+        mfc_profile_import,
+        "import_stock_mfc_profile",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("existing profile must not be imported")),
+    )
+
+    result = mfc_profile_import.ensure_persisted_rust_profile(
+        rust_repo=tmp_path / "emulebb-rust",
+        mfc_profile_dir=None,
+        rust_profile_dir=target,
+    )
+
+    assert result["mode"] == "reused-persisted"
+    assert result["imported"] is False
+
+
+def test_ensure_persisted_rust_profile_rejects_invalid_nonempty_target(tmp_path: Path) -> None:
+    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    target.mkdir()
+    (target / "unrelated.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="non-empty but invalid"):
+        mfc_profile_import.ensure_persisted_rust_profile(
+            rust_repo=tmp_path / "emulebb-rust",
+            mfc_profile_dir=None,
+            rust_profile_dir=target,
+        )
+
+    assert (target / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_ensure_persisted_rust_profile_preserves_empty_target_after_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mfc_profile = tmp_path / "EMULE_BIN"
+    config = mfc_profile / "config"
+    config.mkdir(parents=True)
+    (config / "known.met").write_bytes(b"known")
+    (config / "shareddir.dat").write_bytes(b"shared")
+    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    target.mkdir()
+
+    def fail_import(**kwargs: object) -> dict[str, object]:
+        staged = Path(str(kwargs["rust_profile_dir"]))
+        (staged / "partial.txt").write_text("partial", encoding="utf-8")
+        raise RuntimeError("import failed")
+
+    monkeypatch.setattr(mfc_profile_import, "import_stock_mfc_profile", fail_import)
+
+    with pytest.raises(RuntimeError, match="import failed"):
+        mfc_profile_import.ensure_persisted_rust_profile(
+            rust_repo=tmp_path / "emulebb-rust",
+            mfc_profile_dir=mfc_profile,
+            rust_profile_dir=target,
+        )
+
+    assert target.is_dir()
+    assert list(target.iterdir()) == []
+    assert not list(tmp_path.glob(".EMULE_RUST_PROFILE_PERSISTED.import-*"))
 
 
 def test_parse_server_met_rejects_trailing_bytes(tmp_path: Path) -> None:
