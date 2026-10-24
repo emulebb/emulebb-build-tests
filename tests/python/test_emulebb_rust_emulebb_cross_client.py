@@ -605,7 +605,7 @@ def _download_lifecycle_events(
 ) -> list[dict[str, object]]:
     def event(seq: int, name: str, body: dict[str, object]) -> dict[str, object]:
         return {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "family": "sched",
             "seq": seq,
             "event": name,
@@ -661,7 +661,7 @@ def test_download_connection_reuse_rejects_pre_settlement_second_admission() -> 
     assert module.download_connection_reuse_evidence(records, first_hash, second_hash) is None
 
 
-def test_load_rust_diag_records_skips_invalid_lines_and_orders_sequences(tmp_path: Path) -> None:
+def test_load_rust_diag_records_rejects_legacy_unsegmented_input(tmp_path: Path) -> None:
     module = load_suite_module()
     trace = tmp_path / "emulebb-rust-diag-123.jsonl"
     trace.write_text(
@@ -675,7 +675,8 @@ def test_load_rust_diag_records_skips_invalid_lines_and_orders_sequences(tmp_pat
         encoding="utf-8",
     )
 
-    assert [record["seq"] for record in module.load_rust_diag_records(tmp_path)] == [1, 2]
+    with pytest.raises(ValueError, match="no diag_event_v2"):
+        module.load_rust_diag_records(tmp_path)
 
 
 def test_load_rust_diag_records_uses_only_the_latest_v2_run(tmp_path: Path) -> None:
@@ -685,10 +686,12 @@ def test_load_rust_diag_records_uses_only_the_latest_v2_run(tmp_path: Path) -> N
         json.dumps(
             {
                 "schema": "diag_event_v2",
+                "client": "rust",
                 "runId": "stale",
                 "processId": 41,
                 "segmentId": 0,
                 "seq": 99,
+                "streamSeq": 99,
             }
         )
         + "\n",
@@ -699,10 +702,12 @@ def test_load_rust_diag_records_uses_only_the_latest_v2_run(tmp_path: Path) -> N
         json.dumps(
             {
                 "schema": "diag_event_v2",
+                "client": "rust",
                 "runId": "active",
                 "processId": 42,
                 "segmentId": 0,
                 "seq": 1,
+                "streamSeq": 1,
             }
         )
         + "\n",

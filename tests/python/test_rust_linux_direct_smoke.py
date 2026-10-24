@@ -262,12 +262,12 @@ def test_packet_dump_monitor_counts_only_complete_fresh_records(tmp_path: Path) 
     process = SimpleNamespace(poll=lambda: None)
     monitor = module.PacketDumpMonitor(tmp_path, process)
     dump = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
-    dump.write_bytes(b'{"schema":"ed2k_packet_v1"}\n{"schema":"diag_event_v1"')
+    dump.write_bytes(b'{"schema":"ed2k_packet_v1"}\n{"schema":"diag_event_v2"')
 
     assert monitor.sample()["schemas"] == {"ed2k_packet_v1": 1}
     with dump.open("ab") as handle:
         handle.write(b"}\n")
-    assert monitor.sample()["schemas"] == {"diag_event_v1": 1, "ed2k_packet_v1": 1}
+    assert monitor.sample()["schemas"] == {"diag_event_v2": 1, "ed2k_packet_v1": 1}
     assert monitor.sample()["records"] == 2
 
 
@@ -284,10 +284,10 @@ def test_packet_dump_monitor_attributes_only_accepted_payload(tmp_path: Path) ->
     module = load_module()
     monitor = module.PacketDumpMonitor(tmp_path, SimpleNamespace(poll=lambda: None))
     rows = [
-        {"schema": "diag_event_v1", "event": "source_count", "body": {"sourceCount": 4}},
-        {"schema": "diag_event_v1", "event": "download_payload_accepted",
+        {"schema": "diag_event_v2", "event": "source_count", "body": {"sourceCount": 4}},
+        {"schema": "diag_event_v2", "event": "download_payload_accepted",
          "keys": {"fileHash": "a" * 32, "peer": "192.0.2.1:4662"}, "body": {"bytes": 128}},
-        {"schema": "diag_event_v1", "event": "download_source_software",
+        {"schema": "diag_event_v2", "event": "download_source_software",
          "keys": {"fileHash": "a" * 32, "peer": "192.0.2.1:4662"},
          "body": {"clientSoftware": "eMule v0.50a"}},
     ]

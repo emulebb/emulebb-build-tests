@@ -1599,7 +1599,7 @@ def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     jsonl_file.write_text(
-        '{"schema":"diag_event_v1","event":"capacity_snapshot","severity":"info"}\n',
+        '{"schema":"diag_event_v2","event":"capacity_snapshot","severity":"info"}\n',
         encoding="utf-8",
     )
 
@@ -1635,7 +1635,7 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
     rust_logs.mkdir()
     mfc_logs.mkdir()
     (rust_logs / "emulebb-rust-diag-123.jsonl").write_text(
-        '{"schema":"diag_event_v1","event":"routing_summary","severity":"info","network":"Kad"}\n',
+        '{"schema":"diag_event_v2","event":"routing_summary","severity":"info","network":"Kad"}\n',
         encoding="utf-8",
     )
     (mfc_logs / "emulebb-diagnostics-packet.log").write_text(
@@ -1653,7 +1653,7 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
     assert result["aggregatePatternCounts"]["kad"] == 1
     assert result["aggregatePatternCounts"]["ed2k"] == 1
     assert result["aggregateJsonCounts"]["schema"] == {
-        "diag_event_v1": 1,
+        "diag_event_v2": 1,
         "ed2k_packet_v1": 1,
     }
     assert result["aggregateJsonCounts"]["event"] == {"routing_summary": 1}
@@ -1672,7 +1672,7 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
             [
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "upload_slot_recycled",
                         "body": {
                             "reason": "slowUnderfill",
@@ -1682,7 +1682,7 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "upload_request_outcome",
                         "body": {
                             "outcome": "served",
@@ -1696,7 +1696,7 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "upload_request_outcome",
                         "body": {
                             "outcome": "served",
@@ -1708,7 +1708,7 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "capacity_snapshot",
                         "body": {
                             "activeGrantedSessions": 7,
@@ -1760,8 +1760,8 @@ def test_diagnostics_summary_uses_rust_jsonl_ts_field(tmp_path: Path) -> None:
     log_file.write_text(
         "\n".join(
             [
-                json.dumps({"schema": "diag_event_v1", "event": "capacity_snapshot", "ts": "2026-01-01T00:00:00Z"}),
-                json.dumps({"schema": "diag_event_v1", "event": "capacity_snapshot", "ts": "2026-01-01T00:01:00Z"}),
+                json.dumps({"schema": "diag_event_v2", "event": "capacity_snapshot", "ts": "2026-01-01T00:00:00Z"}),
+                json.dumps({"schema": "diag_event_v2", "event": "capacity_snapshot", "ts": "2026-01-01T00:01:00Z"}),
             ]
         )
         + "\n",
@@ -1785,7 +1785,7 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
     log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
     rows = [
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "event": "upload_request_outcome",
             "ts": "2026-01-01T00:00:00Z",
             "body": {
@@ -1802,7 +1802,7 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
             },
         },
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "event": "upload_request_outcome",
             "ts": "2026-01-01T00:01:00Z",
             "body": {
@@ -1818,7 +1818,7 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
             },
         },
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "event": "upload_request_outcome",
             "ts": "2026-01-01T00:02:00Z",
             "body": {
@@ -1833,7 +1833,7 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
             },
         },
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "event": "upload_request_outcome",
             "ts": "2026-01-01T00:03:00Z",
             "body": {
@@ -1971,7 +1971,7 @@ def test_rust_ed2k_offer_summary_reports_batches_without_hashes(tmp_path: Path) 
             [
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "shared_publish_offer_batch",
                         "ts": "2026-01-01T00:00:00Z",
                         "keys": {"server": "203.0.113.10:4661"},
@@ -1988,7 +1988,7 @@ def test_rust_ed2k_offer_summary_reports_batches_without_hashes(tmp_path: Path) 
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "shared_publish_offer_batch",
                         "ts": "2026-01-01T00:01:00Z",
                         "keys": {"server": "203.0.113.10:4661"},
@@ -2037,7 +2037,7 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
             [
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "anti_flood_drop",
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:00Z",
@@ -2053,7 +2053,7 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "anti_flood_drop",
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:00Z",
@@ -2069,7 +2069,7 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "anti_flood_drop",
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:05Z",
@@ -2085,7 +2085,7 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                 ),
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "anti_flood_ban",
                         "severity": "high",
                         "ts": "2026-01-01T00:01:00Z",
@@ -2599,10 +2599,10 @@ def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -
     (rust_logs / "emulebb-rust-diag-1.jsonl").write_text(
         "\n".join(
             [
-                '{"schema":"diag_event_v1","event":"packet","severity":"info"} ED2K',
+                '{"schema":"diag_event_v2","event":"packet","severity":"info"} ED2K',
                 json.dumps(
                     {
-                        "schema": "diag_event_v1",
+                        "schema": "diag_event_v2",
                         "event": "anti_flood_drop",
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:00Z",

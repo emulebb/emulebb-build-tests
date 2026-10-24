@@ -844,7 +844,7 @@ def bring_up_rust(
 
     # EMULEBB_RUST_LOG_DIR runtime-gates the rust diag writers: the ed2k/kad
     # PACKET families are additionally behind the cargo `packet-diagnostics`
-    # feature, but the kad-udp wire dump and the sched/kad_event diag_event_v1
+    # feature, but the kad-udp wire dump and the sched/kad_event diag_event_v2
     # families are env-gated ONLY — a plain-release soak must therefore clear
     # the variable or the "no diagnostics" run still writes diag JSONL.
     if enable_packet_dump:

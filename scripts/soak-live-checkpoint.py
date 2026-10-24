@@ -33,7 +33,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, mfc_diag_adapter, packet_trace_diff  # noqa: E402
+from emule_test_harness import (  # noqa: E402
+    converged_live_wire,
+    diag_event_diff,
+    diag_event_runs,
+    mfc_diag_adapter,
+    packet_trace_diff,
+)
 
 RUST_BASE = "http://192.168.1.210:4731"
 RUST_KEY = "converged-soak-rust-api-key-0001"
@@ -148,25 +154,37 @@ def _windowed_diag_trace(loader, paths: list[Path], since: datetime.datetime) ->
 
 def divergence(args: argparse.Namespace) -> None:
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=args.window_minutes)
-    rust_diag = args.rust_diag or _newest(args.rust_dump, "emulebb-rust-diag-*.jsonl")
-    # MFC rotates its diag log every few seconds, so a single active file is a
-    # tiny slice; gather every rotated diag log touched within the window.
-    if args.mfc_diag:
-        mfc_diag_files = [Path(args.mfc_diag)]
-    else:
-        mfc_diag_files = [
-            Path(p) for p in glob.glob(str(args.mfc_logs / "emulebb-diagnostics-diag*.log"))
-            if datetime.datetime.fromtimestamp(Path(p).stat().st_mtime, datetime.timezone.utc) >= since
-        ]
+    rust_diag_files = (
+        [Path(args.rust_diag)]
+        if args.rust_diag
+        else converged_live_wire.find_diag_traces(args.rust_dump, side="rust")
+    )
+    mfc_diag_files = (
+        [Path(args.mfc_diag)]
+        if args.mfc_diag
+        else converged_live_wire.find_diag_traces(args.mfc_logs, side="emule")
+    )
     print("\n=== cross-client divergence (via diag_event_diff / packet_trace_diff) ===")
-    print(f"window={args.window_minutes}min  rust diag: {rust_diag}\nmfc diag files in window: {len(mfc_diag_files)}")
+    print(f"window={args.window_minutes}min  rust diag files: {len(rust_diag_files)}\nmfc diag files: {len(mfc_diag_files)}")
     report: dict = {}
-    if rust_diag and Path(rust_diag).exists() and mfc_diag_files:
-        rt = _windowed_diag_trace(diag_event_diff.load_trace, [Path(rust_diag)], since)
-        mt = _windowed_diag_trace(diag_event_diff.load_trace, mfc_diag_files, since)
+    if rust_diag_files and mfc_diag_files:
+        rt = [
+            record
+            for record in diag_event_runs.load_latest_diag_records(
+                rust_diag_files, client="rust", allow_incomplete_active_tail=True
+            )
+            if (_rec_ts(record) is None or _rec_ts(record) >= since)
+        ]
+        mt = [
+            record
+            for record in diag_event_runs.load_latest_diag_records(
+                mfc_diag_files, client="mfc", allow_incomplete_active_tail=True
+            )
+            if (_rec_ts(record) is None or _rec_ts(record) >= since)
+        ]
         # MFC keeps its richest bad-peer diagnostics in a separate bad_peer_event_v1
         # log (different names/shape) that never reaches the converged diag stream.
-        # Adapt + window those into the diag_event_v1 bad_peer envelope so the
+        # Adapt + window those into the diag_event_v2 bad_peer envelope so the
         # bad_peer surface is actually diffed (otherwise it is invisible on MFC).
         mfc_bad_peer_files = (
             mfc_diag_adapter.find_mfc_bad_peer_logs(args.mfc_logs)
@@ -174,7 +192,7 @@ def divergence(args: argparse.Namespace) -> None:
             else []
         )
         mt += _windowed_diag_trace(
-            lambda path: mfc_diag_adapter.bad_peer_events_as_diag_v1([path]),
+            lambda path: mfc_diag_adapter.bad_peer_events_as_diag_v2([path]),
             mfc_bad_peer_files,
             since,
         )
@@ -192,7 +210,9 @@ def divergence(args: argparse.Namespace) -> None:
         # (buddy/firewall/search-source) it does exercise are not falsely flagged. MFC's
         # window sample is the parity reference.
         rust_kad_all = packet_trace_diff.kad_records(
-            _windowed_diag_trace(diag_event_diff.load_trace, [Path(rust_diag)], _EPOCH)
+            diag_event_runs.load_latest_diag_records(
+                rust_diag_files, client="rust", allow_incomplete_active_tail=True
+            )
         )
         kad_cov = packet_trace_diff.kad_opcode_coverage(
             rust_kad_all, packet_trace_diff.kad_records(mt)
@@ -323,8 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
     parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust superset-of oracle)? rust extras allowed.")
-    parser.add_argument("--rust-diag", help="Override rust diag_event_v1 jsonl (default: newest in --rust-dump).")
-    parser.add_argument("--mfc-diag", help="Override MFC diag_event_v1 log.")
+    parser.add_argument("--rust-diag", help="Override rust diag_event_v2 segment.")
+    parser.add_argument("--mfc-diag", help="Override MFC diag_event_v2 segment.")
     parser.add_argument("--rust-packet", help="Override rust ed2k_packet_v1 jsonl.")
     parser.add_argument("--mfc-packet", help="Override MFC ed2k_packet_v1 log.")
     parser.add_argument("--diff-json", help="Write the full divergence result JSON here.")

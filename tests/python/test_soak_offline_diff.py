@@ -47,7 +47,7 @@ def _pkt(flow: str, direction: str, opcode: int, payload_hex: str, at: float, *,
 
 def _diag(family: str, event: str, at: float, *, body: dict | None = None) -> dict:
     return {
-        "schema": "diag_event_v1",
+        "schema": "diag_event_v2",
         "ts_utc": _ts(at),
         "family": family,
         "event": event,
@@ -78,7 +78,7 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     dumps.mkdir(parents=True)
     (private_dir / "native-capture.pcapng").write_bytes(b"x" * 4096)
     (dumps / "diag.jsonl").write_text(
-        json.dumps({"schema": "diag_event_v1", "ts": _ts(1)}) + "\n",
+        json.dumps({"schema": "diag_event_v2", "ts": _ts(1)}) + "\n",
         encoding="utf-8",
     )
     (dumps / "packet.log").write_text(
@@ -295,7 +295,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
 
     def _kad(opcode: int, at: float) -> dict:
         return {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "ts_utc": _ts(at),
             "family": "kad_udp",
             "event": "packet",

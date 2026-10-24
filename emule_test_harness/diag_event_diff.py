@@ -1,7 +1,6 @@
-"""Semantic diff of two ``diag_event_v1`` diagnostic traces (rust vs MFC).
+"""Semantic diff of two ``diag_event_v2`` diagnostic traces (rust vs MFC).
 
-Both clients emit the single ``diag_event_v1`` envelope (see
-``docs/diagnostics/diag-event-v1-schema.md``); this module aligns the two traces
+Both clients emit the single ``diag_event_v2`` envelope; this module aligns the two traces
 per ``(family, event)`` and compares only the fields marked **comparable** (C)
 in the schema §3 tables, ignoring client-specific (S) fields, timestamps, and
 sequence counters.
@@ -31,8 +30,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-DIAG_SCHEMA = "diag_event_v1"
-DIAG_SCHEMAS = frozenset({DIAG_SCHEMA, "diag_event_v2"})
+from emule_test_harness.diag_event_runs import load_diag_event_segment
+from emule_test_harness.diag_event_schema import (
+    DIAG_EVENT_DIFF_REPORT_SCHEMA,
+    DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
+    DIAG_EVENT_SCHEMA,
+    DIAG_EVENT_SCHEMA_AUDIT_REPORT_SCHEMA,
+)
 
 PACKET_FAMILIES = ("ed2k_tcp", "kad_udp")
 EVENT_FAMILIES = ("kad_event", "bad_peer")
@@ -100,16 +104,6 @@ _COMPARABLE_KEYS: dict[str, tuple[str, ...]] = {
     "bad_peer": ("peer", "peerHash", "fileHash", "searchId"),
 }
 
-# Oracle body keys rust DELIBERATELY omits for privacy (filenames, sizes, usernames,
-# client-software strings). These are never counted as a rust ⊇ oracle conformance
-# violation even if they appear on the oracle side (e.g. from a raw bad_peer_event_v1
-# record rather than the PII-stripping mfc_diag_adapter). Keyed by family.
-_DELIBERATE_ORACLE_KEY_OMISSIONS: dict[str, frozenset[str]] = {
-    "bad_peer": frozenset(
-        {"fileName", "fileSize", "userName", "clientSoftware", "clientMod", "name"}
-    ),
-}
-
 # Oracle body keys BOTH clients emit only CONDITIONALLY — present only when the event
 # actually carried that datum. e.g. `firstSkipReason` on sched/upload_request_outcome
 # appears only when an upload request skipped a block before serving; MFC omits it the
@@ -129,21 +123,9 @@ _CONDITIONAL_ORACLE_BODY_KEYS: dict[str, frozenset[str]] = {
 
 
 def load_trace(path: Path) -> list[dict[str, Any]]:
-    """Loads supported diagnostic-event records from one JSONL segment."""
+    """Loads current diagnostic-event records from one complete JSONL segment."""
 
-    records: list[dict[str, Any]] = []
-    for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("schema") not in DIAG_SCHEMAS:
-            continue
-        records.append(record)
-    return records
+    return load_diag_event_segment(Path(path))
 
 
 def load_traces(paths: list[Path]) -> list[dict[str, Any]]:
@@ -154,6 +136,15 @@ def load_traces(paths: list[Path]) -> list[dict[str, Any]]:
 
 def _by_family(trace: list[dict[str, Any]], family: str) -> list[dict[str, Any]]:
     return [r for r in trace if r.get("family") == family]
+
+
+def _require_current_trace(trace: list[dict[str, Any]], *, side: str) -> None:
+    for index, record in enumerate(trace):
+        if record.get("schema") != DIAG_EVENT_SCHEMA:
+            raise ValueError(
+                f"{side} trace record {index} uses {record.get('schema')!r}; "
+                f"expected {DIAG_EVENT_SCHEMA!r}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -470,8 +461,10 @@ def diff_traces(
     rust_trace: list[dict[str, Any]],
     mfc_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compares two ``diag_event_v1`` traces family-by-family (schema §4 D4)."""
+    """Compares two ``diag_event_v2`` traces family-by-family."""
 
+    _require_current_trace(rust_trace, side="rust")
+    _require_current_trace(mfc_trace, side="mfc")
     families: list[dict[str, Any]] = []
     families_present: set[str] = set()
     for record in (*rust_trace, *mfc_trace):
@@ -499,7 +492,7 @@ def diff_traces(
             )
 
     return {
-        "schema": DIAG_SCHEMA,
+        "schema": DIAG_EVENT_DIFF_REPORT_SCHEMA,
         "ok": all(f["ok"] for f in families),
         "families": families,
     }
@@ -517,6 +510,9 @@ def schema_audit(
     rust emitters can be conformed to the oracle schema. Keys only; value
     semantics are out of scope.
     """
+
+    _require_current_trace(rust_trace, side="rust")
+    _require_current_trace(mfc_trace, side="mfc")
 
     def index(trace: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
         acc: dict[tuple[str, str], dict[str, Any]] = {}
@@ -566,10 +562,9 @@ def schema_audit(
     for e in events:
         if e["presence"] != "both" or not e["onlyMfcKeys"]:
             continue
-        omitted = _DELIBERATE_ORACLE_KEY_OMISSIONS.get(e["family"], frozenset())
         conditional = _CONDITIONAL_ORACLE_BODY_KEYS.get(e["family"], frozenset())
         missing = [
-            key for key in e["onlyMfcKeys"] if key not in omitted and key not in conditional
+            key for key in e["onlyMfcKeys"] if key not in conditional
         ]
         if missing:
             body_violations.append(
@@ -585,7 +580,12 @@ def schema_audit(
             f"{e['family']}/{e['event']}" for e in events if e["presence"] == "rust_only"
         ],
     }
-    return {"schema": DIAG_SCHEMA, "ok": ok, "events": events, "conformance": conformance}
+    return {
+        "schema": DIAG_EVENT_SCHEMA_AUDIT_REPORT_SCHEMA,
+        "ok": ok,
+        "events": events,
+        "conformance": conformance,
+    }
 
 
 def family_conformance(
@@ -641,16 +641,16 @@ def family_conformance(
         slot["ok"] = not slot["bodyKeyViolations"]
         families.append(slot)
     return {
-        "schema": DIAG_SCHEMA,
+        "schema": DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
         "ok": all(f["ok"] for f in families),
         "families": families,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Diff two diag_event_v1 diagnostic traces.")
-    parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust diag_event_v1 JSONL dump.")
-    parser.add_argument("--mfc", required=True, type=Path, help="eMuleBB (MFC) diag_event_v1 JSONL dump.")
+    parser = argparse.ArgumentParser(description=f"Diff two {DIAG_EVENT_SCHEMA} diagnostic traces.")
+    parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust diag_event_v2 JSONL dump.")
+    parser.add_argument("--mfc", required=True, type=Path, help="eMuleBB (MFC) diag_event_v2 JSONL dump.")
     args = parser.parse_args(argv)
 
     report = diff_traces(load_trace(args.rust), load_trace(args.mfc))

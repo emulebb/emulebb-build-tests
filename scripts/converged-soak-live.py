@@ -13,7 +13,7 @@ unattended overnight run. Automated downloads are opt-in only. In both modes the
 harness OBSERVES the clients:
 it polls both ``/api/v1/searches`` and ``/api/v1/transfers``, correlates the same
 search term / ed2k hash across the two clients within a window, and runs the
-converged ``ed2k_packet_v1`` / ``diag_event_v1`` diff over each action's time
+converged ``ed2k_packet_v1`` / ``diag_event_v2`` diff over each action's time
 window (see ``emule_test_harness.soak_action_diff``). A manual ``begin``/``end``
 marker brackets actions the auto-correlator can't pair.
 
@@ -49,6 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import (
     diag_event_diff,
+    diag_event_runs,
     live_process_monitor,
     mfc_diag_adapter,
     mfc_known_met,
@@ -1070,17 +1071,18 @@ def load_packets(
 def load_diag(
     dump_dir: Path, *, side: str, min_mtime: float | None = None
 ) -> list[dict[str, Any]]:
-    globs = clw.RUST_DIAG_DUMP_GLOBS if side == "rust" else clw.EMULE_DIAG_DUMP_GLOBS
-    records: list[dict[str, Any]] = []
-    for path in _glob_all(dump_dir, globs, min_mtime=min_mtime):
-        records.extend(diag_event_diff.load_trace(path))
+    segments = clw.find_diag_traces(dump_dir, side=side)
+    client = "rust" if side == "rust" else "mfc"
+    records = diag_event_runs.load_latest_diag_records(
+        segments, client=client, allow_incomplete_active_tail=True
+    )
     if side == "emule":
         bad_peer_logs = _glob_all(
             dump_dir,
             ("emulebb-diagnostics-bad-peer*.log",),
             min_mtime=min_mtime,
         )
-        records.extend(mfc_diag_adapter.bad_peer_events_as_diag_v1(bad_peer_logs))
+        records.extend(mfc_diag_adapter.bad_peer_events_as_diag_v2(bad_peer_logs))
     return records
 
 

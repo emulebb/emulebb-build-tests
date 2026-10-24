@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import converged_live_wire, diag_event_runs  # noqa: E402
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
@@ -113,13 +114,20 @@ class SwarmClient:
     high_id: bool | None = None
 
     def diag_files(self) -> list[Path]:
-        """Converged diag_event_v1 JSONL/log files this client writes."""
+        """Converged diag_event_v2 segments for this client's current run."""
 
         if self.kind == "rust":
-            return sorted(self.log_dir.glob("*.jsonl")) if self.log_dir else []
+            return (
+                converged_live_wire.find_diag_traces(self.log_dir, side="rust")
+                if self.log_dir
+                else []
+            )
         if self.profile_base is None:
             return []
-        return sorted(self.profile_base.rglob("emulebb-diagnostics-diag.log"))
+        log_dirs = list(self.profile_base.rglob("emulebb-mfc-diag-*.jsonl"))
+        if not log_dirs:
+            return []
+        return converged_live_wire.find_diag_traces(log_dirs[0].parent, side="emule")
 
     @property
     def name(self) -> str:
@@ -347,34 +355,26 @@ def download_and_verify(downloader: SwarmClient, share: dict, *, api_key: str, t
 
 def serving_summary(client: SwarmClient) -> dict:
     """Serving-side (flow=listener) ed2k_tcp opcode + transportMode histogram from a
-    client's converged diag_event_v1, so a rust uploader and an MFC uploader that
+    client's converged diag_event_v2, so a rust uploader and an MFC uploader that
     served the same fixture can be compared feature-by-feature."""
 
     import collections
     opcodes: collections.Counter = collections.Counter()
     tmodes: collections.Counter = collections.Counter()
-    for f in client.diag_files():
-        try:
-            text = f.read_text(encoding="utf-8-sig", errors="ignore")
-        except OSError:
+    diag_files = client.diag_files()
+    diag_client = "rust" if client.kind == "rust" else "mfc"
+    for rec in diag_event_runs.load_latest_diag_records(
+        diag_files, client=diag_client, allow_incomplete_active_tail=True
+    ):
+        if rec.get("family") != "ed2k_tcp":
             continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("schema") != "diag_event_v1" or rec.get("family") != "ed2k_tcp":
-                continue
-            body = rec.get("body") or {}
-            if body.get("flow") != "listener":
-                continue
-            if body.get("opcodeName"):
-                opcodes[body["opcodeName"]] += 1
-            if body.get("transportMode"):
-                tmodes[body["transportMode"]] += 1
+        body = rec.get("body") or {}
+        if body.get("flow") != "listener":
+            continue
+        if body.get("opcodeName"):
+            opcodes[body["opcodeName"]] += 1
+        if body.get("transportMode"):
+            tmodes[body["transportMode"]] += 1
     return {"opcodes": dict(opcodes), "transportModes": dict(tmodes)}
 
 

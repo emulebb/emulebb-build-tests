@@ -1,4 +1,8 @@
-# Common Diagnostic Schema v2 — `diag_event_v1`
+# Legacy Diagnostic Design — `diag_event_v1`
+
+> **Legacy only.** `diag_event_v2` is the sole current shared Rust/MFC schema.
+> Current writers and gates must not emit or accept `diag_event_v1`. This file
+> remains only as historical rationale for explicitly named legacy adapters.
 
 Status: design / contract. This document defines a single converged diagnostic
 event schema (`diag_event_v1`) emitted **identically by both clients** —

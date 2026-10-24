@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import diag_event_diff, packet_trace_diff  # noqa: E402
-from emule_test_harness.diag_event_runs import load_latest_rust_diag_records  # noqa: E402
+from emule_test_harness.diag_event_runs import load_latest_diag_records  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
@@ -204,7 +204,7 @@ def load_rust_diag_records(log_dir: Path) -> list[dict[str, object]]:
         for path in log_dir.glob(pattern)
         if path.is_file()
     }
-    return load_latest_rust_diag_records(paths)
+    return load_latest_diag_records(paths, client="rust")
 
 
 def _compact_diag_event(record: dict[str, object]) -> dict[str, object]:

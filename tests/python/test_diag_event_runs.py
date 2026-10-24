@@ -66,7 +66,12 @@ def test_loader_selects_one_newest_run_and_orders_its_segments(
 
     selected = select_latest_diag_run(tmp_path.glob("*.jsonl"), client=client)
     assert selected == [first.resolve(), second.resolve()]
-    assert [record["seq"] for record in load_latest_diag_records(selected, client=client)] == [
+    assert [
+        record["seq"]
+        for record in load_latest_diag_records(
+            selected, client=client, allow_incomplete_active_tail=True
+        )
+    ] == [
         1,
         2,
     ]
@@ -88,6 +93,13 @@ def test_loader_rejects_legacy_schema_without_explicit_adapter(tmp_path: Path) -
 def test_loader_rejects_malformed_complete_line(tmp_path: Path) -> None:
     segment = tmp_path / _segment_name("rust", 42, "active", 0)
     segment.write_text(_record("active", 42, 0, 1) + "\n{bad}\n", encoding="utf-8")
+    with pytest.raises(DiagnosticTraceError, match="malformed JSON"):
+        load_latest_diag_records([segment], client="rust")
+
+
+def test_loader_rejects_unterminated_tail_for_completed_run(tmp_path: Path) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    segment.write_text(_record("active", 42, 0, 1) + "\n{", encoding="utf-8")
     with pytest.raises(DiagnosticTraceError, match="malformed JSON"):
         load_latest_diag_records([segment], client="rust")
 

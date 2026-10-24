@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from emule_test_harness.diag_event_diff import diff_traces, load_trace, load_traces
+from emule_test_harness.diag_event_runs import DiagnosticTraceError
 
 
 def _env(family, event, *, keys=None, body=None, severity="info"):
     return {
-        "schema": "diag_event_v1",
+        "schema": "diag_event_v2",
         "client": "rust",
         "ts": "2026-06-16T00:00:00.000Z",
         "seq": 1,
@@ -51,6 +54,14 @@ def test_identical_packet_traces_match() -> None:
     fam = _family(report, "ed2k_tcp")
     assert fam["totals"]["matched"] == 2
     assert fam["totals"]["payloadMismatches"] == 0
+    assert report["schema"] == "diag_event_diff_v1"
+
+
+def test_diff_rejects_legacy_schema() -> None:
+    legacy = _pkt("ed2k_tcp", "recv", 0x01, "aabb")
+    legacy["schema"] = "diag_event_v1"
+    with pytest.raises(ValueError, match="expected 'diag_event_v2'"):
+        diff_traces([legacy], [])
 
 
 def test_packet_same_opcode_different_payload_is_mismatch() -> None:
@@ -180,24 +191,20 @@ def test_sched_deny_only_at_cap_invariant() -> None:
 # --- loader + self-diff smoke --------------------------------------------- #
 
 
-def test_load_trace_filters_foreign_schema(tmp_path: Path) -> None:
+def test_load_trace_rejects_foreign_schema(tmp_path: Path) -> None:
     path = tmp_path / "dump.jsonl"
     lines = [
         json.dumps(_pkt("ed2k_tcp", "recv", 0x01, "aabb")),
-        json.dumps({"schema": "ed2k_packet_v1", "opcode": 1}),  # old schema, dropped
-        "not json",
-        "",
+        json.dumps({"schema": "ed2k_packet_v1", "opcode": 1}),
     ]
     path.write_text("\r\n".join(lines), encoding="utf-8")
-    records = load_trace(path)
-    assert len(records) == 1
-    assert records[0]["family"] == "ed2k_tcp"
+    with pytest.raises(DiagnosticTraceError, match="unexpected diagnostic schema"):
+        load_trace(path)
 
 
-def test_load_trace_accepts_diag_event_v2(tmp_path: Path) -> None:
+def test_load_trace_accepts_current_schema(tmp_path: Path) -> None:
     path = tmp_path / "dump.jsonl"
     record = _pkt("ed2k_tcp", "recv", 0x01, "aabb")
-    record["schema"] = "diag_event_v2"
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
     assert load_trace(path) == [record]
@@ -227,18 +234,24 @@ def test_self_diff_of_mixed_trace_is_ok() -> None:
     assert report["ok"] is True
 
 
-def test_conformance_ignores_deliberate_pii_omissions() -> None:
-    # rust deliberately omits filenames/usernames for privacy; an oracle-only PII
-    # body key must NOT count as a rust-superset-of-oracle conformance violation.
+def test_conformance_requires_unredacted_oracle_fields() -> None:
     from emule_test_harness.diag_event_diff import schema_audit
 
-    common = {"schema": "diag_event_v1", "family": "bad_peer", "event": "repeat_block_request",
+    common = {"schema": "diag_event_v2", "family": "bad_peer", "event": "repeat_block_request",
               "severity": "medium", "keys": {"peer": "1.2.3.4:5"}}
     rust = [{**common, "body": {"action": "observe", "behavior": "repeat_block_request"}}]
     mfc = [{**common, "body": {"action": "observe", "behavior": "repeat_block_request",
                                "fileName": "secret.mkv", "userName": "http://x"}}]
     audit = schema_audit(rust, mfc)
-    assert audit["conformance"]["conformant"] is True
+    assert audit["schema"] == "diag_event_schema_audit_v1"
+    assert audit["conformance"]["conformant"] is False
+    assert audit["conformance"]["bodyKeyViolations"] == [
+        {
+            "family": "bad_peer",
+            "event": "repeat_block_request",
+            "missingOracleKeys": ["fileName", "userName"],
+        }
+    ]
 
 
 # --- family_conformance (per-action oracle gate) --------------------------- #
