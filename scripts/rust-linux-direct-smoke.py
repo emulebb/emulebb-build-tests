@@ -563,7 +563,7 @@ class PacketDumpMonitor:
                 self.schemas[record["schema"]] += 1
                 if record.get("severity") == "error":
                     self.error_events[str(record.get("event") or "unknown")] += 1
-                if record.get("schema") in {"diag_event_v1", "diag_event_v2"}:
+                if record.get("schema") == "diag_event_v2":
                     keys = record.get("keys") or {}
                     body = record.get("body") or {}
                     if isinstance(keys, dict) and isinstance(body, dict):
@@ -964,7 +964,7 @@ def main(argv: list[str] | None = None) -> int:
             and report["kad"]["running"]
             and report["kad"]["connected"]
             and report["kad"]["contactCount"] > 0
-            and (not monitor or all(monitor.schemas.get(schema, 0) > 0 for schema in ("ed2k_packet_v1", "udp_packet_v1", "diag_event_v1")))
+            and (not monitor or all(monitor.schemas.get(schema, 0) > 0 for schema in ("ed2k_packet_v1", "udp_packet_v1", "diag_event_v2")))
         )
         transfer_results = report.get("transfers", [])
         if not connectivity_passed:

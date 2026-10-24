@@ -92,7 +92,11 @@ def select_latest_diag_run(
     return [path for _, path in ordered]
 
 
-def _load_segment(path: Path, *, allow_incomplete_tail: bool) -> list[dict[str, Any]]:
+def load_diag_event_segment(
+    path: Path, *, allow_incomplete_tail: bool = False
+) -> list[dict[str, Any]]:
+    """Loads one current segment and rejects malformed or foreign-schema records."""
+
     text = path.read_text(encoding="utf-8-sig")
     lines = text.splitlines(keepends=True)
     records: list[dict[str, Any]] = []
@@ -117,6 +121,10 @@ def _load_segment(path: Path, *, allow_incomplete_tail: bool) -> list[dict[str, 
             raise DiagnosticTraceError(
                 f"diagnostic segment {path} line {line_number} is not a JSON object"
             )
+        if record.get("schema") != DIAG_EVENT_SCHEMA:
+            raise DiagnosticTraceError(
+                f"unexpected diagnostic schema in {path}: {record.get('schema')!r}"
+            )
         records.append(record)
     return records
 
@@ -126,6 +134,7 @@ def load_latest_diag_records(
     *,
     client: str,
     process_id: int | None = None,
+    allow_incomplete_active_tail: bool = False,
 ) -> list[dict[str, Any]]:
     """Loads and validates one current run in segment and process-sequence order."""
 
@@ -141,13 +150,12 @@ def load_latest_diag_records(
         identity = diag_segment_identity(path, client=client)
         assert identity is not None
         _, _, selected_segment_id = identity
-        for record in _load_segment(
-            path, allow_incomplete_tail=path_index == len(selected) - 1
+        for record in load_diag_event_segment(
+            path,
+            allow_incomplete_tail=(
+                allow_incomplete_active_tail and path_index == len(selected) - 1
+            ),
         ):
-            if record.get("schema") != DIAG_EVENT_SCHEMA:
-                raise DiagnosticTraceError(
-                    f"unexpected diagnostic schema in {path}: {record.get('schema')!r}"
-                )
             if record.get("client") != client:
                 raise DiagnosticTraceError(
                     f"unexpected diagnostic client in {path}: {record.get('client')!r}"

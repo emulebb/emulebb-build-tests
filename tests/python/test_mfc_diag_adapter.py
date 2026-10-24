@@ -1,4 +1,4 @@
-"""Tests for the MFC bad_peer_event_v1 -> diag_event_v1 adapter."""
+"""Tests for the explicit MFC bad_peer_event_v1 -> diag_event_v2 adapter."""
 
 from __future__ import annotations
 
@@ -22,7 +22,10 @@ def test_adapt_repeat_block_request_maps_name_keys_body() -> None:
         },
     }
     out = ad.adapt_bad_peer_record(record)
-    assert out["schema"] == "diag_event_v1"
+    assert out["schema"] == "diag_event_v2"
+    assert out["client"] == "mfc"
+    assert out["runId"] == "legacy-mfc-bad-peer-adapter"
+    assert out["seq"] == 1
     assert out["family"] == "bad_peer"
     assert out["event"] == "repeat_block_request"
     assert out["severity"] == "medium"
@@ -70,7 +73,7 @@ def test_download_first_payload_timeout_name_preserved() -> None:
     assert out["body"]["action"] == "cancel_transfer"
 
 
-def test_bad_peer_events_as_diag_v1_reads_jsonl(tmp_path) -> None:
+def test_bad_peer_events_as_diag_v2_reads_jsonl(tmp_path) -> None:
     import json
 
     log = tmp_path / "emulebb-diagnostics-bad-peer.log"
@@ -81,6 +84,6 @@ def test_bad_peer_events_as_diag_v1_reads_jsonl(tmp_path) -> None:
         {"schema": "other", "event": "ignored"},  # non-bad_peer lines skipped
     ]
     log.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
-    out = ad.bad_peer_events_as_diag_v1([log])
+    out = ad.bad_peer_events_as_diag_v2([log])
     assert len(out) == 1
     assert out[0]["event"] == "download_idle_timeout"

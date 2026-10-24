@@ -188,7 +188,7 @@ def test_reflected_self_source_evidence_rejects_requester_endpoint() -> None:
 
 
 def _kad(opcode, direction, name=None):
-    rec = {"schema": "diag_event_v1", "family": "kad_udp", "keys": {"opcode": opcode}, "body": {"direction": direction}}
+    rec = {"schema": "diag_event_v2", "family": "kad_udp", "keys": {"opcode": opcode}, "body": {"direction": direction}}
     if name:
         rec["opcode_name"] = name
     return rec
@@ -282,5 +282,5 @@ def test_kad_opcode_coverage_entries_carry_hex_and_static_names() -> None:
 def test_kad_records_filters_non_kad() -> None:
     from emule_test_harness import packet_trace_diff as ptd
 
-    trace = [_kad(67, "send"), {"schema": "diag_event_v1", "family": "sched", "event": "x"}]
+    trace = [_kad(67, "send"), {"schema": "diag_event_v2", "family": "sched", "event": "x"}]
     assert len(ptd.kad_records(trace)) == 1

@@ -18,7 +18,7 @@ live network:
 
 Both clients emit the converged ``ed2k_packet_v1`` packet schema, so the two
 captures are aligned with ``emule_test_harness.packet_trace_diff`` and the
-broader ``diag_event_v1`` envelope with ``emule_test_harness.diag_event_diff``.
+broader ``diag_event_v2`` envelope with ``emule_test_harness.diag_event_diff``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness.diag_event_runs import select_latest_rust_diag_run
+from emule_test_harness.diag_event_runs import select_latest_diag_run
 
 # Canonical MFC output build layout dimensions (see WORKSPACE-POLICY build root).
 # The packet-diagnostics MFC exe is the `main` variant built with --diagnostics:
@@ -41,7 +41,7 @@ MFC_EXE_NAME = "emulebb-diagnostics.exe"
 # Both clients write the converged ed2k_packet_v1 dump. Rust emits per-flow JSONL
 # stems under EMULEBB_RUST_LOG_DIR; the MFC diagnostics build writes ONE fixed
 # file in its profile log dir (LogArtifactNames::PacketDiagnosticsLogFileName /
-# DiagEventV1LogFileName, srchybrid/LogArtifactNames.h).
+# the dedicated segmented writer.
 RUST_PACKET_DUMP_GLOBS = (
     "emulebb-rust-ed2k-*-dump-*.jsonl",
     "emulebb-rust-ed2k-tcp-dump-*.jsonl",
@@ -50,7 +50,8 @@ RUST_PACKET_DUMP_GLOBS = (
 # of the run; match the rotated files too (`…-packet-<ts>.log`, `…-diag-<ts>.log`).
 EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet*.log",)
 RUST_DIAG_DUMP_GLOBS = ("emulebb-rust-diag-*.jsonl",)
-EMULE_DIAG_DUMP_GLOBS = ("emulebb-diagnostics-diag*.log",)
+EMULE_DIAG_DUMP_GLOBS = ("emulebb-mfc-diag-*.jsonl",)
+EMULE_DIAG_HEALTH_FILE = "emulebb-mfc-diag-health.json"
 
 
 def mfc_diagnostics_build_dir(
@@ -138,7 +139,7 @@ def resolve_rust_diagnostics_exe(output_root: Path, *, require_exists: bool = Tr
 
 
 # The plain release binary (no `packet-diagnostics` feature, no ed2k_packet_v1 /
-# diag_event_v1 dumps) is staged into the same canonical bin dir under its own
+# diag_event_v2 dumps) is staged into the same canonical bin dir under its own
 # name. Staging clears the dir, so exactly ONE flavor is staged at a time — the
 # resolver errors name the build command for the flavor you asked for.
 RUST_REGULAR_EXE_NAME = "emulebb-rust.exe"
@@ -232,14 +233,18 @@ def find_diag_trace(dump_dir: Path, *, side: str) -> Path | None:
 def find_diag_traces(dump_dir: Path, *, side: str) -> list[Path]:
     """Returns ordered diagnostic-event segments for one current client run."""
 
-    if side == "rust":
-        matches = _first_existing_glob(dump_dir, RUST_DIAG_DUMP_GLOBS)
-        return select_latest_rust_diag_run(matches)
-    elif side == "emule":
-        matches = _first_existing_glob(dump_dir, EMULE_DIAG_DUMP_GLOBS)
-    else:
+    if side not in {"rust", "emule"}:
         raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
-    return sorted(matches, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    globs = RUST_DIAG_DUMP_GLOBS if side == "rust" else EMULE_DIAG_DUMP_GLOBS
+    client = "rust" if side == "rust" else "mfc"
+    return select_latest_diag_run(_first_existing_glob(dump_dir, globs), client=client)
+
+
+def find_mfc_diag_health(dump_dir: Path) -> Path | None:
+    """Returns the MFC writer-health sidecar when present."""
+
+    path = dump_dir / EMULE_DIAG_HEALTH_FILE
+    return path if path.is_file() else None
 
 
 def count_jsonl_records(path: Path | None) -> int:
@@ -269,7 +274,7 @@ def build_converged_report(
 
     The report records the located traces, the per-(flow, direction)
     ``ed2k_packet_v1`` diff (matches / payload-diffs / only-rust / only-emule),
-    the ``diag_event_v1`` family diff, and each side's packet-dump summary. The
+    the ``diag_event_v2`` family diff, and each side's packet-dump summary. The
     top-level ``ok`` is true only when both traces were captured and both diffs
     converged.
     """

@@ -31,7 +31,7 @@ def _pkt(
 
 def _diag(family: str, event: str, ts: datetime, body: dict | None = None) -> dict:
     return {
-        "schema": "diag_event_v1",
+        "schema": "diag_event_v2",
         "family": family,
         "event": event,
         "severity": "info",
@@ -206,13 +206,13 @@ def test_slice_trace_keeps_only_in_window_records() -> None:
 def test_slice_trace_keeps_diag_event_records_with_ts_field() -> None:
     records = [
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "family": "sched",
             "event": "outside",
             "ts": _ts(-5).isoformat().replace("+00:00", "Z"),
         },
         {
-            "schema": "diag_event_v1",
+            "schema": "diag_event_v2",
             "family": "sched",
             "event": "inside",
             "ts": _ts(10).isoformat().replace("+00:00", "Z"),
@@ -461,7 +461,7 @@ def test_diff_action_download_gate_fails_without_request_parts() -> None:
 
 def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
     return {
-        "schema": "diag_event_v1",
+        "schema": "diag_event_v2",
         "ts_utc": ts.isoformat().replace("+00:00", "Z"),
         "family": "kad_udp",
         "event": "packet",

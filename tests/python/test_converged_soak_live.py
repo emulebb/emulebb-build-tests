@@ -2213,10 +2213,12 @@ def test_trim_log_tree_can_trim_diagnostic_evidence_when_requested(tmp_path: Pat
 
 def test_load_diag_includes_mfc_bad_peer_adapter(tmp_path: Path) -> None:
     runner = _load_soak_runner()
-    diag = tmp_path / "emulebb-diagnostics-diag.log"
+    diag = tmp_path / "emulebb-mfc-diag-42-active-000000.jsonl"
     bad_peer = tmp_path / "emulebb-diagnostics-bad-peer.log"
     diag.write_text(
-        '{"schema":"diag_event_v1","family":"sched","event":"tick","ts":"2026-07-06T12:00:00.000Z","body":{}}\n',
+        '{"schema":"diag_event_v2","client":"mfc","runId":"active","processId":42,'
+        '"segmentId":0,"seq":1,"streamSeq":1,"family":"sched","event":"tick",'
+        '"ts":"2026-07-06T12:00:00.000Z","body":{}}\n',
         encoding="utf-8",
     )
     bad_peer.write_text(

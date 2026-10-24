@@ -29,9 +29,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import diag_event_diff, packet_trace_diff, secident_audit, soak_action_diff  # noqa: E402
+from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 
-DIAG_SCHEMA = "diag_event_v1"
 CAMPAIGN_EXIT_CODES = {
     "parity": 0,
     "divergence": 1,
@@ -101,8 +101,8 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
                     continue
                 if not isinstance(record, dict):
                     continue
-                if record.get("schema") == DIAG_SCHEMA:
-                    # diag_event_v1 stamps ``ts``; slice_trace keys on ``ts_utc``.
+                if record.get("schema") == DIAG_EVENT_SCHEMA:
+                    # diag_event_v2 stamps ``ts``; slice_trace keys on ``ts_utc``.
                     record.setdefault("ts_utc", record.get("ts"))
                     diag.append(record)
                 else:

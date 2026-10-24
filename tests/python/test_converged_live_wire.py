@@ -216,9 +216,9 @@ def test_converged_runner_clears_mfc_append_only_diagnostic_logs(tmp_path: Path)
 
     removed = runner.clear_mfc_diagnostic_logs(tmp_path)
 
-    assert sorted(removed) == ["emulebb-diagnostics-diag.log", "emulebb-diagnostics-packet.log"]
+    assert removed == ["emulebb-diagnostics-packet.log"]
     assert not packet_log.exists()
-    assert not diag_log.exists()
+    assert diag_log.exists()
     assert keep_log.exists()
 
 
@@ -337,6 +337,86 @@ def test_find_diag_traces_selects_one_rust_run_in_segment_order(tmp_path: Path) 
         second.resolve(),
     ]
     assert clw.find_diag_trace(tmp_path, side="rust") == second.resolve()
+
+
+def test_find_diag_traces_selects_one_mfc_run_in_segment_order(tmp_path: Path) -> None:
+    stale = tmp_path / "emulebb-mfc-diag-41-stale-000000.jsonl"
+    first = tmp_path / "emulebb-mfc-diag-42-active-000000.jsonl"
+    second = tmp_path / "emulebb-mfc-diag-42-active-000001.jsonl"
+    for path in (stale, first, second):
+        path.write_text("{}\n", encoding="utf-8")
+    os.utime(stale, ns=(1, 1))
+    os.utime(first, ns=(2, 2))
+    os.utime(second, ns=(3, 3))
+
+    assert clw.find_diag_traces(tmp_path, side="emule") == [
+        first.resolve(),
+        second.resolve(),
+    ]
+
+
+def test_find_mfc_diag_health(tmp_path: Path) -> None:
+    assert clw.find_mfc_diag_health(tmp_path) is None
+    health = tmp_path / clw.EMULE_DIAG_HEALTH_FILE
+    health.write_text("{}", encoding="utf-8")
+    assert clw.find_mfc_diag_health(tmp_path) == health
+
+
+def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None:
+    runner = _load_converged_runner()
+    rust_dir = tmp_path / "rust"
+    mfc_dir = tmp_path / "mfc"
+    rust_dir.mkdir()
+    mfc_dir.mkdir()
+    rust_segment = rust_dir / "emulebb-rust-diag-41-rust-run-000000.jsonl"
+    mfc_segment = mfc_dir / "emulebb-mfc-diag-42-mfc-run-000000.jsonl"
+
+    def record(client: str, process_id: int, run_id: str) -> dict[str, object]:
+        return {
+            "schema": "diag_event_v2",
+            "client": client,
+            "runId": run_id,
+            "processId": process_id,
+            "segmentId": 0,
+            "seq": 1,
+            "streamSeq": 1,
+            "family": "sched",
+            "event": "capacity_snapshot",
+            "severity": "info",
+            "keys": {},
+            "body": {},
+        }
+
+    _write_jsonl(rust_segment, [record("rust", 41, "rust-run")])
+    _write_jsonl(mfc_segment, [record("mfc", 42, "mfc-run")])
+    (mfc_dir / clw.EMULE_DIAG_HEALTH_FILE).write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "enabled": True,
+                "configured": True,
+                "initialized": True,
+                "runId": "mfc-run",
+                "processId": 42,
+                "activeSegmentId": 0,
+                "activeFileName": mfc_segment.name,
+                "droppedEvents": 0,
+                "encodeErrors": 0,
+                "writeErrors": 0,
+                "retentionDeleteErrors": 0,
+                "initializationFailure": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _, _, _, diag_diff = runner.diff_scenario_traces(
+        {"packetDumpDir": str(rust_dir)}, {"packetDumpDir": str(mfc_dir)}
+    )
+
+    assert diag_diff is not None
+    assert diag_diff["schema"] == "diag_event_diff_v1"
+    assert diag_diff["ok"] is True
 
 
 def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:

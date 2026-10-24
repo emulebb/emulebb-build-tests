@@ -498,7 +498,7 @@ def kad_records(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Filters Kad packet records from a converged diag_event trace (or raw dump).
 
     Kad packets have no standalone MFC ``udp_packet_v1`` dump — they live only in
-    the converged ``diag_event_v1`` stream (``family:"kad_udp"``) on both clients —
+    the converged ``diag_event_v2`` stream (``family:"kad_udp"``) on both clients —
     so the Kad opcode coverage is computed off the diag traces, not packet_trace_diff
     input files.
     """

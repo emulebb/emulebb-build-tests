@@ -11,7 +11,7 @@ Both clients expose the same ``/api/v1`` REST surface (``/searches``,
 ``/shared-directories``, ``/servers/operations/connect``, ``/kad/operations/start``)
 and both emit the converged ``ed2k_packet_v1`` packet schema, so a rust-vs-MFC
 exchange of the same wire traffic can be checked for wire-faithfulness with
-``emule_test_harness.packet_trace_diff`` (and the broader ``diag_event_v1``
+``emule_test_harness.packet_trace_diff`` (and the broader ``diag_event_v2``
 envelope with ``emule_test_harness.diag_event_diff``).
 
 No machine paths are baked in: the REST control plane binds ``X_LOCAL_IP``, the
@@ -47,6 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import converged_scenarios as cs
 from emule_test_harness import diag_event_diff
+from emule_test_harness import diag_event_runs
 from emule_test_harness import packet_trace_diff
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
@@ -220,11 +221,11 @@ def poll_mfc_search_page(rest_smoke: ModuleType, base_url: str, search_id: str) 
 
 
 def clear_mfc_diagnostic_logs(packet_dump_dir: Path) -> list[str]:
-    """Removes append-only MFC diagnostics logs so one run owns one trace."""
+    """Removes the legacy fixed packet log before one scenario run."""
 
     removed: list[str] = []
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("emulebb-diagnostics-packet.log", "emulebb-diagnostics-diag.log"):
+    for name in ("emulebb-diagnostics-packet.log",):
         path = packet_dump_dir / name
         if path.exists():
             path.unlink()
@@ -439,9 +440,8 @@ def run_mfc_side(
         reuse_existing=persist_artifacts_dir is not None,
     )
     config_dir = Path(str(profile["config_dir"]))
-    # The diagnostics build writes the converged ed2k_packet_v1 packet dump
-    # (emulebb-diagnostics-packet.log) and the diag_event_v1 dump
-    # (emulebb-diagnostics-diag.log) into its profile log directory
+    # The diagnostics build writes the converged ed2k_packet_v1 packet dump and
+    # the segmented diag_event_v2 run into its profile log directory
     # (GetMuleDirectory(EMULE_LOGDIR) == <profile_base>/logs), gated at COMPILE
     # time by the EMULEBB_ENABLE_PACKET_DIAGNOSTICS define in the diagnostics
     # flavor. There is no runtime env-var override for the dump path, so we read
@@ -754,9 +754,17 @@ def diff_scenario_traces(
     rust_diag = clw.find_diag_traces(rust_dump_dir, side="rust")
     emule_diag = clw.find_diag_traces(emule_dump_dir, side="emule")
     if rust_diag and emule_diag:
+        emule_health = clw.find_mfc_diag_health(emule_dump_dir)
+        if emule_health is None:
+            raise diag_event_runs.DiagnosticTraceError(
+                f"missing MFC diagnostic writer health in {emule_dump_dir}"
+            )
+        diag_event_runs.load_and_validate_writer_health(
+            emule_health, client="mfc", selected_segments=emule_diag
+        )
         diag_diff = diag_event_diff.diff_traces(
-            diag_event_diff.load_traces(rust_diag),
-            diag_event_diff.load_traces(emule_diag),
+            diag_event_runs.load_latest_diag_records(rust_diag, client="rust"),
+            diag_event_runs.load_latest_diag_records(emule_diag, client="mfc"),
         )
     return rust_trace, emule_trace, packet_diff, diag_diff
 

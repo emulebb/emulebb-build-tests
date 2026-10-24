@@ -15,7 +15,7 @@ This module is the side-effect-free core the soak orchestrator builds on:
 * :func:`correlate_actions` pairs the same search term / ed2k hash across the two
   clients within a correlation window (unpaired actions are surfaced so the
   operator can bracket them with a manual marker instead);
-* :func:`slice_trace` cuts an ``ed2k_packet_v1`` / ``diag_event_v1`` record list to
+* :func:`slice_trace` cuts an ``ed2k_packet_v1`` / ``diag_event_v2`` record list to
   one action's ``[t0, t1]`` window by ``ts_utc``;
 * :func:`diff_action` slices both sides and delegates to the existing
   :mod:`packet_trace_diff` and :mod:`diag_event_diff` engines, then classifies the
@@ -270,7 +270,7 @@ def slice_trace(
 ) -> list[dict[str, Any]]:
     """Returns records whose timestamp falls within ``[t0, t1]`` (inclusive).
 
-    ``ed2k_packet_v1`` records carry top-level ``ts_utc`` while ``diag_event_v1``
+    ``ed2k_packet_v1`` records carry top-level ``ts_utc`` while ``diag_event_v2``
     records carry top-level ``ts``. Records without a parseable timestamp are
     dropped because they cannot be placed in an action window.
     """
