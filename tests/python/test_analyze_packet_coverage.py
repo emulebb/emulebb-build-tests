@@ -33,6 +33,69 @@ def _ed2k(flow: str, direction: str, opcode: int, name: str) -> dict[str, object
     }
 
 
+def _diag_envelope(
+    *, client: str, sequence: int, family: str, body: dict[str, object]
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": client,
+        "ts": "2026-10-24T00:00:00.000Z",
+        "runId": f"{client}-run",
+        "processId": 42,
+        "segmentId": 0,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": family,
+        "event": "packet",
+        "severity": "info",
+        "keys": {
+            "peer": "198.51.100.1:4662",
+            "protocolMarker": body["protocolMarker"],
+            "opcode": body["opcode"],
+        },
+        "body": body,
+    }
+
+
+def _ed2k_diag(*, client: str, sequence: int, flow: str, direction: str) -> dict[str, object]:
+    return _diag_envelope(
+        client=client,
+        sequence=sequence,
+        family="ed2k_tcp",
+        body={
+            "direction": direction,
+            "flow": flow,
+            "transportMode": "plain",
+            "obfuscated": False,
+            "protocolMarker": 0xE3,
+            "protocolName": "ed2k",
+            "opcode": 0x01,
+            "opcodeName": "OP_HELLO",
+            "rawLen": 2,
+            "rawHex": "aabb",
+            "payloadLen": 2,
+            "payloadHex": "aabb",
+            "payloadHexTruncated": False,
+        },
+    )
+
+
+def _kad_diag(*, sequence: int) -> dict[str, object]:
+    return _diag_envelope(
+        client="rust",
+        sequence=sequence,
+        family="kad_udp",
+        body={
+            "direction": "send",
+            "protocolMarker": 0xE4,
+            "opcode": 0x21,
+            "opcodeName": "KADEMLIA2_REQ",
+            "payloadLen": 1,
+            "decodedHex": "00",
+        },
+    )
+
+
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows), encoding="utf-8")
 
@@ -67,26 +130,29 @@ def test_build_summary_reports_opcode_and_upload_coverage() -> None:
 
 def test_main_writes_json_summary(tmp_path: Path) -> None:
     module = load_script_module()
-    rust_dir = tmp_path / "rust"
+    rust_dir = tmp_path / "rust-diagnostics"
+    mfc_dir = tmp_path / "mfc-diagnostics"
     rust_dir.mkdir()
-    mfc_log = tmp_path / "mfc-packet.log"
+    mfc_dir.mkdir()
     json_output = tmp_path / "coverage" / "summary.json"
     _write_jsonl(
-        rust_dir / "emulebb-rust-ed2k-tcp-dump-1.jsonl",
-        [_ed2k("client", "recv", 0x01, "OP_HELLO")],
+        rust_dir / "emulebb-rust-diag-42-rust-run-000000.jsonl",
+        [
+            _ed2k_diag(client="rust", sequence=1, flow="client", direction="recv"),
+            _kad_diag(sequence=2),
+        ],
     )
     _write_jsonl(
-        rust_dir / "emulebb-rust-kad-udp-dump-1.jsonl",
-        [{"schema": "udp_packet_v1", "direction": "send", "opcode_name": "KADEMLIA_REQ"}],
+        mfc_dir / "emulebb-mfc-diag-42-mfc-run-000000.jsonl",
+        [_ed2k_diag(client="mfc", sequence=1, flow="client", direction="recv")],
     )
-    _write_jsonl(mfc_log, [_ed2k("client", "recv", 0x01, "OP_HELLO")])
 
     assert module.main(
         [
-            "--rust-dump-dir",
+            "--rust-diagnostics-dir",
             str(rust_dir),
-            "--mfc-log",
-            str(mfc_log),
+            "--mfc-diagnostics-dir",
+            str(mfc_dir),
             "--json-output",
             str(json_output),
         ]

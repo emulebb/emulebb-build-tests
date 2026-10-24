@@ -1,25 +1,24 @@
-"""Summarize protocol coverage from a live-wire / converged run's packet dumps.
+"""Summarize protocol coverage from a live-wire / converged diagnostic run.
 
-Operationalizes the rust-vs-MFC parity analysis: loads the converged
-``ed2k_packet_v1`` traces (and the Kad ``udp_packet_v1`` dump) from a run and
-prints, per canonical channel (server / client / kad) and direction, the opcode
-SET each client exercised — the right parity signal for two independent live
-clients (their wire bytes never match, but the opcode sets should). Also flags
-the upload-serving opcodes and the Kad opcode histogram so a soak's uploads and
-Kad participation are visible at a glance.
+Operationalizes the rust-vs-MFC parity analysis: selects each client's current
+``diag_event_v2`` run and prints, per canonical channel (server / client / kad)
+and direction, the opcode SET each client exercised — the right parity signal
+for two independent live clients (their wire bytes never match, but the opcode
+sets should). Also flags the upload-serving opcodes and the Rust Kad opcode
+histogram so a soak's uploads and Kad participation are visible at a glance.
 
 Usage:
   uv run python scripts/analyze-packet-coverage.py --run <run_dir>
-  uv run python scripts/analyze-packet-coverage.py --rust-dump-dir <dir> [--mfc-log <packet.log>]
+  uv run python scripts/analyze-packet-coverage.py \
+    --rust-diagnostics-dir <dir> --mfc-diagnostics-dir <dir>
 
-No machine paths are baked in; pass the run/dump locations explicitly.
+No machine paths are baked in; pass the run/diagnostic locations explicitly.
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
-import glob
 import json
 import sys
 from pathlib import Path
@@ -30,6 +29,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import diag_event_diff, diag_event_runs
 from emule_test_harness import packet_trace_diff as ptd
 
 # eD2k opcodes that only appear when WE serve an upload (a peer downloads from
@@ -47,27 +47,17 @@ UPLOAD_SERVING_OPCODES = (
 )
 
 
-def _load_rust_ed2k(dump_dir: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for path in sorted(glob.glob(str(dump_dir / "*ed2k-*dump-*.jsonl"))):
-        records += ptd.load_trace(Path(path))
-    return records
+def _discover_diag_dir(run_dir: Path, *, client: str) -> Path | None:
+    candidates = sorted(run_dir.rglob(f"emulebb-{client}-diag-*.jsonl"))
+    return candidates[0].parent if candidates else None
 
 
-def _load_kad(dump_dir: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for path in sorted(glob.glob(str(dump_dir / "*kad-udp-dump-*.jsonl"))):
-        for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if record.get("schema") == "udp_packet_v1":
-                records.append(record)
-    return records
+def _load_diagnostics(diagnostics_dir: Path, *, client: str) -> list[dict[str, Any]]:
+    return diag_event_runs.load_latest_diag_records(
+        diagnostics_dir.glob(f"emulebb-{client}-diag-*.jsonl"),
+        client=client,
+        allow_incomplete_active_tail=True,
+    )
 
 
 def _fmt(entries: list[dict[str, Any]]) -> list[str]:
@@ -75,12 +65,18 @@ def _fmt(entries: list[dict[str, Any]]) -> list[str]:
 
 
 def _kad_op_name(record: dict[str, Any]) -> str:
-    name = record.get("opcode_name")
+    body = record.get("body") or {}
+    keys = record.get("keys") or {}
+    name = record.get("opcode_name") or body.get("opcodeName")
     if name:
         return str(name)
-    # The Kad udp_packet_v1 dump stores opcode as a hex string ("0x89") or int.
-    opcode = record.get("opcode")
+    opcode = record.get("opcode", body.get("opcode", keys.get("opcode")))
     return str(opcode) if opcode is not None else "?"
+
+
+def _kad_direction(record: dict[str, Any]) -> str:
+    body = record.get("body") or {}
+    return str(record.get("direction") or body.get("direction") or "any")
 
 
 def build_summary(
@@ -94,7 +90,7 @@ def build_summary(
         if name in UPLOAD_SERVING_OPCODES:
             serving[(record.get("flow"), record.get("direction"), name)] += 1
 
-    kad_hist = collections.Counter((record.get("direction"), _kad_op_name(record)) for record in kad)
+    kad_hist = collections.Counter((_kad_direction(record), _kad_op_name(record)) for record in kad)
     return {
         "schema": "packet_coverage_summary_v1",
         "records": {
@@ -116,27 +112,32 @@ def build_summary(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--run", type=Path, help="A live-wire/converged run dir (auto-discovers dumps).")
-    parser.add_argument("--rust-dump-dir", type=Path, help="Directory holding emulebb-rust-*dump-*.jsonl.")
-    parser.add_argument("--mfc-log", type=Path, help="eMuleBB MFC ed2k_packet_v1 packet log (optional).")
+    parser.add_argument("--run", type=Path, help="A live-wire/converged run dir (auto-discovers diagnostics).")
+    parser.add_argument("--rust-diagnostics-dir", type=Path, help="Directory holding Rust diag_event_v2 segments.")
+    parser.add_argument("--mfc-diagnostics-dir", type=Path, help="Directory holding MFC diag_event_v2 segments.")
     parser.add_argument("--json-output", type=Path, help="Optional machine-readable summary output path.")
     args = parser.parse_args(argv)
 
-    rust_dump_dir = args.rust_dump_dir
-    mfc_log = args.mfc_log
+    rust_diagnostics_dir = args.rust_diagnostics_dir
+    mfc_diagnostics_dir = args.mfc_diagnostics_dir
     if args.run:
-        candidates = sorted(glob.glob(str(args.run / "**" / "*ed2k-tcp-dump-*.jsonl"), recursive=True))
-        if candidates:
-            rust_dump_dir = Path(candidates[0]).parent
-        mfc_candidates = sorted(glob.glob(str(args.run / "**" / "emulebb-diagnostics-packet.log"), recursive=True))
-        if mfc_candidates and mfc_log is None:
-            mfc_log = Path(mfc_candidates[0])
-    if rust_dump_dir is None:
-        parser.error("provide --run or --rust-dump-dir")
+        rust_diagnostics_dir = rust_diagnostics_dir or _discover_diag_dir(args.run, client="rust")
+        mfc_diagnostics_dir = mfc_diagnostics_dir or _discover_diag_dir(args.run, client="mfc")
+    if rust_diagnostics_dir is None or mfc_diagnostics_dir is None:
+        parser.error(
+            "provide --run containing both clients or both "
+            "--rust-diagnostics-dir and --mfc-diagnostics-dir"
+        )
 
-    rust = _load_rust_ed2k(rust_dump_dir)
-    mfc = ptd.load_trace(mfc_log) if mfc_log and mfc_log.is_file() else []
-    kad = _load_kad(rust_dump_dir)
+    rust_diagnostics = _load_diagnostics(rust_diagnostics_dir, client="rust")
+    mfc_diagnostics = _load_diagnostics(mfc_diagnostics_dir, client="mfc")
+    rust = diag_event_diff.ed2k_tcp_packet_views(rust_diagnostics)
+    mfc = diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics)
+    kad = [
+        record
+        for record in ptd.kad_records(rust_diagnostics)
+        if record.get("event") == "packet"
+    ]
     summary = build_summary(rust, mfc, kad)
     if args.json_output:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
