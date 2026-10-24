@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from emule_test_harness.diag_event_runs import DiagnosticTraceError
+
 from emule_test_harness import rust_metadata
 
 
@@ -586,14 +588,14 @@ def test_cross_client_shared_root_uses_current_object_contract(monkeypatch, tmp_
     assert calls[0][0][4]["roots"] == [{"path": str(tmp_path)}]
 
 
-def test_cross_client_diagnostics_require_both_peer_dumps(tmp_path: Path) -> None:
+def test_cross_client_diagnostics_require_both_unified_peer_streams(tmp_path: Path) -> None:
     module = load_suite_module()
     rust = tmp_path / "rust"
     mfc = tmp_path / "mfc"
     rust.mkdir()
     mfc.mkdir()
 
-    with pytest.raises(RuntimeError, match="rust diagnostics"):
+    with pytest.raises(DiagnosticTraceError, match="rust diagnostics"):
         module.require_diagnostics(rust, mfc, kad_required=False)
 
 
@@ -602,18 +604,36 @@ def test_cross_client_diagnostics_require_client_udp_family_on_both_sides(
     tmp_path: Path,
 ) -> None:
     module = load_suite_module()
-    packet = tmp_path / "packet.jsonl"
-    packet.write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        module.converged_live_wire,
-        "find_packet_trace",
-        lambda *_args, **_kwargs: packet,
-    )
-    monkeypatch.setattr(module.packet_trace_diff, "load_trace", lambda _path: [{}])
-
     def diag_records(_directory, *, side):
         family = "ed2k_client_udp" if side == "rust" else "sched"
         return [
+            {
+                "schema": "diag_event_v2",
+                "client": side,
+                "ts": "2026-10-24T00:00:00.000Z",
+                "family": "ed2k_tcp",
+                "event": "packet",
+                "keys": {
+                    "peer": "192.0.2.1:4662",
+                    "protocolMarker": 0xE3,
+                    "opcode": 0x01,
+                },
+                "body": {
+                    "direction": "recv",
+                    "flow": "listener",
+                    "transportMode": "plaintext",
+                    "obfuscated": False,
+                    "protocolMarker": 0xE3,
+                    "protocolName": "ed2k",
+                    "opcode": 0x01,
+                    "opcodeName": "OP_HELLO",
+                    "rawLen": 6,
+                    "rawHex": "e30100000001",
+                    "payloadLen": 0,
+                    "payloadHex": "",
+                    "payloadHexTruncated": False,
+                },
+            },
             {
                 "schema": "diag_event_v2",
                 "family": family,
@@ -645,18 +665,6 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     mfc = tmp_path / "mfc"
     rust.mkdir()
     mfc.mkdir()
-    packet = {
-        "schema": "ed2k_packet_v1",
-        "direction": "send",
-        "opcode": 1,
-    }
-    (rust / "emulebb-rust-ed2k-tcp-dump-1.jsonl").write_text(
-        json.dumps(packet) + "\n", encoding="utf-8"
-    )
-    (mfc / "emulebb-diagnostics-packet.log").write_text(
-        json.dumps(packet) + "\n", encoding="utf-8"
-    )
-
     for client, directory, process_id, run_id in (
         ("rust", rust, 41, "rust-run"),
         ("mfc", mfc, 42, "mfc-run"),
@@ -677,9 +685,8 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                 body.update({"outcome": "attempted", "rawHex": "c590", "rawLen": 2})
             else:
                 body.update({"outcome": "send_succeeded", "deliveryKnown": True})
-            path.write_text(
-                json.dumps(
-                    {
+            records = [
+                {
                         "schema": "diag_event_v2",
                         "client": client,
                         "processId": process_id,
@@ -696,9 +703,47 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                             "sendAttemptId": attempt_id,
                         },
                         "body": body,
+                }
+            ]
+            if segment_id == 0:
+                records.append(
+                    {
+                        "schema": "diag_event_v2",
+                        "client": client,
+                        "processId": process_id,
+                        "runId": run_id,
+                        "segmentId": segment_id,
+                        "seq": 2,
+                        "streamSeq": 1,
+                        "family": "ed2k_tcp",
+                        "event": "packet",
+                        "ts": "2026-10-24T00:00:00.000Z",
+                        "keys": {
+                            "peer": "192.0.2.1:4662",
+                            "protocolMarker": 0xE3,
+                            "opcode": 0x01,
+                        },
+                        "body": {
+                            "direction": "recv",
+                            "flow": "listener",
+                            "transportMode": "plaintext",
+                            "obfuscated": False,
+                            "protocolMarker": 0xE3,
+                            "protocolName": "ed2k",
+                            "opcode": 0x01,
+                            "opcodeName": "OP_HELLO",
+                            "rawLen": 6,
+                            "rawHex": "e30100000001",
+                            "payloadLen": 0,
+                            "payloadHex": "",
+                            "payloadHexTruncated": False,
+                        },
                     }
                 )
-                + "\n",
+            if segment_id == 1:
+                records[0]["seq"] = 3
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
                 encoding="utf-8",
             )
 
@@ -728,7 +773,7 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     assert module.require_diagnostics(rust, mfc, kad_required=False) == {
         "rust": {
             "packetRecords": 1,
-            "eventRecords": 2,
+            "eventRecords": 3,
             "clientUdp": {
                 "records": 2,
                 "packets": 1,
@@ -739,7 +784,7 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
         },
         "emule": {
             "packetRecords": 1,
-            "eventRecords": 2,
+            "eventRecords": 3,
             "clientUdp": {
                 "records": 2,
                 "packets": 1,

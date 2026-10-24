@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
-import glob
 import json
 import os
 import shutil
@@ -99,15 +98,28 @@ def heartbeat(args: argparse.Namespace) -> bool:
                 if record.get("event") == event:
                     counts[event] += 1
         print("diag:", dict(counts))
-    udp = glob.glob(str(args.rust_dump / "*client-udp*")) if args.rust_dump else []
-    ping = ack = 0
-    for path in udp:
-        for line in open(path, encoding="utf-8", errors="ignore"):
-            if '"OP_REASKFILEPING"' in line:
-                ping += 1
-            elif '"OP_REASKACK"' in line:
-                ack += 1
-    print(f"reask-transport: OP_REASKFILEPING={ping} OP_REASKACK={ack} clientUdpDumps={len(udp)}")
+        client_udp_packets = [
+            record
+            for record in records
+            if record.get("family") == "ed2k_client_udp" and record.get("event") == "packet"
+        ]
+        ping = sum(
+            1
+            for record in client_udp_packets
+            if (record.get("body") or {}).get("opcodeName") == "OP_REASKFILEPING"
+        )
+        ack = sum(
+            1
+            for record in client_udp_packets
+            if (record.get("body") or {}).get("opcodeName") == "OP_REASKACK"
+        )
+    else:
+        ping = ack = 0
+        client_udp_packets = []
+    print(
+        f"reask-transport: OP_REASKFILEPING={ping} OP_REASKACK={ack} "
+        f"unifiedClientUdpPackets={len(client_udp_packets)}"
+    )
     if args.output_root:
         print("disk: output-root %.0fGB" % (shutil.disk_usage(args.output_root).free / 1e9))
     return True
@@ -128,23 +140,6 @@ def _rec_ts(record: dict) -> datetime.datetime | None:
         return datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _windowed_diag_trace(loader, paths: list[Path], since: datetime.datetime) -> list[dict]:
-    """Load+concat diag traces from one or more (possibly rotated) logs, keeping
-    only records at/after ``since`` so rust's full-session jsonl and MFC's rapidly
-    rotated per-slice logs are compared over the *same* wall-clock window."""
-
-    out: list[dict] = []
-    for path in paths:
-        try:
-            for record in loader(path):
-                ts = _rec_ts(record)
-                if ts is None or ts >= since:
-                    out.append(record)
-        except Exception:
-            continue
-    return out
 
 
 def divergence(args: argparse.Namespace) -> None:
@@ -269,35 +264,18 @@ def divergence(args: argparse.Namespace) -> None:
                           + (f" onlyRust={e['onlyRustKeys']}" if e["onlyRustKeys"] else "")
                           + (f" onlyMfc={e['onlyMfcKeys']}" if e["onlyMfcKeys"] else ""))
                 print(f"  ({clean} shared events with identical body schema)")
-    # C2 + rotation: rust splits eD2K packets across the tcp (peer) and server
-    # dumps, and MFC rotates its packet.log by size. Concat BOTH rust eD2K dumps so
-    # server-flow parity is not silently dropped, and the MFC packet.log files
-    # touched within the window so MFC is not just its active slice.
-    if args.rust_packet:
-        rust_pkt_files = [Path(args.rust_packet)]
-    else:
-        rust_pkt_files = sorted(Path(args.rust_dump).glob("emulebb-rust-ed2k-*-dump-*.jsonl"))
-    if args.mfc_packet:
-        mfc_pkt_files = [Path(args.mfc_packet)]
-    else:
-        mfc_pkt_files = [
-            Path(p)
-            for p in glob.glob(str(args.mfc_logs / "emulebb-diagnostics-packet*.log"))
-            if datetime.datetime.fromtimestamp(Path(p).stat().st_mtime, datetime.timezone.utc) >= since
-        ]
-    if rust_pkt_files and mfc_pkt_files:
-        rp = _windowed_diag_trace(packet_trace_diff.load_trace, rust_pkt_files, since)
-        mp = _windowed_diag_trace(packet_trace_diff.load_trace, mfc_pkt_files, since)
-        res = packet_trace_diff.diff_traces(rp, mp)
-        report["packet"] = res
-        cov = res.get("opcodeCoverage", {})
-        print(
-            f"\n-- packet opcodeCoverage (coverageOk={res.get('coverageOk')} "
-            f"oracleCoverageOk={res.get('oracleCoverageOk')}, rust={len(rp)} mfc={len(mp)}) --"
-        )
-        print(f"  {json.dumps(cov, default=str)[:900]}")
-    else:
-        raise RuntimeError("cross-client divergence requires both current packet traces")
+    rp = diag_event_diff.ed2k_tcp_packet_views(rt)
+    mp = diag_event_diff.ed2k_tcp_packet_views(mt)
+    if not rp or not mp:
+        raise RuntimeError("cross-client divergence requires peer TCP packets in both current runs")
+    res = packet_trace_diff.diff_traces(rp, mp)
+    report["packet"] = res
+    cov = res.get("opcodeCoverage", {})
+    print(
+        f"\n-- packet opcodeCoverage (coverageOk={res.get('coverageOk')} "
+        f"oracleCoverageOk={res.get('oracleCoverageOk')}, rust={len(rp)} mfc={len(mp)}) --"
+    )
+    print(f"  {json.dumps(cov, default=str)[:900]}")
     if args.diff_json:
         Path(args.diff_json).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         print(f"\nfull divergence JSON -> {args.diff_json}")
@@ -319,8 +297,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
     parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust superset-of oracle)? rust extras allowed.")
-    parser.add_argument("--rust-packet", help="Override rust ed2k_packet_v1 jsonl.")
-    parser.add_argument("--mfc-packet", help="Override MFC ed2k_packet_v1 log.")
     parser.add_argument("--diff-json", help="Write the full divergence result JSON here.")
     return parser
 

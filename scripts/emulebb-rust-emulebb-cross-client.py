@@ -174,15 +174,14 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
     counts: dict[str, object] = {}
     diag_records: dict[str, list[dict[str, object]]] = {}
     for side, directory in (("rust", rust_dir), ("emule", mfc_dir)):
-        packet = converged_live_wire.find_packet_trace(directory, side=side)
-        if packet is None:
-            raise RuntimeError(f"{side} diagnostics did not produce packet and event dumps")
-        packet_count = len(packet_trace_diff.load_trace(packet))
         records = converged_live_wire.load_current_diag_records(directory, side=side)
         diag_records[side] = records
+        packet_count = len(diag_event_diff.ed2k_tcp_packet_views(records))
         diag_count = len(records)
         if packet_count == 0 or diag_count == 0:
-            raise RuntimeError(f"{side} diagnostics packet/event dumps contain no valid records")
+            raise RuntimeError(
+                f"{side} unified diagnostics contain no valid peer packet/event records"
+            )
         lifecycle = diag_event_diff.audit_client_udp_lifecycle(records)
         client_udp_records = [
             record for record in records if record.get("family") == "ed2k_client_udp"
@@ -216,13 +215,12 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
         )
     counts["mfcSecureIdent"] = require_mfc_secure_ident_clean(mfc_dir / "emulebb-verbose.log")
     if kad_required:
-        kad_files = list(rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
         kad_count = sum(
-            1 for path in kad_files for line in path.read_text(encoding="utf-8-sig").splitlines()
-            if line.strip() and json.loads(line).get("schema") == "udp_packet_v1"
+            record.get("family") == "kad_udp" and record.get("event") == "packet"
+            for record in diag_records["rust"]
         )
         if kad_count == 0:
-            raise RuntimeError("Rust Kad diagnostics did not capture UDP packets")
+            raise RuntimeError("Rust unified diagnostics did not capture Kad UDP packets")
         counts["rustKadUdpPackets"] = kad_count
     return counts
 
