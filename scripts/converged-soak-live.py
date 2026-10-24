@@ -1329,7 +1329,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
-    parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
+    parser.add_argument(
+        "--lan-bind-addr",
+        required=True,
+        help="REST/control bind IP: X_LOCAL_IP for split-tunnel, 127.0.0.1 for full-tunnel.",
+    )
     parser.add_argument(
         "--vpn-topology",
         choices=soak_launch.VPN_TOPOLOGIES,
@@ -1950,7 +1954,10 @@ def main(argv: list[str] | None = None) -> int:
     soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
     soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
 
-    rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
+    rest_addr = soak_launch.resolve_lan_rest_bind_addr(
+        args.lan_bind_addr,
+        vpn_topology=args.vpn_topology,
+    )
     output_root = get_workspace_output_root()
 
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)

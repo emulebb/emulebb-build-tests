@@ -84,7 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--inputs",
         help="live-wire-inputs.local.json (shared roots). Default: repo-root copy.",
     )
-    parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
+    parser.add_argument(
+        "--lan-bind-addr",
+        required=True,
+        help="REST/control bind IP: X_LOCAL_IP for split-tunnel, 127.0.0.1 for full-tunnel.",
+    )
     parser.add_argument(
         "--vpn-topology",
         choices=soak_launch.VPN_TOPOLOGIES,
@@ -481,7 +485,10 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--rust-fallback-server is Rust-only; pass --no-mfc for fallback server probes.")
     vpn_guard_profile = resolve_vpn_guard_profile(args)
 
-    rest_addr = soak_launch.resolve_lan_rest_bind_addr(args.lan_bind_addr)
+    rest_addr = soak_launch.resolve_lan_rest_bind_addr(
+        args.lan_bind_addr,
+        vpn_topology=args.vpn_topology,
+    )
     output_root = get_workspace_output_root()
 
     rust_exe = (

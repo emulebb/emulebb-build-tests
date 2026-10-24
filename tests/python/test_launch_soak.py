@@ -86,7 +86,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     args = module.build_parser().parse_args(
         [
             "--lan-bind-addr",
-            "192.0.2.10",
+            "127.0.0.1",
             "--rust-regular",
             "--no-mfc",
             "--cpu-profile",
@@ -129,6 +129,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.rust_shutdown_trigger == "ctrl-c"
     assert args.vpn_guard_scenario == "success"
     assert args.vpn_topology == "full-tunnel"
+    assert args.lan_bind_addr == "127.0.0.1"
 
 
 def test_graceful_teardown_can_use_ctrl_c(monkeypatch) -> None:
