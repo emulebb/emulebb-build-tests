@@ -21,6 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from . import hideme_split_tunnel, hideme_vpn
 from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
@@ -33,6 +34,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 OPERATOR_SERVER = "176.123.5.89:4725"
 OPERATOR_SERVER_NAME = "operator-parity"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
+VPN_TOPOLOGIES = hideme_vpn.VPN_TOPOLOGIES
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
 RUST_ED2K_PORT = 42662
 RUST_KAD_PORT = 42672
@@ -107,6 +109,52 @@ def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) 
             f"rust={rust_bind_ip!r}, mfc={mfc_bind_ip!r}. Both clients must use the same VPN adapter."
         )
     return rust_bind_ip
+
+
+def prepare_hideme_routing(
+    topology: str,
+    clients: list[tuple[str, str, Path]],
+) -> dict[str, object]:
+    """Prepare one explicit hide.me topology for the selected client executables."""
+
+    if not clients:
+        raise ValueError("At least one client is required for hide.me routing preparation.")
+    if topology == hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL:
+        provider = hideme_vpn.require_full_tunnel_ready()
+        bind_ip = str(provider["bindIp"])
+        return {
+            "topology": topology,
+            "bindIp": bind_ip,
+            "provider": provider,
+            "clients": {
+                key: {
+                    "exe": exe_path.name,
+                    "whitelistAdded": False,
+                    "bindIp": bind_ip,
+                }
+                for key, _name, exe_path in clients
+            },
+        }
+    if topology != hideme_vpn.VPN_TOPOLOGY_SPLIT_TUNNEL:
+        raise ValueError(f"Unsupported hide.me topology: {topology!r}.")
+
+    statuses = {
+        key: {
+            "exe": exe_path.name,
+            **hideme_split_tunnel.ensure_vpn_ready(exe_path, name=name),
+        }
+        for key, name, exe_path in clients
+    }
+    bind_ips = {str(status.get("bindIp") or "").strip() for status in statuses.values()}
+    bind_ips.discard("")
+    if len(bind_ips) != 1 or any(not str(status.get("bindIp") or "").strip() for status in statuses.values()):
+        raise RuntimeError("hide.me split-tunnel client bind IPs are missing or inconsistent.")
+    return {
+        "topology": topology,
+        "bindIp": bind_ips.pop(),
+        "provider": None,
+        "clients": statuses,
+    }
 
 
 def require_distinct_endpoint_ports(

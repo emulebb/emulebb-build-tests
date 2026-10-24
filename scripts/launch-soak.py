@@ -37,7 +37,6 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import cpu_profile, live_process_monitor, vpn_guard_live
 from emule_test_harness import soak_launch, soak_run_layout
-from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
@@ -86,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="live-wire-inputs.local.json (shared roots). Default: repo-root copy.",
     )
     parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
+    parser.add_argument(
+        "--vpn-topology",
+        choices=soak_launch.VPN_TOPOLOGIES,
+        default="split-tunnel",
+        help="hide.me routing topology; full-tunnel is read-only and requires split tunneling disabled.",
+    )
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument(
         "--rust-profile-dir",
@@ -545,17 +550,13 @@ def main(argv: list[str] | None = None) -> int:
         f"MFC TCP {endpoint_ports['mfc']['ed2kTcpPort']}/UDP {endpoint_ports['mfc']['kadUdpPort']}"
     )
 
-    log("ensuring hide.me split tunnel...")
-    rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
-    mfc_vpn = None
+    vpn_clients = [("rust", "eMuleBB Rust", rust_exe)]
     if not args.no_mfc:
-        mfc_vpn = ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
-    bind_ip = (
-        soak_launch.require_same_vpn_bind_ip(rust_vpn, mfc_vpn)
-        if mfc_vpn is not None
-        else str(rust_vpn["bindIp"])
-    )
-    log(f"hide.me bind IP: {bind_ip}")
+        vpn_clients.append(("mfc", "eMuleBB MFC", mfc_exe))
+    log(f"preparing hide.me {args.vpn_topology} routing...")
+    vpn_routing = soak_launch.prepare_hideme_routing(args.vpn_topology, vpn_clients)
+    bind_ip = str(vpn_routing["bindIp"])
+    log(f"hide.me {args.vpn_topology} routing ready")
 
     if args.reuse_kad_bootstrap:
         bootstrap_nodes = []
@@ -715,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             "reuseRustSharedProfile": bool(args.reuse_rust_shared_profile),
             "shutdown": shutdown_report,
             "error": failure,
+            "vpnRouting": vpn_routing,
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,
             "processMetrics": process_metrics_summary,

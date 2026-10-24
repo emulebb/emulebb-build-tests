@@ -110,6 +110,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
             "vpn-guard-live.local.json",
             "--vpn-guard-scenario",
             "success",
+            "--vpn-topology",
+            "full-tunnel",
         ]
     )
 
@@ -126,6 +128,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.reuse_rust_shared_profile is True
     assert args.rust_shutdown_trigger == "ctrl-c"
     assert args.vpn_guard_scenario == "success"
+    assert args.vpn_topology == "full-tunnel"
 
 
 def test_graceful_teardown_can_use_ctrl_c(monkeypatch) -> None:

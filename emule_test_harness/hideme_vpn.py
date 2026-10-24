@@ -12,6 +12,9 @@ from typing import Any
 HIDE_ME_APP_EXE = r"C:\Program Files (x86)\hide.me VPN\Hide.me.exe"
 HIDE_ME_SERVICE = "hmevpnsvc"
 FULL_TUNNEL_SPLIT_MODE = 0
+VPN_TOPOLOGY_SPLIT_TUNNEL = "split-tunnel"
+VPN_TOPOLOGY_FULL_TUNNEL = "full-tunnel"
+VPN_TOPOLOGIES = (VPN_TOPOLOGY_SPLIT_TUNNEL, VPN_TOPOLOGY_FULL_TUNNEL)
 
 
 def vpn_settings_path() -> Path:
