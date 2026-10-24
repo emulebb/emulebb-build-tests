@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .soak_storage import SoakStoragePolicy, parse_soak_storage_policy
+
 SCHEMA = "emulebb-build-tests.live-wire-inputs.v1"
 LEGACY_SCHEMAS = ("emule-build-tests.live-wire-inputs.v1",)
 DEFAULT_INPUTS_FILE_NAME = "live-wire-inputs.local.json"
@@ -30,6 +32,7 @@ class LiveWireInputs:
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
     mfc_profile_dir: Path | None = None
     rust_profile_dir: Path | None = None
+    soak_storage: SoakStoragePolicy | None = None
 
 
 def get_default_inputs_path(repo_root: Path) -> Path:
@@ -59,7 +62,9 @@ def load_live_wire_inputs(path: Path) -> LiveWireInputs:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Live-wire inputs file is not valid JSON: {path}") from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"Live-wire inputs file must contain one JSON object: {path}")
+        raise RuntimeError(
+            f"Live-wire inputs file must contain one JSON object: {path}"
+        )
     return parse_live_wire_inputs(payload, path=path)
 
 
@@ -73,11 +78,15 @@ def load_live_wire_inputs_payload(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Live-wire inputs file is not valid JSON: {path}") from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"Live-wire inputs file must contain one JSON object: {path}")
+        raise RuntimeError(
+            f"Live-wire inputs file must contain one JSON object: {path}"
+        )
     return payload
 
 
-def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None) -> LiveWireInputs:
+def parse_live_wire_inputs(
+    payload: dict[str, Any], *, path: Path | None = None
+) -> LiveWireInputs:
     """Validates one live-wire input payload and returns normalized values."""
 
     if payload.get("schema") not in (SCHEMA, *LEGACY_SCHEMAS):
@@ -87,17 +96,25 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
     media_corpus = read_optional_object(payload, "media_corpus")
     mfc_profile = read_optional_object(payload, "mfc_profile")
     rust_profile = read_optional_object(payload, "rust_profile")
+    soak_storage = payload.get("soak_storage")
     return LiveWireInputs(
         path=(path or Path(DEFAULT_INPUTS_FILE_NAME)).resolve(),
         generic_open_terms=read_terms(search_terms, "generic_open"),
         document_terms=read_terms(search_terms, "documents"),
         radarr_movie_terms=read_terms(search_terms, "radarr_movies"),
-        sonarr_series_terms=read_optional_terms(search_terms, "sonarr_series", fallback_key="radarr_movies"),
+        sonarr_series_terms=read_optional_terms(
+            search_terms, "sonarr_series", fallback_key="radarr_movies"
+        ),
         video_roots=read_optional_paths(media_corpus, "video_roots"),
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
-        direct_bootstrap_transfers=read_direct_transfers(auto_browse, "direct_bootstrap_transfers"),
+        direct_bootstrap_transfers=read_direct_transfers(
+            auto_browse, "direct_bootstrap_transfers"
+        ),
         mfc_profile_dir=read_optional_single_path(mfc_profile, "profile_dir"),
         rust_profile_dir=read_optional_single_path(rust_profile, "profile_dir"),
+        soak_storage=parse_soak_storage_policy(soak_storage)
+        if soak_storage is not None
+        else None,
     )
 
 
@@ -128,12 +145,16 @@ def read_terms(payload: dict[str, Any], key: str) -> tuple[str, ...]:
     terms: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, str) or not item.strip():
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a non-empty string.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}] must be a non-empty string."
+            )
         terms.append(item.strip())
     return tuple(terms)
 
 
-def read_optional_terms(payload: dict[str, Any], key: str, *, fallback_key: str) -> tuple[str, ...]:
+def read_optional_terms(
+    payload: dict[str, Any], key: str, *, fallback_key: str
+) -> tuple[str, ...]:
     """Reads an optional term field, falling back to an existing required field."""
 
     if key not in payload:
@@ -150,7 +171,9 @@ def read_optional_paths(payload: dict[str, Any], key: str) -> tuple[Path, ...]:
     paths: list[Path] = []
     for index, item in enumerate(value):
         if not isinstance(item, str) or not item.strip():
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a non-empty string.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}] must be a non-empty string."
+            )
         paths.append(Path(item.strip()).expanduser().resolve())
     return tuple(paths)
 
@@ -162,7 +185,9 @@ def read_optional_single_path(payload: dict[str, Any], key: str) -> Path | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise RuntimeError(f"Live-wire inputs field {key!r} must be a non-empty string.")
+        raise RuntimeError(
+            f"Live-wire inputs field {key!r} must be a non-empty string."
+        )
     return Path(value.strip()).expanduser()
 
 
@@ -175,12 +200,16 @@ def read_hashes(payload: dict[str, Any], key: str) -> tuple[str, ...]:
     hashes: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, str) or not HASH_RE.fullmatch(item.strip()):
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a 32-character hex hash.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}] must be a 32-character hex hash."
+            )
         hashes.append(item.strip())
     return tuple(hashes)
 
 
-def read_direct_transfers(payload: dict[str, Any], key: str) -> tuple[dict[str, object], ...]:
+def read_direct_transfers(
+    payload: dict[str, Any], key: str
+) -> tuple[dict[str, object], ...]:
     """Reads direct bootstrap transfer rows with validated real-file metadata."""
 
     value = payload.get(key)
@@ -189,19 +218,31 @@ def read_direct_transfers(payload: dict[str, Any], key: str) -> tuple[dict[str, 
     transfers: list[dict[str, object]] = []
     for index, item in enumerate(value):
         if not isinstance(item, dict):
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be an object.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}] must be an object."
+            )
         transfer_hash = item.get("hash")
         name = item.get("name")
         size = item.get("size")
         method = item.get("method", "direct_ed2k")
-        if not isinstance(transfer_hash, str) or not HASH_RE.fullmatch(transfer_hash.strip()):
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}].hash must be a 32-character hex hash.")
+        if not isinstance(transfer_hash, str) or not HASH_RE.fullmatch(
+            transfer_hash.strip()
+        ):
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}].hash must be a 32-character hex hash."
+            )
         if not isinstance(name, str) or not name.strip():
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}].name must be a non-empty string.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}].name must be a non-empty string."
+            )
         if not isinstance(size, int) or size <= 0:
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}].size must be a positive integer.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}].size must be a positive integer."
+            )
         if method != "direct_ed2k":
-            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}].method must be 'direct_ed2k'.")
+            raise RuntimeError(
+                f"Live-wire inputs field {key!r}[{index}].method must be 'direct_ed2k'."
+            )
         transfers.append(
             {
                 "hash": transfer_hash.strip(),
@@ -219,7 +260,9 @@ def build_direct_bootstrap_transfer(result_row: dict[str, Any]) -> dict[str, obj
     transfer_hash = result_row.get("hash")
     name = result_row.get("name")
     size = result_row.get("sizeBytes", result_row.get("size"))
-    if not isinstance(transfer_hash, str) or not HASH_RE.fullmatch(transfer_hash.strip()):
+    if not isinstance(transfer_hash, str) or not HASH_RE.fullmatch(
+        transfer_hash.strip()
+    ):
         raise RuntimeError("Live search result hash must be a 32-character hex hash.")
     if not isinstance(name, str) or not name.strip():
         raise RuntimeError("Live search result name must be a non-empty string.")
@@ -233,7 +276,9 @@ def build_direct_bootstrap_transfer(result_row: dict[str, Any]) -> dict[str, obj
     }
 
 
-def merge_live_wire_bootstrap_result(payload: dict[str, Any], result_row: dict[str, Any]) -> dict[str, object]:
+def merge_live_wire_bootstrap_result(
+    payload: dict[str, Any], result_row: dict[str, Any]
+) -> dict[str, object]:
     """Merges one selected live result into the auto-browse bootstrap inputs."""
 
     parse_live_wire_inputs(payload)
@@ -243,7 +288,11 @@ def merge_live_wire_bootstrap_result(payload: dict[str, Any], result_row: dict[s
     transfer_hash = str(direct_row["hash"])
 
     hashes = read_hashes(auto_browse, "bootstrap_transfer_hashes")
-    existing_hashes = [item.strip().lower() for item in hashes if item.strip().lower() != PLACEHOLDER_HASH]
+    existing_hashes = [
+        item.strip().lower()
+        for item in hashes
+        if item.strip().lower() != PLACEHOLDER_HASH
+    ]
     new_hashes = [transfer_hash]
     new_hashes.extend(item for item in existing_hashes if item != transfer_hash)
     auto_browse["bootstrap_transfer_hashes"] = new_hashes
@@ -252,7 +301,8 @@ def merge_live_wire_bootstrap_result(payload: dict[str, Any], result_row: dict[s
     existing_rows = [
         dict(item)
         for item in direct_transfers
-        if str(item.get("hash") or "").strip().lower() not in {PLACEHOLDER_HASH, transfer_hash}
+        if str(item.get("hash") or "").strip().lower()
+        not in {PLACEHOLDER_HASH, transfer_hash}
     ]
     auto_browse["direct_bootstrap_transfers"] = [direct_row, *existing_rows]
 
@@ -265,7 +315,9 @@ def merge_live_wire_bootstrap_result(payload: dict[str, Any], result_row: dict[s
     }
 
 
-def update_live_wire_bootstrap_inputs(path: Path, result_row: dict[str, Any]) -> dict[str, object]:
+def update_live_wire_bootstrap_inputs(
+    path: Path, result_row: dict[str, Any]
+) -> dict[str, object]:
     """Updates a live-wire inputs file from one selected live search result."""
 
     payload = load_live_wire_inputs_payload(path)
@@ -274,7 +326,9 @@ def update_live_wire_bootstrap_inputs(path: Path, result_row: dict[str, Any]) ->
     return summary
 
 
-def select_daily(items: tuple[str, ...], *, today: _dt.date | None = None) -> tuple[int, str]:
+def select_daily(
+    items: tuple[str, ...], *, today: _dt.date | None = None
+) -> tuple[int, str]:
     """Selects one item deterministically by local date modulo item count."""
 
     if not items:
@@ -291,7 +345,9 @@ def summarize_terms(items: tuple[str, ...]) -> dict[str, object]:
     return {"count": len(items)}
 
 
-def summarize_direct_transfers(items: tuple[dict[str, object], ...]) -> dict[str, object]:
+def summarize_direct_transfers(
+    items: tuple[dict[str, object], ...],
+) -> dict[str, object]:
     """Returns a redacted summary for direct bootstrap transfer inputs."""
 
     return {
@@ -307,7 +363,9 @@ def summarize_paths(items: tuple[Path, ...]) -> dict[str, object]:
     return {"count": len(items)}
 
 
-def redact_term_selection(index: int, items: tuple[str, ...], *, source: str) -> dict[str, object]:
+def redact_term_selection(
+    index: int, items: tuple[str, ...], *, source: str
+) -> dict[str, object]:
     """Reports one selected runtime term without exposing the term itself."""
 
     return {
