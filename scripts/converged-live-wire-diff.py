@@ -3,16 +3,17 @@
 Runs the eMuleBB **Rust** client and the eMuleBB **MFC diagnostics** client over
 the public network through the hide.me split tunnel, drives the *same* gentle
 live exchange against both (eD2K connect + Kad bootstrap, share one small seed
-file, run a few widely-spaced keyword searches), captures each side's converged
-``ed2k_packet_v1`` packet dump, then diffs the two traces and writes a combined
-report.
+file, run a few widely-spaced keyword searches), captures each side's segmented
+``diag_event_v2`` run, extracts complete eD2K TCP packet events, then diffs the
+two packet views and writes a combined report.
 
 Both clients expose the same ``/api/v1`` REST surface (``/searches``,
 ``/shared-directories``, ``/servers/operations/connect``, ``/kad/operations/start``)
-and both emit the converged ``ed2k_packet_v1`` packet schema, so a rust-vs-MFC
-exchange of the same wire traffic can be checked for wire-faithfulness with
-``emule_test_harness.packet_trace_diff`` (and the broader ``diag_event_v2``
-envelope with ``emule_test_harness.diag_event_diff``).
+and both emit unified eD2K TCP packet events, so a rust-vs-MFC exchange of the
+same wire traffic can be checked for wire-faithfulness with
+``emule_test_harness.packet_trace_diff`` after normalization by
+``diag_event_diff.ed2k_tcp_packet_views``. The complete unified runs are also
+compared with ``emule_test_harness.diag_event_diff``.
 
 No machine paths are baked in: the REST control plane binds ``X_LOCAL_IP``, the
 P2P data plane binds the hide.me tunnel, build artifacts live under
@@ -37,7 +38,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, NamedTuple
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
@@ -89,6 +90,17 @@ DEFAULT_SEED_FILE_NAME = "converged-seed.txt"
 DEFAULT_SEED_BYTES = b"eMuleBB converged live-wire seed fixture\r\n"
 
 
+class ScenarioTraceDiff(NamedTuple):
+    """Unified diagnostic evidence and both converged diff results."""
+
+    rust_segments: tuple[Path, ...]
+    emule_segments: tuple[Path, ...]
+    rust_packet_count: int
+    emule_packet_count: int
+    packet_diff: dict[str, Any]
+    diag_diff: dict[str, Any]
+
+
 def log(message: str) -> None:
     print(f"[converged] {message}", flush=True)
 
@@ -137,8 +149,8 @@ def create_seed_file(seed_dir: Path, *, compression_fixture: str | None = None) 
 
 
 # --------------------------------------------------------------------------- #
-# Rust side: reuse rust-live-wire-hideme.py for config/start/connect/search and
-# packet-dump summarizers; ADD the share step (it does not share today).
+# Rust side: reuse rust-live-wire-hideme.py for config/start/connect/search;
+# ADD the share step (it does not share today).
 # --------------------------------------------------------------------------- #
 
 
@@ -357,15 +369,14 @@ def run_rust_side(
         stop_process_tree(process)
         handle.close()
 
-    evidence["packetDumpDir"] = str(packet_dump_dir)
-    evidence["packetSummary"] = rust_mod.summarize_source_exchange_packets(packet_dump_dir)
+    evidence["diagnosticsDir"] = str(packet_dump_dir)
     return evidence
 
 
 # --------------------------------------------------------------------------- #
 # MFC side: reuse the live profile + REST drivers (search-ui-live /
 # shared-directories-rest-e2e / live_e2e_suite). REST binds X_LOCAL_IP, P2P binds
-# hide.me, packet diagnostics dump -> side_dir.
+# hide.me, unified diagnostics -> side_dir.
 # --------------------------------------------------------------------------- #
 
 
@@ -444,8 +455,8 @@ def run_mfc_side(
         reuse_existing=persist_artifacts_dir is not None,
     )
     config_dir = Path(str(profile["config_dir"]))
-    # The diagnostics build writes the converged ed2k_packet_v1 packet dump and
-    # the segmented diag_event_v2 run into its profile log directory
+    # The diagnostics build writes its segmented diag_event_v2 run into the
+    # profile log directory
     # (GetMuleDirectory(EMULE_LOGDIR) == <profile_base>/logs), gated at COMPILE
     # time by the EMULEBB_ENABLE_PACKET_DIAGNOSTICS define in the diagnostics
     # flavor. There is no runtime env-var override for the dump path, so we read
@@ -570,7 +581,7 @@ def run_mfc_side(
                 except Exception:  # noqa: BLE001
                     pass
 
-    evidence["packetDumpDir"] = str(packet_dump_dir)
+    evidence["diagnosticsDir"] = str(packet_dump_dir)
     return evidence
 
 
@@ -744,28 +755,29 @@ def build_live_action_coverage(packet_diff: dict[str, Any], scenario: cs.Converg
 
 def diff_scenario_traces(
     rust_evidence: dict[str, Any], mfc_evidence: dict[str, Any]
-) -> tuple[Path | None, Path | None, dict[str, Any] | None, dict[str, Any] | None]:
-    """Locates both sides' dumps and runs the packet + diag_event diffs."""
+) -> ScenarioTraceDiff:
+    """Loads both selected unified runs and computes packet plus event diffs."""
 
-    rust_dump_dir = Path(rust_evidence["packetDumpDir"])
-    emule_dump_dir = Path(mfc_evidence["packetDumpDir"])
-    rust_trace = clw.find_packet_trace(rust_dump_dir, side="rust")
-    emule_trace = clw.find_packet_trace(emule_dump_dir, side="emule")
-
-    packet_diff: dict[str, Any] | None = None
-    if rust_trace is not None and emule_trace is not None:
-        packet_diff = packet_trace_diff.diff_traces(
-            packet_trace_diff.load_trace(rust_trace),
-            packet_trace_diff.load_trace(emule_trace),
-        )
-    rust_diag = clw.load_current_diag_records(
-        rust_dump_dir, side="rust", process_id=int(rust_evidence["processId"])
+    rust_diagnostics_dir = Path(rust_evidence["diagnosticsDir"])
+    emule_diagnostics_dir = Path(mfc_evidence["diagnosticsDir"])
+    rust_capture = clw.load_current_diag_capture(
+        rust_diagnostics_dir, side="rust", process_id=int(rust_evidence["processId"])
     )
-    emule_diag = clw.load_current_diag_records(
-        emule_dump_dir, side="emule", process_id=int(mfc_evidence["processId"])
+    emule_capture = clw.load_current_diag_capture(
+        emule_diagnostics_dir, side="emule", process_id=int(mfc_evidence["processId"])
     )
-    diag_diff = diag_event_diff.diff_traces(rust_diag, emule_diag)
-    return rust_trace, emule_trace, packet_diff, diag_diff
+    rust_packets = diag_event_diff.ed2k_tcp_packet_views(rust_capture.records)
+    emule_packets = diag_event_diff.ed2k_tcp_packet_views(emule_capture.records)
+    return ScenarioTraceDiff(
+        rust_segments=rust_capture.selected_segments,
+        emule_segments=emule_capture.selected_segments,
+        rust_packet_count=len(rust_packets),
+        emule_packet_count=len(emule_packets),
+        packet_diff=packet_trace_diff.diff_traces(rust_packets, emule_packets),
+        diag_diff=diag_event_diff.diff_traces(
+            list(rust_capture.records), list(emule_capture.records)
+        ),
+    )
 
 
 def run_one_scenario(
@@ -817,18 +829,19 @@ def run_one_scenario(
     )
 
     log("--- diff ---")
-    rust_trace, emule_trace, packet_diff, diag_diff = diff_scenario_traces(rust_evidence, mfc_evidence)
-    if packet_diff is not None:
-        packet_diff["liveActionCoverage"] = build_live_action_coverage(packet_diff, scenario)
+    trace_diff = diff_scenario_traces(rust_evidence, mfc_evidence)
+    trace_diff.packet_diff["liveActionCoverage"] = build_live_action_coverage(
+        trace_diff.packet_diff, scenario
+    )
 
     report = clw.build_converged_report(
         run_id=scenario.name,
-        rust_packet_trace=rust_trace,
-        emule_packet_trace=emule_trace,
-        packet_diff=packet_diff,
-        diag_diff=diag_diff,
-        rust_packet_summary=rust_evidence.get("packetSummary"),
-        emule_packet_summary=None,
+        rust_diag_segments=trace_diff.rust_segments,
+        emule_diag_segments=trace_diff.emule_segments,
+        rust_packet_record_count=trace_diff.rust_packet_count,
+        emule_packet_record_count=trace_diff.emule_packet_count,
+        packet_diff=trace_diff.packet_diff,
+        diag_diff=trace_diff.diag_diff,
         extra={
             "scenarioKnobs": scenario.summary(),
             "server": OPERATOR_SERVER,
@@ -842,11 +855,10 @@ def run_one_scenario(
             "emule": mfc_evidence,
         },
     )
-    if packet_diff is not None:
-        report["gate"] = "liveActionCoverage"
-        report["ok"] = bool(report["traces"]["bothCaptured"]) and bool(
-            packet_diff["liveActionCoverage"]["ok"]
-        ) and bool(diag_diff.get("ok"))
+    report["gate"] = "liveActionCoverage"
+    report["ok"] = bool(report["packetEvidence"]["bothCaptured"]) and bool(
+        trace_diff.packet_diff["liveActionCoverage"]["ok"]
+    ) and bool(trace_diff.diag_diff.get("ok"))
 
     rust_search_obj = rust_evidence.get("search")
     rust_search: dict[str, Any] = rust_search_obj if isinstance(rust_search_obj, dict) else {}
@@ -860,9 +872,9 @@ def run_one_scenario(
         mfc_high_id=bool(mfc_evidence.get("ed2kHighId")),
         rust_result_count=int(rust_search.get("totalResults") or 0),
         mfc_result_count=sum(int(search.get("resultCount") or 0) for search in mfc_searches if isinstance(search, dict)),
-        packet_diff=packet_diff,
-        diag_diff=diag_diff,
-        both_traces_captured=bool(report["traces"]["bothCaptured"]),
+        packet_diff=trace_diff.packet_diff,
+        diag_diff=trace_diff.diag_diff,
+        both_traces_captured=bool(report["packetEvidence"]["bothCaptured"]),
         error=rust_evidence.get("error") or mfc_evidence.get("error"),
         extra={"environmentParity": environment_parity},
     )

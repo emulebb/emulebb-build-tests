@@ -361,7 +361,9 @@ def test_find_mfc_diag_health(tmp_path: Path) -> None:
     assert clw.find_mfc_diag_health(tmp_path) == health
 
 
-def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None:
+def test_converged_runner_uses_selected_unified_runs_for_packet_diff(
+    tmp_path: Path,
+) -> None:
     runner = _load_converged_runner()
     rust_dir = tmp_path / "rust"
     mfc_dir = tmp_path / "mfc"
@@ -379,11 +381,30 @@ def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None
             "segmentId": 0,
             "seq": 1,
             "streamSeq": 1,
-            "family": "sched",
-            "event": "capacity_snapshot",
+            "ts": "2026-10-24T12:00:00.000Z",
+            "family": "ed2k_tcp",
+            "event": "packet",
             "severity": "info",
-            "keys": {},
-            "body": {},
+            "keys": {
+                "peer": "192.0.2.20:4662",
+                "protocolMarker": 0xE3,
+                "opcode": 0x01,
+            },
+            "body": {
+                "flow": "server",
+                "direction": "send",
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "protocolMarker": 0xE3,
+                "protocolName": "ed2k",
+                "opcode": 0x01,
+                "opcodeName": "OP_LOGINREQUEST",
+                "rawLen": 3,
+                "rawHex": "e30100",
+                "payloadLen": 1,
+                "payloadHex": "00",
+                "payloadHexTruncated": False,
+            },
         }
 
     _write_jsonl(rust_segment, [record("rust", 41, "rust-run")])
@@ -417,14 +438,19 @@ def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    _, _, _, diag_diff = runner.diff_scenario_traces(
-        {"packetDumpDir": str(rust_dir), "processId": 41},
-        {"packetDumpDir": str(mfc_dir), "processId": 42},
+    result = runner.diff_scenario_traces(
+        {"diagnosticsDir": str(rust_dir), "processId": 41},
+        {"diagnosticsDir": str(mfc_dir), "processId": 42},
     )
 
-    assert diag_diff is not None
-    assert diag_diff["schema"] == "diag_event_diff_v1"
-    assert diag_diff["ok"] is True
+    assert result.rust_segments == (rust_segment.resolve(),)
+    assert result.emule_segments == (mfc_segment.resolve(),)
+    assert result.rust_packet_count == 1
+    assert result.emule_packet_count == 1
+    assert result.packet_diff["totals"]["matched"] == 1
+    assert result.packet_diff["ok"] is True
+    assert result.diag_diff["schema"] == "diag_event_diff_v1"
+    assert result.diag_diff["ok"] is True
 
 
 def test_load_current_mfc_diag_requires_lossless_writer_health(tmp_path: Path) -> None:
@@ -466,57 +492,57 @@ def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:
 
 
 def test_build_converged_report_ok_when_both_captured_and_diffs_pass(tmp_path: Path) -> None:
-    rust_trace = tmp_path / "rust.jsonl"
-    emule_trace = tmp_path / "emule.jsonl"
-    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
-    _write_jsonl(emule_trace, [{"schema": "ed2k_packet_v1"}])
+    rust_segments = (tmp_path / "rust-000000.jsonl", tmp_path / "rust-000001.jsonl")
+    emule_segments = (tmp_path / "mfc-000000.jsonl",)
 
     report = clw.build_converged_report(
         run_id="20260622T000000Z",
-        rust_packet_trace=rust_trace,
-        emule_packet_trace=emule_trace,
+        rust_diag_segments=rust_segments,
+        emule_diag_segments=emule_segments,
+        rust_packet_record_count=2,
+        emule_packet_record_count=1,
         packet_diff={"ok": True, "totals": {"matched": 1}},
         diag_diff={"ok": True},
-        rust_packet_summary={"requestSources2Sent": 0},
-        emule_packet_summary=None,
     )
     assert report["scenario"] == "emulebb.flow.converged.live-wire.hideme.v1"
     assert report["ok"] is True
-    assert report["traces"]["bothCaptured"] is True
-    assert report["traces"]["rust"]["records"] == 1
+    assert report["packetEvidence"]["source"] == "diag_event_v2"
+    assert report["packetEvidence"]["bothCaptured"] is True
+    assert report["packetEvidence"]["rust"] == {
+        "selectedSegments": [str(path) for path in rust_segments],
+        "extractedRecords": 2,
+        "captured": True,
+    }
+    assert report["packetEvidence"]["emule"]["selectedSegments"] == [
+        str(emule_segments[0])
+    ]
+    assert "traces" not in report
+    assert "packetSummaries" not in report
 
 
 def test_build_converged_report_not_ok_when_one_side_missing(tmp_path: Path) -> None:
-    rust_trace = tmp_path / "rust.jsonl"
-    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
-
     report = clw.build_converged_report(
         run_id="20260622T000000Z",
-        rust_packet_trace=rust_trace,
-        emule_packet_trace=None,
-        packet_diff=None,
-        diag_diff=None,
-        rust_packet_summary=None,
-        emule_packet_summary=None,
+        rust_diag_segments=(tmp_path / "rust.jsonl",),
+        emule_diag_segments=(tmp_path / "mfc.jsonl",),
+        rust_packet_record_count=1,
+        emule_packet_record_count=0,
+        packet_diff={"ok": False},
+        diag_diff={"ok": True},
     )
     assert report["ok"] is False
-    assert report["traces"]["emule"]["captured"] is False
+    assert report["packetEvidence"]["emule"]["captured"] is False
 
 
 def test_build_converged_report_not_ok_on_payload_mismatch(tmp_path: Path) -> None:
-    rust_trace = tmp_path / "rust.jsonl"
-    emule_trace = tmp_path / "emule.jsonl"
-    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
-    _write_jsonl(emule_trace, [{"schema": "ed2k_packet_v1"}])
-
     report = clw.build_converged_report(
         run_id="20260622T000000Z",
-        rust_packet_trace=rust_trace,
-        emule_packet_trace=emule_trace,
+        rust_diag_segments=(tmp_path / "rust.jsonl",),
+        emule_diag_segments=(tmp_path / "mfc.jsonl",),
+        rust_packet_record_count=1,
+        emule_packet_record_count=1,
         packet_diff={"ok": False, "totals": {"payload_mismatches": 1}},
         diag_diff={"ok": True},
-        rust_packet_summary=None,
-        emule_packet_summary=None,
     )
     assert report["ok"] is False
 
@@ -524,12 +550,12 @@ def test_build_converged_report_not_ok_on_payload_mismatch(tmp_path: Path) -> No
 def test_build_converged_report_merges_extra() -> None:
     report = clw.build_converged_report(
         run_id="r",
-        rust_packet_trace=None,
-        emule_packet_trace=None,
-        packet_diff=None,
-        diag_diff=None,
-        rust_packet_summary=None,
-        emule_packet_summary=None,
+        rust_diag_segments=(),
+        emule_diag_segments=(),
+        rust_packet_record_count=0,
+        emule_packet_record_count=0,
+        packet_diff={"ok": False},
+        diag_diff={"ok": False},
         extra={"server": "1.2.3.4:5687", "bindIp": "10.0.0.2"},
     )
     assert report["server"] == "1.2.3.4:5687"

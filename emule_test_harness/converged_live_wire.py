@@ -12,17 +12,20 @@ live network:
 * :func:`build_search_payload` / :func:`build_shared_directory_patch_payload`
   build the REST request bodies shared by both clients (rust ``/api/v1`` and the
   eMuleBB ``/api/v1`` REST use the same shapes);
-* :func:`find_packet_trace` discovers each side's ``ed2k_packet_v1`` JSONL dump;
-* :func:`build_converged_report` aggregates the two diff outputs plus the
-  packet-dump summaries into one combined report object.
+* :func:`load_current_diag_capture` selects and validates one segmented
+  ``diag_event_v2`` run per client;
+* :func:`build_converged_report` aggregates the two diff outputs with explicit
+  unified packet evidence into one combined report object.
 
-Both clients emit the converged ``ed2k_packet_v1`` packet schema, so the two
-captures are aligned with ``emule_test_harness.packet_trace_diff`` and the
-broader ``diag_event_v2`` envelope with ``emule_test_harness.diag_event_diff``.
+Both clients emit eD2K TCP packet events in ``diag_event_v2``. The orchestrator
+normalizes those events with ``diag_event_diff.ed2k_tcp_packet_views`` before
+aligning them with ``packet_trace_diff``; legacy packet-file discovery remains
+available only for compatibility with harness paths not yet migrated.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +55,14 @@ EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet*.log",)
 RUST_DIAG_DUMP_GLOBS = ("emulebb-rust-diag-*.jsonl",)
 EMULE_DIAG_DUMP_GLOBS = ("emulebb-mfc-diag-*.jsonl",)
 EMULE_DIAG_HEALTH_FILE = "emulebb-mfc-diag-health.json"
+
+
+@dataclass(frozen=True)
+class CurrentDiagCapture:
+    """One validated current diagnostic run and its selected segment paths."""
+
+    selected_segments: tuple[Path, ...]
+    records: tuple[dict[str, Any], ...]
 
 
 def mfc_diagnostics_build_dir(
@@ -251,15 +262,15 @@ def find_mfc_diag_health(dump_dir: Path) -> Path | None:
     return path if path.is_file() else None
 
 
-def load_current_diag_records(
+def load_current_diag_capture(
     dump_dir: Path,
     *,
     side: str,
     process_id: int | None = None,
     min_mtime: float | None = None,
     allow_incomplete_active_tail: bool = False,
-) -> list[dict[str, Any]]:
-    """Loads one current client run and requires lossless MFC writer health."""
+) -> CurrentDiagCapture:
+    """Loads one current run with its segments and validates MFC writer health."""
 
     segments = find_diag_traces(
         dump_dir, side=side, process_id=process_id, min_mtime=min_mtime
@@ -288,7 +299,27 @@ def load_current_diag_records(
         raise diag_event_runs.DiagnosticTraceError(
             f"selected {side} diagnostic run contains no complete events"
         )
-    return records
+    return CurrentDiagCapture(tuple(segments), tuple(records))
+
+
+def load_current_diag_records(
+    dump_dir: Path,
+    *,
+    side: str,
+    process_id: int | None = None,
+    min_mtime: float | None = None,
+    allow_incomplete_active_tail: bool = False,
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning only one current run's records."""
+
+    capture = load_current_diag_capture(
+        dump_dir,
+        side=side,
+        process_id=process_id,
+        min_mtime=min_mtime,
+        allow_incomplete_active_tail=allow_incomplete_active_tail,
+    )
+    return list(capture.records)
 
 
 def count_jsonl_records(path: Path | None) -> int:
@@ -306,53 +337,49 @@ def count_jsonl_records(path: Path | None) -> int:
 def build_converged_report(
     *,
     run_id: str,
-    rust_packet_trace: Path | None,
-    emule_packet_trace: Path | None,
-    packet_diff: dict[str, Any] | None,
-    diag_diff: dict[str, Any] | None,
-    rust_packet_summary: dict[str, Any] | None,
-    emule_packet_summary: dict[str, Any] | None,
+    rust_diag_segments: tuple[Path, ...],
+    emule_diag_segments: tuple[Path, ...],
+    rust_packet_record_count: int,
+    emule_packet_record_count: int,
+    packet_diff: dict[str, Any],
+    diag_diff: dict[str, Any],
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregates both sides into one combined converged-diff report object.
 
-    The report records the located traces, the per-(flow, direction)
-    ``ed2k_packet_v1`` diff (matches / payload-diffs / only-rust / only-emule),
-    the ``diag_event_v2`` family diff, and each side's packet-dump summary. The
-    top-level ``ok`` is true only when both traces were captured and both diffs
+    Packet evidence names the selected ``diag_event_v2`` segments and the count
+    of complete eD2K TCP packet records extracted from each run. The top-level
+    ``ok`` is true only when both runs supplied packet evidence and both diffs
     converged.
     """
 
-    rust_records = count_jsonl_records(rust_packet_trace)
-    emule_records = count_jsonl_records(emule_packet_trace)
-    both_captured = rust_records > 0 and emule_records > 0
+    if rust_packet_record_count < 0 or emule_packet_record_count < 0:
+        raise ValueError("packet record counts must be non-negative")
+    both_captured = rust_packet_record_count > 0 and emule_packet_record_count > 0
 
-    packet_ok = bool(packet_diff and packet_diff.get("ok"))
-    diag_ok = bool(diag_diff and diag_diff.get("ok"))
+    packet_ok = bool(packet_diff.get("ok"))
+    diag_ok = bool(diag_diff.get("ok"))
 
     report: dict[str, Any] = {
         "scenario": "emulebb.flow.converged.live-wire.hideme.v1",
         "runId": run_id,
         "ok": both_captured and packet_ok and diag_ok,
-        "traces": {
+        "packetEvidence": {
+            "source": "diag_event_v2",
             "rust": {
-                "path": str(rust_packet_trace) if rust_packet_trace else None,
-                "records": rust_records,
-                "captured": rust_records > 0,
+                "selectedSegments": [str(path) for path in rust_diag_segments],
+                "extractedRecords": rust_packet_record_count,
+                "captured": rust_packet_record_count > 0,
             },
             "emule": {
-                "path": str(emule_packet_trace) if emule_packet_trace else None,
-                "records": emule_records,
-                "captured": emule_records > 0,
+                "selectedSegments": [str(path) for path in emule_diag_segments],
+                "extractedRecords": emule_packet_record_count,
+                "captured": emule_packet_record_count > 0,
             },
             "bothCaptured": both_captured,
         },
         "packetDiff": packet_diff,
         "diagDiff": diag_diff,
-        "packetSummaries": {
-            "rust": rust_packet_summary,
-            "emule": emule_packet_summary,
-        },
     }
     if extra:
         report.update(extra)
