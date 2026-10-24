@@ -232,39 +232,35 @@ def load_peer_packet_diagnostics(
     return list(capture.selected_segments), records, packets
 
 
-def summarize_client_udp_packets(packet_dump_dir: Path) -> dict[str, Any]:
-    """Summarizes retained client-UDP reask packet diagnostics."""
+def summarize_client_udp_packets(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarizes unified client-UDP reask packet diagnostics."""
 
     opcode_counts: Counter[str] = Counter()
     direction_counts: Counter[str] = Counter()
     transport_counts: Counter[str] = Counter()
     direction_opcode_counts: Counter[tuple[str, str]] = Counter()
-    files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-client-udp-dump-*.jsonl"))
-    records = 0
+    packet_records = 0
     unknown_records = 0
-    for dump_file in files:
-        for line in dump_file.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            records += 1
-            opcode_name = str(record.get("opcode_name") or "")
-            direction = str(record.get("direction") or "")
-            transport = str(record.get("transport_mode") or "")
-            opcode_counts[opcode_name] += 1
-            direction_counts[direction] += 1
-            direction_opcode_counts[(direction, opcode_name)] += 1
-            transport_counts[transport] += 1
-            if opcode_name == "UNKNOWN":
-                unknown_records += 1
+    for record in records:
+        if record.get("family") != "ed2k_client_udp" or record.get("event") != "packet":
+            continue
+        body = record.get("body")
+        if not isinstance(body, dict):
+            continue
+        packet_records += 1
+        opcode_name = str(body.get("opcodeName") or "")
+        direction = str(body.get("direction") or "")
+        transport = str(body.get("transportMode") or "")
+        opcode_counts[opcode_name] += 1
+        direction_counts[direction] += 1
+        direction_opcode_counts[(direction, opcode_name)] += 1
+        transport_counts[transport] += 1
+        if opcode_name == "UNKNOWN":
+            unknown_records += 1
 
     return {
-        "files": len(files),
-        "records": records,
-        "captured": records > 0,
+        "records": packet_records,
+        "captured": packet_records > 0,
         "unknownRecords": unknown_records,
         "opcodes": dict(sorted((key, value) for key, value in opcode_counts.items() if key)),
         "directions": dict(sorted((key, value) for key, value in direction_counts.items() if key)),
@@ -905,33 +901,34 @@ def run_pass(
         handle.close()
     # Summarize unified peer packets so a silently-empty diagnostic stream
     # (release exe built without --features packet-diagnostics) is visible.
-    udp_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
-    diag_dump_files, diag_records, peer_packets = load_peer_packet_diagnostics(
+    diag_segments, diag_records, peer_packets = load_peer_packet_diagnostics(
         packet_dump_dir,
         process_id=process.pid,
     )
-    udp_dump_lines = sum(
-        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
-        for f in udp_dump_files
-    )
     peer_packet_count = len(peer_packets)
-    diag_dump_lines = len(diag_records)
-    evidence["packetDump"] = {
+    client_udp = summarize_client_udp_packets(diag_records)
+    kad_udp_records = [
+        record
+        for record in diag_records
+        if record.get("family") == "kad_udp" and record.get("event") == "packet"
+    ]
+    source_exchange_packets = summarize_source_exchange_packets(peer_packets)
+    evidence["diagnostics"] = {
         "dir": str(packet_dump_dir),
         "source": "diag_event_v2",
-        "files": len(diag_dump_files),
-        "records": peer_packet_count,
-        "captured": peer_packet_count > 0,
-        "ed2kFiles": len(diag_dump_files),
-        "ed2kRecords": peer_packet_count,
-        "udpFiles": len(udp_dump_files),
-        "udpRecords": udp_dump_lines,
-        "diagFiles": len(diag_dump_files),
-        "diagRecords": diag_dump_lines,
+        "selectedSegments": [str(path) for path in diag_segments],
+        "records": len(diag_records),
+        "peerTcp": {
+            "records": peer_packet_count,
+            "captured": peer_packet_count > 0,
+            "sourceExchange": source_exchange_packets,
+        },
+        "clientUdp": client_udp,
+        "kadUdp": {
+            "records": len(kad_udp_records),
+            "captured": bool(kad_udp_records),
+        },
     }
-    source_exchange_packets = summarize_source_exchange_packets(peer_packets)
-    evidence["packetDump"]["sourceExchange"] = source_exchange_packets
-    evidence["packetDump"]["clientUdp"] = summarize_client_udp_packets(packet_dump_dir)
     if source_exchange_packets["requestSources2Sent"] > 0 and isinstance(evidence.get("download"), dict):
         evidence["download"]["sourceExchangeObserved"] = True
         evidence["download"]["sourceExchangeEvidence"] = "diag_event_v2"
