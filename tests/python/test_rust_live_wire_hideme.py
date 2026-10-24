@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 
@@ -15,6 +16,50 @@ def load_live_wire_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def ed2k_tcp_packet_event(
+    *,
+    opcode: int,
+    payload: bytes,
+    direction: str,
+    process_id: int = 42,
+    run_id: str = "active",
+) -> dict[str, object]:
+    raw = bytes([0xE3, opcode]) + payload
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "runId": run_id,
+        "processId": process_id,
+        "segmentId": 0,
+        "seq": 1,
+        "streamSeq": 1,
+        "ts": "2026-10-24T12:00:00.000Z",
+        "family": "ed2k_tcp",
+        "event": "packet",
+        "severity": "info",
+        "keys": {
+            "peer": "192.0.2.20:4662",
+            "protocolMarker": 0xE3,
+            "opcode": opcode,
+        },
+        "body": {
+            "flow": "peer",
+            "direction": direction,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "protocolMarker": 0xE3,
+            "protocolName": "ed2k",
+            "opcode": opcode,
+            "opcodeName": f"OP_{opcode:02X}",
+            "rawLen": len(raw),
+            "rawHex": raw.hex(),
+            "payloadLen": len(payload),
+            "payloadHex": payload.hex(),
+            "payloadHexTruncated": False,
+        },
+    }
 
 
 def test_udp_reask_protocol_log_counts_outbound_reasks_only(tmp_path: Path) -> None:
@@ -89,9 +134,8 @@ def test_resolve_rust_live_wire_exe_uses_diagnostics_when_required(tmp_path: Pat
     assert resolved == diagnostics
 
 
-def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) -> None:
+def test_source_exchange_summary_counts_embedded_sx2_requests() -> None:
     module = load_live_wire_module()
-    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
     request_filename_ext_info = bytes([1, 0, 0, 0, 0])
     answer_sources2_payload = (
         bytes([4])
@@ -108,21 +152,22 @@ def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) ->
         + bytes([module.OP_REQUESTSOURCES2, 4, 0, 0])
         + bytes([module.OP_AICHFILEHASHREQ])
     )
-    records = [
-        {
-            "direction": "send",
-            "opcode": module.OP_MULTIPACKET_EXT,
-            "payload_hex": multipacket_ext_payload.hex(),
-        },
-        {
-            "direction": "recv",
-            "opcode": module.OP_ANSWERSOURCES2,
-            "payload_hex": answer_sources2_payload.hex(),
-        },
+    events = [
+        ed2k_tcp_packet_event(
+            opcode=module.OP_MULTIPACKET_EXT,
+            payload=multipacket_ext_payload,
+            direction="send",
+        ),
+        ed2k_tcp_packet_event(
+            opcode=module.OP_ANSWERSOURCES2,
+            payload=answer_sources2_payload,
+            direction="recv",
+        ),
     ]
-    dump_path.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
 
-    summary = module.summarize_source_exchange_packets(tmp_path)
+    summary = module.summarize_source_exchange_packets(
+        module.diag_event_diff.ed2k_tcp_packet_views(events)
+    )
 
     assert summary["requestSources2Sent"] == 1
     assert summary["embeddedRequestSources2Sent"] == 1
@@ -132,9 +177,8 @@ def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) ->
     assert summary["emptyAnswerSources2Received"] == 0
 
 
-def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Path) -> None:
+def test_source_exchange_summary_counts_ext2_embedded_sx2_requests() -> None:
     module = load_live_wire_module()
-    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
     request_filename_ext_info = bytes([1, 0, 0, 0, 0])
     file_identifier = bytes([0x03]) + bytes(range(16)) + (54321).to_bytes(8, "little")
     multipacket_ext2_payload = (
@@ -143,43 +187,96 @@ def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Pat
         + request_filename_ext_info
         + bytes([module.OP_REQUESTSOURCES2, 4, 0, 0])
     )
-    dump_path.write_text(
-        json.dumps(
-            {
-                "direction": "send",
-                "opcode": module.OP_MULTIPACKET_EXT2,
-                "payload_hex": multipacket_ext2_payload.hex(),
-            }
-        ),
-        encoding="utf-8",
+    packets = module.diag_event_diff.ed2k_tcp_packet_views(
+        [
+            ed2k_tcp_packet_event(
+                opcode=module.OP_MULTIPACKET_EXT2,
+                payload=multipacket_ext2_payload,
+                direction="send",
+            )
+        ]
     )
 
-    summary = module.summarize_source_exchange_packets(tmp_path)
+    summary = module.summarize_source_exchange_packets(packets)
 
     assert summary["requestSources2Sent"] == 1
     assert summary["embeddedRequestSources2Sent"] == 1
 
 
-def test_source_exchange_summary_counts_empty_sx2_answers(tmp_path: Path) -> None:
+def test_source_exchange_summary_counts_empty_sx2_answers() -> None:
     module = load_live_wire_module()
-    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
     answer_sources2_payload = bytes([4]) + bytes(range(16)) + (0).to_bytes(2, "little")
-    dump_path.write_text(
-        json.dumps(
-            {
-                "direction": "recv",
-                "opcode": module.OP_ANSWERSOURCES2,
-                "payload_hex": answer_sources2_payload.hex(),
-            }
-        ),
-        encoding="utf-8",
+    packets = module.diag_event_diff.ed2k_tcp_packet_views(
+        [
+            ed2k_tcp_packet_event(
+                opcode=module.OP_ANSWERSOURCES2,
+                payload=answer_sources2_payload,
+                direction="recv",
+            )
+        ]
     )
 
-    summary = module.summarize_source_exchange_packets(tmp_path)
+    summary = module.summarize_source_exchange_packets(packets)
 
     assert summary["answerSources2Received"] == 1
     assert summary["answerSources2SourceCount"] == 0
     assert summary["emptyAnswerSources2Received"] == 1
+
+
+def test_peer_packet_diagnostics_use_selected_unified_run_not_legacy_dump(
+    tmp_path: Path,
+) -> None:
+    module = load_live_wire_module()
+    legacy = tmp_path / "emulebb-rust-ed2k-tcp-dump-legacy.jsonl"
+    legacy.write_text(
+        json.dumps(
+            {
+                "direction": "send",
+                "opcode": module.OP_REQUESTSOURCES2,
+                "payload_hex": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    stale = tmp_path / "emulebb-rust-diag-42-stale-000000.jsonl"
+    active = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    stale.write_text(
+        json.dumps(
+            ed2k_tcp_packet_event(
+                opcode=module.OP_REQUESTSOURCES2,
+                payload=b"",
+                direction="send",
+                run_id="stale",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    active.write_text(
+        json.dumps(
+            ed2k_tcp_packet_event(
+                opcode=module.OP_ANSWERSOURCES2,
+                payload=bytes([4]) + bytes(range(16)) + (0).to_bytes(2, "little"),
+                direction="recv",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(stale, (1_000_000_000, 1_000_000_000))
+    os.utime(active, (2_000_000_000, 2_000_000_000))
+
+    segments, records, packets = module.load_peer_packet_diagnostics(
+        tmp_path,
+        process_id=42,
+    )
+
+    assert segments == [active.resolve()]
+    assert len(records) == 1
+    assert [packet["opcode"] for packet in packets] == [module.OP_ANSWERSOURCES2]
+    summary = module.summarize_source_exchange_packets(packets)
+    assert summary["requestSources2Sent"] == 0
+    assert summary["answerSources2Received"] == 1
 
 
 def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
