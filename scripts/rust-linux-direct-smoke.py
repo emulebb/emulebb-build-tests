@@ -33,7 +33,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.direct_safe_corpus import LINUX_PDF_TERMS, MAX_PDF_BYTES
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness import nat_live_matrix, rust_client, server_failure_accounting
+from emule_test_harness import (
+    diag_event_diff,
+    diag_event_runs,
+    nat_live_matrix,
+    rust_client,
+    server_failure_accounting,
+)
+from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
 from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_profile,
@@ -52,6 +59,7 @@ NAT_MATRIX_TRIGGER_ADDRESS = "192.0.2.1"
 NAT_MATRIX_TRIGGER_PORT = 9
 NAT_MATRIX_TRIGGER_ENDPOINT = f"{NAT_MATRIX_TRIGGER_ADDRESS}:{NAT_MATRIX_TRIGGER_PORT}"
 ALLOWED_TRANSFER_SUFFIXES = {".iso", ".pdf"}
+REQUIRED_DIAGNOSTIC_EVENTS = (("ed2k_tcp", "packet"), ("kad_udp", "packet"))
 
 
 def require_environment() -> tuple[Path, Path]:
@@ -515,84 +523,93 @@ def completed_transfer_evidence(
     }
 
 
-class PacketDumpMonitor:
-    """Checks fresh diagnostic JSONL while retaining only schema counts in reports."""
+class DiagnosticRunMonitor:
+    """Loads the launched daemon's current unified diagnostic run."""
 
     def __init__(self, dump_dir: Path, process: subprocess.Popen, max_bytes: int = 512 * 1024 * 1024) -> None:
         self.dump_dir = dump_dir
         self.process = process
         self.max_bytes = max_bytes
-        self.positions: dict[Path, int] = {}
-        self.pending: dict[Path, bytes] = {}
-        self.schemas: Counter[str] = Counter()
-        self.error_events: Counter[str] = Counter()
-        self.source_software: dict[tuple[str, str], str] = {}
-        self.accepted_source_bytes: Counter[tuple[str, str]] = Counter()
-        self.peak_source_count = 0
-        self.records = 0
+        self.event_counts: Counter[tuple[str, str]] = Counter()
+
+    def has_required_evidence(self) -> bool:
+        return all(self.event_counts[event] > 0 for event in REQUIRED_DIAGNOSTIC_EVENTS)
 
     def sample(self) -> dict[str, Any]:
         if self.process.poll() is not None:
             raise RuntimeError(f"Rust daemon exited during live diagnostics (code {self.process.returncode}).")
-        total_bytes = 0
-        for path in sorted(self.dump_dir.glob("emulebb-rust-*.jsonl")):
-            size = path.stat().st_size
-            total_bytes += size
-            if total_bytes > self.max_bytes:
-                raise RuntimeError("Live diagnostic dumps exceeded the bounded retention limit.")
-            previous = self.positions.get(path, 0)
-            if size < previous:
-                raise RuntimeError("Live diagnostic dump was truncated during capture.")
-            if size == previous:
-                continue
-            with path.open("rb") as handle:
-                handle.seek(previous)
-                fresh = handle.read(size - previous)
-            self.positions[path] = size
-            parts = (self.pending.pop(path, b"") + fresh).split(b"\n")
-            self.pending[path] = parts.pop()
-            for line in parts:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise RuntimeError("Malformed live diagnostic JSONL record.") from error
-                if not isinstance(record, dict) or not isinstance(record.get("schema"), str):
-                    raise RuntimeError("Live diagnostic record is missing a schema.")
-                self.schemas[record["schema"]] += 1
-                if record.get("severity") == "error":
-                    self.error_events[str(record.get("event") or "unknown")] += 1
-                if record.get("schema") == "diag_event_v2":
-                    keys = record.get("keys") or {}
-                    body = record.get("body") or {}
-                    if isinstance(keys, dict) and isinstance(body, dict):
-                        if record.get("event") == "source_count":
-                            count = body.get("sourceCount")
-                            if isinstance(count, int) and count > self.peak_source_count:
-                                self.peak_source_count = count
-                        source_key = (str(keys.get("fileHash") or ""), str(keys.get("peer") or ""))
-                        if all(source_key):
-                            software = body.get("clientSoftware")
-                            if isinstance(software, str) and software:
-                                self.source_software[source_key] = software
-                            if record.get("event") == "download_payload_accepted":
-                                accepted = body.get("bytes")
-                                if isinstance(accepted, int) and accepted > 0:
-                                    self.accepted_source_bytes[source_key] += accepted
-                self.records += 1
-        stock_bytes = sum(
-            count for key, count in self.accepted_source_bytes.items()
-            if self.source_software.get(key, "").lower().startswith("emule ")
+        segments = diag_event_runs.select_latest_diag_run(
+            self.dump_dir.glob("emulebb-rust-diag-*.jsonl"),
+            client="rust",
+            process_id=self.process.pid,
         )
+        total_bytes = sum(path.stat().st_size for path in segments)
+        if total_bytes > self.max_bytes:
+            raise RuntimeError("Live diagnostic run exceeded the bounded retention limit.")
+        records = diag_event_runs.load_latest_diag_records(
+            segments,
+            client="rust",
+            process_id=self.process.pid,
+            allow_incomplete_active_tail=True,
+        )
+        audit = diag_event_diff.schema_audit(records, records)
+        self.event_counts = Counter(
+            {
+                (str(event["family"]), str(event["event"])): int(event["rustCount"])
+                for event in audit["events"]
+                if int(event["rustCount"]) > 0
+            }
+        )
+        self.event_counts[("ed2k_tcp", "packet")] = len(
+            diag_event_diff.ed2k_tcp_packet_views(records)
+        )
+        error_events: Counter[str] = Counter()
+        source_software: dict[tuple[str, str], str] = {}
+        accepted_source_bytes: Counter[tuple[str, str]] = Counter()
+        peak_source_count = 0
+        for record in records:
+            if record.get("severity") == "error":
+                error_events[str(record.get("event") or "unknown")] += 1
+            keys = record.get("keys") or {}
+            body = record.get("body") or {}
+            if not isinstance(keys, dict) or not isinstance(body, dict):
+                continue
+            if record.get("event") == "source_count":
+                count = body.get("sourceCount")
+                if isinstance(count, int) and count > peak_source_count:
+                    peak_source_count = count
+            source_key = (str(keys.get("fileHash") or ""), str(keys.get("peer") or ""))
+            if all(source_key):
+                software = body.get("clientSoftware")
+                if isinstance(software, str) and software:
+                    source_software[source_key] = software
+                if record.get("event") == "download_payload_accepted":
+                    accepted = body.get("bytes")
+                    if isinstance(accepted, int) and accepted > 0:
+                        accepted_source_bytes[source_key] += accepted
+        stock_bytes = sum(
+            count for key, count in accepted_source_bytes.items()
+            if source_software.get(key, "").lower().startswith("emule ")
+        )
+        family_events: dict[str, dict[str, int]] = {}
+        for (family, event), count in sorted(self.event_counts.items()):
+            if count > 0:
+                family_events.setdefault(family, {})[event] = count
         return {
-            "records": self.records,
-            "schemas": dict(sorted(self.schemas.items())),
-            "errorEvents": dict(sorted(self.error_events.items())),
-            "acceptedPayloadBytes": sum(self.accepted_source_bytes.values()),
+            "schema": DIAG_EVENT_SCHEMA,
+            "records": len(records),
+            "selectedSegments": [path.name for path in segments],
+            "familyEvents": family_events,
+            "requiredEvidence": {
+                f"{family}/{event}": self.event_counts[(family, event)]
+                for family, event in REQUIRED_DIAGNOSTIC_EVENTS
+            },
+            "requiredEvidenceComplete": self.has_required_evidence(),
+            "errorEvents": dict(sorted(error_events.items())),
+            "acceptedPayloadBytes": sum(accepted_source_bytes.values()),
             "stockIdentifiedAcceptedBytes": stock_bytes,
-            "acceptedSourceCount": len(self.accepted_source_bytes),
-            "peakSourceCount": self.peak_source_count,
+            "acceptedSourceCount": len(accepted_source_bytes),
+            "peakSourceCount": peak_source_count,
             "bytes": total_bytes,
         }
 
@@ -610,7 +627,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-completed-type", action="append", default=[], choices=("iso", "pdf"),
                         help="Require a SHA-256-verified completed probe of this type.")
     parser.add_argument("--require-stock-bytes", action="store_true", help="Require accepted bytes from a stock-identifying live peer.")
-    parser.add_argument("--require-diagnostics", action="store_true", help="Use the diagnostics binary and require its packet dumps.")
+    parser.add_argument(
+        "--require-diagnostics",
+        action="store_true",
+        help="Use the diagnostics binary and require unified eD2K TCP and Kad UDP packet evidence.",
+    )
     parser.add_argument("--enable-upnp", action="store_true", help="Require live UPnP discovery and TCP/UDP mappings.")
     parser.add_argument(
         "--nat-backend",
@@ -735,7 +756,7 @@ def main(argv: list[str] | None = None) -> int:
     if diagnostics_required:
         launch_env["EMULEBB_RUST_LOG_DIR"] = str(diagnostic_dir)
     process = rust_client.spawn_rust_daemon(executable, profile_dir, output_handle=handle, env=launch_env)
-    monitor = PacketDumpMonitor(diagnostic_dir, process) if diagnostics_required else None
+    monitor = DiagnosticRunMonitor(diagnostic_dir, process) if diagnostics_required else None
     try:
         wait_until("Rust REST ready", 60.0, lambda: status(base_url) or None)
         report["webuiReady"] = webui_ready(base_url)
@@ -964,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
             and report["kad"]["running"]
             and report["kad"]["connected"]
             and report["kad"]["contactCount"] > 0
-            and (not monitor or all(monitor.schemas.get(schema, 0) > 0 for schema in ("ed2k_packet_v1", "udp_packet_v1", "diag_event_v2")))
+            and (not monitor or monitor.has_required_evidence())
         )
         transfer_results = report.get("transfers", [])
         if not connectivity_passed:
