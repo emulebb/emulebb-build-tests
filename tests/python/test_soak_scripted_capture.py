@@ -132,12 +132,61 @@ def test_gather_recording_preserves_relative_paths(tmp_path: Path) -> None:
     (source / "udp").mkdir()
     (source / "tcp" / "events.jsonl").write_text("tcp\n", encoding="utf-8")
     (source / "udp" / "events.jsonl").write_text("udp\n", encoding="utf-8")
+    (source / "emulebb-mfc-diag-health.json").write_text("{}", encoding="utf-8")
 
     copied = module.gather_recording(source, tmp_path / "recording", 0.0)
 
-    assert copied == 2
+    assert copied == 3
     assert (tmp_path / "recording" / "tcp" / "events.jsonl").read_text(encoding="utf-8") == "tcp\n"
     assert (tmp_path / "recording" / "udp" / "events.jsonl").read_text(encoding="utf-8") == "udp\n"
+    assert (tmp_path / "recording" / "emulebb-mfc-diag-health.json").read_text(
+        encoding="utf-8"
+    ) == "{}"
+
+
+def test_validate_recorded_diagnostics_rejects_unhealthy_mfc_writer(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    segment = tmp_path / "emulebb-mfc-diag-42-active-000000.jsonl"
+    segment.write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "client": "mfc",
+                "processId": 42,
+                "runId": "active",
+                "segmentId": 0,
+                "seq": 1,
+                "streamSeq": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "emulebb-mfc-diag-health.json").write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "enabled": True,
+                "configured": True,
+                "initialized": True,
+                "runId": "active",
+                "processId": 42,
+                "activeSegmentId": 0,
+                "activeFileName": segment.name,
+                "droppedEvents": 1,
+                "encodeErrors": 0,
+                "writeErrors": 0,
+                "retentionDeleteErrors": 0,
+                "initializationFailure": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="not lossless"):
+        module.validate_recorded_diagnostics(tmp_path, client="mfc", process_id=42)
 
 
 def test_gather_recording_fails_on_destination_collision(tmp_path: Path) -> None:

@@ -36,8 +36,6 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import (  # noqa: E402
     converged_live_wire,
     diag_event_diff,
-    diag_event_runs,
-    mfc_diag_adapter,
     packet_trace_diff,
 )
 
@@ -69,11 +67,6 @@ def _stats(base: str, key: str) -> dict | None:
     return payload.get("data") if payload else None
 
 
-def _newest(dump_dir: Path, pattern: str) -> Path | None:
-    files = glob.glob(str(dump_dir / pattern))
-    return Path(max(files, key=lambda p: Path(p).stat().st_mtime)) if files else None
-
-
 def heartbeat(args: argparse.Namespace) -> bool:
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"===== {ts} =====")
@@ -96,12 +89,14 @@ def heartbeat(args: argparse.Namespace) -> bool:
             print("monitor:", args.monitor_heartbeat.read_text().strip())
         except Exception as exc:
             print("monitor: unreadable", exc)
-    diag = _newest(args.rust_dump, "emulebb-rust-diag-*.jsonl") if args.rust_dump else None
-    if diag:
+    if args.rust_dump:
+        records = converged_live_wire.load_current_diag_records(
+            args.rust_dump, side="rust", allow_incomplete_active_tail=True
+        )
         counts: collections.Counter[str] = collections.Counter()
-        for line in open(diag, encoding="utf-8", errors="ignore"):
+        for record in records:
             for event in DIAG_EVENTS:
-                if f'"{event}"' in line:
+                if record.get("event") == event:
                     counts[event] += 1
         print("diag:", dict(counts))
     udp = glob.glob(str(args.rust_dump / "*client-udp*")) if args.rust_dump else []
@@ -154,48 +149,34 @@ def _windowed_diag_trace(loader, paths: list[Path], since: datetime.datetime) ->
 
 def divergence(args: argparse.Namespace) -> None:
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=args.window_minutes)
-    rust_diag_files = (
-        [Path(args.rust_diag)]
-        if args.rust_diag
-        else converged_live_wire.find_diag_traces(args.rust_dump, side="rust")
-    )
-    mfc_diag_files = (
-        [Path(args.mfc_diag)]
-        if args.mfc_diag
-        else converged_live_wire.find_diag_traces(args.mfc_logs, side="emule")
-    )
+    rust_diag_files = converged_live_wire.find_diag_traces(args.rust_dump, side="rust")
+    mfc_diag_files = converged_live_wire.find_diag_traces(args.mfc_logs, side="emule")
     print("\n=== cross-client divergence (via diag_event_diff / packet_trace_diff) ===")
     print(f"window={args.window_minutes}min  rust diag files: {len(rust_diag_files)}\nmfc diag files: {len(mfc_diag_files)}")
     report: dict = {}
+    if not rust_diag_files or not mfc_diag_files:
+        raise RuntimeError("cross-client divergence requires both current diagnostic runs")
     if rust_diag_files and mfc_diag_files:
+        rust_records = converged_live_wire.load_current_diag_records(
+            args.rust_dump, side="rust", allow_incomplete_active_tail=True
+        )
+        mfc_records = converged_live_wire.load_current_diag_records(
+            args.mfc_logs, side="emule", allow_incomplete_active_tail=True
+        )
         rt = [
             record
-            for record in diag_event_runs.load_latest_diag_records(
-                rust_diag_files, client="rust", allow_incomplete_active_tail=True
-            )
+            for record in rust_records
             if (_rec_ts(record) is None or _rec_ts(record) >= since)
         ]
         mt = [
             record
-            for record in diag_event_runs.load_latest_diag_records(
-                mfc_diag_files, client="mfc", allow_incomplete_active_tail=True
-            )
+            for record in mfc_records
             if (_rec_ts(record) is None or _rec_ts(record) >= since)
         ]
-        # MFC keeps its richest bad-peer diagnostics in a separate bad_peer_event_v1
-        # log (different names/shape) that never reaches the converged diag stream.
-        # Adapt + window those into the diag_event_v2 bad_peer envelope so the
-        # bad_peer surface is actually diffed (otherwise it is invisible on MFC).
-        mfc_bad_peer_files = (
-            mfc_diag_adapter.find_mfc_bad_peer_logs(args.mfc_logs)
-            if args.mfc_logs
-            else []
-        )
-        mt += _windowed_diag_trace(
-            lambda path: mfc_diag_adapter.bad_peer_events_as_diag_v2([path]),
-            mfc_bad_peer_files,
-            since,
-        )
+        if not rt or not mt:
+            raise RuntimeError(
+                "cross-client divergence window contains no current diagnostics on one or both sides"
+            )
         res = diag_event_diff.diff_traces(rt, mt)
         report["diag_event"] = res
         print(f"\n-- diag_event families (overall ok={res['ok']}, rustRecs={len(rt)} mfcRecs={len(mt)}) --")
@@ -210,9 +191,7 @@ def divergence(args: argparse.Namespace) -> None:
         # (buddy/firewall/search-source) it does exercise are not falsely flagged. MFC's
         # window sample is the parity reference.
         rust_kad_all = packet_trace_diff.kad_records(
-            diag_event_runs.load_latest_diag_records(
-                rust_diag_files, client="rust", allow_incomplete_active_tail=True
-            )
+            rust_records
         )
         kad_cov = packet_trace_diff.kad_opcode_coverage(
             rust_kad_all, packet_trace_diff.kad_records(mt)
@@ -230,9 +209,8 @@ def divergence(args: argparse.Namespace) -> None:
             f"recvOnlyNoise={kad_recv_noise} expectedDivergences={kad_expected}"
         )
         # Download-parallelism parity (rotation-robust): the latest source_count body from
-        # each side's already-windowed trace. MFC's rapidly-rotated diag logs are gathered
-        # + concatenated above (mfc_diag_files -> mt), so this is NOT subject to the
-        # mid-rotation misses / wrong-glob hits that ad-hoc single-file reads suffer.
+        # each side's already-windowed trace. The shared loader selects one complete
+        # segmented run, so this is not subject to single-file rotation misses.
         # validSourceCount >> transferringSourceCount is the stall signature (many engaged
         # sources, few actually moving bytes).
         def _latest_source_count(trace: list[dict]) -> dict | None:
@@ -291,8 +269,6 @@ def divergence(args: argparse.Namespace) -> None:
                           + (f" onlyRust={e['onlyRustKeys']}" if e["onlyRustKeys"] else "")
                           + (f" onlyMfc={e['onlyMfcKeys']}" if e["onlyMfcKeys"] else ""))
                 print(f"  ({clean} shared events with identical body schema)")
-    else:
-        print("  (skipped diag diff: missing one trace)")
     # C2 + rotation: rust splits eD2K packets across the tcp (peer) and server
     # dumps, and MFC rotates its packet.log by size. Concat BOTH rust eD2K dumps so
     # server-flow parity is not silently dropped, and the MFC packet.log files
@@ -321,7 +297,7 @@ def divergence(args: argparse.Namespace) -> None:
         )
         print(f"  {json.dumps(cov, default=str)[:900]}")
     else:
-        print("  (skipped packet diff: missing one trace)")
+        raise RuntimeError("cross-client divergence requires both current packet traces")
     if args.diff_json:
         Path(args.diff_json).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         print(f"\nfull divergence JSON -> {args.diff_json}")
@@ -336,15 +312,13 @@ def build_parser() -> argparse.ArgumentParser:
     default_rust_dump = OUTPUT_ROOT / "soak" / "rust-profile" / "packet-dump" if OUTPUT_ROOT else None
     default_monitor = OUTPUT_ROOT / "soak" / "parity-monitor" / "upload-parity-monitor.heartbeat.txt" if OUTPUT_ROOT else None
     parser.add_argument("--rust-dump", type=Path, default=default_rust_dump, help="Rust packet-dump directory.")
-    parser.add_argument("--mfc-logs", type=Path, help="Active MFC profile logs directory (required for --diff unless both MFC trace overrides are supplied).")
+    parser.add_argument("--mfc-logs", type=Path, help="Active MFC profile logs directory (required for --diff).")
     parser.add_argument("--monitor-heartbeat", type=Path, default=default_monitor)
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT, help="Output root used only for free-space reporting.")
     parser.add_argument("--diff", action="store_true", help="Also run the cross-client divergence report.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Wall-clock window for the divergence diff (both traces are filtered to it).")
     parser.add_argument("--schema-audit", action="store_true", help="Per shared event, report body-field key deltas vs the MFC oracle schema.")
     parser.add_argument("--oracle-conformance", action="store_true", help="Verdict only: does rust cover every oracle event + body key (rust superset-of oracle)? rust extras allowed.")
-    parser.add_argument("--rust-diag", help="Override rust diag_event_v2 segment.")
-    parser.add_argument("--mfc-diag", help="Override MFC diag_event_v2 segment.")
     parser.add_argument("--rust-packet", help="Override rust ed2k_packet_v1 jsonl.")
     parser.add_argument("--mfc-packet", help="Override MFC ed2k_packet_v1 log.")
     parser.add_argument("--diff-json", help="Write the full divergence result JSON here.")
@@ -356,8 +330,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.diff and args.rust_dump is None:
         parser.error("--diff requires --rust-dump when EMULEBB_WORKSPACE_OUTPUT_ROOT is unset")
-    if args.diff and args.mfc_logs is None and not (args.mfc_diag and args.mfc_packet):
-        parser.error("--diff requires --mfc-logs unless --mfc-diag and --mfc-packet are both supplied")
+    if args.diff and args.mfc_logs is None:
+        parser.error("--diff requires --mfc-logs")
     up = heartbeat(args)
     if args.diff and up:
         divergence(args)

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness.diag_event_diff import diff_traces, load_trace, load_traces
+from emule_test_harness.diag_event_diff import (
+    diff_traces,
+    family_conformance,
+    load_trace,
+    load_traces,
+)
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
 
 
@@ -62,6 +67,11 @@ def test_diff_rejects_legacy_schema() -> None:
     legacy["schema"] = "diag_event_v1"
     with pytest.raises(ValueError, match="expected 'diag_event_v2'"):
         diff_traces([legacy], [])
+
+
+def test_empty_diagnostics_are_not_successful_evidence() -> None:
+    assert diff_traces([], [])["ok"] is False
+    assert family_conformance([], [])["ok"] is False
 
 
 def test_packet_same_opcode_different_payload_is_mismatch() -> None:

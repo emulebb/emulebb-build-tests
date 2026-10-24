@@ -1388,7 +1388,7 @@ def test_start_upload_monitor_ignores_stale_reused_mfc_log(tmp_path: Path, monke
     assert str(stale_mfc_log) not in commands[0]
 
 
-def test_start_upload_monitor_allows_regular_rust_without_diag_log(tmp_path: Path, monkeypatch) -> None:
+def test_start_upload_monitor_tracks_segment_directory_and_process(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     mfc_log = tmp_path / "emulebb-diagnostics-upload-slot.log"
     mfc_log.write_text("fresh\n", encoding="utf-8")
@@ -1400,7 +1400,6 @@ def test_start_upload_monitor_allows_regular_rust_without_diag_log(tmp_path: Pat
             commands.append(list(command))
             self.pid = 5432
 
-    monkeypatch.setattr(control, "latest_diag_log", lambda _log_dir, _rust_pid: None)
     monkeypatch.setattr(control.subprocess, "Popen", FakePopen)
 
     result = control.start_upload_monitor(
@@ -1418,8 +1417,15 @@ def test_start_upload_monitor_allows_regular_rust_without_diag_log(tmp_path: Pat
     )
 
     assert result["monitorPid"] == 5432
-    assert result["rustDiagLog"] is None
+    assert result["rustDiagDir"] == str(tmp_path)
+    assert result["rustPid"] == 123
     assert "--rust-diag-log" not in commands[0]
+    assert ["--rust-diag-dir", str(tmp_path)] == commands[0][
+        commands[0].index("--rust-diag-dir") : commands[0].index("--rust-diag-dir") + 2
+    ]
+    assert ["--rust-pid", "123"] == commands[0][
+        commands[0].index("--rust-pid") : commands[0].index("--rust-pid") + 2
+    ]
     assert "--mfc-upload-log" in commands[0]
 
 
@@ -3830,6 +3836,66 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["trend"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
     assert "latestRecord" not in brief
     assert "files" not in brief["diagnostics"]
+
+
+def test_watch_brief_uses_every_segment_from_current_rust_run(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    segments = [
+        tmp_path / "emulebb-rust-diag-42-active-000000.jsonl",
+        tmp_path / "emulebb-rust-diag-42-active-000001.jsonl",
+    ]
+    observed: dict[str, object] = {}
+
+    def find_diag_traces(dump_dir, *, side, process_id=None, min_mtime=None):
+        observed["find"] = (dump_dir, side, process_id, min_mtime)
+        return segments
+
+    def load_current_diag_records(
+        dump_dir,
+        *,
+        side,
+        process_id=None,
+        min_mtime=None,
+        allow_incomplete_active_tail=False,
+    ):
+        observed["load"] = (
+            dump_dir,
+            side,
+            process_id,
+            min_mtime,
+            allow_incomplete_active_tail,
+        )
+        return [{"schema": "diag_event_v2"}]
+
+    def upload_efficiency_summary(args):
+        observed["segments"] = args.log_file
+        observed["limit"] = args.limit
+        return {"rowCount": 1, "outcomes": {"served": 1}, "numeric": {}}
+
+    monkeypatch.setattr(control.clw, "find_diag_traces", find_diag_traces)
+    monkeypatch.setattr(control.clw, "load_current_diag_records", load_current_diag_records)
+    monkeypatch.setattr(control, "upload_efficiency_summary", upload_efficiency_summary)
+
+    result = control.watch_brief_from_record(
+        {"timestampUtc": "2026-01-01T00:00:00+00:00"},
+        SimpleNamespace(
+            watch_pid_file=tmp_path / "missing.pid",
+            watch_stop_file=tmp_path / "missing.stop",
+            stale_seconds=900.0,
+            rust_diag_dir=tmp_path,
+            rust_pid=42,
+            upload_efficiency_max_bytes=1024,
+            slow_read_ms=100.0,
+            mfc_upload_log=None,
+        ),
+        {},
+    )
+
+    assert observed["find"] == (tmp_path, "rust", 42, None)
+    assert observed["load"] == (tmp_path, "rust", 42, None, True)
+    assert observed["segments"] == segments
+    assert observed["limit"] == len(segments)
+    assert result["diagnostics"]["uploadEfficiency"]["rowCount"] == 1
 
 
 def test_upload_demand_classification_flags_post_visibility_scheduler_gap() -> None:

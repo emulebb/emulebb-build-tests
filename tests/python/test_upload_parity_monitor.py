@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from emule_test_harness import upload_parity_monitor
 
 
@@ -53,7 +55,7 @@ def test_append_record_writes_jsonl_and_heartbeat(tmp_path: Path) -> None:
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
-        rust_diag_log=None,
+        rust_diag_dir=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
     )
@@ -77,7 +79,7 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
-        rust_diag_log=None,
+        rust_diag_dir=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
     )
@@ -116,69 +118,75 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
 
 
 def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> None:
-    log = tmp_path / "emulebb-rust-diag.jsonl"
+    log = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    rows = [
+        {"family": "other", "event": "ignored", "body": {"peer": "hidden"}},
+        {
+            "family": "sched",
+            "event": "capacity_snapshot",
+            "keys": {"peer": "hidden"},
+            "body": {
+                "activeSlots": 22,
+                "activeGrantedSessions": 21,
+                "activeUploadingSessions": 20,
+                "activeNeverUploadedSessions": 1,
+                "activeProductiveSessions": 19,
+                "baseSlots": 12,
+                "effectiveSlotCap": 22,
+                "elasticSlots": 10,
+                "elasticUnderfill": True,
+                "underfillSinceMs": 541542,
+                "uploadLimitBytesPerSec": 3145728,
+                "uploadRateBytesPerSec": 2252002,
+                "waitingSessions": 2,
+            },
+        },
+        {
+            "family": "sched",
+            "event": "upload_slot_recycled",
+            "keys": {"peer": "hidden", "fileHash": "hidden"},
+            "body": {"reason": "slowUnderfill", "slotRateBytesPerSec": 12624},
+        },
+        {
+            "family": "sched",
+            "event": "upload_request_outcome",
+            "keys": {"peer": "hidden", "fileHash": "hidden"},
+            "body": {
+                "outcome": "served",
+                "servedBytes": 4096,
+                "throttleDelayMs": 25,
+                "verifiedReaderOpenMs": 3,
+                "payloadReadMs": 7,
+            },
+        },
+        {
+            "family": "sched",
+            "event": "upload_payload_accounting",
+            "keys": {"peer": "hidden", "fileHash": "hidden"},
+            "body": {"sentPayloadBytes": 4096},
+        },
+    ]
     log.write_text(
         "\n".join(
-            [
-                json.dumps({"family": "other", "event": "ignored", "body": {"peer": "hidden"}}),
-                json.dumps(
-                    {
-                        "family": "sched",
-                        "event": "capacity_snapshot",
-                        "keys": {"peer": "hidden"},
-                        "body": {
-                            "activeSlots": 22,
-                            "activeGrantedSessions": 21,
-                            "activeUploadingSessions": 20,
-                            "activeNeverUploadedSessions": 1,
-                            "activeProductiveSessions": 19,
-                            "baseSlots": 12,
-                            "effectiveSlotCap": 22,
-                            "elasticSlots": 10,
-                            "elasticUnderfill": True,
-                            "underfillSinceMs": 541542,
-                            "uploadLimitBytesPerSec": 3145728,
-                            "uploadRateBytesPerSec": 2252002,
-                            "waitingSessions": 2,
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "family": "sched",
-                        "event": "upload_slot_recycled",
-                        "keys": {"peer": "hidden", "fileHash": "hidden"},
-                        "body": {"reason": "slowUnderfill", "slotRateBytesPerSec": 12624},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "family": "sched",
-                        "event": "upload_request_outcome",
-                        "keys": {"peer": "hidden", "fileHash": "hidden"},
-                        "body": {
-                            "outcome": "served",
-                            "servedBytes": 4096,
-                            "throttleDelayMs": 25,
-                            "verifiedReaderOpenMs": 3,
-                            "payloadReadMs": 7,
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "family": "sched",
-                        "event": "upload_payload_accounting",
-                        "keys": {"peer": "hidden", "fileHash": "hidden"},
-                        "body": {"sentPayloadBytes": 4096},
-                    }
-                ),
-            ]
-        ),
+            json.dumps(
+                {
+                    "schema": "diag_event_v2",
+                    "client": "rust",
+                    "processId": 42,
+                    "runId": "active",
+                    "segmentId": 0,
+                    "seq": seq,
+                    "streamSeq": seq,
+                    **row,
+                }
+            )
+            for seq, row in enumerate(rows, start=1)
+        )
+        + "\n",
         encoding="utf-8",
     )
 
-    summary = upload_parity_monitor.rust_sched_summary(log)
+    summary = upload_parity_monitor.rust_sched_summary(tmp_path, rust_pid=42)
 
     assert summary["schedEvents"] == 4
     assert summary["eventCounts"] == {
@@ -201,11 +209,70 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
     assert "hidden" not in json.dumps(summary)
 
 
+def test_rust_sched_summary_aggregates_all_current_run_segments(tmp_path: Path) -> None:
+    for segment_id, served_bytes in ((0, 1024), (1, 2048)):
+        path = tmp_path / f"emulebb-rust-diag-42-active-{segment_id:06}.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "diag_event_v2",
+                    "client": "rust",
+                    "processId": 42,
+                    "runId": "active",
+                    "segmentId": segment_id,
+                    "seq": segment_id + 1,
+                    "streamSeq": segment_id + 1,
+                    "family": "sched",
+                    "event": "upload_request_outcome",
+                    "body": {"outcome": "served", "servedBytes": served_bytes},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    summary = upload_parity_monitor.rust_sched_summary(tmp_path, rust_pid=42)
+
+    assert summary["schedEvents"] == 2
+    assert summary["servedBytes"] == 3072
+
+
+def test_rust_sched_summary_rejects_single_file_compatibility_input(tmp_path: Path) -> None:
+    log = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    log.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires a diagnostic segment directory"):
+        upload_parity_monitor.rust_sched_summary(log, rust_pid=42)
+
+
+def test_run_monitor_once_returns_failure_for_invalid_current_run(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    config = upload_parity_monitor.MonitorConfig(
+        rust_base_url="http://example.invalid/api/v1",
+        rust_api_key="placeholder",
+        rust_diag_dir=tmp_path / "missing-diag-dir",
+        mfc_upload_log=tmp_path / "missing.log",
+        output_dir=tmp_path / "out",
+        once=True,
+    )
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "build_record",
+        lambda _config: (_ for _ in ()).throw(ValueError("invalid current diagnostic run")),
+    )
+
+    assert upload_parity_monitor.run_monitor(config) == 2
+    record = json.loads(config.jsonl_path.read_text(encoding="utf-8"))
+    assert "invalid current diagnostic run" in record["error"]
+
+
 def test_build_record_flags_post_visibility_demand_gap(monkeypatch: Any, tmp_path: Path) -> None:
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
-        rust_diag_log=None,
+        rust_diag_dir=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
     )
@@ -247,7 +314,7 @@ def test_build_record_suppresses_parity_gap_when_mfc_log_is_stale(monkeypatch: A
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
-        rust_diag_log=None,
+        rust_diag_dir=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
         mfc_log_stale_seconds=1.0,

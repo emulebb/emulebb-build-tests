@@ -714,6 +714,7 @@ def diff_action(
     mfc_packets: list[dict[str, Any]],
     rust_diag: list[dict[str, Any]] | None = None,
     mfc_diag: list[dict[str, Any]] | None = None,
+    diagnostics_required: bool = False,
     lead_seconds: float = DEFAULT_LEAD_SECONDS,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
 ) -> dict[str, Any]:
@@ -731,6 +732,10 @@ def diff_action(
 
     rust_diag_slice = slice_trace(rust_diag or [], t0, t1)
     mfc_diag_slice = slice_trace(mfc_diag or [], t0, t1)
+    if diagnostics_required and (not rust_diag_slice or not mfc_diag_slice):
+        raise ValueError(
+            "required current diagnostics are missing from one or both action windows"
+        )
     diag_diff: dict[str, Any] | None = None
     diag_conformance: dict[str, Any] | None = None
     if rust_diag or mfc_diag:

@@ -57,6 +57,31 @@ def _diag(family: str, event: str, at: float, *, body: dict | None = None) -> di
     }
 
 
+def _segmented_diag(
+    client: str,
+    process_id: int,
+    run_id: str,
+    segment_id: int,
+    seq: int,
+    at: float,
+) -> dict:
+    return {
+        "schema": "diag_event_v2",
+        "client": client,
+        "processId": process_id,
+        "runId": run_id,
+        "segmentId": segment_id,
+        "seq": seq,
+        "streamSeq": seq,
+        "ts": _ts(at),
+        "family": "sched",
+        "event": "tick",
+        "severity": "info",
+        "keys": {},
+        "body": {},
+    }
+
+
 def _window(at: float = 0.0) -> dict:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=at)
     return {"kind": "search", "t0": stamp, "t1": stamp + timedelta(seconds=10)}
@@ -68,6 +93,25 @@ def _sides(rust_pkt: list, mfc_pkt: list, rust_diag: list | None = None, mfc_dia
     return rust, mfc
 
 
+def _write_recording_shell(tmp_path: Path, stem: str) -> tuple[Path, Path]:
+    recording = tmp_path / f"{stem}.zip"
+    private_dir = tmp_path / f"{stem}-private-artifacts"
+    (private_dir / "dumps").mkdir(parents=True)
+    with zipfile.ZipFile(recording, "w") as archive:
+        archive.writestr(f"{stem}/results.json", "{}")
+        archive.writestr(f"{stem}/markers.jsonl", "")
+        archive.writestr(
+            f"{stem}/evidence-classification.json",
+            json.dumps(
+                {
+                    "archiveClassification": "sanitized-report",
+                    "privateArtifactsSibling": f"{stem}-private-artifacts",
+                }
+            ),
+        )
+    return recording, private_dir
+
+
 def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     tmp_path: Path,
 ) -> None:
@@ -77,8 +121,8 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     dumps = private_dir / "dumps" / "nested"
     dumps.mkdir(parents=True)
     (private_dir / "native-capture.pcapng").write_bytes(b"x" * 4096)
-    (dumps / "diag.jsonl").write_text(
-        json.dumps({"schema": "diag_event_v2", "ts": _ts(1)}) + "\n",
+    (dumps / "emulebb-rust-diag-42-active-000000.jsonl").write_text(
+        json.dumps(_segmented_diag("rust", 42, "active", 0, 1, 1)) + "\n",
         encoding="utf-8",
     )
     (dumps / "packet.log").write_text(
@@ -98,12 +142,48 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
             ),
         )
 
-    loaded = mod._load_recording(recording)
+    loaded = mod._load_recording(recording, client="rust")
 
     assert loaded["nativeCaptureSizes"] == [4096]
     assert len(loaded["diag"]) == 1
     assert loaded["diag"][0]["ts_utc"] == _ts(1)
     assert len(loaded["packets"]) == 1
+
+
+def test_load_recording_rejects_malformed_current_diag_segment(tmp_path: Path) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "rust-recording")
+    (private_dir / "dumps" / "emulebb-rust-diag-42-active-000000.jsonl").write_text(
+        '{"schema":"diag_event_v2"', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="malformed JSON"):
+        mod._load_recording(recording, client="rust")
+
+
+def test_load_recording_rejects_unsegmented_current_diag_event(tmp_path: Path) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "rust-recording")
+    (private_dir / "dumps" / "events.jsonl").write_text(
+        json.dumps(_segmented_diag("rust", 42, "active", 0, 1, 1)) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="segmented current-run names"):
+        mod._load_recording(recording, client="rust")
+
+
+def test_load_recording_requires_mfc_writer_health(tmp_path: Path) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "mfc-recording")
+    segment = private_dir / "dumps" / "emulebb-mfc-diag-42-active-000000.jsonl"
+    segment.write_text(
+        json.dumps(_segmented_diag("mfc", 42, "active", 0, 1, 1)) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exactly one diagnostic writer health"):
+        mod._load_recording(recording, client="mfc")
 
 
 def test_load_recording_rejects_private_diagnostics_in_sanitized_archive(
@@ -117,7 +197,7 @@ def test_load_recording_rejects_private_diagnostics_in_sanitized_archive(
         archive.writestr("rust-recording/dumps/private.log", "sensitive")
 
     with pytest.raises(ValueError, match="private diagnostics"):
-        mod._load_recording(recording)
+        mod._load_recording(recording, client="rust")
 
 
 def test_load_recording_uses_private_completion_digest_for_pair_proof(
@@ -148,7 +228,8 @@ def test_load_recording_uses_private_completion_digest_for_pair_proof(
             json.dumps(_completion_meta(digest=digest)["nativeCompletionEvidence"]),
             encoding="utf-8",
         )
-        return mod._load_recording(recording)
+        client = "rust" if stem.startswith("rust") else "mfc"
+        return mod._load_recording(recording, client=client)
 
     rust = make_recording("rust-recording")
     mfc = make_recording("mfc-recording")
@@ -185,7 +266,7 @@ def test_load_recording_rejects_valid_json_non_objects(
         )
 
     with pytest.raises(ValueError, match=message):
-        mod._load_recording(recording)
+        mod._load_recording(recording, client="rust")
 
 
 def test_cli_maps_unexpected_failure_to_sanitized_harness_exit(
@@ -257,6 +338,22 @@ def test_diag_family_gate_fails_on_missing_oracle_body_key() -> None:
 
     assert result["diagFamilyOk"] is False
     assert result["verdict"] == "divergence"
+
+
+def test_packet_only_action_window_fails_for_missing_diagnostics() -> None:
+    mod = _load_offline_diff()
+    rust, mfc = _sides(
+        [_pkt("server", "send", 0x16, "aa", 1.0)],
+        [_pkt("server", "send", 0x16, "bb", 1.0)],
+        [],
+        [],
+    )
+
+    result = mod._diff_one_action("search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0)
+
+    assert result["verdict"] == "missing-diagnostics"
+    assert result["conformant"] is False
+    assert result["diagFamilyOk"] is False
 
 
 def test_action_windows_capture_marker_method() -> None:
@@ -525,6 +622,28 @@ def test_missing_state_machine_evidence_is_not_a_protocol_divergence() -> None:
     }
     assert observed_mismatch["verdict"] == "divergence"
     assert observed_mismatch["exitCode"] == 1
+
+
+def test_missing_action_diagnostics_is_a_harness_failure() -> None:
+    mod = _load_offline_diff()
+
+    result = mod._campaign_verdict(
+        per_action=[{"verdict": "missing-diagnostics", "coverageOk": True}],
+        missing_action_count=0,
+        action_error_count=0,
+        completion={"required": False, "ok": None},
+        scenario_mismatch=False,
+        conformance_ok=True,
+        kad_coverage_ok=True,
+        secident_dead=False,
+        external_inconclusive=False,
+    )
+
+    assert result == {
+        "verdict": "harness-failure",
+        "exitCode": 2,
+        "findings": ["missing-action-diagnostics"],
+    }
 
 
 def test_action_errors_and_required_completion_failure_are_harness_failures() -> None:

@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness.diag_event_runs import select_latest_diag_run
+from emule_test_harness import diag_event_runs
 
 # Canonical MFC output build layout dimensions (see WORKSPACE-POLICY build root).
 # The packet-diagnostics MFC exe is the `main` variant built with --diagnostics:
@@ -223,21 +223,25 @@ def find_packet_trace(dump_dir: Path, *, side: str) -> Path | None:
     return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
 
 
-def find_diag_trace(dump_dir: Path, *, side: str) -> Path | None:
-    """Returns the active diagnostic-event segment for one client side."""
-
-    matches = find_diag_traces(dump_dir, side=side)
-    return matches[-1] if matches else None
-
-
-def find_diag_traces(dump_dir: Path, *, side: str) -> list[Path]:
+def find_diag_traces(
+    dump_dir: Path,
+    *,
+    side: str,
+    process_id: int | None = None,
+    min_mtime: float | None = None,
+) -> list[Path]:
     """Returns ordered diagnostic-event segments for one current client run."""
 
     if side not in {"rust", "emule"}:
         raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
     globs = RUST_DIAG_DUMP_GLOBS if side == "rust" else EMULE_DIAG_DUMP_GLOBS
     client = "rust" if side == "rust" else "mfc"
-    return select_latest_diag_run(_first_existing_glob(dump_dir, globs), client=client)
+    candidates = _first_existing_glob(dump_dir, globs)
+    if min_mtime is not None:
+        candidates = [path for path in candidates if path.stat().st_mtime >= min_mtime]
+    return diag_event_runs.select_latest_diag_run(
+        candidates, client=client, process_id=process_id
+    )
 
 
 def find_mfc_diag_health(dump_dir: Path) -> Path | None:
@@ -245,6 +249,46 @@ def find_mfc_diag_health(dump_dir: Path) -> Path | None:
 
     path = dump_dir / EMULE_DIAG_HEALTH_FILE
     return path if path.is_file() else None
+
+
+def load_current_diag_records(
+    dump_dir: Path,
+    *,
+    side: str,
+    process_id: int | None = None,
+    min_mtime: float | None = None,
+    allow_incomplete_active_tail: bool = False,
+) -> list[dict[str, Any]]:
+    """Loads one current client run and requires lossless MFC writer health."""
+
+    segments = find_diag_traces(
+        dump_dir, side=side, process_id=process_id, min_mtime=min_mtime
+    )
+    if not segments:
+        raise diag_event_runs.DiagnosticTraceError(
+            f"{side} diagnostics did not produce a current diag_event_v2 run in {dump_dir}"
+        )
+    client = "rust" if side == "rust" else "mfc"
+    if side == "emule":
+        health = find_mfc_diag_health(dump_dir)
+        if health is None:
+            raise diag_event_runs.DiagnosticTraceError(
+                f"missing MFC diagnostic writer health in {dump_dir}"
+            )
+        diag_event_runs.load_and_validate_writer_health(
+            health, client="mfc", selected_segments=segments
+        )
+    records = diag_event_runs.load_latest_diag_records(
+        segments,
+        client=client,
+        process_id=process_id,
+        allow_incomplete_active_tail=allow_incomplete_active_tail,
+    )
+    if not records:
+        raise diag_event_runs.DiagnosticTraceError(
+            f"selected {side} diagnostic run contains no complete events"
+        )
+    return records
 
 
 def count_jsonl_records(path: Path | None) -> int:
@@ -284,7 +328,7 @@ def build_converged_report(
     both_captured = rust_records > 0 and emule_records > 0
 
     packet_ok = bool(packet_diff and packet_diff.get("ok"))
-    diag_ok = diag_diff is None or bool(diag_diff.get("ok"))
+    diag_ok = bool(diag_diff and diag_diff.get("ok"))
 
     report: dict[str, Any] = {
         "scenario": "emulebb.flow.converged.live-wire.hideme.v1",

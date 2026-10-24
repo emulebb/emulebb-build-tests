@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import converged_live_wire
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root
@@ -891,7 +892,9 @@ def run_pass(
     # (release exe built without --features packet-diagnostics) is visible.
     ed2k_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-*-dump-*.jsonl"))
     udp_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
-    diag_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-diag-*.jsonl"))
+    diag_dump_files = converged_live_wire.find_diag_traces(
+        packet_dump_dir, side="rust", process_id=process.pid
+    )
     ed2k_dump_lines = sum(
         sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
         for f in ed2k_dump_files
@@ -900,9 +903,10 @@ def run_pass(
         sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
         for f in udp_dump_files
     )
-    diag_dump_lines = sum(
-        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
-        for f in diag_dump_files
+    diag_dump_lines = len(
+        converged_live_wire.load_current_diag_records(
+            packet_dump_dir, side="rust", process_id=process.pid
+        )
     )
     evidence["packetDump"] = {
         "dir": str(packet_dump_dir),

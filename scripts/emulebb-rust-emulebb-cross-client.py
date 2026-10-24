@@ -18,8 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
-from emule_test_harness import diag_event_diff, packet_trace_diff  # noqa: E402
-from emule_test_harness.diag_event_runs import load_latest_diag_records  # noqa: E402
+from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
@@ -174,11 +173,12 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
     counts: dict[str, object] = {}
     for side, directory in (("rust", rust_dir), ("emule", mfc_dir)):
         packet = converged_live_wire.find_packet_trace(directory, side=side)
-        diag = converged_live_wire.find_diag_trace(directory, side=side)
-        if packet is None or diag is None:
+        if packet is None:
             raise RuntimeError(f"{side} diagnostics did not produce packet and event dumps")
         packet_count = len(packet_trace_diff.load_trace(packet))
-        diag_count = len(diag_event_diff.load_trace(diag))
+        diag_count = len(
+            converged_live_wire.load_current_diag_records(directory, side=side)
+        )
         if packet_count == 0 or diag_count == 0:
             raise RuntimeError(f"{side} diagnostics packet/event dumps contain no valid records")
         counts[side] = {"packetRecords": packet_count, "eventRecords": diag_count}
@@ -198,13 +198,7 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
 def load_rust_diag_records(log_dir: Path) -> list[dict[str, object]]:
     """Loads valid Rust diagnostic events in process sequence order."""
 
-    paths = {
-        path.resolve()
-        for pattern in converged_live_wire.RUST_DIAG_DUMP_GLOBS
-        for path in log_dir.glob(pattern)
-        if path.is_file()
-    }
-    return load_latest_diag_records(paths, client="rust")
+    return converged_live_wire.load_current_diag_records(log_dir, side="rust")
 
 
 def _compact_diag_event(record: dict[str, object]) -> dict[str, object]:

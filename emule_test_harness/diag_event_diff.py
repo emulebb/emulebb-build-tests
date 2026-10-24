@@ -493,7 +493,7 @@ def diff_traces(
 
     return {
         "schema": DIAG_EVENT_DIFF_REPORT_SCHEMA,
-        "ok": all(f["ok"] for f in families),
+        "ok": bool(families) and all(f["ok"] for f in families),
         "families": families,
     }
 
@@ -600,8 +600,8 @@ def family_conformance(
     gate that IS live-meaningful is oracle conformance scoped per family: for
     every diag family present on both sides, rust's event-type/body-key coverage
     must be a superset of the oracle's (MFC's) on the shared events, reusing the
-    exact :func:`schema_audit` rules (deliberate privacy omissions and
-    conditional keys excluded). Oracle events rust did not emit in-window stay
+    exact :func:`schema_audit` rules with no privacy-based omissions.
+    Conditional keys remain excluded. Oracle events rust did not emit in-window stay
     informational (``oracleOnlyEvents``) — window/state sampling is
     indistinguishable from a real gap in a finite slice — as do families present
     on only one side.
@@ -642,7 +642,7 @@ def family_conformance(
         families.append(slot)
     return {
         "schema": DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
-        "ok": all(f["ok"] for f in families),
+        "ok": bool(families) and all(f["ok"] for f in families),
         "families": families,
     }
 

@@ -28,7 +28,13 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, packet_trace_diff, secident_audit, soak_action_diff  # noqa: E402
+from emule_test_harness import (  # noqa: E402
+    diag_event_diff,
+    diag_event_runs,
+    packet_trace_diff,
+    secident_audit,
+    soak_action_diff,
+)
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 
@@ -38,10 +44,14 @@ CAMPAIGN_EXIT_CODES = {
     "harness-failure": 2,
     "inconclusive-external": 3,
 }
+PACKET_SCHEMAS = {"ed2k_packet_v1", "udp_packet_v1"}
 
 
-def _load_recording(zip_path: Path) -> dict[str, Any]:
+def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
     """Read sanitized metadata plus raw diagnostics from its private sibling."""
+
+    if client not in {"rust", "mfc"}:
+        raise ValueError(f"client must be 'rust' or 'mfc', got {client!r}")
 
     markers: list[dict[str, Any]] = []
     diag: list[dict[str, Any]] = []
@@ -88,9 +98,39 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
         native_capture_sizes.append(capture_path.stat().st_size)
     dumps_dir = private_dir / "dumps"
     if dumps_dir.is_dir():
-        for path in dumps_dir.rglob("*"):
+        diag_paths: list[Path] = []
+        packet_paths: list[Path] = []
+        for path in sorted(dumps_dir.rglob("*")):
             if not path.is_file() or path.suffix.casefold() not in (".jsonl", ".log"):
                 continue
+            if diag_event_runs.diag_segment_identity(path, client=client) is not None:
+                diag_paths.append(path)
+                continue
+            other_client = "mfc" if client == "rust" else "rust"
+            if diag_event_runs.diag_segment_identity(path, client=other_client) is not None:
+                raise ValueError(f"A {client} recording contains {other_client} diagnostics.")
+            if path.name.startswith(("emulebb-rust-diag-", "emulebb-mfc-diag-")):
+                raise ValueError(f"Unsupported diagnostic segment name: {path.name}")
+            packet_paths.append(path)
+
+        diag = diag_event_runs.load_latest_diag_records(diag_paths, client=client)
+        for record in diag:
+            record.setdefault("ts_utc", record.get("ts"))
+
+        if client == "mfc" and diag_paths:
+            health_paths = sorted(dumps_dir.rglob("emulebb-mfc-diag-health.json"))
+            if len(health_paths) != 1:
+                raise ValueError(
+                    "An MFC recording must contain exactly one diagnostic writer health file."
+                )
+            selected_segments = diag_event_runs.select_latest_diag_run(
+                diag_paths, client="mfc"
+            )
+            diag_event_runs.load_and_validate_writer_health(
+                health_paths[0], client="mfc", selected_segments=selected_segments
+            )
+
+        for path in packet_paths:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
@@ -101,11 +141,12 @@ def _load_recording(zip_path: Path) -> dict[str, Any]:
                     continue
                 if not isinstance(record, dict):
                     continue
-                if record.get("schema") == DIAG_EVENT_SCHEMA:
-                    # diag_event_v2 stamps ``ts``; slice_trace keys on ``ts_utc``.
-                    record.setdefault("ts_utc", record.get("ts"))
-                    diag.append(record)
-                else:
+                schema = record.get("schema")
+                if schema == DIAG_EVENT_SCHEMA:
+                    raise ValueError(
+                        f"Diagnostic events must use segmented current-run names: {path.name}"
+                    )
+                if schema in PACKET_SCHEMAS:
                     packets.append(record)
     private_completion_path = private_dir / "completion-private.json"
     if private_completion_path.is_file():
@@ -335,6 +376,8 @@ def _diff_one_action(
         verdict = "no-traffic"
     elif rust_total == 0 or mfc_total == 0:
         verdict = "one-sided"
+    elif not rust_diag or not mfc_diag:
+        verdict = "missing-diagnostics"
     else:
         # For two INDEPENDENT clients the strict diag family-match (like byteMatch) is
         # never true - transition sequences differ. The real parity signal is oracle
@@ -349,7 +392,13 @@ def _diff_one_action(
         "kind": kind,
         "method": method,
         "verdict": verdict,
-        "conformant": bool(conf["conformant"] and rust_total > 0 and mfc_total > 0),
+        "conformant": bool(
+            conf["conformant"]
+            and rust_total > 0
+            and mfc_total > 0
+            and rust_diag
+            and mfc_diag
+        ),
         # Per-family oracle-conformance gate (rust ⊇ oracle on families present on
         # both sides) — the reported per-action diag gate. The old strict
         # record-identity match is retained as `diagStrictMatchOk`, which is
@@ -546,6 +595,8 @@ def _campaign_verdict(
         and not external_inconclusive
     ):
         findings.append("missing-action-traffic")
+    if any(row.get("verdict") == "missing-diagnostics" for row in per_action):
+        findings.append("missing-action-diagnostics")
     completion_findings = set(completion.get("findings") or [])
     completion_content_divergence = bool(
         completion_findings
@@ -647,8 +698,10 @@ def main(argv: list[str] | None = None) -> int:
         return CAMPAIGN_EXIT_CODES["harness-failure"]
 
     try:
-        rust = _load_recording(rust_zip)
-        mfc = _load_recording(mfc_zip)
+        rust = _load_recording(rust_zip, client="rust")
+        mfc = _load_recording(mfc_zip, client="mfc")
+        if not rust["diag"] or not mfc["diag"]:
+            raise ValueError("Both recordings require current diag_event_v2 evidence.")
     except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         print(f"harness-failure: could not load recordings ({type(exc).__name__})")
         return CAMPAIGN_EXIT_CODES["harness-failure"]
