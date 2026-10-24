@@ -5,6 +5,8 @@ import inspect
 import sys
 from pathlib import Path
 
+import pytest
+
 from emule_test_harness import cpu_profile, vpn_guard_live
 from emule_test_harness.live_wire_inputs import LiveWireInputs
 
@@ -201,6 +203,21 @@ def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None
     assert resolved["mode"] == "block"
     assert resolved["allowed_public_ip_cidrs"] == ",".join(vpn_guard_live.REQUIRED_HIDEME_PUBLIC_CIDRS)
     assert resolved["config_path"] == str(config_path.resolve())
+
+
+def test_launch_soak_rejects_full_tunnel_without_blocking_vpn_guard() -> None:
+    module = load_launch_soak_module()
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "127.0.0.1",
+            "--vpn-topology",
+            "full-tunnel",
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="both clients start in Block mode"):
+        module.resolve_vpn_guard_profile(args)
 
 
 def test_launch_soak_initializes_cpu_profile_with_staged_symbols(tmp_path: Path, monkeypatch) -> None:
