@@ -5,7 +5,7 @@ common long-soak chores reusable:
 
 * sample sanitized Rust REST counters;
 * gracefully restart the diagnostics daemon against an existing profile dir;
-* restart the upload parity monitor with the current PID-specific Rust diag log;
+* restart the upload parity monitor with the current PID-specific Rust diag run;
 * run reusable long-soak cadence checks without shell loops.
 
 Private operator paths, such as the MFC upload diagnostics log, must be passed at
@@ -5241,7 +5241,6 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     stop_path = output_dir / "upload-parity-monitor.stop"
     if stop_path.exists():
         stop_path.unlink()
-    diag_log = args.rust_diag_log or latest_diag_log(args.log_dir, args.rust_pid)
     script = SCRIPT_PATH.parent / "upload-parity-monitor.py"
     stale_seconds = getattr(args, "mfc_log_stale_seconds", 900.0)
     explicit_mfc_upload_log = args.mfc_upload_log is not None
@@ -5276,6 +5275,8 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         args.base_url,
         "--rust-api-key",
         args.api_key,
+        "--rust-diag-dir",
+        str(args.log_dir),
         "--mfc-upload-log",
         str(mfc_upload_log),
         "--output-dir",
@@ -5285,8 +5286,8 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         "--mfc-log-stale-seconds",
         str(stale_seconds),
     ]
-    if diag_log is not None:
-        command.extend(["--rust-diag-log", str(diag_log)])
+    if args.rust_pid is not None:
+        command.extend(["--rust-pid", str(args.rust_pid)])
     process = subprocess.Popen(
         command,
         cwd=str(REPO_ROOT),
@@ -5294,7 +5295,12 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         stderr=stderr,
         creationflags=creationflags,
     )
-    return {"monitorPid": process.pid, "rustDiagLog": str(diag_log) if diag_log is not None else None, "outputDir": str(output_dir)}
+    return {
+        "monitorPid": process.pid,
+        "rustDiagDir": str(args.log_dir),
+        "rustPid": args.rust_pid,
+        "outputDir": str(output_dir),
+    }
 
 
 def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
@@ -6605,13 +6611,25 @@ def watch_brief_from_record(
     monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     diagnostics = latest.get("diagnostics") if isinstance(latest.get("diagnostics"), dict) else {}
     upload_efficiency = trend.get("latestUploadEfficiency")
-    rust_diag_log = getattr(args, "rust_diag_log", None)
-    if rust_diag_log is not None:
+    rust_diag_dir = getattr(args, "rust_diag_dir", None)
+    if rust_diag_dir is not None:
+        rust_pid = getattr(args, "rust_pid", None)
+        segments = clw.find_diag_traces(
+            rust_diag_dir,
+            side="rust",
+            process_id=rust_pid,
+        )
+        clw.load_current_diag_records(
+            rust_diag_dir,
+            side="rust",
+            process_id=rust_pid,
+            allow_incomplete_active_tail=True,
+        )
         current_upload = upload_efficiency_summary(
             argparse.Namespace(
                 log_dir=None,
-                log_file=[rust_diag_log],
-                limit=1,
+                log_file=segments,
+                limit=len(segments),
                 max_bytes=getattr(args, "upload_efficiency_max_bytes", 33_554_432),
                 slow_read_ms=getattr(args, "slow_read_ms", 100.0),
                 outlier_limit=0,
@@ -7298,7 +7316,6 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     monitor_parser.add_argument("--log-dir", type=Path, default=default_profile_dir() / "packet-dump")
     monitor_parser.add_argument("--rust-pid", type=int)
-    monitor_parser.add_argument("--rust-diag-log", type=Path)
     monitor_parser.add_argument("--interval-seconds", type=float, default=300.0)
     monitor_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     monitor_parser.set_defaults(func=restart_upload_monitor)
@@ -7539,10 +7556,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
     watch_brief_parser.add_argument(
-        "--rust-diag-log",
+        "--rust-diag-dir",
         type=Path,
-        help="Current Rust diagnostics JSONL log to use for upload-efficiency evidence.",
+        help="Rust diagnostic segment directory to use for current-run upload-efficiency evidence.",
     )
+    watch_brief_parser.add_argument("--rust-pid", type=int)
     watch_brief_parser.add_argument(
         "--mfc-upload-log",
         type=Path,
@@ -7552,7 +7570,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--upload-efficiency-max-bytes",
         type=int,
         default=33_554_432,
-        help="Bytes to scan from --rust-diag-log for compact upload-efficiency evidence.",
+        help="Bytes to scan from each current --rust-diag-dir segment for compact upload-efficiency evidence.",
     )
     watch_brief_parser.add_argument(
         "--mfc-upload-max-bytes",

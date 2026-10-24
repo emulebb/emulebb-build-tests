@@ -49,9 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import (
     diag_event_diff,
-    diag_event_runs,
     live_process_monitor,
-    mfc_diag_adapter,
     mfc_known_met,
     mfc_profile_import,
     packet_trace_diff,
@@ -728,13 +726,6 @@ def stats_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.0
     }
 
 
-def _latest_file(root: Path, pattern: str) -> Path | None:
-    matches = [path for path in root.glob(pattern) if path.is_file()]
-    if not matches:
-        return None
-    return max(matches, key=lambda path: path.stat().st_mtime)
-
-
 def _opcode_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     counts = {name: 0 for name in UPLOAD_EVIDENCE_OPCODES}
     for record in records:
@@ -779,9 +770,8 @@ def build_upload_evidence(
 ) -> dict[str, Any]:
     """Builds a passive upload-parity checkpoint from local logs and REST counters."""
 
-    rust_diag_log = _latest_file(rust_dump_dir, "emulebb-rust-diag-*.jsonl")
     mfc_upload_log = mfc_dump_dir / "emulebb-diagnostics-upload-slot.log"
-    rust_sched = upload_parity_monitor.rust_sched_summary(rust_diag_log)
+    rust_sched = upload_parity_monitor.rust_sched_summary(rust_dump_dir)
     mfc_upload = upload_parity_monitor.mfc_upload_summary(mfc_upload_log)
     rust_opcodes = _opcode_counts(rust_packets)
     mfc_opcodes = _opcode_counts(mfc_packets)
@@ -1071,18 +1061,12 @@ def load_packets(
 def load_diag(
     dump_dir: Path, *, side: str, min_mtime: float | None = None
 ) -> list[dict[str, Any]]:
-    segments = clw.find_diag_traces(dump_dir, side=side)
-    client = "rust" if side == "rust" else "mfc"
-    records = diag_event_runs.load_latest_diag_records(
-        segments, client=client, allow_incomplete_active_tail=True
+    records = clw.load_current_diag_records(
+        dump_dir,
+        side=side,
+        min_mtime=min_mtime,
+        allow_incomplete_active_tail=True,
     )
-    if side == "emule":
-        bad_peer_logs = _glob_all(
-            dump_dir,
-            ("emulebb-diagnostics-bad-peer*.log",),
-            min_mtime=min_mtime,
-        )
-        records.extend(mfc_diag_adapter.bad_peer_events_as_diag_v2(bad_peer_logs))
     return records
 
 
@@ -2657,6 +2641,7 @@ def main(argv: list[str] | None = None) -> int:
                         sad.diff_action(
                             pair, rust_packets=rust_pkts, mfc_packets=mfc_pkts,
                             rust_diag=rust_dg, mfc_diag=mfc_dg,
+                            diagnostics_required=True,
                             lead_seconds=args.lead_seconds,
                             settle_seconds=tracker.settle_seconds_for(pair.kind),
                         )
@@ -2692,6 +2677,7 @@ def main(argv: list[str] | None = None) -> int:
                                 mfc_packets=load_packets(mfc_dump_dir, side="emule", min_mtime=marker_t0.timestamp() - 60.0),
                                 rust_diag=load_diag(rust_dump_dir, side="rust", min_mtime=marker_t0.timestamp() - 60.0),
                                 mfc_diag=load_diag(mfc_dump_dir, side="emule", min_mtime=marker_t0.timestamp() - 60.0),
+                                diagnostics_required=True,
                                 lead_seconds=0.0, settle_seconds=0.0,
                             )
                         )

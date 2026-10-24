@@ -336,7 +336,6 @@ def test_find_diag_traces_selects_one_rust_run_in_segment_order(tmp_path: Path) 
         first.resolve(),
         second.resolve(),
     ]
-    assert clw.find_diag_trace(tmp_path, side="rust") == second.resolve()
 
 
 def test_find_diag_traces_selects_one_mfc_run_in_segment_order(tmp_path: Path) -> None:
@@ -389,6 +388,14 @@ def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None
 
     _write_jsonl(rust_segment, [record("rust", 41, "rust-run")])
     _write_jsonl(mfc_segment, [record("mfc", 42, "mfc-run")])
+    rust_stale = rust_dir / "emulebb-rust-diag-99-other-run-000000.jsonl"
+    mfc_stale = mfc_dir / "emulebb-mfc-diag-99-other-run-000000.jsonl"
+    _write_jsonl(rust_stale, [record("rust", 99, "other-run")])
+    _write_jsonl(mfc_stale, [record("mfc", 99, "other-run")])
+    os.utime(rust_segment, ns=(1, 1))
+    os.utime(mfc_segment, ns=(1, 1))
+    os.utime(rust_stale, ns=(2, 2))
+    os.utime(mfc_stale, ns=(2, 2))
     (mfc_dir / clw.EMULE_DIAG_HEALTH_FILE).write_text(
         json.dumps(
             {
@@ -411,12 +418,43 @@ def test_converged_runner_validates_segmented_mfc_health(tmp_path: Path) -> None
     )
 
     _, _, _, diag_diff = runner.diff_scenario_traces(
-        {"packetDumpDir": str(rust_dir)}, {"packetDumpDir": str(mfc_dir)}
+        {"packetDumpDir": str(rust_dir), "processId": 41},
+        {"packetDumpDir": str(mfc_dir), "processId": 42},
     )
 
     assert diag_diff is not None
     assert diag_diff["schema"] == "diag_event_diff_v1"
     assert diag_diff["ok"] is True
+
+
+def test_load_current_mfc_diag_requires_lossless_writer_health(tmp_path: Path) -> None:
+    segment = tmp_path / "emulebb-mfc-diag-42-active-000000.jsonl"
+    _write_jsonl(
+        segment,
+        [
+            {
+                "schema": "diag_event_v2",
+                "client": "mfc",
+                "runId": "active",
+                "processId": 42,
+                "segmentId": 0,
+                "seq": 1,
+                "streamSeq": 1,
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="missing MFC diagnostic writer health"):
+        clw.load_current_diag_records(tmp_path, side="emule")
+
+
+def test_load_current_diag_rejects_empty_selected_run(tmp_path: Path) -> None:
+    (tmp_path / "emulebb-rust-diag-42-active-000000.jsonl").write_text(
+        "", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="contains no complete events"):
+        clw.load_current_diag_records(tmp_path, side="rust")
 
 
 def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:

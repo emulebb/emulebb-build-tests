@@ -408,7 +408,11 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
         if not stat.S_ISREG(source_info.st_mode):
             continue
         name = path.name.lower()
-        if not (name.endswith(".jsonl") or name.endswith(".log")):
+        if not (
+            name.endswith(".jsonl")
+            or name.endswith(".log")
+            or name == clw.EMULE_DIAG_HEALTH_FILE
+        ):
             continue
         if source_info.st_mtime < since:
             continue
@@ -432,6 +436,26 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
             raise RuntimeError("A copied diagnostic dump entry has an unexpected size.")
         copied += 1
     return copied
+
+
+def validate_recorded_diagnostics(
+    dumps_dir: Path, *, client: str, process_id: int
+) -> dict[str, object]:
+    """Require a nonempty current run and lossless MFC writer health."""
+
+    if client not in {"rust", "mfc"}:
+        raise ValueError(f"client must be 'rust' or 'mfc', got {client!r}")
+    records = clw.load_current_diag_records(
+        dumps_dir,
+        side="rust" if client == "rust" else "emule",
+        process_id=process_id,
+    )
+    return {
+        "schema": "diag_event_v2",
+        "processId": process_id,
+        "recordCount": len(records),
+        "writerHealthValidated": client == "mfc",
+    }
 
 
 def pack_recording(
@@ -1299,6 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
     timeouts = {"rest": 60.0, "connect": 240.0}
 
     handles: dict | None = None
+    client_process_ids: tuple[int, ...] = ()
     base_url = ""
     dump_dir: Path = report_dir / "dumps"
     results_meta: dict = {}
@@ -1423,6 +1448,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
+        client_process_ids = _owned_process_ids(client, handles)
+        if len(client_process_ids) != 1:
+            raise RuntimeError("Could not resolve the launched client process identity.")
         base_url = handles["baseUrl"]
         if native_config is not None:
             incoming_dir = handles.get("incomingDir")
@@ -1659,8 +1687,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # Gather AFTER shutdown: rust batches diag/packet writes (the REST-starvation fix),
     # so the buffered action-window records only hit disk on the graceful teardown flush.
-    if results_meta:
-        (report_dir / "results.json").write_text(json.dumps(results_meta, indent=2), encoding="utf-8")
     private_completion_path = None
     if native_config is not None:
         private_completion_path = report_dir / "completion-private.json"
@@ -1682,6 +1708,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         in_place = len(list(dumps_dest.glob("*"))) if dumps_dest.exists() else 0
         log(f"recording dumps in place (post-flush): {in_place} file(s)")
+    results_meta["diagnostics"] = validate_recorded_diagnostics(
+        dumps_dest, client=client, process_id=client_process_ids[0]
+    )
+    (report_dir / "results.json").write_text(
+        json.dumps(results_meta, indent=2), encoding="utf-8"
+    )
     archive = pack_recording(
         report_dir,
         incoming_dir=(Path(handles["incomingDir"]) if native_config is not None and handles else None),

@@ -577,6 +577,28 @@ def test_diff_action_no_traffic_and_one_sided() -> None:
     assert one["verdict"] == "one-sided"
 
 
+def test_required_diagnostics_reject_empty_action_windows() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(1)),
+        mfc=_action("mfc", "ubuntu", _ts(2)),
+    )
+    outside = _diag(
+        "kad_event", "lookup", _ts(100), {"milestone": "lookup_complete"}
+    )
+
+    with pytest.raises(ValueError, match="missing from one or both action windows"):
+        sad.diff_action(
+            pair,
+            rust_packets=[],
+            mfc_packets=[],
+            rust_diag=[outside],
+            mfc_diag=[outside],
+            diagnostics_required=True,
+        )
+
+
 def test_summary_folds_verdicts() -> None:
     summary = sad.empty_summary("camp-1")
     for verdict in ("coverage-parity", "divergence", "unpaired"):

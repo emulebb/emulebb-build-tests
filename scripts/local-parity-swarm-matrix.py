@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import converged_live_wire, diag_event_runs  # noqa: E402
+from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
@@ -361,10 +361,19 @@ def serving_summary(client: SwarmClient) -> dict:
     import collections
     opcodes: collections.Counter = collections.Counter()
     tmodes: collections.Counter = collections.Counter()
-    diag_files = client.diag_files()
-    diag_client = "rust" if client.kind == "rust" else "mfc"
-    for rec in diag_event_runs.load_latest_diag_records(
-        diag_files, client=diag_client, allow_incomplete_active_tail=True
+    if client.kind == "rust":
+        if client.log_dir is None:
+            raise RuntimeError(f"{client.name} has no diagnostic log directory")
+        diag_dir = client.log_dir
+        side = "rust"
+    else:
+        diag_files = client.diag_files()
+        if not diag_files:
+            raise RuntimeError(f"{client.name} produced no current diagnostic run")
+        diag_dir = diag_files[0].parent
+        side = "emule"
+    for rec in converged_live_wire.load_current_diag_records(
+        diag_dir, side=side, allow_incomplete_active_tail=True
     ):
         if rec.get("family") != "ed2k_tcp":
             continue

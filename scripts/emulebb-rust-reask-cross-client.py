@@ -185,40 +185,40 @@ def log_contains(path: Path, needle: str) -> int:
     return sum(1 for line in text.splitlines() if needle in line)
 
 
-def wait_for_upload_capacity(path: Path, *, active_slots: int, timeout: float) -> dict:
+def _mfc_capacity_snapshots(log_dir: Path) -> list[dict]:
+    return [
+        event
+        for event in converged_live_wire.load_current_diag_records(
+            log_dir, side="emule", allow_incomplete_active_tail=True
+        )
+        if event.get("event") == "capacity_snapshot"
+    ]
+
+
+def wait_for_upload_capacity(log_dir: Path, *, active_slots: int, timeout: float) -> dict:
     """Require a fresh diagnostics snapshot proving the test's queue precondition."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.is_file():
-            for line in reversed(path.read_text(encoding="utf-8", errors="replace").splitlines()):
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("event") != "capacity_snapshot":
-                    continue
-                body = event.get("body", {})
-                if body.get("effectiveSlotCap") != active_slots:
-                    raise RuntimeError(f"MFC effective upload cap is not {active_slots}: {body}")
-                if body.get("activeSlots", 0) >= active_slots:
-                    return body
-                break
+        try:
+            snapshots = _mfc_capacity_snapshots(log_dir)
+        except ValueError:
+            snapshots = []
+        for event in reversed(snapshots):
+            body = event.get("body", {})
+            if body.get("effectiveSlotCap") != active_slots:
+                raise RuntimeError(f"MFC effective upload cap is not {active_slots}: {body}")
+            if body.get("activeSlots", 0) >= active_slots:
+                return body
+            break
         time.sleep(1.0)
     raise RuntimeError(f"MFC never reached {active_slots} occupied upload slots")
 
 
-def max_waiting_sessions(path: Path) -> int:
+def max_waiting_sessions(log_dir: Path) -> int:
     """Read MFC's diagnostics snapshots as the queue-admission oracle."""
-    if not path.is_file():
-        return 0
     maximum = 0
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("event") == "capacity_snapshot":
-            maximum = max(maximum, int((event.get("body") or {}).get("waitingSessions") or 0))
+    for event in _mfc_capacity_snapshots(log_dir):
+        maximum = max(maximum, int((event.get("body") or {}).get("waitingSessions") or 0))
     return maximum
 
 
@@ -316,8 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         for occ_url in occupiers:
             cc.request_json(occ_url, "POST", "/api/v1/transfers", args.api_key, {"link": str(shared_link["link"]), "paused": False})
-        capacity_log = Path(emulebb["profile_base"]) / "logs" / "emulebb-diagnostics-diag.log"
-        report["checks"]["occupied_capacity"] = wait_for_upload_capacity(capacity_log, active_slots=2, timeout=90.0)
+        mfc_log_dir = Path(emulebb["profile_base"]) / "logs"
+        report["checks"]["occupied_capacity"] = wait_for_upload_capacity(mfc_log_dir, active_slots=2, timeout=90.0)
 
         # --- reask Rust: gets queued -> detaches onto UDP reask ---
         cc.request_json(reask_url, "POST", "/api/v1/transfers", args.api_key, {"link": str(shared_link["link"]), "paused": False})
@@ -331,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             if detaches > 0 and acks > 0:
                 break
             time.sleep(3.0)
-        waiting = max_waiting_sessions(capacity_log)
+        waiting = max_waiting_sessions(mfc_log_dir)
         report["checks"]["reask"] = {"mfcWaitingSessionsMax": waiting, "detaches": detaches, "ackedReplies": acks}
         if waiting == 0:
             report["reason"] = "MFC never admitted the third same-IP client to its queue"

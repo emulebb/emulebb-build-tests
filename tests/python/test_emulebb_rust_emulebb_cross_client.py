@@ -597,6 +597,78 @@ def test_cross_client_diagnostics_require_both_peer_dumps(tmp_path: Path) -> Non
         module.require_diagnostics(rust, mfc, kad_required=False)
 
 
+def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Path) -> None:
+    module = load_suite_module()
+    rust = tmp_path / "rust"
+    mfc = tmp_path / "mfc"
+    rust.mkdir()
+    mfc.mkdir()
+    packet = {
+        "schema": "ed2k_packet_v1",
+        "direction": "send",
+        "opcode": 1,
+    }
+    (rust / "emulebb-rust-ed2k-tcp-dump-1.jsonl").write_text(
+        json.dumps(packet) + "\n", encoding="utf-8"
+    )
+    (mfc / "emulebb-diagnostics-packet.log").write_text(
+        json.dumps(packet) + "\n", encoding="utf-8"
+    )
+
+    for client, directory, process_id, run_id in (
+        ("rust", rust, 41, "rust-run"),
+        ("mfc", mfc, 42, "mfc-run"),
+    ):
+        for segment_id in (0, 1):
+            path = directory / (
+                f"emulebb-{client}-diag-{process_id}-{run_id}-{segment_id:06}.jsonl"
+            )
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "diag_event_v2",
+                        "client": client,
+                        "processId": process_id,
+                        "runId": run_id,
+                        "segmentId": segment_id,
+                        "seq": segment_id + 1,
+                        "streamSeq": segment_id + 1,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    active_mfc = mfc / "emulebb-mfc-diag-42-mfc-run-000001.jsonl"
+    (mfc / "emulebb-mfc-diag-health.json").write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "enabled": True,
+                "configured": True,
+                "initialized": True,
+                "runId": "mfc-run",
+                "processId": 42,
+                "activeSegmentId": 1,
+                "activeFileName": active_mfc.name,
+                "droppedEvents": 0,
+                "encodeErrors": 0,
+                "writeErrors": 0,
+                "retentionDeleteErrors": 0,
+                "initializationFailure": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (mfc / "emulebb-verbose.log").write_text("Connected\n", encoding="utf-8")
+
+    assert module.require_diagnostics(rust, mfc, kad_required=False) == {
+        "rust": {"packetRecords": 1, "eventRecords": 2},
+        "emule": {"packetRecords": 1, "eventRecords": 2},
+        "mfcSecureIdent": {"failureLines": 0},
+    }
+
+
 def _download_lifecycle_events(
     transfer_hash: str,
     peer: str,

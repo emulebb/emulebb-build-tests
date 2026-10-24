@@ -47,7 +47,6 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import converged_scenarios as cs
 from emule_test_harness import diag_event_diff
-from emule_test_harness import diag_event_runs
 from emule_test_harness import packet_trace_diff
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
@@ -284,7 +283,12 @@ def run_rust_side(
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     handle = daemon_log.open("w", encoding="utf-8")
     process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
-    evidence: dict[str, Any] = {"client": "rust", "baseUrl": base_url, "scenario": scenario.name}
+    evidence: dict[str, Any] = {
+        "client": "rust",
+        "baseUrl": base_url,
+        "scenario": scenario.name,
+        "processId": int(process.pid),
+    }
     try:
         wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
         evidence["serverMetImport"] = rust_mod.import_server_met(base_url, server_met_url)
@@ -472,6 +476,10 @@ def run_mfc_side(
     app = None
     try:
         app = live_common.launch_app(exe_path, Path(str(profile["profile_base"])))
+        process_id = live_common.resolve_app_process_id(app)
+        if process_id is None:
+            raise RuntimeError("Could not resolve the launched MFC process identity.")
+        evidence["processId"] = process_id
         rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
 
         # Same endpoints as rust: server connect, kad start, share, search.
@@ -750,22 +758,13 @@ def diff_scenario_traces(
             packet_trace_diff.load_trace(rust_trace),
             packet_trace_diff.load_trace(emule_trace),
         )
-    diag_diff: dict[str, Any] | None = None
-    rust_diag = clw.find_diag_traces(rust_dump_dir, side="rust")
-    emule_diag = clw.find_diag_traces(emule_dump_dir, side="emule")
-    if rust_diag and emule_diag:
-        emule_health = clw.find_mfc_diag_health(emule_dump_dir)
-        if emule_health is None:
-            raise diag_event_runs.DiagnosticTraceError(
-                f"missing MFC diagnostic writer health in {emule_dump_dir}"
-            )
-        diag_event_runs.load_and_validate_writer_health(
-            emule_health, client="mfc", selected_segments=emule_diag
-        )
-        diag_diff = diag_event_diff.diff_traces(
-            diag_event_runs.load_latest_diag_records(rust_diag, client="rust"),
-            diag_event_runs.load_latest_diag_records(emule_diag, client="mfc"),
-        )
+    rust_diag = clw.load_current_diag_records(
+        rust_dump_dir, side="rust", process_id=int(rust_evidence["processId"])
+    )
+    emule_diag = clw.load_current_diag_records(
+        emule_dump_dir, side="emule", process_id=int(mfc_evidence["processId"])
+    )
+    diag_diff = diag_event_diff.diff_traces(rust_diag, emule_diag)
     return rust_trace, emule_trace, packet_diff, diag_diff
 
 
@@ -847,7 +846,7 @@ def run_one_scenario(
         report["gate"] = "liveActionCoverage"
         report["ok"] = bool(report["traces"]["bothCaptured"]) and bool(
             packet_diff["liveActionCoverage"]["ok"]
-        ) and (diag_diff is None or bool(diag_diff.get("ok")))
+        ) and bool(diag_diff.get("ok"))
 
     rust_search_obj = rust_evidence.get("search")
     rust_search: dict[str, Any] = rust_search_obj if isinstance(rust_search_obj, dict) else {}

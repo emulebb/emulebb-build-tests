@@ -14,6 +14,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from emule_test_harness import diag_event_runs
+
 DEFAULT_INTERVAL_SECONDS = 300.0
 DEFAULT_RUST_UNDERFILL_KIBPS = 2048.0
 DEFAULT_MFC_SATURATED_KIBPS = 2500.0
@@ -37,9 +39,10 @@ class MonitorConfig:
 
     rust_base_url: str
     rust_api_key: str
-    rust_diag_log: Path | None
+    rust_diag_dir: Path | None
     mfc_upload_log: Path
     output_dir: Path
+    rust_pid: int | None = None
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
     rust_underfill_kibps: float = DEFAULT_RUST_UNDERFILL_KIBPS
     mfc_saturated_kibps: float = DEFAULT_MFC_SATURATED_KIBPS
@@ -180,11 +183,16 @@ def mfc_upload_summary(path: Path, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> d
     return summary
 
 
-def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> dict[str, object]:
+def rust_sched_summary(
+    log_dir: Path | None,
+    *,
+    rust_pid: int | None = None,
+    tail_bytes: int = DEFAULT_TAIL_BYTES,
+) -> dict[str, object]:
     """Summarizes Rust scheduler diag events without retaining peer or file identifiers."""
 
     summary: dict[str, object] = {
-        "logPresent": path is not None and path.exists(),
+        "logPresent": log_dir is not None and log_dir.is_dir(),
         "logLastWrite": None,
         "schedEvents": 0,
         "eventCounts": {},
@@ -205,10 +213,30 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
         "payloadReadMs": 0,
         "lastCapacity": None,
     }
-    if path is None or not path.exists():
+    if log_dir is None:
         return summary
-
-    summary["logLastWrite"] = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    if not log_dir.is_dir():
+        raise diag_event_runs.DiagnosticTraceError(
+            "Rust scheduler monitor requires a diagnostic segment directory"
+        )
+    segments = diag_event_runs.select_latest_diag_run(
+        log_dir.glob("emulebb-rust-diag-*.jsonl"),
+        client="rust",
+        process_id=rust_pid,
+    )
+    records = diag_event_runs.load_latest_diag_records(
+        segments,
+        client="rust",
+        process_id=rust_pid,
+        allow_incomplete_active_tail=True,
+    )
+    if not records:
+        raise diag_event_runs.DiagnosticTraceError(
+            "Rust scheduler monitor found no complete current diagnostic events"
+        )
+    summary["logLastWrite"] = datetime.fromtimestamp(
+        max(segment.stat().st_mtime for segment in segments), timezone.utc
+    ).isoformat()
     event_counts: Counter[str] = Counter()
     kad_publish_events: Counter[str] = Counter()
     kad_publish_failure_classes: Counter[str] = Counter()
@@ -227,11 +255,7 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
     payload_read_ms = 0
     last_capacity: dict[str, object] | None = None
 
-    for line in tail_lines(path, max_bytes=tail_bytes):
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for record in records:
         family = record.get("family")
         event = str(record.get("event") or "")
         body = record.get("body") or {}
@@ -387,7 +411,11 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     """Builds one aggregate parity record."""
 
     rust = rust_summary(config)
-    rust_sched = rust_sched_summary(config.rust_diag_log, tail_bytes=config.tail_bytes)
+    rust_sched = rust_sched_summary(
+        config.rust_diag_dir,
+        rust_pid=config.rust_pid,
+        tail_bytes=config.tail_bytes,
+    )
     mfc = mfc_upload_summary(config.mfc_upload_log, tail_bytes=config.tail_bytes)
     rust_kibps = float(rust["uploadSpeedKiBps"])
     mfc_kibps = float(mfc.get("summaryRateKiBps") or mfc["sumRateKiBps"])
@@ -464,12 +492,14 @@ def run_monitor(config: MonitorConfig) -> int:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.pid_path.write_text(str(os.getpid()), encoding="ascii")
     while not config.stop_path.exists():
+        failed = False
         try:
             append_record(config, build_record(config))
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
             append_record(config, {"timestamp": now_iso(), "error": repr(exc)})
+            failed = True
         if config.once:
-            return 0
+            return 2 if failed else 0
         for _ in range(max(1, int(config.interval_seconds))):
             if config.stop_path.exists():
                 return 0
@@ -483,7 +513,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-base-url", required=True, help="Base Rust REST URL, for example http://host:port/api/v1.")
     parser.add_argument("--rust-api-key", required=True)
-    parser.add_argument("--rust-diag-log", type=Path)
+    parser.add_argument(
+        "--rust-diag-dir",
+        type=Path,
+        required=True,
+        help="Rust diagnostic segment directory.",
+    )
+    parser.add_argument("--rust-pid", type=int)
     parser.add_argument("--mfc-upload-log", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--interval-seconds", type=float, default=DEFAULT_INTERVAL_SECONDS)
@@ -503,9 +539,10 @@ def config_from_args(args: argparse.Namespace) -> MonitorConfig:
     return MonitorConfig(
         rust_base_url=args.rust_base_url,
         rust_api_key=args.rust_api_key,
-        rust_diag_log=args.rust_diag_log,
+        rust_diag_dir=args.rust_diag_dir,
         mfc_upload_log=args.mfc_upload_log,
         output_dir=args.output_dir,
+        rust_pid=args.rust_pid,
         interval_seconds=args.interval_seconds,
         rust_underfill_kibps=args.rust_underfill_kibps,
         mfc_saturated_kibps=args.mfc_saturated_kibps,
