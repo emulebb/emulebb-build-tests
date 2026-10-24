@@ -121,11 +121,21 @@ def test_audit_not_assessable_without_traffic_or_hellos() -> None:
     assert audit["verdict"] == "not-assessable"
 
 
-def test_audit_ignores_server_channel_and_foreign_schemas() -> None:
+def test_audit_ignores_server_channel_and_incomplete_packet_views() -> None:
     packets = [
         {**_pkt("send", 0xC5, 0x85), "flow": "server"},  # server channel, ignored
-        {**_pkt("send", 0xC5, 0x85), "schema": "udp_packet_v1"},  # foreign schema
+        {"flow": "client", "direction": "send", "opcode": 0x85},
     ]
     audit = sia.audit_client_secident(packets, declared_enabled=True, min_peer_packets=1)
     assert audit["clientChannelPackets"] == 0
     assert audit["verdict"] == "not-assessable"
+
+
+def test_audit_accepts_normalized_packet_view_without_persisted_schema() -> None:
+    packet = _pkt("send", 0xC5, 0x85)
+    packet.pop("schema")
+
+    audit = sia.audit_client_secident([packet], declared_enabled=True, min_peer_packets=1)
+
+    assert audit["verdict"] == "ok"
+    assert audit["secIdentPackets"]["total"] == 1

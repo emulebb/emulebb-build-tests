@@ -169,12 +169,16 @@ def audit_client_secident(
     secident_counts = {"send": 0, "recv": 0}
     client_packets = 0
     for record in packets or []:
-        if record.get("schema") != "ed2k_packet_v1":
-            continue
         direction = record.get("direction")
         if direction not in _PACKET_DIRECTIONS:
             continue
         if canonical_channel(record.get("flow")) != "client":
+            continue
+        payload_hex = record.get("payload_hex")
+        payload_len = record.get("payload_len")
+        if not isinstance(payload_hex, str) or not isinstance(payload_len, int):
+            continue
+        if len(payload_hex) != payload_len * 2:
             continue
         try:
             marker = int(record.get("protocol_marker") or 0)
@@ -186,7 +190,7 @@ def audit_client_secident(
             secident_counts[str(direction)] += 1
         if direction == "send" and marker == OP_EDONKEYPROT and opcode in (OP_HELLO, OP_HELLOANSWER):
             hello_seen += 1
-            miscoptions1 = parse_hello_miscoptions1(record.get("payload_hex") or "", opcode)
+            miscoptions1 = parse_hello_miscoptions1(payload_hex, opcode)
             if miscoptions1 is not None:
                 hello_bits.append(secident_bits(miscoptions1))
 
