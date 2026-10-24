@@ -61,6 +61,28 @@ def test_latest_server_diagnostic_uses_unified_current_run(tmp_path: Path) -> No
     assert latest["family"] == "ed2k_tcp"
 
 
+def test_latest_peer_packet_ignores_newer_unified_state_event(tmp_path: Path) -> None:
+    packet = diag_record(sequence=1, stream_sequence=1, family="ed2k_tcp", flow="client")
+    state = diag_record(sequence=2, stream_sequence=2, family="ed2k_tcp", flow="client")
+    state["event"] = "state"
+    write_diag_segment(
+        tmp_path / "emulebb-rust-diag-42-run-a-000001.jsonl",
+        [packet, state],
+    )
+
+    latest = soak_launch.latest_diag_event_record(
+        tmp_path,
+        client="rust",
+        families={"ed2k_tcp"},
+        event="packet",
+        flow="client",
+    )
+
+    assert latest is not None
+    assert latest["seq"] == 1
+    assert latest["event"] == "packet"
+
+
 def test_soak_api_keys_meet_current_rust_secret_length() -> None:
     assert len(soak_launch.RUST_API_KEY.encode("utf-8")) >= 32
     assert len(soak_launch.MFC_API_KEY.encode("utf-8")) >= 32
