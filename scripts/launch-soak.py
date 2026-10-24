@@ -184,6 +184,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop the soak after this many seconds with the same graceful teardown path as Ctrl-C.",
     )
     parser.add_argument(
+        "--stop-file",
+        type=Path,
+        help="Stop an until-stopped soak gracefully when this output-root control file appears.",
+    )
+    parser.add_argument(
         "--rust-shutdown-trigger",
         choices=("rest", "ctrl-c"),
         default="rest",
@@ -494,6 +499,14 @@ def main(argv: list[str] | None = None) -> int:
         vpn_topology=args.vpn_topology,
     )
     output_root = get_workspace_output_root()
+    stop_file = args.stop_file.resolve() if args.stop_file is not None else None
+    if stop_file is not None:
+        try:
+            stop_file.relative_to(output_root)
+        except ValueError as error:
+            raise RuntimeError(f"--stop-file must be below EMULEBB_WORKSPACE_OUTPUT_ROOT: {stop_file}") from error
+        if stop_file.exists():
+            raise RuntimeError(f"--stop-file already exists; remove the stale stop request before launch: {stop_file}")
 
     rust_exe = (
         clw.resolve_rust_regular_exe(output_root)
@@ -693,6 +706,10 @@ def main(argv: list[str] | None = None) -> int:
                 log("rust daemon exited - stopping.")
                 status = "rust-exited"
                 break
+            if stop_file is not None and stop_file.exists():
+                log("stop file observed - stopping all launched apps gracefully...")
+                status = "stop-requested"
+                break
             row = process_metrics.maybe_sample() if process_metrics is not None else None
             if row is not None and time.monotonic() - last_metrics_log >= 30.0:
                 log(
@@ -779,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
             "rustServer": args.rust_server,
             "rustFallbackServers": list(args.rust_fallback_server),
             "durationSeconds": args.duration_seconds,
+            "stopFile": str(stop_file) if stop_file is not None else None,
             "reuseRustSharedProfile": bool(args.reuse_rust_shared_profile),
             "shutdown": shutdown_report,
             "error": failure,
