@@ -84,6 +84,29 @@ def test_resolve_lan_rest_bind_addr_uses_x_local_ip(monkeypatch: pytest.MonkeyPa
     assert soak_launch.resolve_lan_rest_bind_addr() == "192.0.2.10"
 
 
+def test_resolve_lan_rest_bind_addr_uses_explicit_loopback_for_full_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+
+    assert (
+        soak_launch.resolve_lan_rest_bind_addr(
+            "127.0.0.1",
+            vpn_topology="full-tunnel",
+        )
+        == "127.0.0.1"
+    )
+
+
+@pytest.mark.parametrize("candidate", ["", "192.0.2.10", "0.0.0.0", "localhost", "::1"])
+def test_resolve_lan_rest_bind_addr_rejects_non_ipv4_loopback_for_full_tunnel(candidate: str) -> None:
+    with pytest.raises((RuntimeError, ValueError), match="Full-tunnel"):
+        soak_launch.resolve_lan_rest_bind_addr(
+            candidate,
+            vpn_topology="full-tunnel",
+        )
+
+
 @pytest.mark.parametrize("candidate", ["", "127.0.0.1", "0.0.0.0", "localhost"])
 def test_resolve_lan_rest_bind_addr_rejects_missing_loopback_wildcard_or_host(
     candidate: str,
@@ -102,13 +125,13 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
             "--inputs",
             "live-wire-inputs.local.json",
             "--lan-bind-addr",
-            "192.0.2.10",
+            "127.0.0.1",
             "--vpn-topology",
             "full-tunnel",
         ]
     )
 
-    assert args.lan_bind_addr == "192.0.2.10"
+    assert args.lan_bind_addr == "127.0.0.1"
     assert args.vpn_topology == "full-tunnel"
 
 

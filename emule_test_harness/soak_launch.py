@@ -54,8 +54,29 @@ def log(message: str) -> None:
     print(f"[soak] {message}", flush=True)
 
 
-def resolve_lan_rest_bind_addr(lan_bind_addr: str = "") -> str:
-    """Returns the explicit LAN address used by soak REST/control surfaces."""
+def resolve_lan_rest_bind_addr(
+    lan_bind_addr: str = "",
+    *,
+    vpn_topology: str = hideme_vpn.VPN_TOPOLOGY_SPLIT_TUNNEL,
+) -> str:
+    """Returns the REST/control address required by the selected VPN topology."""
+
+    if vpn_topology not in VPN_TOPOLOGIES:
+        raise ValueError(f"Unsupported hide.me topology: {vpn_topology!r}.")
+
+    if vpn_topology == hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL:
+        candidate = str(lan_bind_addr or "").strip()
+        if not candidate:
+            raise RuntimeError("Full-tunnel soak REST/control binding requires explicit --lan-bind-addr 127.0.0.1.")
+        try:
+            parsed = ipaddress.ip_address(candidate)
+        except ValueError as exc:
+            raise ValueError(f"Full-tunnel REST/control bind address must be an IP literal, got {candidate!r}.") from exc
+        if parsed.version != 4 or not parsed.is_loopback:
+            raise ValueError(
+                f"Full-tunnel REST/control bind address must be an IPv4 loopback address, got {candidate!r}."
+            )
+        return candidate
 
     x_local_ip = os.environ.get("X_LOCAL_IP", "").strip()
     candidate = str(lan_bind_addr or "").strip() or x_local_ip
