@@ -590,37 +590,12 @@ def connect_operator_server(
     return {"ensure": ensured, "connect": connected}
 
 
-def latest_packet_dump_record(packet_dump_dir: Path, pattern: str) -> dict[str, Any] | None:
-    """Returns the latest JSON row from the newest matching packet dump."""
-
-    if not packet_dump_dir.is_dir():
-        return None
-    files = sorted(packet_dump_dir.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True)
-    for path in files:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for line in reversed(lines):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                payload = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                payload = dict(payload)
-                payload["sourceFile"] = path.name
-                return payload
-    return None
-
-
 def latest_diag_event_record(
     packet_dump_dir: Path,
     *,
     client: str,
     families: set[str],
+    event: str | None = None,
     flow: str | None = None,
 ) -> dict[str, Any] | None:
     """Returns the latest matching record from one current unified diagnostic run."""
@@ -635,6 +610,8 @@ def latest_diag_event_record(
         return None
     for record in reversed(records):
         if record.get("family") not in families:
+            continue
+        if event is not None and record.get("event") != event:
             continue
         body = record.get("body")
         if flow is not None and (not isinstance(body, dict) or body.get("flow") != flow):
@@ -660,9 +637,16 @@ def rust_startup_failure_context(
             packet_dump_dir,
             client="rust",
             families={"ed2k_tcp", "ed2k_server_udp"},
+            event="packet",
             flow="server",
         ),
-        "latestEd2kTcpPacket": latest_packet_dump_record(packet_dump_dir, "emulebb-rust-ed2k-tcp-dump-*.jsonl"),
+        "latestEd2kTcpPacket": latest_diag_event_record(
+            packet_dump_dir,
+            client="rust",
+            families={"ed2k_tcp"},
+            event="packet",
+            flow="client",
+        ),
     }
     try:
         context["stats"] = retry_http_json(
