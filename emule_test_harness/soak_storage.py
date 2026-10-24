@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 SCHEMA = "emulebb-build-tests.soak-storage-policy.v1"
 REQUIRED_STREAMS = ("controller_output", "daemon_output")
@@ -44,6 +47,34 @@ class SoakStoragePolicy:
             return self.streams[name]
         except KeyError as exc:
             raise RuntimeError(f"Unknown soak storage stream: {name}") from exc
+
+
+@dataclass(frozen=True)
+class ArtifactFile:
+    """One immutable artifact candidate below the bounded store root."""
+
+    path: Path
+    relative_path: Path
+    size_bytes: int
+    modified_ns: int
+
+
+@dataclass(frozen=True)
+class ArtifactInventory:
+    """Deterministic whole-file inventory for one bounded store root."""
+
+    files: tuple[ArtifactFile, ...]
+    total_bytes: int
+
+
+@dataclass(frozen=True)
+class DiskSpaceSnapshot:
+    """Capacity information for the nearest existing artifact-store ancestor."""
+
+    measured_path: Path
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
 
 
 def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
@@ -111,6 +142,95 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
         bundle_interval_seconds=bundle_interval_seconds,
         streams=MappingProxyType(streams),
     )
+
+
+def inventory_artifacts(root: Path) -> ArtifactInventory:
+    """Inventories regular files without following directory symlinks."""
+
+    resolved_root = root.resolve()
+    if not resolved_root.exists():
+        return ArtifactInventory(files=(), total_bytes=0)
+    if not resolved_root.is_dir():
+        raise RuntimeError(
+            f"Soak artifact store root is not a directory: {resolved_root}"
+        )
+
+    files: list[ArtifactFile] = []
+    for current_root, directory_names, file_names in os.walk(
+        resolved_root, followlinks=False
+    ):
+        current = Path(current_root)
+        directory_names[:] = sorted(
+            (name for name in directory_names if not (current / name).is_symlink()),
+            key=str.casefold,
+        )
+        for name in sorted(file_names, key=str.casefold):
+            path = current / name
+            if path.is_symlink():
+                raise RuntimeError(
+                    f"Soak artifact store contains a file symlink: {path}"
+                )
+            stat = path.stat()
+            if not path.is_file():
+                continue
+            files.append(
+                ArtifactFile(
+                    path=path.resolve(),
+                    relative_path=path.relative_to(resolved_root),
+                    size_bytes=stat.st_size,
+                    modified_ns=stat.st_mtime_ns,
+                )
+            )
+
+    files.sort(
+        key=lambda item: (item.modified_ns, item.relative_path.as_posix().casefold())
+    )
+    return ArtifactInventory(
+        files=tuple(files), total_bytes=sum(item.size_bytes for item in files)
+    )
+
+
+def disk_space_snapshot(
+    path: Path,
+    *,
+    disk_usage: Callable[[Path], tuple[int, int, int]] = shutil.disk_usage,
+) -> DiskSpaceSnapshot:
+    """Measures capacity at the nearest existing ancestor of one store path."""
+
+    measured_path = nearest_existing_ancestor(path)
+    total_bytes, used_bytes, free_bytes = disk_usage(measured_path)
+    values = (total_bytes, used_bytes, free_bytes)
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in values
+    ):
+        raise RuntimeError(
+            f"Disk-usage provider returned invalid capacity values for {measured_path}."
+        )
+    if used_bytes + free_bytes > total_bytes:
+        raise RuntimeError(
+            f"Disk-usage provider returned inconsistent capacity values for {measured_path}."
+        )
+    return DiskSpaceSnapshot(
+        measured_path=measured_path,
+        total_bytes=total_bytes,
+        used_bytes=used_bytes,
+        free_bytes=free_bytes,
+    )
+
+
+def nearest_existing_ancestor(path: Path) -> Path:
+    """Returns the nearest existing path used for a future store's disk check."""
+
+    candidate = path.resolve()
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            raise RuntimeError(
+                f"No existing ancestor is available for soak storage path: {path}"
+            )
+        candidate = parent
+    return candidate
 
 
 def _positive_integer(payload: dict[str, Any], key: str, *, context: str) -> int:
