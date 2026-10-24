@@ -157,6 +157,7 @@ Script inventory:
 | `scripts\native-windows-parity-campaign.py` | native Rust/MFC parity runner | maintained | fresh builds, protocol/state oracle stages, then sequential direct UPnP and forced-firewalled diagnostics captures |
 | `scripts\soak-scripted-capture.py` | capture-then-diff recorder | maintained | VPN solo capture by default; the policy-bounded `--route direct` mode adds isolated profiles, PCAPNG, path audits, exact completion verification, and owned firewall rules |
 | `scripts\soak-offline-diff.py` | capture-then-diff adjudicator | maintained | correlates opaque actions and emits parity, divergence, harness-failure, or external-inconclusive verdicts |
+| `scripts\persisted-soak-control.py` | persisted full-tunnel diagnostics controller | maintained | starts, watches, reports, and gracefully stops detached Rust-plus-MFC diagnostics against operator-selected persisted profiles |
 | `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, and Rust cross-client transfers; records optional eMuleAI readiness and the explicit aMule EC-adapter gap |
 | `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through required UPnP TCP/UDP mappings, public server/Kad imports, independent disconnect/reconnect, a rendered-UI synthetic shared-tree reload with eD2K offer and acknowledged Kad keyword/source publishing, safe PDF-only searches, received bytes from a sourced PDF below 5 MiB, visible Stop and confirmed Delete actions, restart persistence, and pass-clean/fail-retain disposal |
@@ -268,6 +269,15 @@ Live Arr environment:
 - auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
 - persisted live reports redact exact runtime terms, movie titles, magnets, and real transfer hashes, keeping counts, indexes, sizes, and presence flags instead
 - ordinary live eMule profiles apply the workspace live-network policy: P2P `BindInterface=hide.me`, empty P2P `BindAddr`, and main P2P `UPnP` enabled; only the policy-bounded native parity campaign uses inherited `X_LOCAL_IP` directly
+
+Persisted full-tunnel diagnostics soak:
+
+- configure the ignored `live-wire-inputs.local.json` with the existing MFC profile and the operator-owned persisted Rust profile; the Rust profile is imported transactionally only when empty and otherwise must already be valid
+- configure the ignored `vpn-guard-live.local.json` for `hide.me` and the required public CIDRs; the controller performs a read-only preflight and starts nothing unless hide.me is active, split tunneling is off, representative public routes use hide.me, loopback control is valid, and both diagnostics binaries exist
+- run `python scripts\persisted-soak-control.py start` for a detached, until-stopped dual-client diagnostics session; it delegates client lifecycle to `launch-soak.py`, preserves the profile import/reuse contract, and starts a bounded rotating health watcher
+- run `python scripts\persisted-soak-control.py status` for exact launcher/watcher identity, Rust and MFC process counts, loopback REST health, current full-tunnel health, and the latest canonical run state
+- run `python scripts\persisted-soak-control.py stop` to request canonical graceful teardown, including MFC preference restoration; only an exact still-live launcher or watcher identity may receive the bounded forced fallback
+- controller state, output logs, watch heartbeat, and rotated watch JSONL stay under `EMULEBB_WORKSPACE_OUTPUT_ROOT\soak\control`; the controller never mutates hide.me settings or inherited workspace environment variables
 
 Native Windows Rust/MFC parity campaign:
 
