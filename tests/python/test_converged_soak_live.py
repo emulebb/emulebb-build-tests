@@ -33,6 +33,41 @@ def test_soak_launch_requires_same_vpn_bind_ip() -> None:
         soak_launch.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.0.0.5"})
 
 
+def test_prepare_hideme_routing_uses_read_only_full_tunnel_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rust_exe = tmp_path / "emulebb-rust-diagnostics.exe"
+    mfc_exe = tmp_path / "emulebb.exe"
+    monkeypatch.setattr(
+        soak_launch.hideme_vpn,
+        "require_full_tunnel_ready",
+        lambda: {
+            "schema": "emulebb.hide-me-full-tunnel-status.v1",
+            "bindIp": "192.0.2.10",
+            "routesThroughHideMe": True,
+        },
+    )
+    monkeypatch.setattr(
+        soak_launch.hideme_split_tunnel,
+        "ensure_vpn_ready",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("split-tunnel mutation must not run")),
+    )
+
+    routing = soak_launch.prepare_hideme_routing(
+        "full-tunnel",
+        [
+            ("rust", "eMuleBB Rust", rust_exe),
+            ("mfc", "eMuleBB MFC", mfc_exe),
+        ],
+    )
+
+    assert routing["topology"] == "full-tunnel"
+    assert routing["bindIp"] == "192.0.2.10"
+    assert routing["clients"]["rust"]["whitelistAdded"] is False
+    assert routing["clients"]["mfc"]["whitelistAdded"] is False
+
+
 def test_resolve_lan_rest_bind_addr_requires_explicit_cli_value_to_match_x_local_ip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,10 +103,13 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
             "live-wire-inputs.local.json",
             "--lan-bind-addr",
             "192.0.2.10",
+            "--vpn-topology",
+            "full-tunnel",
         ]
     )
 
     assert args.lan_bind_addr == "192.0.2.10"
+    assert args.vpn_topology == "full-tunnel"
 
 
 def test_soak_endpoint_ports_are_distinct_by_default() -> None:

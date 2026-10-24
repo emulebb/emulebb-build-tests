@@ -59,7 +59,6 @@ from emule_test_harness import (
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch, soak_run_layout, vpn_guard_live
-from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
@@ -1331,6 +1330,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
     parser.add_argument("--lan-bind-addr", required=True, help="LAN IP for REST/control binding; pass X_LOCAL_IP.")
+    parser.add_argument(
+        "--vpn-topology",
+        choices=soak_launch.VPN_TOPOLOGIES,
+        default="split-tunnel",
+        help="hide.me routing topology; full-tunnel is read-only and requires split tunneling disabled.",
+    )
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
@@ -2085,11 +2090,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     log(f"reports under {report_dir}")
 
-    log("ensuring hide.me split tunnel for both clients...")
-    rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
-    mfc_vpn = ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
-    bind_ip = soak_launch.require_same_vpn_bind_ip(rust_vpn, mfc_vpn)
-    log(f"hide.me bind IP: {bind_ip}")
+    log(f"preparing hide.me {args.vpn_topology} routing for both clients...")
+    vpn_routing = soak_launch.prepare_hideme_routing(
+        args.vpn_topology,
+        [
+            ("rust", "eMuleBB Rust", rust_exe),
+            ("mfc", "eMuleBB MFC", mfc_exe),
+        ],
+    )
+    bind_ip = str(vpn_routing["bindIp"])
+    log(f"hide.me {args.vpn_topology} routing ready")
 
     bootstrap_selection = resolve_kad_bootstrap_endpoints(
         mfc_profile_dir=mfc_profile_dir,
@@ -2104,16 +2114,10 @@ def main(argv: list[str] | None = None) -> int:
         f"{len(bootstrap_nodes)} contacts"
     )
     summary["vpn"] = {
-        "rust": {
-            "exe": rust_exe.name,
-            "whitelistAdded": bool(rust_vpn.get("whitelistAdded")),
-            "bindIp": rust_vpn.get("bindIp"),
-        },
-        "mfc": {
-            "exe": mfc_exe.name,
-            "whitelistAdded": bool(mfc_vpn.get("whitelistAdded")),
-            "bindIp": mfc_vpn.get("bindIp"),
-        },
+        "topology": vpn_routing["topology"],
+        "provider": vpn_routing["provider"],
+        "rust": vpn_routing["clients"]["rust"],
+        "mfc": vpn_routing["clients"]["mfc"],
         "sameBindIp": True,
     }
     summary["environmentParity"] = {
