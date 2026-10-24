@@ -82,6 +82,44 @@ def _segmented_diag(
     }
 
 
+def _segmented_peer_packet(
+    client: str,
+    process_id: int,
+    run_id: str,
+    segment_id: int,
+    seq: int,
+    at: float,
+) -> dict:
+    record = _segmented_diag(client, process_id, run_id, segment_id, seq, at)
+    record.update(
+        {
+            "family": "ed2k_tcp",
+            "event": "packet",
+            "keys": {
+                "peer": "198.51.100.1:4662",
+                "protocolMarker": 0xE3,
+                "opcode": 0x01,
+            },
+            "body": {
+                "direction": "send",
+                "flow": "client",
+                "transportMode": "plain",
+                "obfuscated": False,
+                "protocolMarker": 0xE3,
+                "protocolName": "ed2k",
+                "opcode": 0x01,
+                "opcodeName": "OP_HELLO",
+                "rawLen": 2,
+                "rawHex": "aabb",
+                "payloadLen": 2,
+                "payloadHex": "aabb",
+                "payloadHexTruncated": False,
+            },
+        }
+    )
+    return record
+
+
 def test_full_run_diagnostics_require_client_udp_without_narrow_window_penalty() -> None:
     mod = _load_offline_diff()
     rust = [_diag("sched", "source_count", 0.0, body={"sourceCount": 1})]
@@ -97,7 +135,13 @@ def test_full_run_diagnostics_require_client_udp_without_narrow_window_penalty()
             "rustPresent": False,
             "mfcPresent": False,
             "ok": False,
-        }
+        },
+        {
+            "family": "ed2k_tcp",
+            "rustPresent": False,
+            "mfcPresent": False,
+            "ok": False,
+        },
     ]
 
 
@@ -141,11 +185,14 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     dumps.mkdir(parents=True)
     (private_dir / "native-capture.pcapng").write_bytes(b"x" * 4096)
     (dumps / "emulebb-rust-diag-42-active-000000.jsonl").write_text(
-        json.dumps(_segmented_diag("rust", 42, "active", 0, 1, 1)) + "\n",
-        encoding="utf-8",
-    )
-    (dumps / "packet.log").write_text(
-        json.dumps({"schema": "ed2k_packet_v1", "ts_utc": _ts(2)}) + "\n",
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                _segmented_diag("rust", 42, "active", 0, 1, 1),
+                _segmented_peer_packet("rust", 42, "active", 0, 2, 2),
+            )
+        )
+        + "\n",
         encoding="utf-8",
     )
     with zipfile.ZipFile(recording, "w") as archive:
@@ -164,9 +211,22 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     loaded = mod._load_recording(recording, client="rust")
 
     assert loaded["nativeCaptureSizes"] == [4096]
-    assert len(loaded["diag"]) == 1
+    assert len(loaded["diag"]) == 2
     assert loaded["diag"][0]["ts_utc"] == _ts(1)
+    assert loaded["diag"][1]["ts_utc"] == _ts(2)
     assert len(loaded["packets"]) == 1
+
+
+def test_load_recording_rejects_legacy_packet_side_file(tmp_path: Path) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "rust-recording")
+    (private_dir / "dumps" / "packet.log").write_text(
+        json.dumps({"schema": "ed2k_packet_v1", "ts_utc": _ts(2)}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Legacy packet side files are unsupported"):
+        mod._load_recording(recording, client="rust")
 
 
 def test_load_recording_rejects_malformed_current_diag_segment(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ Consumes two sanitized recordings and their private-artifact siblings produced b
 ``soak-scripted-capture.py`` (one rust, one mfc) for the same campaign — captured
 SEQUENTIALLY, so each side has its own action windows. Correlates the two by
 ``actionId`` (deterministic — the same scripted set ran on both), slices each side's
-diag/packet records to that action's
+diagnostic records to that action's
 ``[begin-lead, end+settle]`` window, and delegates to the existing
 ``diag_event_diff`` / ``packet_trace_diff`` engines. Emits a per-action verdict plus a
 campaign summary (oracle conformance, cumulative Kad opcode coverage, source_count).
@@ -45,9 +45,6 @@ CAMPAIGN_EXIT_CODES = {
     "harness-failure": 2,
     "inconclusive-external": 3,
 }
-PACKET_SCHEMAS = {"ed2k_packet_v1", "udp_packet_v1"}
-
-
 def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
     """Read sanitized metadata plus raw diagnostics from its private sibling."""
 
@@ -100,7 +97,7 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
     dumps_dir = private_dir / "dumps"
     if dumps_dir.is_dir():
         diag_paths: list[Path] = []
-        packet_paths: list[Path] = []
+        other_diagnostic_paths: list[Path] = []
         for path in sorted(dumps_dir.rglob("*")):
             if not path.is_file() or path.suffix.casefold() not in (".jsonl", ".log"):
                 continue
@@ -112,7 +109,7 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
                 raise ValueError(f"A {client} recording contains {other_client} diagnostics.")
             if path.name.startswith(("emulebb-rust-diag-", "emulebb-mfc-diag-")):
                 raise ValueError(f"Unsupported diagnostic segment name: {path.name}")
-            packet_paths.append(path)
+            other_diagnostic_paths.append(path)
 
         diag = diag_event_runs.load_latest_diag_records(diag_paths, client=client)
         for record in diag:
@@ -131,7 +128,8 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
                 health_paths[0], client="mfc", selected_segments=selected_segments
             )
 
-        for path in packet_paths:
+        packets = diag_event_diff.ed2k_tcp_packet_views(diag)
+        for path in other_diagnostic_paths:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
@@ -147,8 +145,10 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
                     raise ValueError(
                         f"Diagnostic events must use segmented current-run names: {path.name}"
                     )
-                if schema in PACKET_SCHEMAS:
-                    packets.append(record)
+                if schema in {"ed2k_packet_v1", "udp_packet_v1"}:
+                    raise ValueError(
+                        f"Legacy packet side files are unsupported: {path.name}"
+                    )
     private_completion_path = private_dir / "completion-private.json"
     if private_completion_path.is_file():
         private_completion = json.loads(
@@ -754,16 +754,9 @@ def main(argv: list[str] | None = None) -> int:
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
     conf = audit["conformance"]
     full_diag_gate = _full_run_diagnostic_gate(rust["diag"], mfc["diag"])
-    # rust diag stamps opcode None for unknown/legacy inbound Kad opcodes; the raw
-    # udp_packet_v1 kad dump (carried in the rust recording's non-diag records)
-    # supplements the rust side so it is credited for those receives.
-    rust_udp_dump = [
-        record for record in rust["packets"] if record.get("schema") == "udp_packet_v1"
-    ]
     kad_cov = packet_trace_diff.kad_opcode_coverage(
         packet_trace_diff.kad_records(rust["diag"]),
         packet_trace_diff.kad_records(mfc["diag"]),
-        rust_supplementary_records=rust_udp_dump,
     )
 
     def _kad_labels(rows: list[dict[str, Any]]) -> list[str]:
