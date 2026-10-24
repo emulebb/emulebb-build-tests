@@ -3,15 +3,15 @@
 A pure launcher: it brings up emulebb-rust (diagnostics) and the MFC diagnostics
 GUI on selected persistent profiles (same operator eD2K server, same nodes.dat
 bootstrap, same shared library roots), then idles until Ctrl-C. Drive the clients
-through their REST APIs; both diagnostics builds write their ``ed2k_packet_v1`` /
-``diag_event_v2`` dumps continuously into the persistent profile dirs.
+through their REST APIs; both diagnostics builds write segmented
+``diag_event_v2`` runs continuously into the persistent profile dirs.
 
 No test/diff logic lives here. Analysis runs separately from this repo
 (``analyze-packet-coverage.py``, ``diag_event_diff``, or the live observer
 ``converged-soak-live.py``) over the captured dumps when you ask for it.
 
 REST control binds X_LOCAL_IP for split-tunnel or loopback for full-tunnel;
-P2P binds the hide.me tunnel. The rust
+P2P binds the hide.me tunnel. The Rust
 diagnostics binary is the distinctly-named ``emulebb-rust-diagnostics.exe`` (build
 it with ``python -m emule_workspace build clients --client emulebb-rust
 --diagnostics``).

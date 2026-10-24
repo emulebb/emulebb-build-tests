@@ -16,7 +16,7 @@ from .paths import path_is_relative_to
 
 CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
-RUST_PACKET_DUMP_GLOBS = (
+RUST_DIAGNOSTIC_GLOBS = (
     "*.jsonl",
 )
 RUST_PROFILE_VOLATILE_FILES = (
@@ -253,7 +253,7 @@ def archive_rust_volatile_outputs(
     """Archives Rust soak logs/dumps while preserving durable profile state."""
 
     profile_files = [rust_profile_dir / name for name in RUST_PROFILE_VOLATILE_FILES]
-    packet_files = _glob_files(rust_packet_dump_dir, RUST_PACKET_DUMP_GLOBS)
+    packet_files = _glob_files(rust_packet_dump_dir, RUST_DIAGNOSTIC_GLOBS)
     archived_runtime = _archive_files(
         profile_files,
         source_root=rust_profile_dir,

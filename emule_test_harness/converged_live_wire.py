@@ -19,8 +19,7 @@ live network:
 
 Both clients emit eD2K TCP packet events in ``diag_event_v2``. The orchestrator
 normalizes those events with ``diag_event_diff.ed2k_tcp_packet_views`` before
-aligning them with ``packet_trace_diff``; legacy packet-file discovery remains
-available only for compatibility with harness paths not yet migrated.
+aligning them with ``packet_trace_diff``.
 """
 
 from __future__ import annotations
@@ -41,17 +40,6 @@ DEFAULT_MFC_CONFIGURATION = "Release"
 MFC_DIAGNOSTICS_FLAVOR = "diagnostics"
 MFC_EXE_NAME = "emulebb-diagnostics.exe"
 
-# Both clients write the converged ed2k_packet_v1 dump. Rust emits per-flow JSONL
-# stems under EMULEBB_RUST_LOG_DIR; the MFC diagnostics build writes ONE fixed
-# file in its profile log dir (LogArtifactNames::PacketDiagnosticsLogFileName /
-# the dedicated segmented writer.
-RUST_PACKET_DUMP_GLOBS = (
-    "emulebb-rust-ed2k-*-dump-*.jsonl",
-    "emulebb-rust-ed2k-tcp-dump-*.jsonl",
-)
-# MFC rotates its packet/diag logs (size cap), so the active file is a tiny slice
-# of the run; match the rotated files too (`…-packet-<ts>.log`, `…-diag-<ts>.log`).
-EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet*.log",)
 RUST_DIAG_DUMP_GLOBS = ("emulebb-rust-diag-*.jsonl",)
 EMULE_DIAG_DUMP_GLOBS = ("emulebb-mfc-diag-*.jsonl",)
 EMULE_DIAG_HEALTH_FILE = "emulebb-mfc-diag-health.json"
@@ -216,24 +204,6 @@ def _first_existing_glob(dump_dir: Path, globs: tuple[str, ...]) -> list[Path]:
     return unique
 
 
-def find_packet_trace(dump_dir: Path, *, side: str) -> Path | None:
-    """Returns the first ``ed2k_packet_v1`` JSONL dump for one client side.
-
-    ``side`` is ``"rust"`` or ``"emule"``; returns ``None`` when no dump file is
-    present (a silently-empty diagnostics build).
-    """
-
-    if side == "rust":
-        matches = _first_existing_glob(dump_dir, RUST_PACKET_DUMP_GLOBS)
-    elif side == "emule":
-        matches = _first_existing_glob(dump_dir, EMULE_PACKET_DUMP_GLOBS)
-    else:
-        raise ValueError(f"side must be 'rust' or 'emule', got {side!r}.")
-    # With a rotated-file glob, the most-recently-written file is the live window;
-    # matches[0] (name-sorted) would pick the oldest rotated slice.
-    return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
-
-
 def find_diag_traces(
     dump_dir: Path,
     *,
@@ -320,18 +290,6 @@ def load_current_diag_records(
         allow_incomplete_active_tail=allow_incomplete_active_tail,
     )
     return list(capture.records)
-
-
-def count_jsonl_records(path: Path | None) -> int:
-    """Counts non-empty lines in a JSONL dump (0 for a missing/None path)."""
-
-    if path is None or not path.is_file():
-        return 0
-    return sum(
-        1
-        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-        if line.strip()
-    )
 
 
 def build_converged_report(
