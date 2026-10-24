@@ -322,6 +322,23 @@ def test_find_packet_trace_rejects_unknown_side(tmp_path: Path) -> None:
         clw.find_packet_trace(tmp_path, side="bogus")
 
 
+def test_find_diag_traces_selects_one_rust_run_in_segment_order(tmp_path: Path) -> None:
+    stale = tmp_path / "emulebb-rust-diag-41-stale-000000.jsonl"
+    first = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    second = tmp_path / "emulebb-rust-diag-42-active-000001.jsonl"
+    for path in (stale, first, second):
+        path.write_text("{}\n", encoding="utf-8")
+    os.utime(stale, ns=(1, 1))
+    os.utime(first, ns=(2, 2))
+    os.utime(second, ns=(3, 3))
+
+    assert clw.find_diag_traces(tmp_path, side="rust") == [
+        first.resolve(),
+        second.resolve(),
+    ]
+    assert clw.find_diag_trace(tmp_path, side="rust") == second.resolve()
+
+
 def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:
     path = tmp_path / "dump.jsonl"
     path.write_text('{"a":1}\n\n{"b":2}\n', encoding="utf-8")

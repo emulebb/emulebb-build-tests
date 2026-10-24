@@ -146,6 +146,12 @@ def load_trace(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def load_traces(paths: list[Path]) -> list[dict[str, Any]]:
+    """Loads supported records from ordered diagnostic-event segments."""
+
+    return [record for path in paths for record in load_trace(path)]
+
+
 def _by_family(trace: list[dict[str, Any]], family: str) -> list[dict[str, Any]]:
     return [r for r in trace if r.get("family") == family]
 
