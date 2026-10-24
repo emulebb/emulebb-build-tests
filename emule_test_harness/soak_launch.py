@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from . import hideme_split_tunnel, hideme_vpn, vpn_guard_live
+from . import diag_event_runs, hideme_split_tunnel, hideme_vpn, vpn_guard_live
 from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
@@ -616,6 +616,33 @@ def latest_packet_dump_record(packet_dump_dir: Path, pattern: str) -> dict[str, 
     return None
 
 
+def latest_diag_event_record(
+    packet_dump_dir: Path,
+    *,
+    client: str,
+    families: set[str],
+    flow: str | None = None,
+) -> dict[str, Any] | None:
+    """Returns the latest matching record from one current unified diagnostic run."""
+
+    try:
+        records = diag_event_runs.load_latest_diag_records(
+            packet_dump_dir.glob(f"emulebb-{client}-diag-*.jsonl"),
+            client=client,
+            allow_incomplete_active_tail=True,
+        )
+    except (OSError, diag_event_runs.DiagnosticTraceError):
+        return None
+    for record in reversed(records):
+        if record.get("family") not in families:
+            continue
+        body = record.get("body")
+        if flow is not None and (not isinstance(body, dict) or body.get("flow") != flow):
+            continue
+        return dict(record)
+    return None
+
+
 def rust_startup_failure_context(
     *,
     base_url: str,
@@ -629,7 +656,12 @@ def rust_startup_failure_context(
     context: dict[str, Any] = {
         "connectAttempts": connect_attempts,
         "error": str(latest_error),
-        "latestEd2kServerPacket": latest_packet_dump_record(packet_dump_dir, "emulebb-rust-ed2k-server-dump-*.jsonl"),
+        "latestEd2kServerPacket": latest_diag_event_record(
+            packet_dump_dir,
+            client="rust",
+            families={"ed2k_tcp", "ed2k_server_udp"},
+            flow="server",
+        ),
         "latestEd2kTcpPacket": latest_packet_dump_record(packet_dump_dir, "emulebb-rust-ed2k-tcp-dump-*.jsonl"),
     }
     try:
