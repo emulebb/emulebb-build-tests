@@ -211,21 +211,19 @@ def test_reflected_self_source_requires_partial_transfer_window() -> None:
 
 def test_wait_for_reflected_self_source_uses_only_post_cursor_packets(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
-    trace = tmp_path / "emule-packets.jsonl"
-    old_record = {"schema": "ed2k_packet_v1", "event_seq": 10}
+    old_record = {"runId": "run-a", "event_seq": 10}
     new_records = [
-        {"schema": "ed2k_packet_v1", "event_seq": 11},
-        {"schema": "ed2k_packet_v1", "event_seq": 12},
+        {"runId": "run-a", "event_seq": 11},
+        {"runId": "run-a", "event_seq": 12},
     ]
     loads = iter([[old_record], [old_record, *new_records]])
     observed: list[list[dict[str, object]]] = []
 
     monkeypatch.setattr(
-        module.converged_live_wire,
-        "find_packet_trace",
-        lambda *_args, **_kwargs: trace,
+        module,
+        "current_mfc_peer_packets",
+        lambda *_args, **_kwargs: ("run-a", next(loads)),
     )
-    monkeypatch.setattr(module.packet_trace_diff, "load_trace", lambda _path: next(loads))
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
     monkeypatch.setattr(
         module.packet_trace_diff,
@@ -242,10 +240,15 @@ def test_wait_for_reflected_self_source_uses_only_post_cursor_packets(monkeypatc
         },
     )
 
-    cursor = module.capture_mfc_packet_cursor(tmp_path, 1.0)
+    cursor = module.capture_mfc_packet_cursor(
+        tmp_path,
+        process_id=42,
+        timeout_seconds=1.0,
+    )
     evidence = module.wait_for_reflected_self_source_evidence(
         tmp_path,
         cursor,
+        process_id=42,
         transfer_hash="AA" * 16,
         requester_port=4662,
         expected_publisher_port=5662,

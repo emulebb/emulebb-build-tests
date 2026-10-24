@@ -362,17 +362,48 @@ def wait_for_rust_download_connection_reuse(
     )
 
 
-PacketTraceCursor = tuple[Path, int, int]
+PacketTraceCursor = tuple[str, int, int]
 
 
-def capture_mfc_packet_cursor(log_dir: Path, timeout_seconds: float) -> PacketTraceCursor:
-    """Captures the current MFC packet trace position after self-publication."""
+def current_mfc_peer_packets(
+    log_dir: Path,
+    *,
+    process_id: int,
+) -> tuple[str, list[dict[str, object]]]:
+    """Returns one current MFC run id and its normalized peer packets."""
+
+    if not converged_live_wire.find_diag_traces(
+        log_dir,
+        side="emule",
+        process_id=process_id,
+    ):
+        return "", []
+    capture = converged_live_wire.load_current_diag_capture(
+        log_dir,
+        side="emule",
+        process_id=process_id,
+        allow_incomplete_active_tail=True,
+    )
+    records = list(capture.records)
+    run_id = str(records[0].get("runId") or "") if records else ""
+    return run_id, diag_event_diff.ed2k_tcp_packet_views(records)
+
+
+def capture_mfc_packet_cursor(
+    log_dir: Path,
+    *,
+    process_id: int,
+    timeout_seconds: float,
+) -> PacketTraceCursor:
+    """Captures the current MFC unified packet position after self-publication."""
 
     def resolve() -> PacketTraceCursor | None:
-        trace = converged_live_wire.find_packet_trace(log_dir, side="emule")
-        if trace is None:
+        run_id, records = current_mfc_peer_packets(
+            log_dir,
+            process_id=process_id,
+        )
+        if not run_id:
             return None
-        records = packet_trace_diff.load_trace(trace)
         max_event_seq = max(
             (
                 int(record["event_seq"])
@@ -381,7 +412,7 @@ def capture_mfc_packet_cursor(log_dir: Path, timeout_seconds: float) -> PacketTr
             ),
             default=-1,
         )
-        return trace, len(records), max_event_seq
+        return run_id, len(records), max_event_seq
 
     return live_common.wait_for(
         resolve,
@@ -391,15 +422,17 @@ def capture_mfc_packet_cursor(log_dir: Path, timeout_seconds: float) -> PacketTr
     )
 
 
-def packet_records_after_cursor(log_dir: Path, cursor: PacketTraceCursor) -> list[dict[str, object]]:
-    """Reads the active MFC packet records written after one captured cursor."""
+def packet_records_after_cursor(
+    log_dir: Path,
+    cursor: PacketTraceCursor,
+    *,
+    process_id: int,
+) -> list[dict[str, object]]:
+    """Reads current-run MFC peer packets written after one captured cursor."""
 
-    cursor_path, cursor_count, cursor_event_seq = cursor
-    trace = converged_live_wire.find_packet_trace(log_dir, side="emule")
-    if trace is None:
-        return []
-    records = packet_trace_diff.load_trace(trace)
-    if trace == cursor_path:
+    cursor_run_id, cursor_count, cursor_event_seq = cursor
+    run_id, records = current_mfc_peer_packets(log_dir, process_id=process_id)
+    if run_id == cursor_run_id:
         return records[cursor_count:]
     if cursor_event_seq >= 0:
         return [
@@ -414,6 +447,7 @@ def wait_for_reflected_self_source_evidence(
     log_dir: Path,
     cursor: PacketTraceCursor,
     *,
+    process_id: int,
     transfer_hash: str,
     requester_port: int,
     expected_publisher_port: int,
@@ -423,7 +457,11 @@ def wait_for_reflected_self_source_evidence(
 
     return live_common.wait_for(
         lambda: packet_trace_diff.reflected_self_source_evidence(
-            packet_records_after_cursor(log_dir, cursor),
+            packet_records_after_cursor(
+                log_dir,
+                cursor,
+                process_id=process_id,
+            ),
             file_hash=transfer_hash,
             requester_port=requester_port,
             expected_publisher_port=expected_publisher_port,
@@ -1794,7 +1832,8 @@ def main(argv: list[str] | None = None) -> int:
             mfc_log_dir = Path(emulebb["profile_base"]) / "logs"
             packet_cursor = capture_mfc_packet_cursor(
                 mfc_log_dir,
-                args.server_publish_timeout_seconds,
+                process_id=mfc_process_id,
+                timeout_seconds=args.server_publish_timeout_seconds,
             )
             dtt.add_and_connect_server(
                 emulebb_base_url,
@@ -1813,6 +1852,7 @@ def main(argv: list[str] | None = None) -> int:
             reflected_self = wait_for_reflected_self_source_evidence(
                 mfc_log_dir,
                 packet_cursor,
+                process_id=mfc_process_id,
                 transfer_hash=transfer_hash,
                 requester_port=ports["client1_tcp"],
                 expected_publisher_port=rust_ed2k_port,
