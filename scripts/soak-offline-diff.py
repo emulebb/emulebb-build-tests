@@ -34,6 +34,7 @@ from emule_test_harness import (  # noqa: E402
     packet_trace_diff,
     secident_audit,
     soak_action_diff,
+    soak_report_summary,
 )
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -865,6 +866,9 @@ def main(argv: list[str] | None = None) -> int:
         "conformance": full_diag_gate["ok"],
         "schemaConformance": conf["conformant"],
         "fullRunDiagnostics": full_diag_gate,
+        "fullRunDiagnosticSummary": soak_report_summary.summarize_full_run_diagnostics(
+            full_diag_gate
+        ),
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,
