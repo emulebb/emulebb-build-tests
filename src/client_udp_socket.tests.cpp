@@ -24,6 +24,16 @@ TEST_CASE("Client UDP seam always logs unexpected packet exceptions")
 	CHECK(ClientUDPSocketSeams::ShouldLogPacketFailure(true, policy));
 }
 
+TEST_CASE("Client UDP seam classifies complete, failed, and retryable socket sends")
+{
+	using ClientUDPSocketSeams::EClientUdpSocketSendResult;
+
+	CHECK(ClientUDPSocketSeams::ClassifyClientUdpSocketSendResult(42, 42) == EClientUdpSocketSendResult::Succeeded);
+	CHECK(ClientUDPSocketSeams::ClassifyClientUdpSocketSendResult(0, 42) == EClientUdpSocketSendResult::Failed);
+	CHECK(ClientUDPSocketSeams::ClassifyClientUdpSocketSendResult(21, 42) == EClientUdpSocketSendResult::Failed);
+	CHECK(ClientUDPSocketSeams::ClassifyClientUdpSocketSendResult(-1, 42) == EClientUdpSocketSendResult::Retry);
+}
+
 TEST_CASE("Client UDP seam only reads diagnostic opcode when packet contains it")
 {
 	const unsigned char packet[] = {0xC5, 0x91};
