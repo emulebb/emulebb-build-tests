@@ -416,6 +416,15 @@ def _diff_one_action(
     }
 
 
+def _full_run_diagnostic_gate(
+    rust_diag: list[dict[str, Any]],
+    mfc_diag: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Applies requirements that are meaningful only over complete captures."""
+
+    return diag_event_diff.full_run_conformance(rust_diag, mfc_diag)
+
+
 def _action_error_count(recording: dict[str, Any]) -> int:
     """Count explicitly failed action results while tolerating legacy metadata."""
 
@@ -743,6 +752,7 @@ def main(argv: list[str] | None = None) -> int:
     # Campaign summary over the FULL recordings (conformance + cumulative Kad coverage).
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
     conf = audit["conformance"]
+    full_diag_gate = _full_run_diagnostic_gate(rust["diag"], mfc["diag"])
     # rust diag stamps opcode None for unknown/legacy inbound Kad opcodes; the raw
     # udp_packet_v1 kad dump (carried in the rust recording's non-diag records)
     # supplements the rust side so it is credited for those receives.
@@ -763,6 +773,13 @@ def main(argv: list[str] | None = None) -> int:
     kad_expected = _kad_labels(kad_cov["expectedOnlyEmule"])
     print("\n== campaign summary ==")
     print(f"  oracle conformance (rust superset-of oracle): {'PASS' if conf['conformant'] else 'FAIL'}")
+    print(
+        "  full-run diagnostics: "
+        f"{'PASS' if full_diag_gate['ok'] else 'FAIL'} "
+        f"required={full_diag_gate['familyConformance']['requiredFamilies']} "
+        f"rustLifecycleViolations={len(full_diag_gate['clientUdpLifecycle']['rust']['violations'])} "
+        f"mfcLifecycleViolations={len(full_diag_gate['clientUdpLifecycle']['mfc']['violations'])}"
+    )
     print(
         f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "
         f"sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} "
@@ -817,7 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         action_error_count=action_error_count,
         completion=completion,
         scenario_mismatch=scenario_mismatch,
-        conformance_ok=bool(conf["conformant"]),
+        conformance_ok=bool(full_diag_gate["ok"]),
         kad_coverage_ok=bool(kad_cov["oracleOk"]),
         secident_dead=secident_dead,
         external_inconclusive=external_inconclusive,
@@ -845,7 +862,9 @@ def main(argv: list[str] | None = None) -> int:
         "mfcRecording": mfc_zip.name,
         "obfuscation": rust["meta"].get("obfuscation"),
         "perAction": per_action,
-        "conformance": conf["conformant"],
+        "conformance": full_diag_gate["ok"],
+        "schemaConformance": conf["conformant"],
+        "fullRunDiagnostics": full_diag_gate,
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,

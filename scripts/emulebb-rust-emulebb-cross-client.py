@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness import diag_event_diff  # noqa: E402
 from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
@@ -168,20 +169,51 @@ def disconnect_mfc_servers(
 
 
 def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) -> dict[str, object]:
-    """Reject silent diagnostics builds and keep only compact capture counts."""
+    """Reject silent/incomplete diagnostics builds and return compact capture counts."""
 
     counts: dict[str, object] = {}
+    diag_records: dict[str, list[dict[str, object]]] = {}
     for side, directory in (("rust", rust_dir), ("emule", mfc_dir)):
         packet = converged_live_wire.find_packet_trace(directory, side=side)
         if packet is None:
             raise RuntimeError(f"{side} diagnostics did not produce packet and event dumps")
         packet_count = len(packet_trace_diff.load_trace(packet))
-        diag_count = len(
-            converged_live_wire.load_current_diag_records(directory, side=side)
-        )
+        records = converged_live_wire.load_current_diag_records(directory, side=side)
+        diag_records[side] = records
+        diag_count = len(records)
         if packet_count == 0 or diag_count == 0:
             raise RuntimeError(f"{side} diagnostics packet/event dumps contain no valid records")
-        counts[side] = {"packetRecords": packet_count, "eventRecords": diag_count}
+        lifecycle = diag_event_diff.audit_client_udp_lifecycle(records)
+        client_udp_records = [
+            record for record in records if record.get("family") == "ed2k_client_udp"
+        ]
+        counts[side] = {
+            "packetRecords": packet_count,
+            "eventRecords": diag_count,
+            "clientUdp": {
+                "records": len(client_udp_records),
+                "packets": sum(
+                    record.get("event") == "packet" for record in client_udp_records
+                ),
+                "sendAttempts": lifecycle["attemptCount"],
+                "sendTerminals": lifecycle["terminalCount"],
+                "outcomes": lifecycle["outcomes"],
+            },
+        }
+    full_gate = diag_event_diff.full_run_conformance(
+        diag_records["rust"],
+        diag_records["emule"],
+    )
+    if not full_gate["ok"]:
+        compact_failure = {
+            "requiredFamilies": full_gate["familyConformance"]["requiredFamilies"],
+            "rustLifecycleViolations": full_gate["clientUdpLifecycle"]["rust"]["violations"],
+            "mfcLifecycleViolations": full_gate["clientUdpLifecycle"]["mfc"]["violations"],
+        }
+        raise RuntimeError(
+            "complete diagnostics capture failed required-family/lifecycle validation: "
+            + json.dumps(compact_failure, sort_keys=True)
+        )
     counts["mfcSecureIdent"] = require_mfc_secure_ident_clean(mfc_dir / "emulebb-verbose.log")
     if kad_required:
         kad_files = list(rust_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))

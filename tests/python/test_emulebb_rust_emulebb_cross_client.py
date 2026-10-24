@@ -597,6 +597,48 @@ def test_cross_client_diagnostics_require_both_peer_dumps(tmp_path: Path) -> Non
         module.require_diagnostics(rust, mfc, kad_required=False)
 
 
+def test_cross_client_diagnostics_require_client_udp_family_on_both_sides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = load_suite_module()
+    packet = tmp_path / "packet.jsonl"
+    packet.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        module.converged_live_wire,
+        "find_packet_trace",
+        lambda *_args, **_kwargs: packet,
+    )
+    monkeypatch.setattr(module.packet_trace_diff, "load_trace", lambda _path: [{}])
+
+    def diag_records(_directory, *, side):
+        family = "ed2k_client_udp" if side == "rust" else "sched"
+        return [
+            {
+                "schema": "diag_event_v2",
+                "family": family,
+                "event": "packet" if family == "ed2k_client_udp" else "source_count",
+                "keys": {},
+                "body": {
+                    "direction": "recv",
+                    "outcome": "accepted",
+                    "rawHex": "c590",
+                }
+                if family == "ed2k_client_udp"
+                else {"sourceCount": 1},
+            }
+        ]
+
+    monkeypatch.setattr(
+        module.converged_live_wire,
+        "load_current_diag_records",
+        diag_records,
+    )
+
+    with pytest.raises(RuntimeError, match="required-family"):
+        module.require_diagnostics(tmp_path / "rust", tmp_path / "mfc", kad_required=False)
+
+
 def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Path) -> None:
     module = load_suite_module()
     rust = tmp_path / "rust"
@@ -623,6 +665,18 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
             path = directory / (
                 f"emulebb-{client}-diag-{process_id}-{run_id}-{segment_id:06}.jsonl"
             )
+            attempt_id = 11 if client == "rust" else 21
+            body = {
+                "direction": "send",
+                "sendAttemptId": attempt_id,
+                "role": "reask_request",
+                "opcode": 0x90,
+            }
+            event = "packet" if segment_id == 0 else "send_outcome"
+            if event == "packet":
+                body.update({"outcome": "attempted", "rawHex": "c590", "rawLen": 2})
+            else:
+                body.update({"outcome": "send_succeeded", "deliveryKnown": True})
             path.write_text(
                 json.dumps(
                     {
@@ -633,6 +687,15 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                         "segmentId": segment_id,
                         "seq": segment_id + 1,
                         "streamSeq": segment_id + 1,
+                        "family": "ed2k_client_udp",
+                        "event": event,
+                        "keys": {
+                            "peer": "192.0.2.1:4672",
+                            "protocolMarker": 0xC5,
+                            "opcode": 0x90,
+                            "sendAttemptId": attempt_id,
+                        },
+                        "body": body,
                     }
                 )
                 + "\n",
@@ -663,8 +726,28 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     (mfc / "emulebb-verbose.log").write_text("Connected\n", encoding="utf-8")
 
     assert module.require_diagnostics(rust, mfc, kad_required=False) == {
-        "rust": {"packetRecords": 1, "eventRecords": 2},
-        "emule": {"packetRecords": 1, "eventRecords": 2},
+        "rust": {
+            "packetRecords": 1,
+            "eventRecords": 2,
+            "clientUdp": {
+                "records": 2,
+                "packets": 1,
+                "sendAttempts": 1,
+                "sendTerminals": 1,
+                "outcomes": {"send_succeeded": 1},
+            },
+        },
+        "emule": {
+            "packetRecords": 1,
+            "eventRecords": 2,
+            "clientUdp": {
+                "records": 2,
+                "packets": 1,
+                "sendAttempts": 1,
+                "sendTerminals": 1,
+                "outcomes": {"send_succeeded": 1},
+            },
+        },
         "mfcSecureIdent": {"failureLines": 0},
     }
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from emule_test_harness.diag_event_schema import (
     DIAG_EVENT_SCHEMA,
     DIAG_EVENT_SCHEMA_AUDIT_REPORT_SCHEMA,
     ED2K_CLIENT_UDP_FAMILY,
+    FULL_RUN_REQUIRED_PARITY_FAMILIES,
 )
 
 PACKET_FAMILIES = ("ed2k_tcp", "kad_udp")
@@ -466,17 +468,31 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
         },
         key=repr,
     )
+    outcome_counts: dict[str, int] = {}
+    for matching in terminals.values():
+        for _index, record in matching:
+            outcome = (record.get("body") or {}).get("outcome")
+            if isinstance(outcome, str):
+                outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
     return {
         "ok": not violations,
         "attemptCount": len(attempts),
         "terminalCount": sum(len(matching) for matching in terminals.values()),
         "violations": violations,
+        "outcomes": dict(sorted(outcome_counts.items())),
         "coverage": [
             {"role": role, "opcode": opcode, "outcome": outcome}
             for role, opcode, outcome in coverage
         ],
         "coverageKeys": coverage,
     }
+
+
+def audit_client_udp_lifecycle(trace: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validates one complete trace's client-UDP send attempt lifecycle."""
+
+    _require_current_trace(trace, side="diagnostic")
+    return _client_udp_lifecycle_audit(_by_family(trace, ED2K_CLIENT_UDP_FAMILY))
 
 
 def _diff_client_udp_family(
@@ -840,6 +856,8 @@ def schema_audit(
 def family_conformance(
     rust_trace: list[dict[str, Any]],
     mfc_trace: list[dict[str, Any]],
+    *,
+    required_families: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Per-family oracle-conformance gate for one shared action window.
 
@@ -857,6 +875,27 @@ def family_conformance(
     """
 
     audit = schema_audit(rust_trace, mfc_trace)
+    required = sorted(set(required_families))
+    rust_present = {
+        record.get("family")
+        for record in rust_trace
+        if isinstance(record.get("family"), str)
+    }
+    mfc_present = {
+        record.get("family")
+        for record in mfc_trace
+        if isinstance(record.get("family"), str)
+    }
+    required_presence = [
+        {
+            "family": family,
+            "rustPresent": family in rust_present,
+            "mfcPresent": family in mfc_present,
+            "ok": family in rust_present and family in mfc_present,
+        }
+        for family in required
+    ]
+    required_ok = all(item["ok"] for item in required_presence)
     per_family: dict[str, dict[str, Any]] = {}
     for event in audit["events"]:
         slot = per_family.setdefault(
@@ -891,8 +930,35 @@ def family_conformance(
         families.append(slot)
     return {
         "schema": DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
-        "ok": bool(families) and all(f["ok"] for f in families),
+        "ok": bool(families) and all(f["ok"] for f in families) and required_ok,
         "families": families,
+        "requiredFamilies": required_presence,
+        "requiredFamiliesOk": required_ok,
+    }
+
+
+def full_run_conformance(
+    rust_trace: list[dict[str, Any]],
+    mfc_trace: list[dict[str, Any]],
+    *,
+    required_families: Iterable[str] = FULL_RUN_REQUIRED_PARITY_FAMILIES,
+) -> dict[str, Any]:
+    """Validates complete-capture family presence, schema, and send lifecycles."""
+
+    family_gate = family_conformance(
+        rust_trace,
+        mfc_trace,
+        required_families=required_families,
+    )
+    rust_lifecycle = audit_client_udp_lifecycle(rust_trace)
+    mfc_lifecycle = audit_client_udp_lifecycle(mfc_trace)
+    return {
+        "ok": family_gate["ok"] and rust_lifecycle["ok"] and mfc_lifecycle["ok"],
+        "familyConformance": family_gate,
+        "clientUdpLifecycle": {
+            "rust": rust_lifecycle,
+            "mfc": mfc_lifecycle,
+        },
     }
 
 
