@@ -194,6 +194,15 @@ def test_load_trace_filters_foreign_schema(tmp_path: Path) -> None:
     assert records[0]["family"] == "ed2k_tcp"
 
 
+def test_load_trace_accepts_diag_event_v2(tmp_path: Path) -> None:
+    path = tmp_path / "dump.jsonl"
+    record = _pkt("ed2k_tcp", "recv", 0x01, "aabb")
+    record["schema"] = "diag_event_v2"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    assert load_trace(path) == [record]
+
+
 def test_self_diff_of_mixed_trace_is_ok() -> None:
     trace = [
         _pkt("ed2k_tcp", "recv", 0x01, "aabb"),

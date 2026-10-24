@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -675,6 +676,43 @@ def test_load_rust_diag_records_skips_invalid_lines_and_orders_sequences(tmp_pat
     )
 
     assert [record["seq"] for record in module.load_rust_diag_records(tmp_path)] == [1, 2]
+
+
+def test_load_rust_diag_records_uses_only_the_latest_v2_run(tmp_path: Path) -> None:
+    module = load_suite_module()
+    stale = tmp_path / "emulebb-rust-diag-41-stale-000000.jsonl"
+    stale.write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "runId": "stale",
+                "processId": 41,
+                "segmentId": 0,
+                "seq": 99,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    active = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    active.write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "runId": "active",
+                "processId": 42,
+                "segmentId": 0,
+                "seq": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(stale, ns=(1, 1))
+    os.utime(active, ns=(2, 2))
+
+    records = module.load_rust_diag_records(tmp_path)
+    assert [(record["runId"], record["seq"]) for record in records] == [("active", 1)]
 
 
 def test_cross_client_rejects_mfc_secure_ident_failure(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import diag_event_diff, packet_trace_diff  # noqa: E402
+from emule_test_harness.diag_event_runs import load_latest_rust_diag_records  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
@@ -197,28 +198,13 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
 def load_rust_diag_records(log_dir: Path) -> list[dict[str, object]]:
     """Loads valid Rust diagnostic events in process sequence order."""
 
-    records: list[dict[str, object]] = []
     paths = {
         path.resolve()
         for pattern in converged_live_wire.RUST_DIAG_DUMP_GLOBS
         for path in log_dir.glob(pattern)
         if path.is_file()
     }
-    for path in sorted(paths, key=lambda item: item.name):
-        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (
-                isinstance(record, dict)
-                and record.get("schema") == "diag_event_v1"
-                and isinstance(record.get("seq"), int)
-            ):
-                records.append(record)
-    return sorted(records, key=lambda record: int(record["seq"]))
+    return load_latest_rust_diag_records(paths)
 
 
 def _compact_diag_event(record: dict[str, object]) -> dict[str, object]:

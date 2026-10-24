@@ -38,6 +38,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
+from emule_test_harness.diag_event_runs import select_latest_rust_diag_run
 from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met
 from emule_test_harness import soak_launch
@@ -4580,12 +4581,11 @@ def wait_connected(base_url: str, api_key: str, timeout_seconds: float) -> dict[
 def latest_diag_log(log_dir: Path, rust_pid: int | None = None) -> Path | None:
     """Returns the PID-specific Rust diagnostics JSONL when available."""
 
-    if rust_pid is not None:
-        candidate = log_dir / f"emulebb-rust-diag-{rust_pid}.jsonl"
-        if candidate.exists():
-            return candidate
-    matches = sorted(log_dir.glob("emulebb-rust-diag-*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
-    return matches[0] if matches else None
+    selected = select_latest_rust_diag_run(
+        log_dir.glob("emulebb-rust-diag-*.jsonl"),
+        process_id=rust_pid,
+    )
+    return selected[-1] if selected else None
 
 
 def start_rust(args: argparse.Namespace) -> dict[str, object]:
