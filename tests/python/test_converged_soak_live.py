@@ -158,6 +158,15 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
     assert args.vpn_topology == "full-tunnel"
 
 
+def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
+    source = SOAK_RUNNER.read_text(encoding="utf-8")
+
+    import_index = source.index("mfc_profile_import.ensure_persisted_rust_profile(")
+    cleanup_index = source.index("soak_run_layout.prepare_clean_run(")
+    assert import_index < cleanup_index
+    assert '"rustProfileSetup": rust_profile_setup' in source
+
+
 def test_soak_endpoint_ports_are_distinct_by_default() -> None:
     ports = soak_launch.require_distinct_endpoint_ports(
         rust_ed2k_port=soak_launch.RUST_ED2K_PORT,

@@ -253,6 +253,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)" in source
     assert "rust_profile_dir = resolve_direct_rust_profile(inputs)" in source
     assert "rust_profile_location = soak_launch.require_rust_profile_location(" in source
+    assert "rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(" in source
     assert "resolve_rust_ui_exe" not in source
     assert "launch_rust_ui(" not in source
     assert "direct_profile_dir=direct_mfc_profile" in source
@@ -263,6 +264,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "fallback_server_endpoints=list(args.rust_fallback_server)" in source
     assert "\"reuseRustSharedProfile\": bool(args.reuse_rust_shared_profile)" in source
     assert "\"rustFallbackServers\": list(args.rust_fallback_server)" in source
+    assert "\"rustProfileSetup\": rust_profile_setup" in source
     assert "except Exception as exc:" in source
     assert "\"error\": failure" in source
     assert "return 1 if status == \"failed\" else 0" in source

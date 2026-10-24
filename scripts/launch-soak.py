@@ -1,8 +1,7 @@
 """Launch the rust<->MFC soak environment against the persistent profiles.
 
 A pure launcher: it brings up emulebb-rust (diagnostics) and the MFC diagnostics
-GUI on the persistent, isolated profiles under
-``$EMULEBB_WORKSPACE_OUTPUT_ROOT/soak/`` (same operator eD2K server, same nodes.dat
+GUI on selected persistent profiles (same operator eD2K server, same nodes.dat
 bootstrap, same shared library roots), then idles until Ctrl-C. Drive the clients
 through their REST APIs; both diagnostics builds write their ``ed2k_packet_v1`` /
 ``diag_event_v1`` dumps continuously into the persistent profile dirs.
@@ -11,7 +10,8 @@ No test/diff logic lives here. Analysis runs separately from this repo
 (``analyze-packet-coverage.py``, ``diag_event_diff``, or the live observer
 ``converged-soak-live.py``) over the captured dumps when you ask for it.
 
-REST control plane binds X_LOCAL_IP; P2P binds the hide.me tunnel. The rust
+REST control binds X_LOCAL_IP for split-tunnel or loopback for full-tunnel;
+P2P binds the hide.me tunnel. The rust
 diagnostics binary is the distinctly-named ``emulebb-rust-diagnostics.exe`` (build
 it with ``python -m emule_workspace build clients --client emulebb-rust
 --diagnostics``).
@@ -35,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import cpu_profile, live_process_monitor, vpn_guard_live
+from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, vpn_guard_live
 from emule_test_harness import soak_launch, soak_run_layout
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
@@ -523,6 +523,19 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         vpn_topology=args.vpn_topology,
     )
+    source_mfc_profile = inputs.mfc_profile_dir.resolve() if inputs.mfc_profile_dir is not None else None
+    rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(
+        rust_repo=REPO_ROOT.parent / "emulebb-rust",
+        mfc_profile_dir=source_mfc_profile,
+        rust_profile_dir=rust_profile_dir,
+        kad_bootstrap_limit=args.bootstrap_limit,
+        rest_addr=rest_addr,
+        rest_port=args.rust_rest_port,
+        api_key=RUST_API_KEY,
+        p2p_bind_interface="hide.me",
+        ed2k_port=args.rust_ed2k_port,
+        kad_port=args.rust_kad_port,
+    )
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -548,7 +561,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if direct_mfc_profile is not None:
         log(f"MFC direct profile from live-wire inputs: {direct_mfc_profile}")
-    log(f"persistent rust profile under {soak_root} - sharing {len(shared_roots)} library root(s)")
+    log(
+        f"rust profile {rust_profile_setup['mode']}: {rust_profile_dir} - "
+        f"sharing {len(shared_roots)} library root(s)"
+    )
     if vpn_guard_profile["mode"] == "block":
         log(
             "VPN Guard enabled for hide.me with CIDRs: "
@@ -719,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
         extra={
             "rustProfileDir": str(rust_profile_dir),
             "rustProfileLocation": rust_profile_location,
+            "rustProfileSetup": rust_profile_setup,
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustServer": args.rust_server,
