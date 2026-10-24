@@ -173,6 +173,14 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
     }
 
 
+def test_diagnostic_dump_contract_body_omits_retired_full_memory_flag() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+
+    assert module.get_contract_route_body("captureDiagnosticDump") == {
+        "confirmDump": True
+    }
+
+
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     routes_by_operation = {
