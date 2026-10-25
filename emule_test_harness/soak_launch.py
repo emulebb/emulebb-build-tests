@@ -20,12 +20,12 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Mapping
 
 from . import bounded_process_output, diag_event_runs, hideme_split_tunnel, hideme_vpn, soak_storage, vpn_guard_live
 from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
-from .vm_guest_profiles import retry_http_json, wait_until
+from .vm_guest_profiles import api_data, retry_http_json, wait_until
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -72,10 +72,157 @@ def require_blocking_vpn_guard_config(
     }
 DEFAULT_UPLOAD_LIMIT_KIBPS = 3072
 DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
+RUST_DIAGNOSTIC_ENV_KEYS = (
+    "EMULEBB_RUST_LOG_DIR",
+    "EMULEBB_RUST_DIAG_SEGMENT_BYTES",
+    "EMULEBB_RUST_DIAG_SEGMENT_SECONDS",
+    "EMULEBB_RUST_DIAG_RETAINED_SEGMENTS",
+    "EMULEBB_RUST_DIAG_MAX_TOTAL_BYTES",
+    "EMULEBB_RUST_DIAG_MAX_RETAINED_SECONDS",
+    "EMULEBB_RUST_DIAG_MIN_FREE_BYTES",
+)
 
 
 def log(message: str) -> None:
     print(f"[soak] {message}", flush=True)
+
+
+def rust_process_environment(
+    *,
+    diagnostics_dir: Path | None,
+    diagnostic_writer_policy: soak_storage.RustDiagnosticWriterPolicy | None,
+    base_environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Builds a deterministic child environment for Rust diagnostics."""
+
+    if diagnostics_dir is None and diagnostic_writer_policy is not None:
+        raise ValueError("Rust diagnostic writer policy requires diagnostics to be enabled.")
+    environment = dict(os.environ if base_environment is None else base_environment)
+    for name in RUST_DIAGNOSTIC_ENV_KEYS:
+        environment.pop(name, None)
+    if diagnostics_dir is None:
+        return environment
+
+    environment["EMULEBB_RUST_LOG_DIR"] = str(diagnostics_dir.resolve())
+    if diagnostic_writer_policy is None:
+        return environment
+    environment.update(
+        {
+            "EMULEBB_RUST_DIAG_SEGMENT_BYTES": str(
+                diagnostic_writer_policy.max_segment_bytes
+            ),
+            "EMULEBB_RUST_DIAG_SEGMENT_SECONDS": str(
+                diagnostic_writer_policy.max_segment_seconds
+            ),
+            "EMULEBB_RUST_DIAG_RETAINED_SEGMENTS": str(
+                diagnostic_writer_policy.retained_segments
+            ),
+            "EMULEBB_RUST_DIAG_MAX_TOTAL_BYTES": str(
+                diagnostic_writer_policy.max_total_bytes
+            ),
+            "EMULEBB_RUST_DIAG_MAX_RETAINED_SECONDS": str(
+                diagnostic_writer_policy.max_retained_seconds
+            ),
+            "EMULEBB_RUST_DIAG_MIN_FREE_BYTES": str(
+                diagnostic_writer_policy.minimum_free_bytes
+            ),
+        }
+    )
+    return environment
+
+
+def require_rust_diagnostic_writer_ready(
+    base_url: str,
+    policy: soak_storage.RustDiagnosticWriterPolicy,
+) -> dict[str, Any]:
+    """Requires initialized, fault-free writer health matching the launch policy."""
+
+    payload = retry_http_json(
+        "rust diagnostic writer health",
+        3,
+        base_url,
+        "/api/v1/diagnostics",
+        api_key=RUST_API_KEY,
+    )
+    data = api_data(payload)
+    health = data.get("diagnosticWriter") if isinstance(data, dict) else None
+    if not isinstance(health, dict):
+        raise RuntimeError("Rust diagnostics response is missing diagnosticWriter health.")
+
+    expected = {
+        "schema": "diag_event_v2",
+        "enabled": True,
+        "configured": True,
+        "initialized": True,
+        "maxSegmentBytes": policy.max_segment_bytes,
+        "maxSegmentSeconds": policy.max_segment_seconds,
+        "retainedSegments": policy.retained_segments,
+        "maxTotalBytes": policy.max_total_bytes,
+        "maxRetainedSeconds": policy.max_retained_seconds,
+        "minimumFreeBytes": policy.minimum_free_bytes,
+        "storageAuthorityFaulted": False,
+        "writerIoFaulted": False,
+        "storageBlockReason": None,
+        "storagePolicySatisfied": True,
+        "initializationFailure": None,
+        "droppedEvents": 0,
+        "encodeErrors": 0,
+        "writeErrors": 0,
+        "retentionDeleteErrors": 0,
+        "retentionScanErrors": 0,
+        "freeSpaceProbeErrors": 0,
+        "retentionPolicyErrors": 0,
+        "storagePolicyDrops": 0,
+        "storageFaultDrops": 0,
+        "retentionLimitDrops": 0,
+        "aggregateLimitDrops": 0,
+        "minimumFreeSpaceDrops": 0,
+        "writerFaultDrops": 0,
+    }
+    mismatches = [
+        f"{name}={health.get(name)!r} expected {value!r}"
+        for name, value in expected.items()
+        if health.get(name) != value
+    ]
+    maximum_growth = health.get("maximumGrowthBytes")
+    if (
+        isinstance(maximum_growth, bool)
+        or not isinstance(maximum_growth, int)
+        or maximum_growth < policy.max_segment_bytes
+    ):
+        mismatches.append(
+            "maximumGrowthBytes="
+            f"{maximum_growth!r} expected at least {policy.max_segment_bytes!r}"
+        )
+    bounded_integers = {
+        "processId": (1, None),
+        "activeSegmentId": (0, None),
+        "retainedSegmentCount": (1, policy.retained_segments),
+        "retainedBytes": (0, policy.max_total_bytes),
+        "availableBytes": (policy.minimum_free_bytes, None),
+    }
+    for name, (minimum, maximum) in bounded_integers.items():
+        value = health.get(name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < minimum
+            or (maximum is not None and value > maximum)
+        ):
+            expected_range = (
+                f"at least {minimum}" if maximum is None else f"in {minimum}..={maximum}"
+            )
+            mismatches.append(f"{name}={value!r} expected {expected_range}")
+    for name in ("runId", "activeFileName"):
+        value = health.get(name)
+        if not isinstance(value, str) or not value:
+            mismatches.append(f"{name}={value!r} expected a non-empty string")
+    if mismatches:
+        raise RuntimeError(
+            "Rust diagnostic writer health does not satisfy the soak policy: "
+            + "; ".join(mismatches)
+        )
+    return dict(health)
 
 
 def resolve_lan_rest_bind_addr(
@@ -823,6 +970,7 @@ def bring_up_rust(
     fallback_server_endpoints: list[str] | None = None,
     daemon_output_path: Path | None = None,
     daemon_output_policy: soak_storage.ArtifactStreamPolicy | None = None,
+    diagnostic_writer_policy: soak_storage.RustDiagnosticWriterPolicy | None = None,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent profile and returns live handles.
 
@@ -863,15 +1011,10 @@ def bring_up_rust(
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
 
-    # EMULEBB_RUST_LOG_DIR runtime-gates the rust diag writers: the ed2k/kad
-    # PACKET families are additionally behind the cargo `packet-diagnostics`
-    # feature, but the kad-udp wire dump and the sched/kad_event diag_event_v2
-    # families are env-gated ONLY — a plain-release soak must therefore clear
-    # the variable or the "no diagnostics" run still writes diag JSONL.
-    if enable_packet_dump:
-        os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
-    else:
-        os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
+    rust_environment = rust_process_environment(
+        diagnostics_dir=packet_dump_dir if enable_packet_dump else None,
+        diagnostic_writer_policy=diagnostic_writer_policy,
+    )
     output_capture = (
         bounded_process_output.AsyncBinaryCapture(
             daemon_output_path,
@@ -890,15 +1033,22 @@ def bring_up_rust(
                     exe_path,
                     profile_dir,
                     handle,
+                    env=rust_environment,
                     new_process_group=True,
                 )
             else:
-                process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
+                process = start_rust_client_executable_with_output(
+                    exe_path,
+                    profile_dir,
+                    handle,
+                    env=rust_environment,
+                )
         else:
             process = start_rust_client_executable_with_output(
                 exe_path,
                 profile_dir,
                 subprocess.PIPE,
+                env=rust_environment,
                 new_process_group=ctrl_c_shutdown,
                 text=False,
             )
@@ -922,8 +1072,14 @@ def bring_up_rust(
             output_capture.raise_if_failed()
         return rust_mod.get_stats(base_url)
 
+    diagnostic_writer_health = None
     try:
         wait_until("rust REST ready", timeouts["rest"], lambda: checked_stats() or None)
+        if diagnostic_writer_policy is not None:
+            diagnostic_writer_health = require_rust_diagnostic_writer_ready(
+                base_url,
+                diagnostic_writer_policy,
+            )
         patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
         if server_met_url:
             rust_mod.import_server_met(base_url, server_met_url)
@@ -1001,6 +1157,7 @@ def bring_up_rust(
         "profileDir": profile_dir,
         "incomingDir": incoming_dir,
         "packetDumpDir": packet_dump_dir,
+        "diagnosticWriterHealth": diagnostic_writer_health,
         "sharedDirectoriesApplied": apply_shared_directories,
     }
 

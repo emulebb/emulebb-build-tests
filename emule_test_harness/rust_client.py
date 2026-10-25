@@ -314,6 +314,7 @@ def start_rust_client_executable_with_output(
     profile_dir: Path,
     output_handle,
     *,
+    env: dict[str, str] | None = None,
     new_process_group: bool = False,
     text: bool = True,
 ) -> subprocess.Popen:
@@ -323,6 +324,7 @@ def start_rust_client_executable_with_output(
         executable,
         profile_dir,
         output_handle=output_handle,
+        env=env,
         new_process_group=new_process_group,
         text=text,
     )
