@@ -7,12 +7,60 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness.diag_event_runs import (
+    DIAGNOSTIC_WRITER_HEALTH_FIELDS,
     DiagnosticTraceError,
+    diagnostic_writer_health_violations,
     diag_segment_identity,
     load_and_validate_writer_health,
     load_latest_diag_records,
     select_latest_diag_run,
 )
+
+
+def _writer_health(*, segment_name: str) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "enabled": True,
+        "configured": True,
+        "initialized": True,
+        "runId": "active",
+        "processId": 42,
+        "activeSegmentId": 7,
+        "activeFileName": segment_name,
+        "activeSegmentBytes": 10,
+        "recordsWritten": 1,
+        "bytesWritten": 10,
+        "droppedEvents": 0,
+        "encodeErrors": 0,
+        "writeErrors": 0,
+        "rotations": 0,
+        "retentionDeletes": 0,
+        "retentionDeleteErrors": 0,
+        "retentionScanErrors": 0,
+        "freeSpaceProbeErrors": 0,
+        "retentionPolicyErrors": 0,
+        "storagePolicyDrops": 0,
+        "storageFaultDrops": 0,
+        "retentionLimitDrops": 0,
+        "aggregateLimitDrops": 0,
+        "minimumFreeSpaceDrops": 0,
+        "writerFaultDrops": 0,
+        "retainedSegmentCount": 1,
+        "retainedBytes": 10,
+        "availableBytes": 10_000,
+        "storageAuthorityFaulted": False,
+        "writerIoFaulted": False,
+        "storageBlockReason": None,
+        "storagePolicySatisfied": True,
+        "maximumGrowthBytes": 100,
+        "maxSegmentBytes": 100,
+        "maxSegmentSeconds": 60,
+        "retainedSegments": 2,
+        "maxTotalBytes": 200,
+        "maxRetainedSeconds": 3_600,
+        "minimumFreeBytes": 500,
+        "initializationFailure": None,
+    }
 
 
 def _record(
@@ -125,21 +173,7 @@ def test_writer_health_must_match_selected_lossless_run(tmp_path: Path) -> None:
     segment = tmp_path / _segment_name("mfc", 42, "active", 7)
     segment.write_text(_record("active", 42, 7, 99, client="mfc") + "\n", encoding="utf-8")
     health_path = tmp_path / "emulebb-mfc-diag-health.json"
-    health = {
-        "schema": "diag_event_v2",
-        "enabled": True,
-        "configured": True,
-        "initialized": True,
-        "runId": "active",
-        "processId": 42,
-        "activeSegmentId": 7,
-        "activeFileName": segment.name,
-        "droppedEvents": 0,
-        "encodeErrors": 0,
-        "writeErrors": 0,
-        "retentionDeleteErrors": 0,
-        "initializationFailure": None,
-    }
+    health = _writer_health(segment_name=segment.name)
     health_path.write_text(json.dumps(health), encoding="utf-8")
     assert load_and_validate_writer_health(
         health_path, client="mfc", selected_segments=[segment]
@@ -149,3 +183,39 @@ def test_writer_health_must_match_selected_lossless_run(tmp_path: Path) -> None:
     health_path.write_text(json.dumps(health), encoding="utf-8")
     with pytest.raises(DiagnosticTraceError, match="not lossless"):
         load_and_validate_writer_health(health_path, client="mfc", selected_segments=[segment])
+
+
+def test_writer_health_integrity_requires_exact_current_contract() -> None:
+    health = _writer_health(segment_name="emulebb-mfc-diag-42-active-000007.jsonl")
+    assert tuple(health) == DIAGNOSTIC_WRITER_HEALTH_FIELDS
+    assert diagnostic_writer_health_violations(health) == ()
+
+    del health["retentionScanErrors"]
+    health["legacyField"] = 0
+    violations = diagnostic_writer_health_violations(health)
+    assert "missingFields=['retentionScanErrors']" in violations
+    assert "unexpectedFields=['legacyField']" in violations
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("retentionScanErrors", 1),
+        ("freeSpaceProbeErrors", 1),
+        ("storagePolicyDrops", 1),
+        ("storageAuthorityFaulted", True),
+        ("writerIoFaulted", True),
+        ("storageBlockReason", "aggregateByteLimit"),
+        ("storagePolicySatisfied", False),
+        ("initializationFailure", "open failed"),
+    ],
+)
+def test_writer_health_integrity_rejects_every_fault_class(
+    field: str, value: object
+) -> None:
+    health = _writer_health(segment_name="emulebb-mfc-diag-42-active-000007.jsonl")
+    health[field] = value
+    assert any(
+        field in violation
+        for violation in diagnostic_writer_health_violations(health)
+    )

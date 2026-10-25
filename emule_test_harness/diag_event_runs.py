@@ -23,6 +23,182 @@ _SEGMENT_NAMES = {
     ),
 }
 
+DIAGNOSTIC_WRITER_HEALTH_FIELDS = (
+    "schema",
+    "enabled",
+    "configured",
+    "initialized",
+    "runId",
+    "processId",
+    "activeSegmentId",
+    "activeFileName",
+    "activeSegmentBytes",
+    "recordsWritten",
+    "bytesWritten",
+    "droppedEvents",
+    "encodeErrors",
+    "writeErrors",
+    "rotations",
+    "retentionDeletes",
+    "retentionDeleteErrors",
+    "retentionScanErrors",
+    "freeSpaceProbeErrors",
+    "retentionPolicyErrors",
+    "storagePolicyDrops",
+    "storageFaultDrops",
+    "retentionLimitDrops",
+    "aggregateLimitDrops",
+    "minimumFreeSpaceDrops",
+    "writerFaultDrops",
+    "retainedSegmentCount",
+    "retainedBytes",
+    "availableBytes",
+    "storageAuthorityFaulted",
+    "writerIoFaulted",
+    "storageBlockReason",
+    "storagePolicySatisfied",
+    "maximumGrowthBytes",
+    "maxSegmentBytes",
+    "maxSegmentSeconds",
+    "retainedSegments",
+    "maxTotalBytes",
+    "maxRetainedSeconds",
+    "minimumFreeBytes",
+    "initializationFailure",
+)
+
+_WRITER_FAULT_COUNTER_FIELDS = (
+    "droppedEvents",
+    "encodeErrors",
+    "writeErrors",
+    "retentionDeleteErrors",
+    "retentionScanErrors",
+    "freeSpaceProbeErrors",
+    "retentionPolicyErrors",
+    "storagePolicyDrops",
+    "storageFaultDrops",
+    "retentionLimitDrops",
+    "aggregateLimitDrops",
+    "minimumFreeSpaceDrops",
+    "writerFaultDrops",
+)
+
+_WRITER_NONNEGATIVE_INTEGER_FIELDS = (
+    "activeSegmentId",
+    "activeSegmentBytes",
+    "recordsWritten",
+    "bytesWritten",
+    "droppedEvents",
+    "encodeErrors",
+    "writeErrors",
+    "rotations",
+    "retentionDeletes",
+    "retentionDeleteErrors",
+    "retentionScanErrors",
+    "freeSpaceProbeErrors",
+    "retentionPolicyErrors",
+    "storagePolicyDrops",
+    "storageFaultDrops",
+    "retentionLimitDrops",
+    "aggregateLimitDrops",
+    "minimumFreeSpaceDrops",
+    "writerFaultDrops",
+    "retainedBytes",
+    "availableBytes",
+    "maximumGrowthBytes",
+    "maxSegmentBytes",
+    "maxSegmentSeconds",
+    "retainedSegments",
+    "maxTotalBytes",
+    "maxRetainedSeconds",
+    "minimumFreeBytes",
+)
+
+
+def diagnostic_writer_health_violations(health: object) -> tuple[str, ...]:
+    """Returns strict current-contract and lossless-writer violations."""
+
+    if not isinstance(health, dict):
+        return (f"health={type(health).__name__} expected object",)
+
+    violations: list[str] = []
+    expected_fields = set(DIAGNOSTIC_WRITER_HEALTH_FIELDS)
+    actual_fields = set(health)
+    missing = sorted(expected_fields - actual_fields)
+    unexpected = sorted(actual_fields - expected_fields)
+    if missing:
+        violations.append(f"missingFields={missing!r}")
+    if unexpected:
+        violations.append(f"unexpectedFields={unexpected!r}")
+
+    expected_values = {
+        "schema": DIAG_EVENT_SCHEMA,
+        "enabled": True,
+        "configured": True,
+        "initialized": True,
+        "storageAuthorityFaulted": False,
+        "writerIoFaulted": False,
+        "storageBlockReason": None,
+        "storagePolicySatisfied": True,
+        "initializationFailure": None,
+    }
+    violations.extend(
+        f"{name}={health.get(name)!r} expected {expected!r}"
+        for name, expected in expected_values.items()
+        if health.get(name) != expected
+    )
+
+    for name in ("runId", "activeFileName"):
+        value = health.get(name)
+        if not isinstance(value, str) or not value:
+            violations.append(f"{name}={value!r} expected non-empty string")
+
+    process_id = health.get("processId")
+    if (
+        isinstance(process_id, bool)
+        or not isinstance(process_id, int)
+        or process_id <= 0
+    ):
+        violations.append(f"processId={process_id!r} expected positive integer")
+
+    retained_count = health.get("retainedSegmentCount")
+    if (
+        isinstance(retained_count, bool)
+        or not isinstance(retained_count, int)
+        or retained_count <= 0
+    ):
+        violations.append(
+            f"retainedSegmentCount={retained_count!r} expected positive integer"
+        )
+
+    for name in _WRITER_NONNEGATIVE_INTEGER_FIELDS:
+        value = health.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            violations.append(f"{name}={value!r} expected non-negative integer")
+
+    for name in _WRITER_FAULT_COUNTER_FIELDS:
+        if health.get(name) != 0:
+            violations.append(f"{name}={health.get(name)!r} expected 0")
+
+    bounds = (
+        ("retainedSegmentCount", "retainedSegments"),
+        ("retainedBytes", "maxTotalBytes"),
+        ("minimumFreeBytes", "availableBytes"),
+        ("maxSegmentBytes", "maximumGrowthBytes"),
+    )
+    for lower_name, upper_name in bounds:
+        lower = health.get(lower_name)
+        upper = health.get(upper_name)
+        if (
+            isinstance(lower, int)
+            and not isinstance(lower, bool)
+            and isinstance(upper, int)
+            and not isinstance(upper, bool)
+            and lower > upper
+        ):
+            violations.append(f"{lower_name}={lower!r} exceeds {upper_name}={upper!r}")
+    return tuple(violations)
+
 
 def diag_segment_identity(path: Path, *, client: str) -> tuple[int, str, int] | None:
     """Returns ``(process_id, run_id, segment_id)`` for one current segment name."""
@@ -199,6 +375,12 @@ def load_and_validate_writer_health(
     if not isinstance(health, dict):
         raise DiagnosticTraceError(f"diagnostic writer health {path} is not a JSON object")
 
+    violations = diagnostic_writer_health_violations(health)
+    if violations:
+        raise DiagnosticTraceError(
+            "diagnostic writer health is not lossless: " + "; ".join(violations)
+        )
+
     first_identity = diag_segment_identity(selected_segments[0], client=client)
     last_identity = diag_segment_identity(selected_segments[-1], client=client)
     assert first_identity is not None and last_identity is not None
@@ -219,19 +401,4 @@ def load_and_validate_writer_health(
     if mismatches:
         raise DiagnosticTraceError(f"diagnostic writer health identity mismatch: {mismatches}")
 
-    unhealthy_flags = [
-        key for key in ("enabled", "configured", "initialized") if health.get(key) is not True
-    ]
-    unhealthy_counters = [
-        key
-        for key in ("droppedEvents", "encodeErrors", "writeErrors", "retentionDeleteErrors")
-        if health.get(key) != 0
-    ]
-    if health.get("initializationFailure") is not None:
-        unhealthy_flags.append("initializationFailure")
-    if unhealthy_flags or unhealthy_counters:
-        raise DiagnosticTraceError(
-            "diagnostic writer health is not lossless: "
-            f"flags={unhealthy_flags}, counters={unhealthy_counters}"
-        )
     return health
