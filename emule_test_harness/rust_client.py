@@ -315,7 +315,8 @@ def start_rust_client_executable_with_output(
     output_handle,
     *,
     new_process_group: bool = False,
-) -> subprocess.Popen[str]:
+    text: bool = True,
+) -> subprocess.Popen:
     """Starts a staged `emulebb-rust` executable with an already-open output handle."""
 
     return spawn_rust_daemon(
@@ -323,6 +324,7 @@ def start_rust_client_executable_with_output(
         profile_dir,
         output_handle=output_handle,
         new_process_group=new_process_group,
+        text=text,
     )
 
 
