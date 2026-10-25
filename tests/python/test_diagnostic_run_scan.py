@@ -131,6 +131,26 @@ def test_scan_resumes_after_retention_deleted_previously_indexed_segments(
     assert resumed.checkpoint["index"]["writerHealth"]["samples"] == 2
 
 
+def test_scan_preserves_bounded_evidence_pin_metadata(tmp_path: Path) -> None:
+    initial = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(0, records_written=0),
+        observed_utc="2026-10-25T12:00:00+00:00",
+    )
+    initial.checkpoint["evidencePins"] = [{"segmentId": 7}]
+
+    resumed = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(0, records_written=0),
+        observed_utc="2026-10-25T12:01:00+00:00",
+        checkpoint=initial.checkpoint,
+    )
+
+    assert resumed.checkpoint["evidencePins"] == [{"segmentId": 7}]
+
+
 def test_scan_classifies_a_contiguous_retained_suffix(tmp_path: Path) -> None:
     _write_segment(tmp_path, 3, [_record(10, segment_id=3, stream_sequence=10)])
     _write_segment(tmp_path, 4, [_record(11, segment_id=4, stream_sequence=11)])

@@ -35,6 +35,7 @@ def artifact_store(
                 "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(1, 1),
                 "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_pins": soak_storage.ArtifactStreamPolicy(1, 1),
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
                     1_048_576, segment_retained
                 ),

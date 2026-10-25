@@ -141,6 +141,7 @@ def scan_closed_segments(
         "updatedUtc": observed_utc,
         "source": source,
         "index": index,
+        "evidencePins": _checkpoint_evidence_pins(checkpoint),
     }
     return ClosedSegmentAdvance(
         checkpoint=updated,
@@ -178,6 +179,19 @@ def _load_checkpoint(
         or checkpoint.get("schema") != CHECKPOINT_SCHEMA
     ):
         raise DiagnosticRunScanError("diagnostic run checkpoint schema is invalid")
+    expected_checkpoint_fields = {
+        "schema",
+        "profileDir",
+        "client",
+        "processId",
+        "runId",
+        "updatedUtc",
+        "source",
+        "index",
+        "evidencePins",
+    }
+    if set(checkpoint) != expected_checkpoint_fields:
+        raise DiagnosticRunScanError("diagnostic run checkpoint fields are invalid")
     expected_identity = {
         "profileDir": str(profile_dir),
         "client": client,
@@ -228,6 +242,23 @@ def _load_checkpoint(
         raise DiagnosticRunScanError("diagnostic run checkpoint coverage is invalid")
     _require_source_consistency(source)
     return copy.deepcopy(index), copy.deepcopy(source)
+
+
+def _checkpoint_evidence_pins(
+    checkpoint: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if checkpoint is None:
+        return []
+    pins = checkpoint.get("evidencePins")
+    if not isinstance(pins, list) or len(pins) > 4_096:
+        raise DiagnosticRunScanError(
+            "diagnostic run checkpoint evidencePins are invalid"
+        )
+    if any(not isinstance(pin, dict) for pin in pins):
+        raise DiagnosticRunScanError(
+            "diagnostic run checkpoint evidencePins are invalid"
+        )
+    return copy.deepcopy(pins)
 
 
 def _closed_run_segments(

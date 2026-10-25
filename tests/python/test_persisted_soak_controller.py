@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -19,7 +20,13 @@ def make_paths(tmp_path: Path) -> controller.ControlPaths:
 
 
 def storage_policy(
-    *, max_total_bytes: int = 1_000, index_max_bytes: int = 1
+    *,
+    max_total_bytes: int = 1_000,
+    index_max_bytes: int = 1,
+    pin_max_bytes: int = 1,
+    pin_retained: int = 1,
+    segment_max_bytes: int = 1,
+    segment_retained: int = 1,
 ) -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=max_total_bytes,
@@ -42,7 +49,12 @@ def storage_policy(
                 "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(
                     index_max_bytes, 1
                 ),
-                "diagnostic_segments": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_pins": soak_storage.ArtifactStreamPolicy(
+                    pin_max_bytes, pin_retained
+                ),
+                "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
+                    segment_max_bytes, segment_retained
+                ),
             }
         ),
     )
@@ -91,7 +103,7 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     os.utime(latest_file, ns=(200, 200))
 
     summary = controller.preflight_campaign_storage(
-        live_inputs(tmp_path, policy=storage_policy(max_total_bytes=70)),
+        live_inputs(tmp_path, policy=storage_policy(max_total_bytes=72)),
         output_root,
         protected_campaigns=(latest_file.parents[1],),
     )
@@ -99,10 +111,10 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     assert summary["deletionCount"] == 1
     assert summary["deletionBytes"] == 60
     assert summary["protectedFileCount"] == 1
-    assert summary["reservedBytes"] == 10
-    assert summary["projectedTotalBytes"] == 70
+    assert summary["reservedBytes"] == 12
+    assert summary["projectedTotalBytes"] == 72
     assert summary["reservation"] == {
-        "totalBytes": 10,
+        "totalBytes": 12,
         "streams": {
             "controller_output": {
                 "instances": 4,
@@ -123,6 +135,12 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
                 "capacityBytes": 1,
             },
             "diagnostic_indexes": {
+                "instances": 2,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 2,
+            },
+            "diagnostic_pins": {
                 "instances": 2,
                 "maxSegmentBytes": 1,
                 "retainedSegments": 1,
@@ -155,7 +173,7 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
     latest_file.write_bytes(b"n" * 60)
     os.utime(old_file, ns=(100, 100))
     os.utime(latest_file, ns=(200, 200))
-    inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=70))
+    inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=72))
 
     summary = controller.enforce_campaign_storage(
         inputs,
@@ -165,10 +183,10 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
 
     assert summary["deletedCount"] == 1
     assert summary["deletedBytes"] == 60
-    assert summary["planned"]["reservedBytes"] == 10
-    assert summary["verification"]["reservedBytes"] == 10
-    assert summary["verification"]["projectedTotalBytes"] == 70
-    assert summary["reservation"]["totalBytes"] == 10
+    assert summary["planned"]["reservedBytes"] == 12
+    assert summary["verification"]["reservedBytes"] == 12
+    assert summary["verification"]["projectedTotalBytes"] == 72
+    assert summary["reservation"]["totalBytes"] == 12
     assert summary["reservation"]["streams"]["controller_output"]["capacityBytes"] == 4
     assert summary["verification"]["deletionCount"] == 0
     assert summary["withinLimits"] is True
@@ -309,7 +327,7 @@ def diagnostic_writer_health(
 
 
 def diagnostic_record(
-    *, client: str, segment_id: int, sequence: int
+    *, client: str, segment_id: int, sequence: int, severity: str = "info"
 ) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
@@ -321,7 +339,7 @@ def diagnostic_record(
         "streamSeq": sequence,
         "family": "ed2k_tcp",
         "event": "packet",
-        "severity": "info",
+        "severity": severity,
         "keys": {"protocolMarker": 0xE3, "opcode": 1},
         "body": {
             "direction": "send",
@@ -506,7 +524,12 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
 ) -> None:
     root = controller.campaign_storage_root(tmp_path / "output")
     active_campaign = root / "20261025T120000Z"
-    policy = storage_policy(max_total_bytes=1_000_000, index_max_bytes=64 * 1024)
+    policy = storage_policy(
+        max_total_bytes=1_000_000,
+        index_max_bytes=64 * 1024,
+        pin_max_bytes=64 * 1024,
+        pin_retained=2,
+    )
     context = controller.SessionStorageContext(
         root=root,
         policy=policy,
@@ -523,7 +546,14 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
         prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
         segment = profile / f"{prefix}-diag-42-run-a-000000.jsonl"
         segment.write_text(
-            json.dumps(diagnostic_record(client=client, segment_id=0, sequence=1))
+            json.dumps(
+                diagnostic_record(
+                    client=client,
+                    segment_id=0,
+                    sequence=1,
+                    severity="warning" if client == "rust" else "info",
+                )
+            )
             + "\n",
             encoding="utf-8",
         )
@@ -568,6 +598,217 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
         )
         assert checkpoint["client"] == client
         assert checkpoint["index"]["recordCount"] == 1
+    assert len(first["rust"]["evidencePins"]) == 1
+    assert first["rust"]["evidencePins"][0]["reasons"] == ["severity:warning"]
+    assert Path(first["rust"]["evidencePins"][0]["destination"]).is_file()
+    assert first["mfc"]["evidencePins"] == []
+
+
+def test_reconcile_diagnostic_evidence_pins_keeps_highest_value_segments(
+    tmp_path: Path,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    campaign = root / "20261025T120000Z"
+    policy = storage_policy(
+        max_total_bytes=1_000_000,
+        pin_max_bytes=1_024,
+        pin_retained=2,
+    )
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=campaign,
+        previous_campaign=None,
+    )
+    profile = tmp_path / "profile"
+    profile.mkdir()
+
+    def metadata(segment_id: int, reasons: list[str]) -> dict[str, object]:
+        source = profile / f"emulebb-rust-diag-42-run-a-{segment_id:06}.jsonl"
+        payload = f"segment-{segment_id}".encode()
+        source.write_bytes(payload)
+        return {
+            "segmentId": segment_id,
+            "fileName": source.name,
+            "source": str(source.resolve()),
+            "bytes": len(payload),
+            "modifiedNs": source.stat().st_mtime_ns,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "recordCount": 1,
+            "interestingReasons": reasons,
+        }
+
+    processed = (
+        metadata(0, ["severity:warning"]),
+        metadata(1, []),
+        metadata(2, ["severity:critical"]),
+    )
+    checkpoint = {"evidencePins": []}
+
+    result = controller.reconcile_diagnostic_evidence_pins(
+        client="rust",
+        checkpoint=checkpoint,
+        prior_checkpoint=None,
+        processed_segments=processed,
+        context=context,
+        observed_utc="2026-10-25T12:00:00+00:00",
+    )
+
+    assert [pin["segmentId"] for pin in result["pins"]] == [0, 2]
+    assert [pin["priority"] for pin in result["pins"]] == [300, 400]
+    assert any(
+        action["action"] == "replaced" and action["replacedSegmentId"] == 1
+        for action in result["actions"]
+    )
+    controller._finalize_diagnostic_evidence_pin_swaps(result["pendingCleanup"])
+    destination = campaign / "archive" / "diagnostic-pins" / "rust"
+    assert sorted(path.name for path in destination.glob("*.jsonl")) == [
+        "emulebb-rust-diag-42-run-a-000000.jsonl",
+        "emulebb-rust-diag-42-run-a-000002.jsonl",
+    ]
+    assert not list(destination.glob("*.tmp"))
+
+
+def test_diagnostic_evidence_pin_recovery_restores_checkpoint_manifest(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "diagnostic-pins" / "rust"
+    directory.mkdir(parents=True)
+    victim = directory / "emulebb-rust-diag-42-run-a-000000.jsonl"
+    victim.write_bytes(b"checkpoint-segment")
+    backup = victim.with_name(f".{victim.name}.pin-swap.tmp")
+    victim.replace(backup)
+    orphan = directory / "emulebb-rust-diag-42-run-a-000001.jsonl"
+    orphan.write_bytes(b"uncommitted-segment")
+    manifest = [
+        {
+            "segmentId": 0,
+            "fileName": victim.name,
+            "source": str((tmp_path / victim.name).resolve()),
+            "destination": str(victim.resolve()),
+            "bytes": len(b"checkpoint-segment"),
+            "sha256": hashlib.sha256(b"checkpoint-segment").hexdigest(),
+            "priority": 300,
+            "reasons": ["severity:warning"],
+            "pinnedUtc": "2026-10-25T12:00:00+00:00",
+        }
+    ]
+
+    controller._recover_diagnostic_evidence_pin_swaps(
+        manifest,
+        directory=directory.resolve(),
+        retained_segments=1,
+    )
+
+    assert victim.read_bytes() == b"checkpoint-segment"
+    assert not backup.exists()
+    assert not orphan.exists()
+
+
+def test_diagnostic_evidence_pin_recovery_keeps_committed_manifest(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "diagnostic-pins" / "rust"
+    directory.mkdir(parents=True)
+    committed = directory / "emulebb-rust-diag-42-run-a-000001.jsonl"
+    committed.write_bytes(b"committed-segment")
+    replaced_name = "emulebb-rust-diag-42-run-a-000000.jsonl"
+    backup = directory / f".{replaced_name}.pin-swap.tmp"
+    backup.write_bytes(b"replaced-segment")
+    manifest = [
+        {
+            "segmentId": 1,
+            "fileName": committed.name,
+            "source": str((tmp_path / committed.name).resolve()),
+            "destination": str(committed.resolve()),
+            "bytes": len(b"committed-segment"),
+            "sha256": hashlib.sha256(b"committed-segment").hexdigest(),
+            "priority": 400,
+            "reasons": ["severity:critical"],
+            "pinnedUtc": "2026-10-25T12:01:00+00:00",
+        }
+    ]
+
+    controller._recover_diagnostic_evidence_pin_swaps(
+        manifest,
+        directory=directory.resolve(),
+        retained_segments=1,
+    )
+
+    assert committed.read_bytes() == b"committed-segment"
+    assert not backup.exists()
+
+
+def test_reconcile_diagnostic_evidence_pins_restores_victim_on_copy_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    campaign = root / "20261025T120000Z"
+    policy = storage_policy(
+        max_total_bytes=1_000_000,
+        pin_max_bytes=1_024,
+        pin_retained=1,
+    )
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=campaign,
+        previous_campaign=None,
+    )
+    profile = tmp_path / "profile"
+    profile.mkdir()
+
+    def metadata(segment_id: int, severity: str) -> dict[str, object]:
+        source = profile / f"emulebb-rust-diag-42-run-a-{segment_id:06}.jsonl"
+        payload = f"segment-{segment_id}".encode()
+        source.write_bytes(payload)
+        return {
+            "segmentId": segment_id,
+            "fileName": source.name,
+            "source": str(source.resolve()),
+            "bytes": len(payload),
+            "modifiedNs": source.stat().st_mtime_ns,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "recordCount": 1,
+            "interestingReasons": [f"severity:{severity}"],
+        }
+
+    initial = controller.reconcile_diagnostic_evidence_pins(
+        client="rust",
+        checkpoint={"evidencePins": []},
+        prior_checkpoint=None,
+        processed_segments=(metadata(0, "warning"),),
+        context=context,
+        observed_utc="2026-10-25T12:00:00+00:00",
+    )
+    candidate = metadata(1, "critical")
+
+    def reject_copy(**_kwargs):
+        raise RuntimeError("copy failed")
+
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "persist_bounded_file_artifact",
+        reject_copy,
+    )
+
+    with pytest.raises(RuntimeError, match="copy failed"):
+        controller.reconcile_diagnostic_evidence_pins(
+            client="rust",
+            checkpoint={"evidencePins": initial["pins"]},
+            prior_checkpoint=None,
+            processed_segments=(candidate,),
+            context=context,
+            observed_utc="2026-10-25T12:01:00+00:00",
+        )
+
+    victim = Path(initial["pins"][0]["destination"])
+    assert victim.is_file()
+    assert victim.read_bytes() == b"segment-0"
+    assert not list(victim.parent.glob("*.tmp"))
 
 
 def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) -> None:

@@ -274,6 +274,7 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
                 "daemon_output": daemon_policy,
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(16, 2),
                 "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(16, 1),
+                "diagnostic_pins": soak_storage.ArtifactStreamPolicy(16, 2),
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(16, 2),
             },
         ),
@@ -314,6 +315,7 @@ def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
                 "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(16, 2),
                 "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(16, 1),
+                "diagnostic_pins": soak_storage.ArtifactStreamPolicy(16, 2),
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(16, 2),
             },
         ),
@@ -370,6 +372,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
             "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
             "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "diagnostic_pins": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_segments": soak_storage.ArtifactStreamPolicy(4_096, 2),
         },
     )
@@ -451,6 +454,7 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
             "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
             "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "diagnostic_pins": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_segments": soak_storage.ArtifactStreamPolicy(4_096, 2),
         },
     )
