@@ -260,6 +260,14 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
             max_age_seconds=3_600,
             minimum_free_bytes=1,
             bundle_interval_seconds=900,
+            rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+                max_segment_bytes=1_048_576,
+                max_segment_seconds=60,
+                retained_segments=2,
+                max_total_bytes=2_097_152,
+                max_retained_seconds=3_600,
+                minimum_free_bytes=1,
+            ),
             streams={
                 "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
                 "daemon_output": daemon_policy,

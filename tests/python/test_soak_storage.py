@@ -16,6 +16,14 @@ def policy_payload() -> dict[str, object]:
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
+        "rust_diagnostics": {
+            "max_segment_bytes": 1_048_576,
+            "max_segment_seconds": 60,
+            "retained_segments": 2,
+            "max_total_bytes": 2_097_152,
+            "max_retained_seconds": 3_600,
+            "minimum_free_bytes": 500,
+        },
         "streams": {
             "controller_output": {
                 "max_segment_bytes": 100,
@@ -40,6 +48,14 @@ def direct_policy(
         max_age_seconds=max_age_seconds,
         minimum_free_bytes=minimum_free_bytes,
         bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=500,
+        ),
         streams=MappingProxyType(
             {
                 "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
@@ -85,6 +101,14 @@ def test_parse_soak_storage_policy_accepts_strict_complete_contract() -> None:
     assert policy.max_age_seconds == 3_600
     assert policy.minimum_free_bytes == 500
     assert policy.bundle_interval_seconds == 900
+    assert policy.rust_diagnostics == soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=1_048_576,
+        max_segment_seconds=60,
+        retained_segments=2,
+        max_total_bytes=2_097_152,
+        max_retained_seconds=3_600,
+        minimum_free_bytes=500,
+    )
     assert policy.stream("controller_output") == soak_storage.ArtifactStreamPolicy(
         max_segment_bytes=100,
         retained_segments=4,
@@ -119,6 +143,7 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
         (lambda payload: payload.update(extra=True), "unknown fields"),
         (lambda payload: payload.update(max_age_seconds=True), "positive integer"),
         (lambda payload: payload.update(minimum_free_bytes=0), "positive integer"),
+        (lambda payload: payload.pop("rust_diagnostics"), "missing required fields"),
         (lambda payload: payload.update(streams=[]), "streams must be an object"),
     ],
 )
@@ -127,6 +152,36 @@ def test_parse_soak_storage_policy_rejects_invalid_top_level_contract(
 ) -> None:
     payload = policy_payload()
     mutate(payload)
+
+    with pytest.raises(RuntimeError, match=message):
+        soak_storage.parse_soak_storage_policy(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda policy: policy.update(extra=True), "unknown fields"),
+        (lambda policy: policy.update(max_segment_bytes=1_048_575), "max_segment_bytes"),
+        (lambda policy: policy.update(max_segment_seconds=59), "max_segment_seconds"),
+        (lambda policy: policy.update(retained_segments=1), "retained_segments"),
+        (lambda policy: policy.update(max_retained_seconds=True), "max_retained_seconds"),
+        (lambda policy: policy.update(minimum_free_bytes=0), "minimum_free_bytes"),
+        (
+            lambda policy: policy.update(
+                max_segment_bytes=2_097_152,
+                max_total_bytes=1_048_576,
+            ),
+            "must not be below",
+        ),
+    ],
+)
+def test_parse_soak_storage_policy_rejects_invalid_rust_diagnostics(
+    mutate, message: str
+) -> None:
+    payload = policy_payload()
+    policy = payload["rust_diagnostics"]
+    assert isinstance(policy, dict)
+    mutate(policy)
 
     with pytest.raises(RuntimeError, match=message):
         soak_storage.parse_soak_storage_policy(payload)
