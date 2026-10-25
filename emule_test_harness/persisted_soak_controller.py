@@ -1052,7 +1052,10 @@ def request_watch_failure_stop(
 
     requested_at = datetime.now(UTC).isoformat()
     stop_errors: list[str] = []
-    paths.control_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        paths.control_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        stop_errors.append(f"{paths.control_dir}: {type(error).__name__}: {error}"[:1024])
     for stop_path in (paths.stop_file, paths.watch_stop_file):
         try:
             stop_path.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
@@ -1102,6 +1105,12 @@ def watch_session(
 
     if interval_seconds <= 0:
         raise ValueError("interval_seconds must be greater than zero.")
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be greater than zero.")
+    if segments <= 0:
+        raise ValueError("segments must be greater than zero.")
+    if max_samples < 0:
+        raise ValueError("max_samples must be zero or greater.")
     manifest: dict[str, Any] = {}
     sample_count = 0
     latest: dict[str, Any] | None = None
@@ -1132,7 +1141,10 @@ def watch_session(
             segments=segments,
         )
         if emit is not None:
-            emit(latest)
+            try:
+                emit(latest)
+            except Exception as error:  # noqa: BLE001 - shutdown must still continue
+                persistence_errors.append(f"watchEmit: {type(error).__name__}: {error}"[:1024])
         stop = request_watch_failure_stop(paths, manifest)
         return {
             "ok": False,
@@ -1173,7 +1185,25 @@ def watch_session(
                 segments=segments,
             )
         if emit is not None:
-            emit(latest)
+            try:
+                emit(latest)
+            except Exception as error:  # noqa: BLE001 - watcher output loss is terminal
+                storage = {
+                    **storage,
+                    "ok": False,
+                    "phase": "watchEvidence",
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
+                latest = build_watch_sample(status, storage)
+                persistence_errors.extend(
+                    persist_terminal_watch_sample(
+                        paths,
+                        latest,
+                        max_bytes=max_bytes,
+                        segments=segments,
+                    )
+                )
         sample_count += 1
         if not storage.get("ok"):
             stop = request_watch_failure_stop(paths, manifest)
