@@ -588,6 +588,70 @@ def test_session_status_reports_exact_dual_process_tree(
     assert result["findings"] == []
 
 
+def test_session_status_reports_current_storage_failure_and_dead_watcher(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    campaign_id = "20261025T120000Z"
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "schema": controller.MANIFEST_SCHEMA,
+            "state": "running",
+            "campaignId": campaign_id,
+            "launcher": {"pid": 10, "creationDate": "launcher"},
+            "watcher": {"pid": 20, "creationDate": "watcher"},
+        },
+    )
+    controller.write_json_atomic(
+        paths.watch_heartbeat,
+        {
+            "schema": controller.WATCH_SCHEMA,
+            "campaignId": campaign_id,
+            "storage": {"ok": False, "error": "minimum_free_bytes"},
+        },
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+
+    result = controller.session_status(paths, check_rest=False, check_vpn=False)
+
+    assert result["storage"]["error"] == "minimum_free_bytes"
+    assert "watcher-not-running" in result["findings"]
+    assert controller.STORAGE_FAILURE_FINDING in result["findings"]
+
+
+def test_session_status_ignores_stale_watch_storage_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "schema": controller.MANIFEST_SCHEMA,
+            "state": "running",
+            "campaignId": "20261025T120000Z",
+            "launcher": {},
+            "watcher": None,
+        },
+    )
+    controller.write_json_atomic(
+        paths.watch_heartbeat,
+        {
+            "schema": controller.WATCH_SCHEMA,
+            "campaignId": "20261024T120000Z",
+            "storage": {"ok": False, "error": "stale"},
+        },
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+
+    result = controller.session_status(paths, check_rest=False, check_vpn=False)
+
+    assert result["storage"] is None
+    assert controller.STORAGE_FAILURE_FINDING not in result["findings"]
+
+
 def test_stop_session_requests_graceful_teardown_without_force(
     tmp_path: Path,
     monkeypatch,
