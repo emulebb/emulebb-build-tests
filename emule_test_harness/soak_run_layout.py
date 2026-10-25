@@ -39,6 +39,8 @@ class SoakRunPaths:
     report_dir: Path
     actions_dir: Path
     checkpoints_dir: Path
+    daemon_output_dir: Path
+    rust_daemon_output: Path
     archive_dir: Path
     preflight_archive_dir: Path
     last_run_dir: Path
@@ -70,6 +72,7 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
     campaigns_root = soak_root / "campaigns"
     campaign_dir = campaigns_root / campaign_id
     report_dir = campaign_dir / "report"
+    daemon_output_dir = campaign_dir / "daemon-output"
     archive_dir = campaign_dir / "archive"
     last_run_dir = soak_root / "last-run"
     return SoakRunPaths(
@@ -80,6 +83,8 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
         report_dir=report_dir,
         actions_dir=report_dir / "actions",
         checkpoints_dir=report_dir / "checkpoints",
+        daemon_output_dir=daemon_output_dir,
+        rust_daemon_output=daemon_output_dir / "rust-daemon.out",
         archive_dir=archive_dir,
         preflight_archive_dir=archive_dir / "preflight",
         last_run_dir=last_run_dir,

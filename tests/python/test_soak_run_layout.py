@@ -30,6 +30,8 @@ def test_build_run_paths_uses_owned_campaign_and_stable_pointers(
     assert paths.report_dir == paths.campaign_dir / "report"
     assert paths.actions_dir == paths.report_dir / "actions"
     assert paths.checkpoints_dir == paths.report_dir / "checkpoints"
+    assert paths.daemon_output_dir == paths.campaign_dir / "daemon-output"
+    assert paths.rust_daemon_output == paths.daemon_output_dir / "rust-daemon.out"
     assert paths.preflight_archive_dir == paths.campaign_dir / "archive" / "preflight"
     assert paths.last_run_manifest == tmp_path / "soak" / "last-run" / "manifest.json"
     assert (
