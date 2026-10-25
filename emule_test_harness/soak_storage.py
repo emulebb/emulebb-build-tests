@@ -12,6 +12,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 SCHEMA = "emulebb-build-tests.soak-storage-policy.v1"
 REQUIRED_STREAMS = ("controller_output", "daemon_output")
+ACTIVE_SEGMENT_INSTANCES = {
+    "controller_output": 4,
+    "daemon_output": 1,
+}
 _POLICY_KEYS = {
     "schema",
     "max_total_bytes",
@@ -348,7 +352,7 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
             raise RuntimeError(
                 f"{context}.max_segment_bytes must not exceed soak_storage.max_total_bytes."
             )
-        active_segment_budget += max_segment_bytes
+        active_segment_budget += max_segment_bytes * ACTIVE_SEGMENT_INSTANCES[name]
         streams[name] = ArtifactStreamPolicy(
             max_segment_bytes=max_segment_bytes,
             retained_segments=retained_segments,
@@ -356,7 +360,7 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
 
     if active_segment_budget > max_total_bytes:
         raise RuntimeError(
-            "soak_storage.max_total_bytes must cover one active segment for every required stream."
+            "soak_storage.max_total_bytes must cover every active required-stream instance."
         )
 
     return SoakStoragePolicy(

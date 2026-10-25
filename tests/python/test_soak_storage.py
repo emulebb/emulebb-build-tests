@@ -137,9 +137,9 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 
 def test_parse_soak_storage_policy_requires_total_to_cover_active_segments() -> None:
     payload = policy_payload()
-    payload["max_total_bytes"] = 250
+    payload["max_total_bytes"] = 599
 
-    with pytest.raises(RuntimeError, match="cover one active segment"):
+    with pytest.raises(RuntimeError, match="every active required-stream instance"):
         soak_storage.parse_soak_storage_policy(payload)
 
 
