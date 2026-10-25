@@ -726,6 +726,37 @@ def watch_status_payload() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_bytes": 0}, "max_bytes"),
+        ({"segments": 0}, "segments"),
+        ({"max_samples": -1}, "max_samples"),
+    ],
+)
+def test_watch_session_rejects_invalid_limits_before_reading_manifest(
+    tmp_path: Path,
+    monkeypatch,
+    kwargs: dict[str, int],
+    message: str,
+) -> None:
+    paths = make_paths(tmp_path)
+    manifest_read = False
+
+    def fake_load(_path: Path) -> dict[str, object]:
+        nonlocal manifest_read
+        manifest_read = True
+        return {}
+
+    monkeypatch.setattr(controller, "load_json", fake_load)
+    options = {"interval_seconds": 1.0, "max_bytes": 1024, "segments": 2, **kwargs}
+
+    with pytest.raises(ValueError, match=message):
+        controller.watch_session(paths, **options)
+
+    assert manifest_read is False
+
+
 def test_watch_session_persists_one_bounded_health_sample(
     tmp_path: Path,
     monkeypatch,
@@ -869,6 +900,41 @@ def test_watch_session_fails_closed_on_watch_evidence_write_failure(
     assert result["latest"]["storage"]["phase"] == "watchEvidence"
     assert result["latest"]["storage"]["error"] == "disk full"
     assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["ok"] is False
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_fails_closed_when_emit_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+        emit=lambda _sample: (_ for _ in ()).throw(BrokenPipeError("sink closed")),
+    )
+
+    assert result["ok"] is False
+    assert result["latest"]["storage"]["phase"] == "watchEvidence"
+    assert result["latest"]["storage"]["error"] == "sink closed"
     assert stop_requests == [manifest]
 
 
