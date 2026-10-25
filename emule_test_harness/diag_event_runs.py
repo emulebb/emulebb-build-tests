@@ -27,6 +27,17 @@ class DiagnosticSegmentSnapshot:
     records: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class DiagnosticRunSnapshot:
+    """One exact diagnostic run with immutable segment provenance."""
+
+    client: str
+    process_id: int
+    run_id: str
+    segments: tuple[DiagnosticSegmentSnapshot, ...]
+    records: tuple[dict[str, Any], ...]
+
+
 _SEGMENT_NAMES = {
     "rust": re.compile(
         r"^emulebb-rust-diag-(?P<process_id>\d+)-(?P<run_id>.+)-(?P<segment_id>\d{6,})\.jsonl$"
@@ -287,6 +298,48 @@ def select_latest_diag_run(
     return [path for _, path in ordered]
 
 
+def select_diag_run(
+    paths: Iterable[Path],
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+) -> list[Path]:
+    """Selects one exact current-schema run without falling back to another run."""
+
+    if (
+        isinstance(process_id, bool)
+        or not isinstance(process_id, int)
+        or process_id <= 0
+    ):
+        raise ValueError("process_id must be a positive integer")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id must be a non-empty string")
+
+    selected: list[tuple[int, Path]] = []
+    for path in sorted({path.resolve() for path in paths if path.is_file()}):
+        identity = diag_segment_identity(path, client=client)
+        if identity is None:
+            continue
+        candidate_process_id, candidate_run_id, segment_id = identity
+        if candidate_process_id == process_id and candidate_run_id == run_id:
+            selected.append((segment_id, path))
+
+    if not selected:
+        return []
+    selected.sort()
+    segment_ids = [segment_id for segment_id, _ in selected]
+    if len(segment_ids) != len(set(segment_ids)):
+        raise DiagnosticTraceError(
+            f"duplicate segment IDs in selected {client} diagnostic run"
+        )
+    if segment_ids != list(range(segment_ids[0], segment_ids[-1] + 1)):
+        raise DiagnosticTraceError(
+            f"non-contiguous segment IDs in selected {client} diagnostic run: {segment_ids}"
+        )
+    return [path for _, path in selected]
+
+
 def load_diag_event_segment(
     path: Path, *, allow_incomplete_tail: bool = False
 ) -> list[dict[str, Any]]:
@@ -400,26 +453,61 @@ def load_latest_diag_records(
     first_identity = diag_segment_identity(selected[0], client=client)
     assert first_identity is not None
     selected_process_id, selected_run_id, _ = first_identity
+    return list(
+        load_exact_diag_run_snapshot(
+            selected,
+            client=client,
+            process_id=selected_process_id,
+            run_id=selected_run_id,
+            allow_incomplete_active_tail=allow_incomplete_active_tail,
+        ).records
+    )
+
+
+def load_exact_diag_run_snapshot(
+    paths: Iterable[Path],
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    allow_incomplete_active_tail: bool = False,
+) -> DiagnosticRunSnapshot:
+    """Loads one pinned run and retains exact provenance for every selected segment."""
+
+    selected = select_diag_run(
+        paths,
+        client=client,
+        process_id=process_id,
+        run_id=run_id,
+    )
+    if not selected:
+        raise DiagnosticTraceError(
+            f"no exact {DIAG_EVENT_SCHEMA} {client} run was found for "
+            f"processId={process_id}, runId={run_id!r}"
+        )
+
+    snapshots: list[DiagnosticSegmentSnapshot] = []
     records: list[dict[str, Any]] = []
     previous_sequence: int | None = None
     for path_index, path in enumerate(selected):
         identity = diag_segment_identity(path, client=client)
         assert identity is not None
-        _, _, selected_segment_id = identity
-        for record in load_diag_event_segment(
+        _, _, segment_id = identity
+        snapshot = load_diag_event_segment_snapshot(
             path,
             allow_incomplete_tail=(
                 allow_incomplete_active_tail and path_index == len(selected) - 1
             ),
-        ):
+        )
+        for record in snapshot.records:
             if record.get("client") != client:
                 raise DiagnosticTraceError(
                     f"unexpected diagnostic client in {path}: {record.get('client')!r}"
                 )
             if (
-                record.get("processId") != selected_process_id
-                or record.get("runId") != selected_run_id
-                or record.get("segmentId") != selected_segment_id
+                record.get("processId") != process_id
+                or record.get("runId") != run_id
+                or record.get("segmentId") != segment_id
             ):
                 raise DiagnosticTraceError(
                     f"mixed run identity in diagnostic segment {path}"
@@ -441,7 +529,15 @@ def load_latest_diag_records(
                 )
             previous_sequence = sequence
             records.append(record)
-    return records
+        snapshots.append(snapshot)
+
+    return DiagnosticRunSnapshot(
+        client=client,
+        process_id=process_id,
+        run_id=run_id,
+        segments=tuple(snapshots),
+        records=tuple(records),
+    )
 
 
 def load_and_validate_writer_health(
