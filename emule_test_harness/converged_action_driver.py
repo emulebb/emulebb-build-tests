@@ -273,7 +273,7 @@ def drive_automatic_cycle(
     method: str,
     rust: ClientEndpoint,
     mfc: ClientEndpoint,
-    safety: DownloadSafety,
+    safety: DownloadSafety | None,
     download: bool,
     search_timeout_seconds: float,
     required_suffix: str | None = None,
@@ -302,6 +302,8 @@ def drive_automatic_cycle(
     cycle["resultCounts"] = {"rust": len(rust_rows), "mfc": len(mfc_rows)}
     if not download:
         return cycle
+    if safety is None:
+        raise ValueError("download cycles require a download safety policy")
 
     rust_transfer_hashes = transfer_hashes(
         get_list(rust, "/api/v1/transfers", "transfers", timeout_seconds=30.0)

@@ -139,6 +139,42 @@ def test_automatic_cycle_schedules_without_triggering_download(
     }
 
 
+def test_search_only_cycle_does_not_require_download_safety(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "create_search",
+        lambda client, **_kwargs: f"{client.name}-search",
+    )
+    monkeypatch.setattr(
+        driver,
+        "poll_search_results",
+        lambda *_args, **_kwargs: [{"hash": "a" * 32}],
+    )
+
+    cycle = driver.drive_automatic_cycle(
+        cycle_index=3,
+        query="debian",
+        method="kad",
+        rust=endpoint("rust"),
+        mfc=endpoint("mfc"),
+        safety=None,
+        download=False,
+        search_timeout_seconds=30.0,
+    )
+
+    assert cycle == {
+        "cycle": 3,
+        "queryIndex": 2,
+        "method": "kad",
+        "query": "debian",
+        "downloadRequested": False,
+        "searchIds": {"rust": "rust-search", "mfc": "mfc-search"},
+        "resultCounts": {"rust": 1, "mfc": 1},
+    }
+
+
 def test_execute_scheduled_download_targets_both_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -35,7 +35,7 @@ CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
-MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v2"
+MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v3"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
@@ -1202,6 +1202,59 @@ def build_observer_command(
     ]
 
 
+def build_observer_action_config(
+    inputs: LiveWireInputs,
+    *,
+    enabled: bool,
+    terms: tuple[str, ...],
+    method: str,
+    start_delay_seconds: float,
+    search_interval_seconds: float,
+    search_timeout_seconds: float,
+    max_cycles: int,
+) -> dict[str, Any]:
+    """Builds one normalized manifest-only observer action-driving contract."""
+
+    if terms and not enabled:
+        raise ValueError("observer action terms require observer action driving.")
+    if any(not isinstance(term, str) or not term.strip() for term in terms):
+        raise ValueError("observer action terms must be non-empty strings.")
+    normalized_terms = tuple(dict.fromkeys(term.strip() for term in terms))
+    source_profile: str | None = None
+    if enabled:
+        if normalized_terms:
+            source_profile = "explicit"
+        else:
+            source_profile = "generic_open"
+            normalized_terms = inputs.generic_open_terms
+    payload = {
+        "enabled": enabled,
+        "sourceProfile": source_profile,
+        "terms": list(normalized_terms) if enabled else [],
+        "method": method,
+        "startDelaySeconds": start_delay_seconds,
+        "searchIntervalSeconds": search_interval_seconds,
+        "searchTimeoutSeconds": search_timeout_seconds,
+        "maxCycles": max_cycles,
+    }
+    try:
+        validated = converged_observer.parse_action_config(
+            {"actionDriving": payload}
+        )
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
+    return {
+        "enabled": validated.enabled,
+        "sourceProfile": validated.source_profile,
+        "terms": list(validated.terms),
+        "method": validated.method,
+        "startDelaySeconds": validated.start_delay_seconds,
+        "searchIntervalSeconds": validated.search_interval_seconds,
+        "searchTimeoutSeconds": validated.search_timeout_seconds,
+        "maxCycles": validated.max_cycles,
+    }
+
+
 def build_watch_command(
     paths: ControlPaths,
     *,
@@ -1341,6 +1394,13 @@ def start_session(
     observer_poll_interval_seconds: float = converged_observer.DEFAULT_POLL_INTERVAL_SECONDS,
     observer_checkpoint_interval_seconds: float = converged_observer.DEFAULT_CHECKPOINT_INTERVAL_SECONDS,
     observer_failure_threshold: int = converged_observer.DEFAULT_FAILURE_THRESHOLD,
+    observer_drive_actions: bool = False,
+    observer_action_terms: tuple[str, ...] = (),
+    observer_action_method: str = converged_observer.DEFAULT_ACTION_METHOD,
+    observer_action_start_delay_seconds: float = converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    observer_action_search_interval_seconds: float = converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    observer_action_search_timeout_seconds: float = converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    observer_action_max_cycles: int = 0,
 ) -> dict[str, Any]:
     """Starts one detached dual-client diagnostics session."""
 
@@ -1356,6 +1416,8 @@ def start_session(
         raise ValueError("watch_segments must be greater than zero.")
     if start_observer and not start_watch:
         raise ValueError("The converged observer requires the persisted health watcher.")
+    if observer_drive_actions and not start_observer:
+        raise ValueError("Observer action driving requires the converged observer.")
     if start_observer and observer_ready_timeout_seconds <= 0:
         raise ValueError("observer_ready_timeout_seconds must be greater than zero.")
     if start_observer and observer_poll_interval_seconds <= 0:
@@ -1375,6 +1437,16 @@ def start_session(
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
+    observer_action_config = build_observer_action_config(
+        inputs,
+        enabled=observer_drive_actions,
+        terms=observer_action_terms,
+        method=observer_action_method,
+        start_delay_seconds=observer_action_start_delay_seconds,
+        search_interval_seconds=observer_action_search_interval_seconds,
+        search_timeout_seconds=observer_action_search_timeout_seconds,
+        max_cycles=observer_action_max_cycles,
+    )
     storage_policy = required_storage_policy(inputs)
     controller_output_policy = storage_policy.stream("controller_output")
     campaigns_root = campaign_storage_root(output_root)
@@ -1443,6 +1515,7 @@ def start_session(
                 observer_checkpoint_interval_seconds if start_observer else None
             ),
             "failureThreshold": observer_failure_threshold if start_observer else None,
+            "actionDriving": observer_action_config,
         },
         "watchConfig": {
             "enabled": start_watch,
@@ -2785,6 +2858,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=converged_observer.DEFAULT_FAILURE_THRESHOLD,
     )
+    start.add_argument("--observer-drive-actions", action="store_true")
+    start.add_argument("--observer-action-term", action="append", default=[])
+    start.add_argument(
+        "--observer-action-method",
+        choices=converged_observer.ACTION_METHODS,
+        default=converged_observer.DEFAULT_ACTION_METHOD,
+    )
+    start.add_argument(
+        "--observer-action-start-delay-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    )
+    start.add_argument(
+        "--observer-action-search-interval-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    )
+    start.add_argument(
+        "--observer-action-search-timeout-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    )
+    start.add_argument("--observer-action-max-cycles", type=int, default=0)
 
     status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
     status.add_argument("--no-rest", action="store_true")
@@ -2832,6 +2928,13 @@ def main(argv: list[str] | None = None) -> int:
             observer_poll_interval_seconds=args.observer_poll_interval_seconds,
             observer_checkpoint_interval_seconds=args.observer_checkpoint_interval_seconds,
             observer_failure_threshold=args.observer_failure_threshold,
+            observer_drive_actions=args.observer_drive_actions,
+            observer_action_terms=tuple(args.observer_action_term),
+            observer_action_method=args.observer_action_method,
+            observer_action_start_delay_seconds=args.observer_action_start_delay_seconds,
+            observer_action_search_interval_seconds=args.observer_action_search_interval_seconds,
+            observer_action_search_timeout_seconds=args.observer_action_search_timeout_seconds,
+            observer_action_max_cycles=args.observer_action_max_cycles,
         )
     elif args.command == "status":
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
