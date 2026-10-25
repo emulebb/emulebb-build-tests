@@ -1199,14 +1199,34 @@ def capture_exact_process_tree(identity: dict[str, Any]) -> tuple[dict[str, Any]
 def remaining_exact_tree_rows(
     identities: tuple[dict[str, Any], ...],
 ) -> list[windows_processes.WindowsProcessInfo]:
-    """Returns captured process instances that are still live."""
+    """Returns captured instances and current descendants of their exact lineage."""
 
     processes = windows_processes.collect_processes()
-    return [
-        row
+    captured_by_pid = {int(identity["pid"]): identity for identity in identities}
+    current_by_pid = {row.pid: row for row in processes}
+    blocked_parent_pids = {
+        pid
+        for pid, identity in captured_by_pid.items()
+        if pid in current_by_pid
+        and current_by_pid[pid].creation_date != identity["creationDate"]
+    }
+    owned_parent_pids = set(captured_by_pid) - blocked_parent_pids
+    selected = {
+        row.pid: row
         for identity in identities
         if (row := exact_process_row(identity, processes)) is not None
-    ]
+    }
+    changed = True
+    while changed:
+        changed = False
+        for row in processes:
+            if row.pid in selected or row.pid in blocked_parent_pids:
+                continue
+            if row.parent_pid in owned_parent_pids:
+                selected[row.pid] = row
+                owned_parent_pids.add(row.pid)
+                changed = True
+    return list(selected.values())
 
 
 def stop_captured_process_tree(
@@ -1227,6 +1247,16 @@ def stop_captured_process_tree(
         }
     remaining_pids = {row.pid for row in remaining}
     roots = [row for row in remaining if row.parent_pid not in remaining_pids]
+    verification_identities = identities + tuple(
+        {
+            "pid": row.pid,
+            "parentPid": row.parent_pid,
+            "creationDate": row.creation_date,
+            "name": row.name,
+        }
+        for row in remaining
+        if row.pid not in {int(identity["pid"]) for identity in identities}
+    )
     results = [
         windows_processes.terminate_process_tree(
             row.pid,
@@ -1235,12 +1265,19 @@ def stop_captured_process_tree(
         )
         for row in roots
     ]
-    survivors = remaining_exact_tree_rows(identities)
+    survivors = remaining_exact_tree_rows(verification_identities)
+    termination_verified = all(
+        result.get("return_code") == 0
+        and isinstance(result.get("remaining_pids"), list)
+        and not result["remaining_pids"]
+        for result in results
+    )
     return {
         "forced": True,
         "alreadyStopped": False,
-        "verifiedStopped": not survivors,
+        "verifiedStopped": termination_verified and not survivors,
         "capturedCount": len(identities),
+        "verificationIdentityCount": len(verification_identities),
         "forcedRootPids": [row.pid for row in roots],
         "results": results,
         "remainingPids": [row.pid for row in survivors],
