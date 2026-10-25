@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from emule_test_harness import bounded_process_output as output
 
@@ -64,6 +67,60 @@ def test_run_bounded_process_captures_both_streams_and_exit_code(tmp_path: Path)
     assert result == 7
     assert stdout_path.read_bytes() == b"raw-out\x00"
     assert stderr_path.read_bytes() == b"raw-err\xff"
+
+
+def test_async_binary_capture_preserves_real_process_and_exact_merged_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "daemon.out"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import os; os.write(1,b'out\\x00'); os.write(2,b'err\\xff')",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    capture = output.AsyncBinaryCapture(
+        path,
+        max_segment_bytes=6,
+        retained_segments=2,
+    )
+    stopped: list[int] = []
+    capture.start(process.stdout, stop_process=lambda: stopped.append(process.pid))
+
+    assert process.wait(timeout=5.0) == 0
+    capture.close()
+    capture.raise_if_failed()
+
+    assert retained_bytes(path, 2) == b"out\x00err\xff"
+    assert stopped == []
+
+
+def test_async_binary_capture_stops_process_and_propagates_sink_failure(tmp_path: Path) -> None:
+    path = tmp_path / "daemon.out"
+    stopped: list[bool] = []
+
+    class FailingSink(output.RotatingBinaryLog):
+        def write(self, data: bytes) -> None:
+            raise OSError("simulated full disk")
+
+    read_fd, write_fd = os.pipe()
+    source = os.fdopen(read_fd, "rb", buffering=0)
+    capture = output.AsyncBinaryCapture(
+        path,
+        max_segment_bytes=64,
+        retained_segments=2,
+        sink_factory=FailingSink,
+    )
+    capture.start(source, stop_process=lambda: stopped.append(True))
+    os.write(write_fd, b"trigger")
+    os.close(write_fd)
+    capture.close()
+
+    with pytest.raises(RuntimeError, match="simulated full disk"):
+        capture.raise_if_failed()
+    assert stopped == [True]
 
 
 def test_run_bounded_process_drains_concurrent_large_streams_without_deadlock(tmp_path: Path) -> None:
