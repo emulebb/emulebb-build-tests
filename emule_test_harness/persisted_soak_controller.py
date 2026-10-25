@@ -222,14 +222,13 @@ def preflight_campaign_storage(
 
 
 def enforce_campaign_storage(
-    inputs_path: Path,
+    inputs: LiveWireInputs,
     output_root: Path,
     *,
     protected_campaigns: tuple[Path, ...],
 ) -> dict[str, Any]:
     """Applies and verifies aggregate retention before any process launch."""
 
-    inputs = load_live_wire_inputs(inputs_path.resolve())
     policy = required_storage_policy(inputs)
     root = campaign_storage_root(output_root)
     result = soak_storage.BoundedArtifactStore(root, policy).enforce(pinned_paths=protected_campaigns)
@@ -297,6 +296,7 @@ def preflight_session(
     config: SessionConfig,
     output_root: Path,
     *,
+    inputs: LiveWireInputs | None = None,
     protected_campaigns: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     """Performs the read-only full-tunnel and persisted-profile preflight."""
@@ -304,7 +304,7 @@ def preflight_session(
     inputs_path = config.inputs.resolve()
     if not inputs_path.is_file():
         raise RuntimeError(f"Live-wire inputs were not found: {inputs_path}")
-    inputs = load_live_wire_inputs(inputs_path)
+    inputs = inputs or load_live_wire_inputs(inputs_path)
     if inputs.mfc_profile_dir is None or not inputs.mfc_profile_dir.is_dir():
         raise RuntimeError("Persisted full-tunnel soaks require an existing MFC profile directory.")
     if inputs.rust_profile_dir is None:
@@ -501,6 +501,7 @@ def start_session(
         raise RuntimeError(f"A persisted soak watcher is already active: {paths.manifest}")
 
     output_root = get_workspace_output_root()
+    inputs = load_live_wire_inputs(config.inputs.resolve())
     campaigns_root = campaign_storage_root(output_root)
     campaign_id = soak_run_layout.utc_campaign_id()
     campaign_dir = (campaigns_root / campaign_id).resolve()
@@ -517,10 +518,11 @@ def start_session(
     preflight = preflight_session(
         config,
         output_root,
+        inputs=inputs,
         protected_campaigns=protected_campaigns,
     )
     storage_enforcement = enforce_campaign_storage(
-        config.inputs,
+        inputs,
         output_root,
         protected_campaigns=protected_campaigns,
     )
