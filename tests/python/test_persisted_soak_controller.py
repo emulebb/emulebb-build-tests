@@ -186,6 +186,25 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert "--cpu-profile" not in command
 
 
+def test_bounded_process_command_preserves_policy_paths_and_target(tmp_path: Path) -> None:
+    command = controller.build_bounded_process_command(
+        ["python", "target.py", "--flag"],
+        stdout_path=tmp_path / "stdout.log",
+        stderr_path=tmp_path / "stderr.log",
+        policy=soak_storage.ArtifactStreamPolicy(
+            max_segment_bytes=128,
+            retained_segments=3,
+        ),
+        stop_files=(tmp_path / "stop", tmp_path / "watch.stop"),
+    )
+
+    assert Path(command[1]).name == "run-bounded-process.py"
+    assert command[command.index("--max-segment-bytes") + 1] == "128"
+    assert command[command.index("--retained-segments") + 1] == "3"
+    assert command.count("--stop-file") == 2
+    assert command[-3:] == ["python", "target.py", "--flag"]
+
+
 def test_exact_process_row_rejects_pid_reuse() -> None:
     rows = [
         WindowsProcessInfo(
@@ -289,8 +308,17 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert input_loads == [config.inputs.resolve()]
     assert observed_inputs == [loaded_inputs, loaded_inputs]
     assert len(spawned) == 2
-    assert "launch-soak.py" in spawned[0][1]
-    assert "persisted-soak-control.py" in spawned[1][1]
+    assert Path(spawned[0][1]).name == "run-bounded-process.py"
+    assert any(Path(value).name == "launch-soak.py" for value in spawned[0])
+    assert Path(spawned[1][1]).name == "run-bounded-process.py"
+    assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[1])
+    assert result["launcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[0])
+    assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[1])
+    assert result["logs"]["root"] == str(
+        output_root / "soak" / "campaigns" / "20261025T120000Z" / "controller-output"
+    )
+    assert result["logs"]["maxSegmentBytes"] == 1
+    assert result["logs"]["retainedSegments"] == 1
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["watcher"]["pid"] == 102
 
 
