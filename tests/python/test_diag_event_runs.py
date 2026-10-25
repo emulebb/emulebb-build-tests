@@ -14,7 +14,9 @@ from emule_test_harness.diag_event_runs import (
     diag_segment_identity,
     load_and_validate_writer_health,
     load_diag_event_segment_snapshot,
+    load_exact_diag_run_snapshot,
     load_latest_diag_records,
+    select_diag_run,
     select_latest_diag_run,
 )
 
@@ -139,6 +141,88 @@ def test_process_selection_never_falls_back_to_another_process(tmp_path: Path) -
     assert (
         select_latest_diag_run(tmp_path.iterdir(), client="rust", process_id=42) == []
     )
+
+
+@pytest.mark.parametrize("client", ["rust", "mfc"])
+def test_exact_run_selection_never_falls_forward_to_a_newer_run(
+    tmp_path: Path, client: str
+) -> None:
+    pinned = tmp_path / _segment_name(client, 42, "pinned", 0)
+    pinned.write_text(
+        _record("pinned", 42, 0, 1, client=client) + "\n", encoding="utf-8"
+    )
+    newer = tmp_path / _segment_name(client, 42, "newer", 0)
+    newer.write_text(_record("newer", 42, 0, 1, client=client) + "\n", encoding="utf-8")
+    os.utime(pinned, ns=(1, 1))
+    os.utime(newer, ns=(2, 2))
+
+    assert select_diag_run(
+        tmp_path.iterdir(),
+        client=client,
+        process_id=42,
+        run_id="pinned",
+    ) == [pinned.resolve()]
+    assert (
+        select_diag_run(
+            tmp_path.iterdir(),
+            client=client,
+            process_id=42,
+            run_id="missing",
+        )
+        == []
+    )
+
+
+def test_exact_run_snapshot_retains_segment_provenance(tmp_path: Path) -> None:
+    first = tmp_path / _segment_name("rust", 42, "pinned", 3)
+    second = tmp_path / _segment_name("rust", 42, "pinned", 4)
+    first_payload = (_record("pinned", 42, 3, 17) + "\n").encode()
+    second_payload = (_record("pinned", 42, 4, 18) + "\n").encode()
+    first.write_bytes(first_payload)
+    second.write_bytes(second_payload)
+    os.utime(first, ns=(10, 10))
+    os.utime(second, ns=(20, 20))
+    expected_modified_ns = [first.stat().st_mtime_ns, second.stat().st_mtime_ns]
+
+    snapshot = load_exact_diag_run_snapshot(
+        tmp_path.iterdir(),
+        client="rust",
+        process_id=42,
+        run_id="pinned",
+    )
+
+    assert snapshot.client == "rust"
+    assert snapshot.process_id == 42
+    assert snapshot.run_id == "pinned"
+    assert [segment.path for segment in snapshot.segments] == [
+        first.resolve(),
+        second.resolve(),
+    ]
+    assert [segment.byte_count for segment in snapshot.segments] == [
+        len(first_payload),
+        len(second_payload),
+    ]
+    assert [
+        segment.modified_ns for segment in snapshot.segments
+    ] == expected_modified_ns
+    assert [segment.sha256 for segment in snapshot.segments] == [
+        hashlib.sha256(first_payload).hexdigest(),
+        hashlib.sha256(second_payload).hexdigest(),
+    ]
+    assert [record["seq"] for record in snapshot.records] == [17, 18]
+
+
+def test_exact_run_snapshot_rejects_missing_pinned_run(tmp_path: Path) -> None:
+    other = tmp_path / _segment_name("rust", 42, "other", 0)
+    other.write_text(_record("other", 42, 0, 1) + "\n", encoding="utf-8")
+
+    with pytest.raises(DiagnosticTraceError, match="no exact diag_event_v2 rust run"):
+        load_exact_diag_run_snapshot(
+            tmp_path.iterdir(),
+            client="rust",
+            process_id=42,
+            run_id="pinned",
+        )
 
 
 def test_loader_rejects_legacy_schema_without_explicit_adapter(tmp_path: Path) -> None:
