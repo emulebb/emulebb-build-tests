@@ -30,6 +30,7 @@ def test_build_run_paths_uses_owned_campaign_and_stable_pointers(
     assert paths.report_dir == paths.campaign_dir / "report"
     assert paths.actions_dir == paths.report_dir / "actions"
     assert paths.checkpoints_dir == paths.report_dir / "checkpoints"
+    assert paths.diagnostic_bundles_dir == paths.report_dir / "diagnostic-bundles"
     assert paths.daemon_output_dir == paths.campaign_dir / "daemon-output"
     assert paths.rust_daemon_output == paths.daemon_output_dir / "rust-daemon.out"
     assert paths.preflight_archive_dir == paths.campaign_dir / "archive" / "preflight"
@@ -113,6 +114,7 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(
     ).is_file()
     assert paths.actions_dir.is_dir()
     assert paths.checkpoints_dir.is_dir()
+    assert paths.diagnostic_bundles_dir.is_dir()
 
 
 def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:

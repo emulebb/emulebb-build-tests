@@ -4,7 +4,8 @@ A pure launcher: it brings up emulebb-rust (diagnostics) and the MFC diagnostics
 GUI on selected persistent profiles (same operator eD2K server, same nodes.dat
 bootstrap, same shared library roots), then idles until Ctrl-C. Drive the clients
 through their REST APIs; both diagnostics builds write segmented
-``diag_event_v2`` runs continuously into the persistent profile dirs.
+``diag_event_v2`` runs continuously into the persistent profile dirs, while
+bounded Rust diagnostic bundles are captured into the campaign evidence store.
 
 No test/diff logic lives here. Analysis runs separately from this repo
 (``analyze-packet-coverage.py``, ``diag_event_diff``, or the live observer
@@ -56,18 +57,24 @@ from emule_test_harness.soak_launch import (
     bring_up_rust,
     log,
 )
-from emule_test_harness.vm_guest_profiles import retry_http_json
+from emule_test_harness.vm_guest_profiles import api_data, retry_http_json
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
 
 
-def required_daemon_output_policy(inputs: LiveWireInputs) -> soak_storage.ArtifactStreamPolicy:
-    """Returns the mandatory bounded Rust daemon-output policy."""
+def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStoragePolicy:
+    """Returns the mandatory aggregate persisted-soak storage policy."""
 
     if inputs.soak_storage is None:
         raise RuntimeError("Persisted soaks require soak_storage in the live-wire inputs.")
-    return inputs.soak_storage.stream("daemon_output")
+    return inputs.soak_storage
+
+
+def required_daemon_output_policy(inputs: LiveWireInputs) -> soak_storage.ArtifactStreamPolicy:
+    """Returns the mandatory bounded Rust daemon-output policy."""
+
+    return required_storage_policy(inputs).stream("daemon_output")
 
 
 def required_rust_diagnostic_writer_policy(
@@ -75,9 +82,61 @@ def required_rust_diagnostic_writer_policy(
 ) -> soak_storage.RustDiagnosticWriterPolicy:
     """Returns the mandatory bounded Rust profile-writer policy."""
 
-    if inputs.soak_storage is None:
-        raise RuntimeError("Persisted soaks require soak_storage in the live-wire inputs.")
-    return inputs.soak_storage.rust_diagnostics
+    return required_storage_policy(inputs).rust_diagnostics
+
+
+def capture_rust_diagnostic_bundle(
+    *,
+    base_url: str,
+    run_paths: soak_run_layout.SoakRunPaths,
+    storage_policy: soak_storage.SoakStoragePolicy,
+    phase: str,
+    now_ns: int | None = None,
+) -> dict[str, object]:
+    """Captures one inline Rust bundle into the bounded campaign-owned stream."""
+
+    response = retry_http_json(
+        f"rust diagnostic bundle ({phase})",
+        3,
+        base_url,
+        "/api/v1/diagnostics/bundles",
+        api_key=RUST_API_KEY,
+        method="POST",
+        body={"confirmCapture": True},
+        timeout_seconds=30.0,
+    )
+    bundle = api_data(response)
+    if not isinstance(bundle, dict):
+        raise RuntimeError("Rust diagnostic bundle response data must be an object.")
+    if bundle.get("schema") != "emulebb.diagnostic-bundle.v4":
+        raise RuntimeError(
+            "Rust diagnostic bundle response must use emulebb.diagnostic-bundle.v4."
+        )
+    summary = bundle.get("summary")
+    if not isinstance(summary, dict):
+        raise RuntimeError("Rust diagnostic bundle response is missing its summary.")
+
+    persisted = soak_storage.persist_bounded_json_artifact(
+        store=soak_storage.BoundedArtifactStore(run_paths.soak_root, storage_policy),
+        active_campaign=run_paths.campaign_dir,
+        directory=run_paths.diagnostic_bundles_dir,
+        stream_name="diagnostic_bundles",
+        stem="rust-diagnostic-bundle",
+        payload=bundle,
+        now_ns=now_ns,
+    )
+    return {
+        "phase": phase,
+        "bundleSchema": bundle["schema"],
+        "bundleCapturedAt": bundle.get("capturedAt"),
+        "bundleSummary": summary,
+        "path": str(persisted.path),
+        "byteCount": persisted.byte_count,
+        "sha256": persisted.sha256,
+        "deletedPaths": [str(path) for path in persisted.deleted_paths],
+        "retainedCount": persisted.retained_count,
+        "retainedBytes": persisted.retained_bytes,
+    }
 
 
 def raise_rust_output_failure(rust_handles: dict | None) -> None:
@@ -578,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     if not inputs_path.is_file():
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
+    storage_policy = required_storage_policy(inputs)
     daemon_output_policy = required_daemon_output_policy(inputs)
     rust_diagnostic_writer_policy = required_rust_diagnostic_writer_policy(inputs)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
@@ -634,6 +694,14 @@ def main(argv: list[str] | None = None) -> int:
         mfc_log_dir=mfc_log_dir,
     )
     preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
+    diagnostic_bundle_policy = storage_policy.stream("diagnostic_bundles")
+    preflight_manifest["rustDiagnosticBundles"] = {
+        "path": str(run_paths.diagnostic_bundles_dir.resolve()),
+        "policy": {
+            "maxSegmentBytes": diagnostic_bundle_policy.max_segment_bytes,
+            "retainedSegments": diagnostic_bundle_policy.retained_segments,
+        },
+    }
     preflight_manifest["rustDiagnosticWriter"] = {
         "enabled": not args.rust_regular,
         "path": str((rust_profile_dir / "packet-dump").resolve()),
@@ -702,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
     status = "stopped"
     failure: dict[str, object] | None = None
     shutdown_report: dict[str, object] | None = None
+    diagnostic_bundle_captures: list[dict[str, object]] = []
     mfc_preferences_overlay: profile_overlay.FileOverlay | None = None
     mfc_overlay_restore: dict[str, object] | None = None
     try:
@@ -762,16 +831,28 @@ def main(argv: list[str] | None = None) -> int:
             )
             mfc_base = mfc_handles["baseUrl"]
 
+        diagnostic_bundle_captures.append(
+            capture_rust_diagnostic_bundle(
+                base_url=rust_base,
+                run_paths=run_paths,
+                storage_policy=storage_policy,
+                phase="ready",
+            )
+        )
+
         log("=" * 70)
         log("SOAK ENVIRONMENT UP. Drive searches/downloads through REST automation:")
         log(f"  emulebb-rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
         if not args.no_mfc:
             log(f"  MFC diagnostics   : {mfc_base}   (X-API-Key: {MFC_API_KEY}) + its GUI window")
         log(f"  operator server   : {OPERATOR_SERVER}")
-        log("Bounded diagnostic rings remain under the persistent profiles; analyze later from this repo.")
+        log(
+            "Bounded event rings remain under the persistent profiles; "
+            "bounded diagnostic bundles are campaign-owned."
+        )
         if args.cpu_profile:
             log(f"Profiling for {args.cpu_profile_seconds:.0f}s; artifacts: {run_paths.report_dir / 'analysis'}")
-        log("Press Ctrl-C to stop everything (profiles + dumps are kept).")
+        log("Press Ctrl-C to stop everything (profiles + bounded campaign evidence are kept).")
         log("=" * 70)
 
         duration_deadline = time.monotonic() + args.duration_seconds if args.duration_seconds > 0 else None
@@ -816,6 +897,30 @@ def main(argv: list[str] | None = None) -> int:
         }
         log(f"soak launch failed: {failure['type']}: {failure['message']}")
     finally:
+        if (
+            rust_handles is not None
+            and rust_base
+            and rust_handles["process"].poll() is None
+        ):
+            try:
+                diagnostic_bundle_captures.append(
+                    capture_rust_diagnostic_bundle(
+                        base_url=rust_base,
+                        run_paths=run_paths,
+                        storage_policy=storage_policy,
+                        phase="final",
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - teardown and evidence must continue
+                status = "failed"
+                bundle_failure = {
+                    "type": type(exc).__name__,
+                    "message": f"Final Rust diagnostic bundle capture failed: {exc}",
+                }
+                if failure is None:
+                    failure = bundle_failure
+                else:
+                    failure["diagnosticBundleCapture"] = bundle_failure
         profile_report = finalize_cpu_profile(
             tools=profile_tools,
             paths=profile_paths,
@@ -886,9 +991,10 @@ def main(argv: list[str] | None = None) -> int:
                 if rust_handles is not None
                 else None
             ),
+            "rustDiagnosticBundles": diagnostic_bundle_captures,
         },
     )
-    log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))
+    log("soak environment stopped; bounded campaign evidence preserved under " + str(soak_root))
     return 1 if status == "failed" else 0
 
 

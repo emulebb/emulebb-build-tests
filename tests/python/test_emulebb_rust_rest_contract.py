@@ -33,6 +33,7 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("GET", "/healthz"),
     ("PATCH", "/api/v1/app/settings"),
     ("PATCH", "/api/v1/shared-directories/exclusions/rules/{}"),
+    ("POST", "/api/v1/diagnostics/bundles"),
     ("POST", "/api/v1/ip-filter/operations/reload"),
     ("POST", "/api/v1/nat/operations/refresh"),
     ("POST", "/api/v1/shared-directories/roots"),
@@ -50,6 +51,7 @@ MFC_ONLY_RUST_PARITY_BACKLOG_ROUTES = {
     ("PATCH", "/api/v1/app/preferences"),
     ("POST", "/api/v1/shared-files"),
     ("POST", "/api/v1/shared-files/operations/reload"),
+    ("POST", "/api/v1/diagnostics/dumps"),
     ("POST", "/api/v1/transfers/{}/operations/preview"),
 }
 
@@ -64,7 +66,7 @@ MFC_ONLY_RUST_PARITY_BACKLOG_REQUEST_SCHEMAS = {
 REQUEST_SCHEMA_TO_RUST_STRUCT = {
     "PreferencesPatch": "PreferencesUpdate",
     "ShutdownRequest": "ShutdownRequest",
-    "DiagnosticDumpRequest": "DiagnosticDumpRequest",
+    "DiagnosticBundleCaptureRequest": "DiagnosticBundleCaptureRequest",
     "DiagnosticCrashTestRequest": "DiagnosticCrashTestRequest",
     "CategoryCreateRequest": "CategoryCreate",
     "CategoryPatch": "CategoryUpdate",

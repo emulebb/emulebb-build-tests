@@ -336,6 +336,7 @@ TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrComp
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
 UNSAFE_OPENAPI_OPERATIONS = {
     "bootstrapKad",
+    "captureDiagnosticBundle",
     "captureDiagnosticDump",
     "clearLogs",
     "connectServer",
@@ -360,6 +361,7 @@ UNSAFE_OPENAPI_OPERATIONS = {
 }
 UNSAFE_BROAD_MUTATION_PATHS = (
     "/api/v1/app/shutdown",
+    "/api/v1/diagnostics/bundles",
     "/api/v1/diagnostics/dumps",
     "/api/v1/diagnostics/crash-tests",
 )
@@ -3741,6 +3743,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
 
     if route_name in {"app_shutdown", "shutdownApp"}:
         return {"confirmShutdown": True}
+    if route_name == "captureDiagnosticBundle":
+        return {"confirmCapture": True}
     if route_name == "captureDiagnosticDump":
         return {"confirmDump": True}
     if route_name == "triggerDiagnosticCrashTest":

@@ -39,6 +39,7 @@ class SoakRunPaths:
     report_dir: Path
     actions_dir: Path
     checkpoints_dir: Path
+    diagnostic_bundles_dir: Path
     daemon_output_dir: Path
     rust_daemon_output: Path
     archive_dir: Path
@@ -83,6 +84,7 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
         report_dir=report_dir,
         actions_dir=report_dir / "actions",
         checkpoints_dir=report_dir / "checkpoints",
+        diagnostic_bundles_dir=report_dir / "diagnostic-bundles",
         daemon_output_dir=daemon_output_dir,
         rust_daemon_output=daemon_output_dir / "rust-daemon.out",
         archive_dir=archive_dir,
@@ -329,6 +331,7 @@ def prepare_clean_run(
     paths.report_dir.mkdir(parents=True, exist_ok=True)
     paths.actions_dir.mkdir(parents=True, exist_ok=True)
     paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    paths.diagnostic_bundles_dir.mkdir(parents=True, exist_ok=True)
     preflight = paths.preflight_archive_dir
     processes = (
         stop_stale_soak_processes(
