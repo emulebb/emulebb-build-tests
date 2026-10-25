@@ -11,6 +11,7 @@ from types import ModuleType
 import pytest
 
 from emule_test_harness import soak_launch
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SOAK_RUNNER = REPO_ROOT / "scripts" / "converged-soak-live.py"
@@ -2244,21 +2245,11 @@ def test_load_diag_uses_only_common_mfc_stream(tmp_path: Path) -> None:
     )
     (tmp_path / "emulebb-mfc-diag-health.json").write_text(
         json.dumps(
-            {
-                "schema": "diag_event_v2",
-                "enabled": True,
-                "configured": True,
-                "initialized": True,
-                "runId": "active",
-                "processId": 42,
-                "activeSegmentId": 0,
-                "activeFileName": diag.name,
-                "droppedEvents": 0,
-                "encodeErrors": 0,
-                "writeErrors": 0,
-                "retentionDeleteErrors": 0,
-                "initializationFailure": None,
-            }
+            current_diagnostic_writer_health(
+                client="mfc",
+                run_id="active",
+                active_file_name=diag.name,
+            )
         ),
         encoding="utf-8",
     )
@@ -2290,21 +2281,12 @@ def test_load_diag_mtime_filter_applies_to_common_segments(tmp_path: Path) -> No
     os.utime(fresh, (200.0, 200.0))
     (tmp_path / "emulebb-mfc-diag-health.json").write_text(
         json.dumps(
-            {
-                "schema": "diag_event_v2",
-                "enabled": True,
-                "configured": True,
-                "initialized": True,
-                "runId": "active",
-                "processId": 42,
-                "activeSegmentId": 1,
-                "activeFileName": fresh.name,
-                "droppedEvents": 0,
-                "encodeErrors": 0,
-                "writeErrors": 0,
-                "retentionDeleteErrors": 0,
-                "initializationFailure": None,
-            }
+            current_diagnostic_writer_health(
+                client="mfc",
+                run_id="active",
+                segment_id=1,
+                active_file_name=fresh.name,
+            )
         ),
         encoding="utf-8",
     )

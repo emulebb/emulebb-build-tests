@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
+
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
 
 from emule_test_harness import rust_metadata
@@ -776,21 +778,12 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     active_mfc = mfc / "emulebb-mfc-diag-42-mfc-run-000001.jsonl"
     (mfc / "emulebb-mfc-diag-health.json").write_text(
         json.dumps(
-            {
-                "schema": "diag_event_v2",
-                "enabled": True,
-                "configured": True,
-                "initialized": True,
-                "runId": "mfc-run",
-                "processId": 42,
-                "activeSegmentId": 1,
-                "activeFileName": active_mfc.name,
-                "droppedEvents": 0,
-                "encodeErrors": 0,
-                "writeErrors": 0,
-                "retentionDeleteErrors": 0,
-                "initializationFailure": None,
-            }
+            current_diagnostic_writer_health(
+                client="mfc",
+                run_id="mfc-run",
+                segment_id=1,
+                active_file_name=active_mfc.name,
+            )
         ),
         encoding="utf-8",
     )
