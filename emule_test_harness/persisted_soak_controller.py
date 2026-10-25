@@ -931,6 +931,8 @@ def watch_heartbeat_health(
         return {"state": "invalid", "accepted": False, "reason": "policy-sha256"}
     if heartbeat_storage.get("activeCampaignDir") != manifest_storage.get("activeCampaignDir"):
         return {"state": "invalid", "accepted": False, "reason": "active-campaign"}
+    if heartbeat_storage.get("previousCampaignDir") != manifest_storage.get("previousCampaignDir"):
+        return {"state": "invalid", "accepted": False, "reason": "previous-campaign"}
 
     heartbeat_at = parse_aware_timestamp(heartbeat.get("timestampUtc"))
     if heartbeat_at is None:
@@ -1479,11 +1481,18 @@ def stop_exact_process(identity: dict[str, Any], *, markers: tuple[str, ...], ti
         expected_command_line_markers=markers,
         expected_root_creation_date=row.creation_date,
     )
-    verified_stopped = exact_process_row(identity, windows_processes.collect_processes()) is None
+    verified_root_stopped = exact_process_row(identity, windows_processes.collect_processes()) is None
+    remaining_pids = result.get("remaining_pids")
+    verified_tree_stopped = bool(
+        result.get("return_code") == 0
+        and isinstance(remaining_pids, list)
+        and not remaining_pids
+    )
     return {
         "forced": True,
         "alreadyStopped": False,
-        "verifiedStopped": verified_stopped,
+        "verifiedRootStopped": verified_root_stopped,
+        "verifiedStopped": verified_root_stopped and verified_tree_stopped,
         "result": result,
     }
 

@@ -636,6 +636,7 @@ def test_session_status_reports_current_storage_failure_and_dead_watcher(
                 "error": "minimum_free_bytes",
                 "policySha256": storage["policySha256"],
                 "activeCampaignDir": storage["activeCampaignDir"],
+                "previousCampaignDir": storage["previousCampaignDir"],
             },
         },
     )
@@ -721,6 +722,7 @@ def test_watch_heartbeat_health_requires_fresh_manifest_authority(
                 storage["policySha256"] if policy_sha256 == "expected" else policy_sha256
             ),
             "activeCampaignDir": storage["activeCampaignDir"],
+            "previousCampaignDir": storage["previousCampaignDir"],
         },
     }
 
@@ -728,6 +730,41 @@ def test_watch_heartbeat_health_requires_fresh_manifest_authority(
 
     assert result["state"] == expected_state
     assert result["accepted"] is (expected_state == "current")
+
+
+def test_watch_heartbeat_health_rejects_previous_campaign_pin_mismatch(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    _output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    storage["previousCampaignDir"] = str(tmp_path / "expected-previous")
+    manifest.update(
+        {
+            "startedUtc": (now - timedelta(minutes=10)).isoformat(),
+            "watchConfig": {
+                "enabled": True,
+                "intervalSeconds": 60.0,
+                "heartbeatStaleSeconds": 180.0,
+            },
+        }
+    )
+    heartbeat = {
+        "schema": controller.WATCH_SCHEMA,
+        "campaignId": manifest["campaignId"],
+        "timestampUtc": now.isoformat(),
+        "storage": {
+            "ok": True,
+            "policySha256": storage["policySha256"],
+            "activeCampaignDir": storage["activeCampaignDir"],
+            "previousCampaignDir": None,
+        },
+    }
+
+    result = controller.watch_heartbeat_health(manifest, heartbeat, now=now)
+
+    assert result == {"state": "invalid", "accepted": False, "reason": "previous-campaign"}
 
 
 def test_stop_session_requests_graceful_teardown_without_force(
@@ -1180,3 +1217,31 @@ def test_stop_exact_process_reports_surviving_exact_launcher(
     assert result["forced"] is True
     assert result["verifiedStopped"] is False
     assert result["result"]["remaining_pids"] == [10]
+
+
+def test_stop_exact_process_rejects_orphaned_owned_children(
+    monkeypatch,
+) -> None:
+    identity = {"pid": 10, "creationDate": "launcher"}
+    row = WindowsProcessInfo(10, 1, "python.exe", "python launch-soak.py", "launcher")
+    process_snapshots = iter(([row], []))
+    monkeypatch.setattr(
+        controller.windows_processes,
+        "collect_processes",
+        lambda: list(next(process_snapshots)),
+    )
+    monkeypatch.setattr(
+        controller.windows_processes,
+        "terminate_process_tree",
+        lambda *_args, **_kwargs: {"return_code": 1, "remaining_pids": [11]},
+    )
+
+    result = controller.stop_exact_process(
+        identity,
+        markers=("launch-soak.py",),
+        timeout_seconds=0.1,
+    )
+
+    assert result["verifiedRootStopped"] is True
+    assert result["verifiedStopped"] is False
+    assert result["result"]["remaining_pids"] == [11]
