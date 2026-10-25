@@ -7,7 +7,7 @@
     "profile_dir": "%EMULEBB_RUST_SOAK_PROFILE_DIR%"
   },
   "soak_storage": {
-    "schema": "emulebb-build-tests.soak-storage-policy.v4",
+    "schema": "emulebb-build-tests.soak-storage-policy.v5",
     "max_total_bytes": 34359738368,
     "max_age_seconds": 604800,
     "minimum_free_bytes": 21474836480,
@@ -32,6 +32,10 @@
       "diagnostic_bundles": {
         "max_segment_bytes": 4194304,
         "retained_segments": 48
+      },
+      "diagnostic_indexes": {
+        "max_segment_bytes": 8388608,
+        "retained_segments": 1
       },
       "diagnostic_segments": {
         "max_segment_bytes": 67108864,
