@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import cpu_profile, vpn_guard_live
+from emule_test_harness import cpu_profile, soak_storage, vpn_guard_live
 from emule_test_harness.live_wire_inputs import LiveWireInputs
 
 
@@ -179,6 +179,116 @@ def test_graceful_teardown_can_use_ctrl_c(monkeypatch) -> None:
     assert result["exitCode"] == 0
     assert result["clean"] is True
     assert log_handle.closed is True
+
+
+def test_graceful_teardown_marks_output_capture_failure_unclean(monkeypatch) -> None:
+    module = load_launch_soak_module()
+
+    class FakeProcess:
+        exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+    class FailingCapture:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def raise_if_failed(self) -> None:
+            raise RuntimeError("daemon output integrity lost")
+
+    process = FakeProcess()
+    capture = FailingCapture()
+
+    def fake_request_ctrl_c(target) -> None:
+        target.exit_code = 0
+
+    monkeypatch.setattr(module, "request_ctrl_c", fake_request_ctrl_c)
+
+    result = module.graceful_teardown(
+        rust_handles={
+            "process": process,
+            "logHandle": None,
+            "outputCapture": capture,
+        },
+        mfc_handles=None,
+        live_common=None,
+        rust_base="http://192.0.2.10:4731",
+        rust_shutdown_trigger="ctrl-c",
+        wait_seconds=0.1,
+    )
+
+    assert result["clean"] is False
+    assert result["outputError"] == "RuntimeError: daemon output integrity lost"
+    assert capture.closed is True
+
+
+def test_required_daemon_output_policy_rejects_missing_storage(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    inputs = LiveWireInputs(
+        path=tmp_path / "inputs.json",
+        generic_open_terms=(),
+        document_terms=(),
+        radarr_movie_terms=(),
+        sonarr_series_terms=(),
+        video_roots=(),
+        bootstrap_transfer_hashes=(),
+        direct_bootstrap_transfers=(),
+        soak_storage=None,
+    )
+
+    with pytest.raises(RuntimeError, match="require soak_storage"):
+        module.required_daemon_output_policy(inputs)
+
+
+def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    daemon_policy = soak_storage.ArtifactStreamPolicy(64, 2)
+    inputs = LiveWireInputs(
+        path=tmp_path / "inputs.json",
+        generic_open_terms=(),
+        document_terms=(),
+        radarr_movie_terms=(),
+        sonarr_series_terms=(),
+        video_roots=(),
+        bootstrap_transfer_hashes=(),
+        direct_bootstrap_transfers=(),
+        soak_storage=soak_storage.SoakStoragePolicy(
+            max_total_bytes=1_000,
+            max_age_seconds=3_600,
+            minimum_free_bytes=1,
+            bundle_interval_seconds=900,
+            streams={
+                "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
+                "daemon_output": daemon_policy,
+            },
+        ),
+    )
+
+    assert module.required_daemon_output_policy(inputs) is daemon_policy
+
+
+def test_daemon_output_manifest_records_exact_campaign_policy(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    run_paths = module.soak_run_layout.build_run_paths(
+        tmp_path / "soak",
+        "20261025T120000Z",
+    )
+
+    result = module.daemon_output_manifest(
+        run_paths,
+        soak_storage.ArtifactStreamPolicy(64, 2),
+    )
+
+    assert result == {
+        "path": str(run_paths.rust_daemon_output),
+        "maxSegmentBytes": 64,
+        "retainedSegments": 2,
+        "exactBytes": True,
+        "stderr": "merged",
+    }
 
 
 def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None:
