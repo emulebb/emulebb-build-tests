@@ -1330,6 +1330,24 @@ def test_remaining_exact_tree_rows_discovers_post_capture_descendant(
     assert remaining == [late_child]
 
 
+def test_remaining_exact_tree_rows_fails_closed_on_parent_pid_reuse(
+    monkeypatch,
+) -> None:
+    identities = (
+        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
+    )
+    reused_parent = WindowsProcessInfo(10, 1, "other.exe", "other", "replacement")
+    ambiguous_child = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
+    monkeypatch.setattr(
+        controller.windows_processes,
+        "collect_processes",
+        lambda: [reused_parent, ambiguous_child],
+    )
+
+    with pytest.raises(RuntimeError, match="PID reuse made descendant ownership ambiguous: 11"):
+        controller.remaining_exact_tree_rows(identities)
+
+
 def test_stop_captured_process_tree_rejects_reported_late_survivors(
     monkeypatch,
 ) -> None:
