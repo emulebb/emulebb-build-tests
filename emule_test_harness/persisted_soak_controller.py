@@ -416,6 +416,37 @@ def exact_process_row(
     )
 
 
+def exact_identity_payload(value: object) -> dict[str, Any] | None:
+    """Returns the minimum exact process identity when it is complete."""
+
+    if not isinstance(value, dict):
+        return None
+    pid = value.get("pid")
+    creation_date = value.get("creationDate")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if not isinstance(creation_date, str) or not creation_date:
+        return None
+    return {"pid": pid, "creationDate": creation_date}
+
+
+def resolve_watcher_launcher_identity(
+    manifest: dict[str, Any],
+    launcher_fallback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolves and cross-checks the watcher's immutable launcher identity."""
+
+    manifest_identity = exact_identity_payload(manifest.get("launcher"))
+    fallback_identity = exact_identity_payload(launcher_fallback)
+    if (
+        manifest_identity is not None
+        and fallback_identity is not None
+        and manifest_identity != fallback_identity
+    ):
+        raise RuntimeError("Persisted soak launcher identity mismatches the watcher fallback.")
+    return fallback_identity or manifest_identity or {}
+
+
 def wait_process_identity(
     pid: int,
     *,
@@ -562,6 +593,7 @@ def build_watch_command(
     interval_seconds: float,
     max_bytes: int,
     segments: int,
+    launcher_identity: dict[str, Any],
 ) -> list[str]:
     """Builds the detached periodic health command."""
 
@@ -577,6 +609,10 @@ def build_watch_command(
         str(max_bytes),
         "--segments",
         str(segments),
+        "--launcher-pid",
+        str(launcher_identity["pid"]),
+        "--launcher-creation-date",
+        str(launcher_identity["creationDate"]),
     ]
 
 
@@ -763,6 +799,7 @@ def start_session(
             interval_seconds=watch_interval_seconds,
             max_bytes=watch_max_bytes,
             segments=watch_segments,
+            launcher_identity=manifest["launcher"],
         )
         watch_command = build_bounded_process_command(
             watch_target_command,
@@ -1046,6 +1083,7 @@ def request_watch_failure_stop(
     paths: ControlPaths,
     manifest: dict[str, Any],
     *,
+    launcher_fallback: dict[str, Any] | None = None,
     graceful_timeout_seconds: float = WATCH_FAILURE_GRACE_SECONDS,
 ) -> dict[str, Any]:
     """Stops the launcher without waiting on or terminating the current watcher."""
@@ -1062,33 +1100,114 @@ def request_watch_failure_stop(
         except OSError as error:
             stop_errors.append(f"{stop_path}: {type(error).__name__}: {error}"[:1024])
 
-    launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
     try:
-        launcher_graceful = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
-    except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
+        launcher_identity = resolve_watcher_launcher_identity(manifest, launcher_fallback)
+    except RuntimeError as error:
+        stop_errors.append(f"launcherIdentity: {error}"[:1024])
+        launcher_identity = (
+            exact_identity_payload(launcher_fallback)
+            or exact_identity_payload(manifest.get("launcher"))
+            or {}
+        )
+    identity_available = bool(launcher_identity)
+    if not identity_available:
         launcher_graceful = False
-        stop_errors.append(f"launcherWait: {type(error).__name__}: {error}"[:1024])
-    if launcher_graceful:
-        launcher_force = {"forced": False, "alreadyStopped": True}
+        launcher_force = {
+            "forced": False,
+            "alreadyStopped": False,
+            "verifiedStopped": False,
+            "errorType": "LauncherIdentityUnavailable",
+            "error": "Exact launcher PID and creation date were unavailable.",
+        }
     else:
         try:
-            launcher_force = stop_exact_process(
-                launcher_identity,
-                markers=("launch-soak.py",),
-                timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
-            )
-        except Exception as error:  # noqa: BLE001 - preserve terminal shutdown evidence
+            launcher_graceful = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
+        except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
+            launcher_graceful = False
+            stop_errors.append(f"launcherWait: {type(error).__name__}: {error}"[:1024])
+        if launcher_graceful:
             launcher_force = {
                 "forced": False,
-                "alreadyStopped": False,
-                "errorType": type(error).__name__,
-                "error": str(error)[:1024],
+                "alreadyStopped": True,
+                "verifiedStopped": True,
             }
+        else:
+            try:
+                launcher_force = stop_exact_process(
+                    launcher_identity,
+                    markers=("launch-soak.py",),
+                    timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+                )
+            except Exception as error:  # noqa: BLE001 - preserve terminal shutdown evidence
+                launcher_force = {
+                    "forced": False,
+                    "alreadyStopped": False,
+                    "verifiedStopped": False,
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
+    launcher_stopped = bool(launcher_graceful or launcher_force.get("verifiedStopped"))
     return {
         "stopRequestedUtc": requested_at,
         "stopWriteErrors": stop_errors,
+        "launcherIdentityAvailable": identity_available,
         "launcherGraceful": launcher_graceful,
         "launcherForce": launcher_force,
+        "launcherStopped": launcher_stopped,
+    }
+
+
+def finish_watch_failure(
+    paths: ControlPaths,
+    manifest: dict[str, Any],
+    latest: dict[str, Any],
+    *,
+    sample_count: int,
+    max_bytes: int,
+    segments: int,
+    launcher_fallback: dict[str, Any] | None,
+    emit: Callable[[dict[str, Any]], None] | None,
+    initial_persisted: bool,
+    persistence_errors: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persists terminal evidence before and after verified launcher shutdown."""
+
+    errors = list(persistence_errors or ())
+    if not initial_persisted:
+        errors.extend(
+            persist_terminal_watch_sample(
+                paths,
+                latest,
+                max_bytes=max_bytes,
+                segments=segments,
+            )
+        )
+    stop = request_watch_failure_stop(
+        paths,
+        manifest,
+        launcher_fallback=launcher_fallback,
+    )
+    latest = {**latest, "shutdown": stop}
+    errors.extend(
+        persist_terminal_watch_sample(
+            paths,
+            latest,
+            max_bytes=max_bytes,
+            segments=segments,
+        )
+    )
+    if emit is not None:
+        try:
+            emit(latest)
+        except Exception as error:  # noqa: BLE001 - terminal shutdown is already complete
+            errors.append(f"watchEmit: {type(error).__name__}: {error}"[:1024])
+    return {
+        "ok": False,
+        "samples": sample_count,
+        "latest": latest,
+        "watchJsonl": str(paths.watch_jsonl),
+        "persistenceErrors": errors,
+        "stop": stop,
     }
 
 
@@ -1100,6 +1219,7 @@ def watch_session(
     segments: int,
     max_samples: int = 0,
     emit: Callable[[dict[str, Any]], None] | None = None,
+    launcher_fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Runs periodic health checks until stopped or the launcher exits."""
 
@@ -1120,6 +1240,7 @@ def watch_session(
             manifest,
             get_workspace_output_root(),
         )
+        resolve_watcher_launcher_identity(manifest, launcher_fallback)
     except Exception as error:  # noqa: BLE001 - invalid storage authority is terminal
         storage = {
             "ok": False,
@@ -1134,33 +1255,53 @@ def watch_session(
             status = None
             status_error = error
         latest = build_watch_sample(status, storage, status_error=status_error)
-        persistence_errors = persist_terminal_watch_sample(
+        return finish_watch_failure(
             paths,
+            manifest,
             latest,
+            sample_count=1,
             max_bytes=max_bytes,
             segments=segments,
+            launcher_fallback=launcher_fallback,
+            emit=emit,
+            initial_persisted=False,
         )
-        if emit is not None:
-            try:
-                emit(latest)
-            except Exception as error:  # noqa: BLE001 - shutdown must still continue
-                persistence_errors.append(f"watchEmit: {type(error).__name__}: {error}"[:1024])
-        stop = request_watch_failure_stop(paths, manifest)
-        return {
-            "ok": False,
-            "samples": 1,
-            "latest": latest,
-            "watchJsonl": str(paths.watch_jsonl),
-            "persistenceErrors": persistence_errors,
-            "stop": stop,
-        }
 
     while max_samples <= 0 or sample_count < max_samples:
         if paths.watch_stop_file.exists():
             break
-        storage = enforce_session_storage_context(storage_context)
-        status = session_status(paths)
-        latest = build_watch_sample(status, storage)
+        try:
+            storage = enforce_session_storage_context(storage_context)
+        except Exception as error:  # noqa: BLE001 - enforcement exceptions are terminal
+            storage = {
+                "ok": False,
+                "phase": "enforcement",
+                "policySha256": storage_context.policy_sha256,
+                "activeCampaignDir": str(storage_context.active_campaign),
+                "previousCampaignDir": (
+                    str(storage_context.previous_campaign)
+                    if storage_context.previous_campaign is not None
+                    else None
+                ),
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            }
+        try:
+            status = session_status(paths)
+            status_error = None
+        except Exception as error:  # noqa: BLE001 - unattended health loss is terminal
+            status = None
+            status_error = error
+            storage = {
+                **storage,
+                "ok": False,
+                "phase": "watchStatus",
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            }
+        latest = build_watch_sample(status, storage, status_error=status_error)
+        initial_persisted = False
+        persistence_errors: list[str] = []
         try:
             persist_watch_sample(
                 paths,
@@ -1168,7 +1309,7 @@ def watch_session(
                 max_bytes=max_bytes,
                 segments=segments,
             )
-            persistence_errors: list[str] = []
+            initial_persisted = True
         except Exception as error:  # noqa: BLE001 - watch evidence loss is terminal
             storage = {
                 **storage,
@@ -1177,14 +1318,8 @@ def watch_session(
                 "errorType": type(error).__name__,
                 "error": str(error)[:1024],
             }
-            latest = build_watch_sample(status, storage)
-            persistence_errors = persist_terminal_watch_sample(
-                paths,
-                latest,
-                max_bytes=max_bytes,
-                segments=segments,
-            )
-        if emit is not None:
+            latest = build_watch_sample(status, storage, status_error=status_error)
+        if storage.get("ok") and emit is not None:
             try:
                 emit(latest)
             except Exception as error:  # noqa: BLE001 - watcher output loss is terminal
@@ -1195,26 +1330,23 @@ def watch_session(
                     "errorType": type(error).__name__,
                     "error": str(error)[:1024],
                 }
-                latest = build_watch_sample(status, storage)
-                persistence_errors.extend(
-                    persist_terminal_watch_sample(
-                        paths,
-                        latest,
-                        max_bytes=max_bytes,
-                        segments=segments,
-                    )
-                )
+                latest = build_watch_sample(status, storage, status_error=status_error)
+                initial_persisted = False
         sample_count += 1
         if not storage.get("ok"):
-            stop = request_watch_failure_stop(paths, manifest)
-            return {
-                "ok": False,
-                "samples": sample_count,
-                "latest": latest,
-                "watchJsonl": str(paths.watch_jsonl),
-                "persistenceErrors": persistence_errors,
-                "stop": stop,
-            }
+            return finish_watch_failure(
+                paths,
+                manifest,
+                latest,
+                sample_count=sample_count,
+                max_bytes=max_bytes,
+                segments=segments,
+                launcher_fallback=launcher_fallback,
+                emit=emit,
+                initial_persisted=initial_persisted,
+                persistence_errors=persistence_errors,
+            )
+        assert status is not None
         if not status["launcher"]["alive"] or (max_samples > 0 and sample_count >= max_samples):
             break
         time.sleep(interval_seconds)
@@ -1243,14 +1375,20 @@ def stop_exact_process(identity: dict[str, Any], *, markers: tuple[str, ...], ti
     processes = windows_processes.collect_processes()
     row = exact_process_row(identity, processes)
     if row is None:
-        return {"forced": False, "alreadyStopped": True}
+        return {"forced": False, "alreadyStopped": True, "verifiedStopped": True}
     result = windows_processes.terminate_process_tree(
         row.pid,
         timeout_seconds=timeout_seconds,
         expected_command_line_markers=markers,
         expected_root_creation_date=row.creation_date,
     )
-    return {"forced": True, "alreadyStopped": False, "result": result}
+    verified_stopped = exact_process_row(identity, windows_processes.collect_processes()) is None
+    return {
+        "forced": True,
+        "alreadyStopped": False,
+        "verifiedStopped": verified_stopped,
+        "result": result,
+    }
 
 
 def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0) -> dict[str, Any]:
@@ -1335,6 +1473,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--max-bytes", type=int, default=DEFAULT_WATCH_MAX_BYTES)
     watch.add_argument("--segments", type=int, default=DEFAULT_WATCH_SEGMENTS)
     watch.add_argument("--max-samples", type=int, default=0)
+    watch.add_argument("--launcher-pid", type=int)
+    watch.add_argument("--launcher-creation-date")
 
     stop = subparsers.add_parser("stop", help="Gracefully stop the detached soak and health watcher.")
     stop.add_argument("--graceful-timeout-seconds", type=float, default=90.0)
@@ -1369,6 +1509,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "status":
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
     elif args.command == "watch":
+        launcher_fallback = None
+        if args.launcher_pid is not None or args.launcher_creation_date is not None:
+            if args.launcher_pid is None or not args.launcher_creation_date:
+                raise RuntimeError("Watcher launcher fallback requires both PID and creation date.")
+            launcher_fallback = {
+                "pid": args.launcher_pid,
+                "creationDate": args.launcher_creation_date,
+            }
         result = watch_session(
             paths,
             interval_seconds=args.interval_seconds,
@@ -1376,6 +1524,7 @@ def main(argv: list[str] | None = None) -> int:
             segments=args.segments,
             max_samples=args.max_samples,
             emit=lambda record: print(json.dumps(record, sort_keys=True), flush=True),
+            launcher_fallback=launcher_fallback,
         )
     else:
         result = stop_session(paths, graceful_timeout_seconds=args.graceful_timeout_seconds)
