@@ -431,6 +431,148 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def action_clients(
+    runtime: ObserverRuntime,
+) -> dict[str, converged_action_driver.ClientEndpoint]:
+    """Returns the fixed Rust and MFC REST authorities for action driving."""
+
+    return {
+        "rust": converged_action_driver.ClientEndpoint(
+            name="rust",
+            base_url=runtime.rust_base_url,
+            api_key=soak_launch.RUST_API_KEY,
+        ),
+        "mfc": converged_action_driver.ClientEndpoint(
+            name="mfc",
+            base_url=runtime.mfc_base_url,
+            api_key=soak_launch.MFC_API_KEY,
+        ),
+    }
+
+
+def action_diagnostic_runs(
+    clients: dict[str, converged_action_driver.ClientEndpoint],
+) -> dict[str, dict[str, Any]]:
+    """Loads the exact healthy diagnostic run identity for both clients."""
+
+    identities: dict[str, dict[str, Any]] = {}
+    for name in ("rust", "mfc"):
+        client = clients[name]
+        health = diagnostic_writer_health(client.base_url, client.api_key)
+        process_id = health.get("processId")
+        run_id = health.get("runId")
+        if (
+            isinstance(process_id, bool)
+            or not isinstance(process_id, int)
+            or process_id <= 0
+            or not isinstance(run_id, str)
+            or not run_id.strip()
+        ):
+            raise RuntimeError(
+                f"{name} diagnostic writer run identity is invalid: "
+                f"processId={process_id!r}, runId={run_id!r}"
+            )
+        identities[name] = {"processId": process_id, "runId": run_id}
+    return identities
+
+
+def utc_text(now_utc: Callable[[], datetime]) -> str:
+    """Returns one canonical UTC timestamp from the injected clock."""
+
+    return now_utc().astimezone(UTC).isoformat()
+
+
+def action_phase_error(
+    client: str,
+    *,
+    error_type: str,
+    message: str,
+) -> dict[str, str]:
+    """Returns one exact unredacted action-phase error."""
+
+    return {
+        "client": client,
+        "phase": "search-create",
+        "type": error_type,
+        "message": message,
+    }
+
+
+def pending_cycle_payload(
+    pending: dict[str, Any],
+    *,
+    completed_at_utc: str,
+) -> dict[str, Any]:
+    """Reconstructs one terminal driver cycle from durable phase outcomes."""
+
+    searches: dict[str, dict[str, Any]] = {}
+    search_ids: dict[str, str] = {}
+    result_counts: dict[str, int] = {}
+    errors: list[dict[str, Any]] = []
+    for client in ("rust", "mfc"):
+        client_state = pending["clients"][client]
+        create = client_state["create"]
+        if not isinstance(create, dict):
+            raise RuntimeError(f"{client} search create is not terminal.")
+        status = create["status"]
+        if status == "succeeded":
+            search_id = str(create["searchId"])
+            create_record: dict[str, Any] = {"ok": True, "searchId": search_id}
+            search_ids[client] = search_id
+        elif status in {"failed", "skipped"}:
+            error = create["error"]
+            create_record = {"ok": False, "error": error}
+            if status == "skipped":
+                create_record["skipped"] = "fail-closed"
+            errors.append(error)
+        else:
+            raise RuntimeError(f"{client} search create is not terminal.")
+
+        results = client_state["results"]
+        if status != "succeeded":
+            results_record: dict[str, Any] = {
+                "ok": False,
+                "skipped": "search-create-failed",
+            }
+        elif not isinstance(results, dict):
+            raise RuntimeError(f"{client} search results are not terminal.")
+        elif results["error"] is not None:
+            results_record = {
+                "ok": False,
+                "completed": results["completed"],
+                "error": results["error"],
+            }
+            if results["resultCount"] is not None:
+                results_record["count"] = results["resultCount"]
+                result_counts[client] = results["resultCount"]
+            errors.append(results["error"])
+        else:
+            result_count = results["resultCount"]
+            results_record = {
+                "ok": True,
+                "count": result_count,
+                "completed": results["completed"],
+            }
+            result_counts[client] = result_count
+        searches[client] = {"create": create_record, "results": results_record}
+
+    return {
+        "cycle": pending["cycle"],
+        "actionId": pending["actionId"],
+        "queryIndex": pending["queryIndex"],
+        "method": pending["method"],
+        "query": pending["query"],
+        "downloadRequested": False,
+        "ok": not errors,
+        "searches": searches,
+        "searchIds": search_ids,
+        "resultCounts": result_counts,
+        "errors": errors,
+        "startedAtUtc": pending["reservedAtUtc"],
+        "completedAtUtc": completed_at_utc,
+    }
+
+
 def capture_action_cycle(
     runtime: ObserverRuntime,
     state: dict[str, Any],
@@ -439,7 +581,7 @@ def capture_action_cycle(
     now_utc: Callable[[], datetime] = utc_now,
     now_ns: int | None = None,
 ) -> dict[str, Any]:
-    """Issues and records one synchronized search without owning either client."""
+    """Advances one crash-safe synchronized search without owning either client."""
 
     validated = converged_observer_state.validate_state(
         state,
@@ -448,43 +590,154 @@ def capture_action_cycle(
     )
     if not config.enabled or not config.terms:
         raise RuntimeError("Observer action driving is not enabled.")
-    cycle_index = int(validated["driver"]["cycles"]) + 1
-    query = config.terms[(cycle_index - 1) % len(config.terms)]
-    started_at = now_utc().astimezone(UTC).isoformat()
-    rust_client = converged_action_driver.ClientEndpoint(
-        name="rust",
-        base_url=runtime.rust_base_url,
-        api_key=soak_launch.RUST_API_KEY,
-    )
-    mfc_client = converged_action_driver.ClientEndpoint(
-        name="mfc",
-        base_url=runtime.mfc_base_url,
-        api_key=soak_launch.MFC_API_KEY,
-    )
-    try:
-        cycle = converged_action_driver.drive_automatic_cycle(
-            cycle_index=cycle_index,
+    clients = action_clients(runtime)
+    resumed = validated["pendingAction"] is not None
+    if not resumed:
+        cycle_index = int(validated["scheduler"]["nextCycle"])
+        query = config.terms[(cycle_index - 1) % len(config.terms)]
+        validated = converged_observer_state.set_next_action_deadline(validated, None)
+        validated = converged_observer_state.reserve_driver_cycle(
+            validated,
             query=query,
             method=config.method,
-            rust=rust_client,
-            mfc=mfc_client,
-            safety=None,
-            download=False,
-            search_timeout_seconds=config.search_timeout_seconds,
+            reserved_at_utc=utc_text(now_utc),
+            diagnostic_runs=action_diagnostic_runs(clients),
         )
-    except Exception as error:  # noqa: BLE001 - persist live action failures and continue the soak
-        cycle = {
-            "cycle": cycle_index,
-            "queryIndex": cycle_index - 1,
-            "method": config.method,
-            "query": query,
-            "downloadRequested": False,
-            "error": f"{type(error).__name__}: {error}",
-        }
-    cycle["startedAtUtc"] = started_at
-    cycle["completedAtUtc"] = now_utc().astimezone(UTC).isoformat()
-    updated = converged_observer_state.record_driver_cycle(validated, cycle)
-    return persist_state(runtime, updated, now_ns=now_ns)
+        validated = persist_state(runtime, validated, now_ns=now_ns)
+
+    pending = validated["pendingAction"]
+    if not isinstance(pending, dict):
+        raise RuntimeError("Observer action reservation was not persisted.")
+    if pending["driverOutcome"] is not None:
+        if pending["evidence"] is None:
+            completed_at_utc = pending["driverOutcome"].get("completedAtUtc")
+            if not isinstance(completed_at_utc, str) or not completed_at_utc.strip():
+                completed_at_utc = utc_text(now_utc)
+            validated = converged_observer_state.mark_evidence_pending(
+                validated,
+                window_end_utc=completed_at_utc,
+            )
+            return persist_state(runtime, validated, now_ns=now_ns)
+        return validated
+
+    entry_creates = {
+        client: pending["clients"][client]["create"] for client in ("rust", "mfc")
+    }
+    if resumed:
+        for client, create in entry_creates.items():
+            if isinstance(create, dict) and create.get("status") == "prepared":
+                prepared_at_utc = create["preparedAtUtc"]
+                validated = converged_observer_state.complete_search_create(
+                    validated,
+                    client=client,
+                    completed_at_utc=utc_text(now_utc),
+                    search_id=None,
+                    error=action_phase_error(
+                        client,
+                        error_type="AmbiguousSearchCreate",
+                        message=(
+                            f"{client} search create was prepared at "
+                            f"{prepared_at_utc} without a persisted terminal outcome; "
+                            "the POST will not be replayed"
+                        ),
+                    ),
+                )
+                validated = persist_state(runtime, validated, now_ns=now_ns)
+
+        if any(create is not None for create in entry_creates.values()):
+            for client, create in entry_creates.items():
+                if create is None:
+                    validated = converged_observer_state.skip_search_create(
+                        validated,
+                        client=client,
+                        completed_at_utc=utc_text(now_utc),
+                        error=action_phase_error(
+                            client,
+                            error_type="SearchCreateSkipped",
+                            message=(
+                                f"{client} search create was not issued after restart "
+                                "because the peer create phase had already started"
+                            ),
+                        ),
+                    )
+                    validated = persist_state(runtime, validated, now_ns=now_ns)
+
+    pending = validated["pendingAction"]
+    if not isinstance(pending, dict):
+        raise RuntimeError(
+            "Observer pending action disappeared during create recovery."
+        )
+    creates = [pending["clients"][client]["create"] for client in ("rust", "mfc")]
+    prepared_now = all(create is None for create in creates)
+    if prepared_now:
+        prepared_at_utc = utc_text(now_utc)
+        for client in ("rust", "mfc"):
+            validated = converged_observer_state.prepare_search_create(
+                validated,
+                client=client,
+                prepared_at_utc=prepared_at_utc,
+            )
+        validated = persist_state(runtime, validated, now_ns=now_ns)
+
+        pending = validated["pendingAction"]
+        if not isinstance(pending, dict):
+            raise RuntimeError("Observer create intentions were not persisted.")
+        for client in ("rust", "mfc"):
+            phase = converged_action_driver.run_search_create_phase(
+                clients[client],
+                query=pending["query"],
+                method=pending["method"],
+            )
+            validated = converged_observer_state.complete_search_create(
+                validated,
+                client=client,
+                completed_at_utc=utc_text(now_utc),
+                search_id=phase.search_id,
+                error=phase.error,
+            )
+            validated = persist_state(runtime, validated, now_ns=now_ns)
+
+    for client in ("rust", "mfc"):
+        pending = validated["pendingAction"]
+        if not isinstance(pending, dict):
+            raise RuntimeError(
+                "Observer pending action disappeared during result polling."
+            )
+        client_state = pending["clients"][client]
+        create = client_state["create"]
+        if (
+            not isinstance(create, dict)
+            or create.get("status") != "succeeded"
+            or client_state["results"] is not None
+        ):
+            continue
+        phase = converged_action_driver.run_search_results_phase(
+            clients[client],
+            str(create["searchId"]),
+            timeout_seconds=config.search_timeout_seconds,
+        )
+        validated = converged_observer_state.record_search_results(
+            validated,
+            client=client,
+            completed_at_utc=utc_text(now_utc),
+            completed=phase.completed,
+            result_count=len(phase.rows),
+            error=phase.error,
+        )
+        validated = persist_state(runtime, validated, now_ns=now_ns)
+
+    pending = validated["pendingAction"]
+    if not isinstance(pending, dict):
+        raise RuntimeError("Observer pending action disappeared before completion.")
+    completed_at_utc = utc_text(now_utc)
+    cycle = pending_cycle_payload(pending, completed_at_utc=completed_at_utc)
+    validated = converged_observer_state.record_driver_cycle(validated, cycle)
+    validated = persist_state(runtime, validated, now_ns=now_ns)
+    validated = converged_observer_state.mark_evidence_pending(
+        validated,
+        window_end_utc=completed_at_utc,
+    )
+    return persist_state(runtime, validated, now_ns=now_ns)
 
 
 def run_observer(

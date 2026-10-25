@@ -73,6 +73,13 @@ def new_state(
     )
 
 
+def diagnostic_runs() -> dict[str, dict[str, object]]:
+    return {
+        "rust": {"processId": 4101, "runId": "rust-run"},
+        "mfc": {"processId": 4201, "runId": "mfc-run"},
+    }
+
+
 def test_capture_checkpoint_persists_full_health_and_cumulative_state(
     tmp_path: Path,
     monkeypatch,
@@ -195,36 +202,10 @@ def test_load_state_binds_the_exact_action_configuration(tmp_path: Path) -> None
         converged_observer.load_state(changed)
 
 
-def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
+def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    subject = runtime(tmp_path)
-    observed: dict[str, object] = {}
-
-    def drive(**kwargs):
-        observed.update(kwargs)
-        return {
-            "cycle": kwargs["cycle_index"],
-            "queryIndex": kwargs["cycle_index"] - 1,
-            "method": kwargs["method"],
-            "query": kwargs["query"],
-            "downloadRequested": False,
-            "searchIds": {"rust": "rust-search", "mfc": "mfc-search"},
-            "resultCounts": {"rust": 4, "mfc": 3},
-        }
-
-    monkeypatch.setattr(
-        converged_observer.converged_action_driver,
-        "drive_automatic_cycle",
-        drive,
-    )
-    timestamps = iter(
-        (
-            datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
-            datetime(2026, 10, 25, 12, 2, tzinfo=UTC),
-        )
-    )
     config = converged_observer.ObserverActionConfig(
         enabled=True,
         source_profile="explicit",
@@ -234,30 +215,83 @@ def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
         search_interval_seconds=900,
         search_timeout_seconds=120,
     )
-    subject = replace(subject, action_config=config)
+    subject = replace(runtime(tmp_path), action_config=config)
+    events: list[tuple[str, str]] = []
+
+    def health(base_url: str, _api_key: str) -> dict[str, object]:
+        client = "rust" if base_url == subject.rust_base_url else "mfc"
+        return diagnostic_runs()[client]
+
+    def create_phase(client, *, query: str, method: str):
+        summary = converged_observer.load_json_object(
+            subject.run_paths.report_dir / "summary.json"
+        )
+        create_statuses = {
+            name: summary["pendingAction"]["clients"][name]["create"]["status"]
+            for name in ("rust", "mfc")
+        }
+        assert create_statuses[client.name] == "prepared"
+        if client.name == "rust":
+            assert create_statuses == {"rust": "prepared", "mfc": "prepared"}
+        else:
+            assert create_statuses == {"rust": "succeeded", "mfc": "prepared"}
+        assert query == "Exact Local Search Term"
+        assert method == "server"
+        events.append(("create", client.name))
+        return converged_observer.converged_action_driver.SearchCreatePhase(
+            search_id=f"{client.name}-search",
+            error=None,
+        )
+
+    def results_phase(client, search_id: str, *, timeout_seconds: float):
+        assert search_id == f"{client.name}-search"
+        assert timeout_seconds == 120
+        events.append(("results", client.name))
+        rows = tuple({"hash": str(index) * 32} for index in range(1, 3))
+        return converged_observer.converged_action_driver.SearchResultsPhase(
+            rows=rows,
+            completed=client.name == "rust",
+            error=None,
+        )
+
+    monkeypatch.setattr(converged_observer, "diagnostic_writer_health", health)
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        create_phase,
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_results_phase",
+        results_phase,
+    )
 
     updated = converged_observer.capture_action_cycle(
         subject,
         new_state(config),
         config,
-        now_utc=lambda: next(timestamps),
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         now_ns=1_000_000_000,
     )
 
-    assert observed["query"] == "Exact Local Search Term"
-    assert observed["download"] is False
-    assert observed["safety"] is None
-    assert observed["rust"].base_url == subject.rust_base_url
-    assert observed["mfc"].base_url == subject.mfc_base_url
+    assert events == [
+        ("create", "rust"),
+        ("create", "mfc"),
+        ("results", "rust"),
+        ("results", "mfc"),
+    ]
     assert updated["driver"]["cycles"] == 1
     assert updated["driver"]["latestCycle"]["query"] == "Exact Local Search Term"
-    assert (
-        updated["driver"]["latestCycle"]["startedAtUtc"] == "2026-10-25T12:01:00+00:00"
-    )
-    assert (
-        updated["driver"]["latestCycle"]["completedAtUtc"]
-        == "2026-10-25T12:02:00+00:00"
-    )
+    assert updated["driver"]["latestCycle"]["resultCounts"] == {
+        "rust": 2,
+        "mfc": 2,
+    }
+    assert updated["pendingAction"]["diagnosticRuns"] == diagnostic_runs()
+    assert updated["pendingAction"]["clients"]["mfc"]["results"]["completed"] is False
+    assert updated["pendingAction"]["evidence"] == {
+        "status": "pending",
+        "windowEndUtc": "2026-10-25T12:01:00+00:00",
+    }
     assert (
         converged_observer.load_json_object(
             subject.run_paths.report_dir / "summary.json"
@@ -266,34 +300,199 @@ def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
     )
 
 
-def test_capture_action_cycle_records_rest_failure_without_stopping_soak(
+def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    subject = runtime(tmp_path)
-    monkeypatch.setattr(
-        converged_observer.converged_action_driver,
-        "drive_automatic_cycle",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("REST unavailable")),
-    )
     config = converged_observer.ObserverActionConfig(
         enabled=True,
         source_profile="generic_open",
         terms=("linux",),
         search_interval_seconds=900,
     )
-    subject = replace(subject, action_config=config)
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+    converged_observer.persist_state(subject, state)
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ambiguous POST must not be replayed")
+        ),
+    )
 
     updated = converged_observer.capture_action_cycle(
         subject,
-        new_state(config),
+        converged_observer.load_state(subject),
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
     )
 
     assert updated["driver"]["cycles"] == 1
     assert updated["driver"]["cycleErrors"] == 1
-    assert updated["driver"]["latestCycle"]["error"] == "RuntimeError: REST unavailable"
+    for client in ("rust", "mfc"):
+        create = updated["pendingAction"]["clients"][client]["create"]
+        assert create["status"] == "failed"
+        assert create["error"]["type"] == "AmbiguousSearchCreate"
+        assert "the POST will not be replayed" in create["error"]["message"]
+
+
+def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_interval_seconds=900,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+        state = converged_observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:02+00:00",
+            search_id=f"{client}-search-9",
+            error=None,
+        )
+    converged_observer.persist_state(subject, state)
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted search must not be created again")
+        ),
+    )
+    polled: list[tuple[str, str]] = []
+
+    def results_phase(client, search_id: str, *, timeout_seconds: float):
+        assert timeout_seconds == config.search_timeout_seconds
+        polled.append((client.name, search_id))
+        return converged_observer.converged_action_driver.SearchResultsPhase(
+            rows=({"hash": "a" * 32},),
+            completed=False,
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_results_phase",
+        results_phase,
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        converged_observer.load_state(subject),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+    )
+
+    assert polled == [
+        ("rust", "rust-search-9"),
+        ("mfc", "mfc-search-9"),
+    ]
+    assert updated["driver"]["latestCycle"]["searchIds"] == {
+        "rust": "rust-search-9",
+        "mfc": "mfc-search-9",
+    }
+
+
+def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_interval_seconds=900,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+        state = converged_observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:02+00:00",
+            search_id=f"{client}-search-9",
+            error=None,
+        )
+        state = converged_observer_state.record_search_results(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:03+00:00",
+            completed=True,
+            result_count=1,
+            error=None,
+        )
+    cycle = converged_observer.pending_cycle_payload(
+        state["pendingAction"],
+        completed_at_utc="2026-10-25T12:00:04+00:00",
+    )
+    state = converged_observer_state.record_driver_cycle(state, cycle)
+    converged_observer.persist_state(subject, state)
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed driver must not issue another POST")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_results_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed driver must not poll again")
+        ),
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        converged_observer.load_state(subject),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 5, tzinfo=UTC),
+    )
+
+    assert updated["pendingAction"]["evidence"] == {
+        "status": "pending",
+        "windowEndUtc": "2026-10-25T12:00:04+00:00",
+    }
 
 
 def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
