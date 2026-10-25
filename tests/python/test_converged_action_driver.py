@@ -170,9 +170,176 @@ def test_search_only_cycle_does_not_require_download_safety(
         "method": "kad",
         "query": "debian",
         "downloadRequested": False,
+        "ok": True,
+        "searches": {
+            "rust": {
+                "create": {"ok": True, "searchId": "rust-search"},
+                "results": {"ok": True, "count": 1, "completed": True},
+            },
+            "mfc": {
+                "create": {"ok": True, "searchId": "mfc-search"},
+                "results": {"ok": True, "count": 1, "completed": True},
+            },
+        },
         "searchIds": {"rust": "rust-search", "mfc": "mfc-search"},
         "resultCounts": {"rust": 1, "mfc": 1},
+        "errors": [],
     }
+
+
+def test_search_cycle_preserves_one_sided_create_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, str]] = []
+
+    def fake_create(client: driver.ClientEndpoint, **_kwargs) -> str:
+        events.append(("create", client.name))
+        if client.name == "mfc":
+            raise RuntimeError("MFC create failed exactly")
+        return "rust-search"
+
+    def fake_poll(client: driver.ClientEndpoint, *_args, **_kwargs):
+        events.append(("poll", client.name))
+        return [{"hash": "a" * 32}]
+
+    monkeypatch.setattr(driver, "create_search", fake_create)
+    monkeypatch.setattr(driver, "poll_search_results", fake_poll)
+
+    cycle = driver.drive_automatic_cycle(
+        cycle_index=4,
+        query="Exact Local Term",
+        method="server",
+        rust=endpoint("rust"),
+        mfc=endpoint("mfc"),
+        safety=None,
+        download=False,
+        search_timeout_seconds=30.0,
+    )
+
+    assert events == [("create", "rust"), ("create", "mfc"), ("poll", "rust")]
+    assert cycle["ok"] is False
+    assert cycle["query"] == "Exact Local Term"
+    assert cycle["searchIds"] == {"rust": "rust-search"}
+    assert cycle["resultCounts"] == {"rust": 1}
+    assert cycle["searches"]["mfc"] == {
+        "create": {
+            "ok": False,
+            "error": {
+                "client": "mfc",
+                "phase": "search-create",
+                "type": "RuntimeError",
+                "message": "MFC create failed exactly",
+            },
+        },
+        "results": {"ok": False, "skipped": "search-create-failed"},
+    }
+    assert cycle["errors"] == [cycle["searches"]["mfc"]["create"]["error"]]
+
+
+def test_search_cycle_preserves_one_sided_result_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, str]] = []
+
+    def fake_create(client: driver.ClientEndpoint, **_kwargs) -> str:
+        events.append(("create", client.name))
+        return f"{client.name}-search"
+
+    def fake_poll(client: driver.ClientEndpoint, *_args, **_kwargs):
+        events.append(("poll", client.name))
+        if client.name == "rust":
+            raise RuntimeError("Rust poll failed exactly")
+        return [{"hash": "a" * 32}, {"hash": "b" * 32}]
+
+    monkeypatch.setattr(driver, "create_search", fake_create)
+    monkeypatch.setattr(driver, "poll_search_results", fake_poll)
+
+    cycle = driver.drive_automatic_cycle(
+        cycle_index=5,
+        query="debian",
+        method="global",
+        rust=endpoint("rust"),
+        mfc=endpoint("mfc"),
+        safety=None,
+        download=False,
+        search_timeout_seconds=30.0,
+    )
+
+    assert events[:2] == [("create", "rust"), ("create", "mfc")]
+    assert cycle["ok"] is False
+    assert cycle["searchIds"] == {
+        "rust": "rust-search",
+        "mfc": "mfc-search",
+    }
+    assert cycle["resultCounts"] == {"mfc": 2}
+    assert cycle["searches"]["rust"]["results"]["error"] == {
+        "client": "rust",
+        "phase": "search-results",
+        "type": "RuntimeError",
+        "message": "Rust poll failed exactly",
+    }
+
+
+def test_search_cycle_records_bounded_poll_timeout_without_losing_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "create_search",
+        lambda client, **_kwargs: f"{client.name}-search",
+    )
+    monkeypatch.setattr(
+        driver,
+        "poll_search_results",
+        lambda *_args, **_kwargs: driver.SearchResults(
+            [{"hash": "a" * 32}],
+            completed=False,
+        ),
+    )
+
+    cycle = driver.drive_automatic_cycle(
+        cycle_index=6,
+        query="linux",
+        method="kad",
+        rust=endpoint("rust"),
+        mfc=endpoint("mfc"),
+        safety=None,
+        download=False,
+        search_timeout_seconds=30.0,
+    )
+
+    assert cycle["ok"] is True
+    assert cycle["resultCounts"] == {"rust": 1, "mfc": 1}
+    assert cycle["searches"]["rust"]["results"] == {
+        "ok": True,
+        "count": 1,
+        "completed": False,
+    }
+    assert cycle["searches"]["mfc"]["results"]["completed"] is False
+
+
+def test_download_cycle_rejects_missing_safety_before_public_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "create_search",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("search must not be created")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="download safety policy"):
+        driver.drive_automatic_cycle(
+            cycle_index=7,
+            query="linux",
+            method="server",
+            rust=endpoint("rust"),
+            mfc=endpoint("mfc"),
+            safety=None,
+            download=True,
+            search_timeout_seconds=30.0,
+        )
 
 
 def test_execute_scheduled_download_targets_both_clients(

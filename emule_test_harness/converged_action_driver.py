@@ -27,6 +27,14 @@ class ClientEndpoint:
     api_key: str
 
 
+class SearchResults(list[dict[str, Any]]):
+    """List-compatible search results with explicit completion state."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, completed: bool) -> None:
+        super().__init__(rows)
+        self.completed = completed
+
+
 def extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
     """Extract dict rows from the REST list envelope variants used by both clients."""
 
@@ -209,7 +217,7 @@ def poll_search_results(
     search_id: str,
     *,
     timeout_seconds: float,
-) -> list[dict[str, Any]]:
+) -> SearchResults:
     """Poll one search until completion or the timeout, retaining the last results."""
 
     deadline = time.monotonic() + timeout_seconds
@@ -228,9 +236,9 @@ def poll_search_results(
         if rows:
             last_rows = rows
         if str(data.get("status") or "").casefold() in {"complete", "completed"}:
-            return rows
+            return SearchResults(rows, completed=True)
         time.sleep(2.0)
-    return last_rows
+    return SearchResults(last_rows, completed=False)
 
 
 def trigger_download(
@@ -283,6 +291,8 @@ def drive_automatic_cycle(
 ) -> dict[str, Any]:
     """Run one synchronized search and optionally schedule a common download."""
 
+    if download and safety is None:
+        raise ValueError("download cycles require a download safety policy")
     cycle: dict[str, Any] = {
         "cycle": cycle_index,
         "queryIndex": cycle_index - 1,
@@ -290,20 +300,83 @@ def drive_automatic_cycle(
         "query": query,
         "downloadRequested": download,
     }
-    rust_search_id = create_search(rust, query=query, method=method)
-    mfc_search_id = create_search(mfc, query=query, method=method)
-    cycle["searchIds"] = {"rust": rust_search_id, "mfc": mfc_search_id}
-    rust_rows = poll_search_results(
-        rust, rust_search_id, timeout_seconds=search_timeout_seconds
-    )
-    mfc_rows = poll_search_results(
-        mfc, mfc_search_id, timeout_seconds=search_timeout_seconds
-    )
-    cycle["resultCounts"] = {"rust": len(rust_rows), "mfc": len(mfc_rows)}
+    clients = (rust, mfc)
+    search_ids: dict[str, str] = {}
+    search_rows: dict[str, list[dict[str, Any]]] = {}
+    searches: dict[str, dict[str, Any]] = {}
+    errors: list[dict[str, str]] = []
+    for client in clients:
+        outcome: dict[str, Any] = {
+            "create": {"ok": False},
+            "results": {"ok": False, "skipped": "search-create-failed"},
+        }
+        searches[client.name] = outcome
+        try:
+            search_id = create_search(client, query=query, method=method)
+            if not search_id:
+                raise RuntimeError(
+                    f"{client.name} search create returned an empty identifier"
+                )
+        except RuntimeError as error:
+            detail = {
+                "client": client.name,
+                "phase": "search-create",
+                "type": type(error).__name__,
+                "message": str(error),
+            }
+            outcome["create"] = {"ok": False, "error": detail}
+            errors.append(detail)
+        else:
+            search_ids[client.name] = search_id
+            outcome["create"] = {"ok": True, "searchId": search_id}
+
+    for client in clients:
+        search_id = search_ids.get(client.name)
+        if search_id is None:
+            continue
+        try:
+            rows = poll_search_results(
+                client,
+                search_id,
+                timeout_seconds=search_timeout_seconds,
+            )
+        except RuntimeError as error:
+            detail = {
+                "client": client.name,
+                "phase": "search-results",
+                "type": type(error).__name__,
+                "message": str(error),
+            }
+            searches[client.name]["results"] = {"ok": False, "error": detail}
+            errors.append(detail)
+        else:
+            search_rows[client.name] = rows
+            searches[client.name]["results"] = {
+                "ok": True,
+                "count": len(rows),
+                "completed": bool(getattr(rows, "completed", True)),
+            }
+
+    cycle["ok"] = not errors
+    cycle["searches"] = searches
+    cycle["searchIds"] = search_ids
+    cycle["resultCounts"] = {client: len(rows) for client, rows in search_rows.items()}
+    cycle["errors"] = errors
+    if errors:
+        if download:
+            cycle["download"] = {
+                "ok": False,
+                "scheduled": False,
+                "reason": "search-phase-failed",
+            }
+        return cycle
+
+    rust_search_id = search_ids[rust.name]
+    mfc_search_id = search_ids[mfc.name]
+    rust_rows = search_rows[rust.name]
+    mfc_rows = search_rows[mfc.name]
     if not download:
         return cycle
-    if safety is None:
-        raise ValueError("download cycles require a download safety policy")
 
     rust_transfer_hashes = transfer_hashes(
         get_list(rust, "/api/v1/transfers", "transfers", timeout_seconds=30.0)

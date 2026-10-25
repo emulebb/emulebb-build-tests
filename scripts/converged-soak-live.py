@@ -2047,6 +2047,11 @@ def main(argv: list[str] | None = None) -> int:
                                 max_size_bytes=args.download_max_bytes,
                                 download_hash=args.download_hash or None,
                             )
+                            if cycle.get("ok") is False:
+                                log(
+                                    f"auto cycle {auto_cycle}: search phase failed: "
+                                    f"{json.dumps(cycle.get('errors'), sort_keys=True)}"
+                                )
                         except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
                             cycle = {
                                 "cycle": auto_cycle,
