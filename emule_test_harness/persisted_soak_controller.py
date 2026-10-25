@@ -16,10 +16,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import converged_live_wire as clw
-from . import hideme_vpn, soak_launch, soak_run_layout, soak_storage, windows_processes
+from . import (
+    diag_event_runs,
+    hideme_vpn,
+    soak_launch,
+    soak_run_layout,
+    soak_storage,
+    windows_processes,
+)
 from .live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from .paths import get_workspace_output_root, path_is_relative_to
-from .vm_guest_profiles import http_json
+from .vm_guest_profiles import api_data, http_json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
@@ -34,6 +41,12 @@ DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
 WATCH_FAILURE_GRACE_SECONDS = 15.0
 STORAGE_FAILURE_FINDING = "campaign-storage-enforcement-failed"
+DIAGNOSTIC_WRITER_FAILURE_FINDINGS = frozenset(
+    {
+        "rust-diagnostic-writer-unhealthy",
+        "mfc-diagnostic-writer-unhealthy",
+    }
+)
 WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
 
 
@@ -895,6 +908,32 @@ def rest_health(base_url: str, api_key: str) -> dict[str, Any]:
         return {"ok": False, "errorType": type(error).__name__, "error": str(error)[:256]}
 
 
+def diagnostic_writer_health(base_url: str, api_key: str) -> dict[str, Any]:
+    """Returns the complete current writer health plus strict integrity findings."""
+
+    try:
+        payload = http_json(
+            base_url,
+            "/diagnostics",
+            api_key=api_key,
+            timeout_seconds=5.0,
+        )
+        data = api_data(payload)
+        health = data.get("diagnosticWriter") if isinstance(data, dict) else None
+        violations = diag_event_runs.diagnostic_writer_health_violations(health)
+        return {
+            "ok": not violations,
+            "health": dict(health) if isinstance(health, dict) else None,
+            "violations": list(violations),
+        }
+    except Exception as error:  # noqa: BLE001 - watcher must persist REST failures
+        return {
+            "ok": False,
+            "health": None,
+            "violations": [f"{type(error).__name__}: {error}"[:1024]],
+        }
+
+
 def full_tunnel_health() -> dict[str, Any]:
     """Returns a bounded read-only hide.me health result."""
 
@@ -1020,6 +1059,12 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     for client in ("rust", "mfc"):
         if client in rest and not rest[client].get("ok"):
             findings.append(f"{client}-rest-unhealthy")
+    diagnostic_writers = status.get("diagnosticWriters") or {}
+    if diagnostic_writers.get("required"):
+        for client in ("rust", "mfc"):
+            health = diagnostic_writers.get(client)
+            if not isinstance(health, dict) or not health.get("ok"):
+                findings.append(f"{client}-diagnostic-writer-unhealthy")
     vpn = status.get("vpn")
     if isinstance(vpn, dict) and not vpn.get("ok"):
         findings.append("full-tunnel-unhealthy")
@@ -1066,15 +1111,41 @@ def session_status(
     rust_rows = [row for row in tree if row.name.casefold() == rust_name]
     mfc_rows = [row for row in tree if row.name.casefold() == mfc_name]
     control = preflight.get("control") if isinstance(preflight.get("control"), dict) else {}
-    rest = None
-    if check_rest and control.get("rustBaseUrl") and control.get("mfcBaseUrl"):
-        rest = {
-            "rust": rest_health(str(control.get("rustBaseUrl") or ""), soak_launch.RUST_API_KEY),
-            "mfc": rest_health(str(control.get("mfcBaseUrl") or ""), soak_launch.MFC_API_KEY),
-        }
     last_run = load_json(paths.last_run_manifest)
-    heartbeat = load_json(paths.watch_heartbeat)
     campaign_id = manifest.get("campaignId")
+    writer_health_required = bool(
+        check_rest
+        and control.get("rustBaseUrl")
+        and control.get("mfcBaseUrl")
+        and campaign_id
+        and last_run.get("campaignId") == campaign_id
+        and last_run.get("status") == "running"
+    )
+    rest = None
+    diagnostic_writers: dict[str, Any] = {
+        "required": writer_health_required,
+        "rust": None,
+        "mfc": None,
+    }
+    if check_rest and control.get("rustBaseUrl") and control.get("mfcBaseUrl"):
+        rust_base_url = str(control.get("rustBaseUrl") or "")
+        mfc_base_url = str(control.get("mfcBaseUrl") or "")
+        rest = {
+            "rust": rest_health(rust_base_url, soak_launch.RUST_API_KEY),
+            "mfc": rest_health(mfc_base_url, soak_launch.MFC_API_KEY),
+        }
+        if writer_health_required:
+            diagnostic_writers.update(
+                {
+                    "rust": diagnostic_writer_health(
+                        rust_base_url, soak_launch.RUST_API_KEY
+                    ),
+                    "mfc": diagnostic_writer_health(
+                        mfc_base_url, soak_launch.MFC_API_KEY
+                    ),
+                }
+            )
+    heartbeat = load_json(paths.watch_heartbeat)
     heartbeat_health = watch_heartbeat_health(manifest, heartbeat)
     heartbeat_storage = heartbeat.get("storage") if heartbeat_health.get("accepted") else None
     result: dict[str, Any] = {
@@ -1111,6 +1182,7 @@ def session_status(
             "error": bounded_error(last_run.get("error")),
         },
         "rest": rest,
+        "diagnosticWriters": diagnostic_writers,
         "vpn": full_tunnel_health() if check_vpn else None,
         "storage": heartbeat_storage,
     }
@@ -1168,6 +1240,9 @@ def build_watch_sample(
         "rustProcessCount": status.get("clients", {}).get("rustCount", 0) if status is not None else 0,
         "mfcProcessCount": status.get("clients", {}).get("mfcCount", 0) if status is not None else 0,
         "rest": status.get("rest") if status is not None else None,
+        "diagnosticWriters": (
+            status.get("diagnosticWriters") if status is not None else None
+        ),
         "vpn": status.get("vpn") if status is not None else None,
         "lastRun": status.get("lastRun") if status is not None else None,
         "storage": storage,
@@ -1611,7 +1686,11 @@ def watch_session(
                 latest = build_watch_sample(status, storage, status_error=status_error)
                 initial_persisted = False
         sample_count += 1
-        if not storage.get("ok"):
+        terminal_writer_fault = any(
+            finding in DIAGNOSTIC_WRITER_FAILURE_FINDINGS
+            for finding in latest["findings"]
+        )
+        if not storage.get("ok") or terminal_writer_fault:
             return finish_watch_failure(
                 paths,
                 manifest,

@@ -241,6 +241,52 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def diagnostic_writer_health() -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "enabled": True,
+        "configured": True,
+        "initialized": True,
+        "runId": "run-a",
+        "processId": 42,
+        "activeSegmentId": 0,
+        "activeFileName": "emulebb-rust-diag-42-run-a-000000.jsonl",
+        "activeSegmentBytes": 10,
+        "recordsWritten": 1,
+        "bytesWritten": 10,
+        "droppedEvents": 0,
+        "encodeErrors": 0,
+        "writeErrors": 0,
+        "rotations": 0,
+        "retentionDeletes": 0,
+        "retentionDeleteErrors": 0,
+        "retentionScanErrors": 0,
+        "freeSpaceProbeErrors": 0,
+        "retentionPolicyErrors": 0,
+        "storagePolicyDrops": 0,
+        "storageFaultDrops": 0,
+        "retentionLimitDrops": 0,
+        "aggregateLimitDrops": 0,
+        "minimumFreeSpaceDrops": 0,
+        "writerFaultDrops": 0,
+        "retainedSegmentCount": 1,
+        "retainedBytes": 10,
+        "availableBytes": 10_000,
+        "storageAuthorityFaulted": False,
+        "writerIoFaulted": False,
+        "storageBlockReason": None,
+        "storagePolicySatisfied": True,
+        "maximumGrowthBytes": 100,
+        "maxSegmentBytes": 100,
+        "maxSegmentSeconds": 60,
+        "retainedSegments": 2,
+        "maxTotalBytes": 200,
+        "maxRetainedSeconds": 3_600,
+        "minimumFreeBytes": 500,
+        "initializationFailure": None,
+    }
+
+
 def storage_context_manifest(
     tmp_path: Path,
     *,
@@ -658,6 +704,13 @@ def test_session_status_reports_exact_dual_process_tree(
     ]
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
     monkeypatch.setattr(controller, "rest_health", lambda _url, _key: {"ok": True})
+    monkeypatch.setattr(
+        controller,
+        "diagnostic_writer_health",
+        lambda _url, _key: (_ for _ in ()).throw(
+            AssertionError("writer health must wait for persisted readiness")
+        ),
+    )
     monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
 
     result = controller.session_status(paths)
@@ -669,7 +722,85 @@ def test_session_status_reports_exact_dual_process_tree(
     assert result["clients"]["mfcCount"] == 1
     assert [row["role"] for row in result["clients"]["processes"]] == ["rust", "mfc"]
     assert all("commandLine" not in row for row in result["clients"]["processes"])
+    assert result["diagnosticWriters"] == {
+        "required": False,
+        "rust": None,
+        "mfc": None,
+    }
     assert result["findings"] == []
+
+
+def test_diagnostic_writer_health_retains_complete_strict_payload(
+    monkeypatch,
+) -> None:
+    health = diagnostic_writer_health()
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_http_json(base_url, path, *, api_key, timeout_seconds):
+        assert timeout_seconds == 5.0
+        calls.append((base_url, path, api_key))
+        return {"data": {"diagnosticWriter": health}}
+
+    monkeypatch.setattr(controller, "http_json", fake_http_json)
+
+    result = controller.diagnostic_writer_health("http://127.0.0.1/api/v1", "key")
+
+    assert result == {"ok": True, "health": health, "violations": []}
+    assert calls == [("http://127.0.0.1/api/v1", "/diagnostics", "key")]
+
+    health["writeErrors"] = 1
+    result = controller.diagnostic_writer_health("http://127.0.0.1/api/v1", "key")
+    assert result["ok"] is False
+    assert result["health"] == health
+    assert "writeErrors=1 expected 0" in result["violations"]
+
+
+def test_session_status_requires_both_writers_after_persisted_readiness(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    campaign_id = "20261024T120000Z"
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "schema": controller.MANIFEST_SCHEMA,
+            "state": "running",
+            "campaignId": campaign_id,
+            "launcher": {"pid": 10, "creationDate": "launcher"},
+            "preflight": preflight_payload(tmp_path),
+        },
+    )
+    controller.write_json_atomic(
+        paths.last_run_manifest,
+        {"campaignId": campaign_id, "status": "running"},
+    )
+    processes = [
+        WindowsProcessInfo(10, 1, "python.exe", "launcher", "launcher"),
+        WindowsProcessInfo(11, 10, "emulebb-rust-diagnostics.exe", "rust", "rust"),
+        WindowsProcessInfo(12, 10, "emule.exe", "mfc", "mfc"),
+    ]
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
+    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: {"ok": True})
+    monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
+
+    def fake_writer_health(_url: str, key: str) -> dict[str, object]:
+        if key == controller.soak_launch.RUST_API_KEY:
+            return {"ok": True, "health": diagnostic_writer_health(), "violations": []}
+        return {
+            "ok": False,
+            "health": diagnostic_writer_health(),
+            "violations": ["writeErrors=1 expected 0"],
+        }
+
+    monkeypatch.setattr(controller, "diagnostic_writer_health", fake_writer_health)
+
+    result = controller.session_status(paths)
+
+    assert result["diagnosticWriters"]["required"] is True
+    assert result["diagnosticWriters"]["rust"]["ok"] is True
+    assert result["diagnosticWriters"]["mfc"]["ok"] is False
+    assert "mfc-diagnostic-writer-unhealthy" in result["findings"]
 
 
 def test_session_status_reports_current_storage_failure_and_dead_watcher(
@@ -912,6 +1043,7 @@ def watch_status_payload() -> dict[str, object]:
         "launcher": {"alive": True},
         "clients": {"rustCount": 1, "mfcCount": 1},
         "rest": {"rust": {"ok": True}, "mfc": {"ok": True}},
+        "diagnosticWriters": {"required": False, "rust": None, "mfc": None},
         "vpn": {"ok": True},
         "lastRun": {"status": "starting"},
     }
@@ -1022,6 +1154,63 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["shutdown"] == {
         "launcherGraceful": True
     }
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_fails_closed_on_diagnostic_writer_fault(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    status = watch_status_payload()
+    status.update(
+        {
+            "ok": False,
+            "findings": ["rust-diagnostic-writer-unhealthy"],
+            "diagnosticWriters": {
+                "required": True,
+                "rust": {
+                    "ok": False,
+                    "health": diagnostic_writer_health(),
+                    "violations": ["writeErrors=1 expected 0"],
+                },
+                "mfc": {
+                    "ok": True,
+                    "health": diagnostic_writer_health(),
+                    "violations": [],
+                },
+            },
+        }
+    )
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: status)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024 * 1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["samples"] == 1
+    assert result["latest"]["storage"]["ok"] is True
+    assert result["latest"]["diagnosticWriters"]["rust"]["ok"] is False
+    assert result["latest"]["shutdown"]["launcherGraceful"] is True
     assert stop_requests == [manifest]
 
 
