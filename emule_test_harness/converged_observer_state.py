@@ -8,10 +8,11 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v1"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v2"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
+    "configurationDigest",
     "limits",
     "observed",
     "nextActionSeq",
@@ -19,6 +20,8 @@ _TOP_LEVEL_FIELDS = {
     "histograms",
     "checkpoints",
     "driver",
+    "scheduler",
+    "pendingAction",
     "retention",
     "recentActions",
     "recentAnomalies",
@@ -41,22 +44,26 @@ _TOTAL_BUCKETS = {
 }
 _KIND_BUCKETS = ("search", "download", "other")
 _METHOD_BUCKETS = ("server", "global", "kad", "automatic", "none", "other")
+_CLIENTS = ("rust", "mfc")
 
 
 def new_state(
     campaign_id: str,
     *,
+    configuration_digest: str,
     recent_action_limit: int,
     recent_anomaly_limit: int,
 ) -> dict[str, Any]:
     """Returns one empty, strictly bounded cumulative observer state."""
 
     _require_nonempty_string(campaign_id, "campaign_id")
+    _validate_sha256(configuration_digest, "configuration_digest")
     _require_positive_integer(recent_action_limit, "recent_action_limit")
     _require_positive_integer(recent_anomaly_limit, "recent_anomaly_limit")
     return {
         "schema": SCHEMA,
         "campaignId": campaign_id,
+        "configurationDigest": configuration_digest,
         "limits": {
             "recentActions": recent_action_limit,
             "recentAnomalies": recent_anomaly_limit,
@@ -91,6 +98,11 @@ def new_state(
             "latestCycle": None,
             "latestConnectivitySkip": None,
         },
+        "scheduler": {
+            "nextCycle": 1,
+            "nextActionAtUtc": None,
+        },
+        "pendingAction": None,
         "retention": {
             "actions": _empty_retention(),
             "checkpoints": _empty_retention(),
@@ -104,6 +116,7 @@ def validate_state(
     payload: object,
     *,
     campaign_id: str | None = None,
+    configuration_digest: str | None = None,
 ) -> dict[str, Any]:
     """Returns a deep copy after strict schema and invariant validation."""
 
@@ -115,6 +128,13 @@ def validate_state(
     _require_nonempty_string(observed_campaign, "campaignId")
     if campaign_id is not None and observed_campaign != campaign_id:
         raise RuntimeError("Converged observer state campaign identity is invalid.")
+    observed_configuration_digest = payload.get("configurationDigest")
+    _validate_sha256(observed_configuration_digest, "configurationDigest")
+    if (
+        configuration_digest is not None
+        and observed_configuration_digest != configuration_digest
+    ):
+        raise RuntimeError("Converged observer configuration identity is invalid.")
 
     limits = payload.get("limits")
     if not isinstance(limits, dict) or set(limits) != {
@@ -197,6 +217,28 @@ def validate_state(
         if driver[name] is not None and not isinstance(driver[name], dict):
             raise RuntimeError(f"Converged observer driver {name} is invalid.")
 
+    scheduler = payload.get("scheduler")
+    if not isinstance(scheduler, dict) or set(scheduler) != {
+        "nextCycle",
+        "nextActionAtUtc",
+    }:
+        raise RuntimeError("Converged observer scheduler state is invalid.")
+    next_cycle = _require_positive_integer(
+        scheduler["nextCycle"], "scheduler.nextCycle"
+    )
+    _validate_optional_timestamp(scheduler["nextActionAtUtc"])
+    pending_action = payload.get("pendingAction")
+    if pending_action is None:
+        if next_cycle != driver["cycles"] + 1:
+            raise RuntimeError("Converged observer driver cycle is discontinuous.")
+    else:
+        _validate_pending_action(
+            pending_action,
+            next_action_seq=next_action_seq,
+            driver_cycles=driver["cycles"],
+            next_cycle=next_cycle,
+        )
+
     retention = payload.get("retention")
     if not isinstance(retention, dict) or set(retention) != {
         "actions",
@@ -224,6 +266,16 @@ def record_action(state: dict[str, Any], report: dict[str, Any]) -> dict[str, An
     """Folds one sequenced action report into bounded cumulative state."""
 
     updated = validate_state(state)
+    if updated["pendingAction"] is not None:
+        raise RuntimeError(
+            "Converged observer pending reports require commit_action_report."
+        )
+    return _fold_action_report(updated, report)
+
+
+def _fold_action_report(
+    updated: dict[str, Any], report: dict[str, Any]
+) -> dict[str, Any]:
     if not isinstance(report, dict):
         raise RuntimeError("Converged observer action report is invalid.")
     if report.get("campaignId") != updated["campaignId"]:
@@ -310,12 +362,198 @@ def record_checkpoint(
     return updated
 
 
+def set_next_action_deadline(
+    state: dict[str, Any], next_action_at_utc: str | None
+) -> dict[str, Any]:
+    """Persists the restart-safe UTC deadline for the next scheduled action."""
+
+    updated = validate_state(state)
+    _validate_optional_timestamp(next_action_at_utc)
+    updated["scheduler"]["nextActionAtUtc"] = next_action_at_utc
+    return validate_state(updated)
+
+
+def reserve_driver_cycle(
+    state: dict[str, Any],
+    *,
+    query: str,
+    method: str,
+    reserved_at_utc: str,
+    diagnostic_runs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Reserves one cycle before either client receives a public action."""
+
+    updated = validate_state(state)
+    if updated["pendingAction"] is not None:
+        raise RuntimeError("Converged observer already has a pending action.")
+    _require_nonempty_string(query, "query")
+    if method not in {"server", "global", "kad"}:
+        raise RuntimeError("Converged observer pending action method is invalid.")
+    _require_nonempty_string(reserved_at_utc, "reserved_at_utc")
+    _validate_diagnostic_runs(diagnostic_runs)
+    cycle = updated["scheduler"]["nextCycle"]
+    action_id = driver_action_id(updated["campaignId"], cycle)
+    updated["pendingAction"] = {
+        "actionId": action_id,
+        "reportSeq": updated["nextActionSeq"],
+        "cycle": cycle,
+        "queryIndex": cycle - 1,
+        "query": query,
+        "method": method,
+        "reservedAtUtc": reserved_at_utc,
+        "diagnosticRuns": copy.deepcopy(diagnostic_runs),
+        "clients": {client: {"create": None, "results": None} for client in _CLIENTS},
+        "driverOutcome": None,
+        "evidence": None,
+    }
+    updated["scheduler"]["nextCycle"] = cycle + 1
+    return validate_state(updated)
+
+
+def driver_action_id(campaign_id: str, cycle: int) -> str:
+    """Returns the stable identity for one reserved cycle."""
+
+    _require_nonempty_string(campaign_id, "campaign_id")
+    _require_positive_integer(cycle, "cycle")
+    return f"{campaign_id}-cycle-{cycle:08d}"
+
+
+def record_search_create(
+    state: dict[str, Any],
+    *,
+    client: str,
+    issued_at_utc: str,
+    search_id: str | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Records one client's exact search-create outcome once."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    if client_state["create"] is not None:
+        raise RuntimeError("Converged observer search create is already recorded.")
+    _require_nonempty_string(issued_at_utc, "issued_at_utc")
+    if (search_id is None) == (error is None):
+        raise RuntimeError(
+            "Converged observer search create requires exactly one result or error."
+        )
+    if search_id is not None:
+        _require_nonempty_string(search_id, "search_id")
+    _validate_optional_error(error)
+    client_state["create"] = {
+        "issuedAtUtc": issued_at_utc,
+        "searchId": search_id,
+        "error": copy.deepcopy(error),
+    }
+    return validate_state(updated)
+
+
+def record_search_results(
+    state: dict[str, Any],
+    *,
+    client: str,
+    completed_at_utc: str,
+    completed: bool,
+    result_count: int | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Records one client's exact bounded result-poll outcome once."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    create = client_state["create"]
+    if not isinstance(create, dict) or create.get("searchId") is None:
+        raise RuntimeError("Converged observer search results require a search ID.")
+    if client_state["results"] is not None:
+        raise RuntimeError("Converged observer search results are already recorded.")
+    _require_nonempty_string(completed_at_utc, "completed_at_utc")
+    if not isinstance(completed, bool):
+        raise RuntimeError("Converged observer search result completion is invalid.")
+    if result_count is not None:
+        _require_nonnegative_integer(result_count, "result_count")
+    _validate_optional_error(error)
+    if result_count is None and error is None:
+        raise RuntimeError(
+            "Converged observer search results require a count or exact error."
+        )
+    if completed and (result_count is None or error is not None):
+        raise RuntimeError("Completed observer search results are inconsistent.")
+    client_state["results"] = {
+        "completedAtUtc": completed_at_utc,
+        "completed": completed,
+        "resultCount": result_count,
+        "error": copy.deepcopy(error),
+    }
+    return validate_state(updated)
+
+
+def mark_evidence_pending(
+    state: dict[str, Any], *, window_end_utc: str
+) -> dict[str, Any]:
+    """Closes the action window after both client outcomes become terminal."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    if pending["driverOutcome"] is None:
+        raise RuntimeError("Converged observer driver outcome is not recorded.")
+    if pending["evidence"] is not None:
+        raise RuntimeError("Converged observer evidence is already pending.")
+    if not all(_pending_client_is_terminal(pending, client) for client in _CLIENTS):
+        raise RuntimeError("Converged observer client outcomes are incomplete.")
+    _require_nonempty_string(window_end_utc, "window_end_utc")
+    pending["evidence"] = {
+        "status": "pending",
+        "windowEndUtc": window_end_utc,
+    }
+    return validate_state(updated)
+
+
+def commit_action_report(
+    state: dict[str, Any], report: dict[str, Any]
+) -> dict[str, Any]:
+    """Commits one matching report and clears its persisted pending action."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    if pending["driverOutcome"] is None or pending["evidence"] is None:
+        raise RuntimeError("Converged observer pending action is not reportable.")
+    if not isinstance(report, dict):
+        raise RuntimeError("Converged observer action report is invalid.")
+    if report.get("actionId") != pending["actionId"]:
+        raise RuntimeError("Converged observer action report identity is invalid.")
+    if report.get("seq") != pending["reportSeq"]:
+        raise RuntimeError("Converged observer action report sequence is invalid.")
+    if report.get("cycle") != pending["cycle"]:
+        raise RuntimeError("Converged observer action report cycle is invalid.")
+    updated = _fold_action_report(updated, report)
+    updated["pendingAction"] = None
+    return validate_state(updated)
+
+
 def record_driver_cycle(state: dict[str, Any], cycle: dict[str, Any]) -> dict[str, Any]:
     """Records cumulative driver-cycle outcomes without retaining an unbounded list."""
 
     updated = validate_state(state)
     if not isinstance(cycle, dict):
         raise RuntimeError("Converged observer driver cycle is invalid.")
+    cycle_number = _require_positive_integer(cycle.get("cycle"), "cycle.cycle")
+    expected_cycle = updated["driver"]["cycles"] + 1
+    if cycle_number != expected_cycle:
+        raise RuntimeError("Converged observer driver cycle is discontinuous.")
+    pending = updated["pendingAction"]
+    if pending is None:
+        if updated["scheduler"]["nextCycle"] != cycle_number:
+            raise RuntimeError("Converged observer driver cycle is discontinuous.")
+        updated["scheduler"]["nextCycle"] = cycle_number + 1
+    else:
+        if pending["cycle"] != cycle_number:
+            raise RuntimeError("Converged observer pending cycle is inconsistent.")
+        if cycle.get("actionId") != pending["actionId"]:
+            raise RuntimeError("Converged observer pending action identity is invalid.")
+        if pending["driverOutcome"] is not None:
+            raise RuntimeError("Converged observer driver cycle is already recorded.")
     updated["driver"]["cycles"] += 1
     if cycle.get("error") or cycle.get("ok") is False or cycle.get("errors"):
         updated["driver"]["cycleErrors"] += 1
@@ -323,7 +561,9 @@ def record_driver_cycle(state: dict[str, Any], cycle: dict[str, Any]) -> dict[st
     if isinstance(download, dict) and download.get("scheduled") is True:
         updated["driver"]["downloadsScheduled"] += 1
     updated["driver"]["latestCycle"] = copy.deepcopy(cycle)
-    return updated
+    if pending is not None:
+        pending["driverOutcome"] = copy.deepcopy(cycle)
+    return validate_state(updated)
 
 
 def record_connectivity_skip(
@@ -378,6 +618,201 @@ def canonical_bytes(state: dict[str, Any]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _validate_pending_action(
+    value: object,
+    *,
+    next_action_seq: int,
+    driver_cycles: int,
+    next_cycle: int,
+) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "actionId",
+        "reportSeq",
+        "cycle",
+        "queryIndex",
+        "query",
+        "method",
+        "reservedAtUtc",
+        "diagnosticRuns",
+        "clients",
+        "driverOutcome",
+        "evidence",
+    }:
+        raise RuntimeError("Converged observer pending action is invalid.")
+    action_id = _require_nonempty_string(value["actionId"], "pendingAction.actionId")
+    report_seq = _require_positive_integer(
+        value["reportSeq"], "pendingAction.reportSeq"
+    )
+    if report_seq != next_action_seq:
+        raise RuntimeError("Converged observer pending report sequence is invalid.")
+    cycle = _require_positive_integer(value["cycle"], "pendingAction.cycle")
+    query_index = _require_nonnegative_integer(
+        value["queryIndex"], "pendingAction.queryIndex"
+    )
+    if query_index != cycle - 1:
+        raise RuntimeError("Converged observer pending query index is invalid.")
+    _require_nonempty_string(value["query"], "pendingAction.query")
+    if value["method"] not in {"server", "global", "kad"}:
+        raise RuntimeError("Converged observer pending action method is invalid.")
+    _require_nonempty_string(value["reservedAtUtc"], "pendingAction.reservedAtUtc")
+    _validate_diagnostic_runs(value["diagnosticRuns"])
+    clients = value["clients"]
+    if not isinstance(clients, dict) or set(clients) != set(_CLIENTS):
+        raise RuntimeError("Converged observer pending clients are invalid.")
+    for client in _CLIENTS:
+        _validate_pending_client(clients[client], client)
+
+    driver_outcome = value["driverOutcome"]
+    if driver_outcome is None:
+        if cycle != driver_cycles + 1 or next_cycle != cycle + 1:
+            raise RuntimeError("Converged observer reserved cycle is discontinuous.")
+    else:
+        if not isinstance(driver_outcome, dict):
+            raise RuntimeError("Converged observer pending driver outcome is invalid.")
+        if (
+            driver_outcome.get("cycle") != cycle
+            or driver_outcome.get("actionId") != action_id
+        ):
+            raise RuntimeError(
+                "Converged observer pending driver outcome is inconsistent."
+            )
+        if cycle != driver_cycles or next_cycle != cycle + 1:
+            raise RuntimeError("Converged observer completed cycle is discontinuous.")
+
+    evidence = value["evidence"]
+    if evidence is not None:
+        if not isinstance(evidence, dict) or set(evidence) != {
+            "status",
+            "windowEndUtc",
+        }:
+            raise RuntimeError("Converged observer pending evidence is invalid.")
+        if evidence["status"] != "pending":
+            raise RuntimeError("Converged observer pending evidence status is invalid.")
+        _require_nonempty_string(
+            evidence["windowEndUtc"], "pendingAction.evidence.windowEndUtc"
+        )
+        if driver_outcome is None or not all(
+            _pending_client_is_terminal(value, client) for client in _CLIENTS
+        ):
+            raise RuntimeError("Converged observer pending evidence is premature.")
+
+
+def _validate_diagnostic_runs(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != set(_CLIENTS):
+        raise RuntimeError("Converged observer diagnostic run identities are invalid.")
+    for client in _CLIENTS:
+        identity = value[client]
+        if not isinstance(identity, dict) or set(identity) != {"processId", "runId"}:
+            raise RuntimeError(
+                f"Converged observer {client} diagnostic identity is invalid."
+            )
+        _require_positive_integer(
+            identity["processId"], f"diagnosticRuns.{client}.processId"
+        )
+        _require_nonempty_string(identity["runId"], f"diagnosticRuns.{client}.runId")
+
+
+def _validate_pending_client(value: object, client: str) -> None:
+    if not isinstance(value, dict) or set(value) != {"create", "results"}:
+        raise RuntimeError(f"Converged observer pending {client} state is invalid.")
+    create = value["create"]
+    if create is not None:
+        if not isinstance(create, dict) or set(create) != {
+            "issuedAtUtc",
+            "searchId",
+            "error",
+        }:
+            raise RuntimeError(
+                f"Converged observer pending {client} create outcome is invalid."
+            )
+        _require_nonempty_string(
+            create["issuedAtUtc"], f"pendingAction.clients.{client}.issuedAtUtc"
+        )
+        search_id = create["searchId"]
+        error = create["error"]
+        if (search_id is None) == (error is None):
+            raise RuntimeError(
+                f"Converged observer pending {client} create outcome is ambiguous."
+            )
+        if search_id is not None:
+            _require_nonempty_string(
+                search_id, f"pendingAction.clients.{client}.searchId"
+            )
+        _validate_optional_error(error)
+
+    results = value["results"]
+    if results is None:
+        return
+    if not isinstance(results, dict) or set(results) != {
+        "completedAtUtc",
+        "completed",
+        "resultCount",
+        "error",
+    }:
+        raise RuntimeError(
+            f"Converged observer pending {client} result outcome is invalid."
+        )
+    if not isinstance(create, dict) or create.get("searchId") is None:
+        raise RuntimeError(
+            f"Converged observer pending {client} results lack a search ID."
+        )
+    _require_nonempty_string(
+        results["completedAtUtc"],
+        f"pendingAction.clients.{client}.completedAtUtc",
+    )
+    if not isinstance(results["completed"], bool):
+        raise RuntimeError(
+            f"Converged observer pending {client} completion is invalid."
+        )
+    result_count = results["resultCount"]
+    if result_count is not None:
+        _require_nonnegative_integer(
+            result_count, f"pendingAction.clients.{client}.resultCount"
+        )
+    _validate_optional_error(results["error"])
+    if result_count is None and results["error"] is None:
+        raise RuntimeError(f"Converged observer pending {client} results are empty.")
+    if results["completed"] and (result_count is None or results["error"] is not None):
+        raise RuntimeError(
+            f"Converged observer pending {client} completion is inconsistent."
+        )
+
+
+def _require_pending_action(state: dict[str, Any]) -> dict[str, Any]:
+    pending = state["pendingAction"]
+    if not isinstance(pending, dict):
+        raise RuntimeError("Converged observer has no pending action.")
+    return pending
+
+
+def _pending_client(pending: dict[str, Any], client: str) -> dict[str, Any]:
+    if client not in _CLIENTS:
+        raise ValueError("client must be 'rust' or 'mfc'.")
+    return pending["clients"][client]
+
+
+def _pending_client_is_terminal(pending: dict[str, Any], client: str) -> bool:
+    client_state = _pending_client(pending, client)
+    create = client_state["create"]
+    return isinstance(create, dict) and (
+        create.get("error") is not None or client_state["results"] is not None
+    )
+
+
+def _validate_optional_error(value: object) -> None:
+    if value is not None and not isinstance(value, dict):
+        raise RuntimeError("Converged observer exact error is invalid.")
+
+
+def _validate_sha256(value: object, name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise RuntimeError(f"{name} must be a lowercase SHA-256 digest.")
 
 
 def _empty_retention() -> dict[str, Any]:
