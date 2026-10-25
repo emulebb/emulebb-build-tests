@@ -306,6 +306,49 @@ def parse_session_storage_context(
     )
 
 
+def enforce_session_storage_context(context: SessionStorageContext) -> dict[str, Any]:
+    """Applies and verifies one manifest-owned storage policy snapshot."""
+
+    pinned_paths = (context.previous_campaign,) if context.previous_campaign is not None else ()
+    identity = {
+        "policySha256": context.policy_sha256,
+        "activeCampaignDir": str(context.active_campaign),
+        "previousCampaignDir": (
+            str(context.previous_campaign) if context.previous_campaign is not None else None
+        ),
+    }
+    try:
+        result = soak_storage.BoundedArtifactStore(
+            context.root,
+            context.policy,
+        ).enforce(
+            active_campaign=context.active_campaign,
+            pinned_paths=pinned_paths,
+        )
+    except Exception as error:  # noqa: BLE001 - storage faults must become terminal evidence
+        return {
+            **identity,
+            "ok": False,
+            "errorType": type(error).__name__,
+            "error": str(error)[:1024],
+        }
+
+    summary = storage_enforcement_summary(context.root, result)
+    response = {
+        **identity,
+        "ok": result.within_limits,
+        "enforcement": summary,
+    }
+    if not result.within_limits:
+        constraints = ", ".join(result.verification.unresolved_constraints)
+        response["errorType"] = "StoragePolicyUnsatisfied"
+        response["error"] = (
+            constraints
+            or (result.failures[0] if result.failures else "pending deletions remain")
+        )[:1024]
+    return response
+
+
 def preflight_campaign_storage(
     inputs: LiveWireInputs,
     output_root: Path,
