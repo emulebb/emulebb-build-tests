@@ -12,11 +12,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v2"
-REQUIRED_STREAMS = ("controller_output", "daemon_output")
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v3"
+REQUIRED_STREAMS = ("controller_output", "daemon_output", "diagnostic_bundles")
 REQUIRED_STREAM_INSTANCES = {
     "controller_output": 4,
     "daemon_output": 1,
+    "diagnostic_bundles": 1,
 }
 _POLICY_KEYS = {
     "schema",
@@ -160,6 +161,18 @@ class StorageEnforcementResult:
             and self.verification.within_limits
             and not self.verification.deletions
         )
+
+
+@dataclass(frozen=True)
+class PersistedJsonArtifact:
+    """One atomically persisted artifact in a bounded immutable JSON stream."""
+
+    path: Path
+    byte_count: int
+    sha256: str
+    deleted_paths: tuple[Path, ...]
+    retained_count: int
+    retained_bytes: int
 
 
 class BoundedArtifactStore:
@@ -346,6 +359,125 @@ class BoundedArtifactStore:
                 )
             roots.append(resolved)
         return tuple(roots)
+
+
+def persist_bounded_json_artifact(
+    *,
+    store: BoundedArtifactStore,
+    active_campaign: Path,
+    directory: Path,
+    stream_name: str,
+    stem: str,
+    payload: object,
+    now_ns: int | None = None,
+) -> PersistedJsonArtifact:
+    """Atomically writes one JSON artifact while enforcing stream and store bounds."""
+
+    if not stem or any(not (character.isalnum() or character == "-") for character in stem):
+        raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
+    if not stem.isascii():
+        raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
+    timestamp_ns = time.time_ns() if now_ns is None else now_ns
+    if isinstance(timestamp_ns, bool) or not isinstance(timestamp_ns, int) or timestamp_ns < 0:
+        raise ValueError("now_ns must be a non-negative integer.")
+
+    resolved_campaign = active_campaign.resolve()
+    resolved_directory = directory.resolve()
+    if not _path_is_relative_to(resolved_campaign, store.root):
+        raise RuntimeError(
+            f"Active campaign escaped its soak artifact store: {resolved_campaign}"
+        )
+    if not _path_is_relative_to(resolved_directory, resolved_campaign):
+        raise RuntimeError(
+            f"Bounded JSON artifact directory escaped its active campaign: {resolved_directory}"
+        )
+
+    policy = store.policy.stream(stream_name)
+    encoded = (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(encoded) > policy.max_segment_bytes:
+        raise RuntimeError(
+            f"{stream_name} artifact requires {len(encoded)} bytes, exceeding its "
+            f"{policy.max_segment_bytes}-byte limit."
+        )
+
+    resolved_directory.mkdir(parents=True, exist_ok=True)
+    artifacts = _json_stream_artifacts(resolved_directory, stem)
+    deleted_paths: list[Path] = []
+    while len(artifacts) >= policy.retained_segments:
+        oldest = artifacts.pop(0)
+        oldest.unlink()
+        deleted_paths.append(oldest)
+
+    reservation = store.enforce(
+        active_campaign=resolved_campaign,
+        reserved_bytes=len(encoded),
+        now_ns=timestamp_ns,
+    )
+    if not reservation.within_limits:
+        raise RuntimeError(
+            "Bounded JSON artifact reservation failed: "
+            f"failures={reservation.failures!r}, "
+            f"constraints={reservation.verification.unresolved_constraints!r}."
+        )
+
+    path = resolved_directory / f"{stem}-{timestamp_ns:020d}.json"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    if path.exists() or temporary.exists():
+        raise RuntimeError(f"Bounded JSON artifact identity already exists: {path.name}")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+    verification = store.enforce(
+        active_campaign=resolved_campaign,
+        now_ns=timestamp_ns,
+    )
+    if not verification.within_limits:
+        raise RuntimeError(
+            "Bounded JSON artifact persistence violated the aggregate policy: "
+            f"failures={verification.failures!r}, "
+            f"constraints={verification.verification.unresolved_constraints!r}."
+        )
+
+    retained = _json_stream_artifacts(resolved_directory, stem)
+    if len(retained) > policy.retained_segments:
+        raise RuntimeError(f"{stream_name} retention exceeded its configured file count.")
+    return PersistedJsonArtifact(
+        path=path,
+        byte_count=len(encoded),
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        deleted_paths=tuple(deleted_paths),
+        retained_count=len(retained),
+        retained_bytes=sum(item.stat().st_size for item in retained),
+    )
+
+
+def _json_stream_artifacts(directory: Path, stem: str) -> list[Path]:
+    artifacts: list[tuple[int, str, Path]] = []
+    for path in directory.glob(f"{stem}-*.json"):
+        if path.is_symlink():
+            raise RuntimeError(f"Bounded JSON artifact stream contains a symlink: {path}")
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        artifacts.append((stat.st_mtime_ns, path.name.casefold(), path.resolve()))
+    artifacts.sort()
+    return [path for _, _, path in artifacts]
 
 
 def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:

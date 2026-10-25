@@ -36,6 +36,7 @@ def storage_policy(*, max_total_bytes: int = 1_000) -> soak_storage.SoakStorageP
             {
                 "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
                 "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
     )
@@ -92,10 +93,10 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     assert summary["deletionCount"] == 1
     assert summary["deletionBytes"] == 60
     assert summary["protectedFileCount"] == 1
-    assert summary["reservedBytes"] == 5
-    assert summary["projectedTotalBytes"] == 65
+    assert summary["reservedBytes"] == 6
+    assert summary["projectedTotalBytes"] == 66
     assert summary["reservation"] == {
-        "totalBytes": 5,
+        "totalBytes": 6,
         "streams": {
             "controller_output": {
                 "instances": 4,
@@ -104,6 +105,12 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
                 "capacityBytes": 4,
             },
             "daemon_output": {
+                "instances": 1,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 1,
+            },
+            "diagnostic_bundles": {
                 "instances": 1,
                 "maxSegmentBytes": 1,
                 "retainedSegments": 1,
@@ -140,10 +147,10 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
 
     assert summary["deletedCount"] == 1
     assert summary["deletedBytes"] == 60
-    assert summary["planned"]["reservedBytes"] == 5
-    assert summary["verification"]["reservedBytes"] == 5
-    assert summary["verification"]["projectedTotalBytes"] == 65
-    assert summary["reservation"]["totalBytes"] == 5
+    assert summary["planned"]["reservedBytes"] == 6
+    assert summary["verification"]["reservedBytes"] == 6
+    assert summary["verification"]["projectedTotalBytes"] == 66
+    assert summary["reservation"]["totalBytes"] == 6
     assert summary["reservation"]["streams"]["controller_output"]["capacityBytes"] == 4
     assert summary["verification"]["deletionCount"] == 0
     assert summary["withinLimits"] is True

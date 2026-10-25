@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 from types import MappingProxyType
@@ -33,6 +35,10 @@ def policy_payload() -> dict[str, object]:
                 "max_segment_bytes": 200,
                 "retained_segments": 8,
             },
+            "diagnostic_bundles": {
+                "max_segment_bytes": 300,
+                "retained_segments": 2,
+            },
         },
     }
 
@@ -42,6 +48,8 @@ def direct_policy(
     max_total_bytes: int = 1_000,
     max_age_seconds: int = 3_600,
     minimum_free_bytes: int = 100,
+    bundle_max_bytes: int = 256,
+    bundle_retained: int = 2,
 ) -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=max_total_bytes,
@@ -60,6 +68,10 @@ def direct_policy(
             {
                 "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
                 "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(
+                    bundle_max_bytes,
+                    bundle_retained,
+                ),
             }
         ),
     )
@@ -129,6 +141,7 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                 "streams": {
                     "daemon_output": payload["streams"]["daemon_output"],
                     "controller_output": payload["streams"]["controller_output"],
+                    "diagnostic_bundles": payload["streams"]["diagnostic_bundles"],
                 },
             }
         )
@@ -212,12 +225,12 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 3_200
+    assert soak_storage.required_stream_capacity_bytes(policy) == 3_800
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
     payload = policy_payload()
-    payload["max_total_bytes"] = 3_199
+    payload["max_total_bytes"] = 3_799
 
     with pytest.raises(RuntimeError, match="every retained required-stream instance"):
         soak_storage.parse_soak_storage_policy(payload)
@@ -606,3 +619,117 @@ def test_bounded_store_enforcement_verifies_actual_free_space(tmp_path: Path) ->
     assert result.deleted_paths == (artifact.resolve(),)
     assert result.verification.unresolved_constraints == ("minimum_free_bytes",)
     assert not result.within_limits
+
+
+def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-bundles"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            bundle_max_bytes=1_024,
+            bundle_retained=2,
+        ),
+    )
+
+    first = soak_storage.persist_bounded_json_artifact(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_bundles",
+        stem="rust-diagnostic-bundle-ready",
+        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 1},
+        now_ns=1,
+    )
+    second = soak_storage.persist_bounded_json_artifact(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_bundles",
+        stem="rust-diagnostic-bundle-ready",
+        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 2},
+        now_ns=2,
+    )
+    third = soak_storage.persist_bounded_json_artifact(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_bundles",
+        stem="rust-diagnostic-bundle-ready",
+        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 3},
+        now_ns=3,
+    )
+
+    assert first.path in third.deleted_paths
+    assert not first.path.exists()
+    assert second.path.is_file()
+    assert third.path.is_file()
+    assert third.retained_count == 2
+    assert third.retained_bytes == second.byte_count + third.byte_count
+    assert third.sha256 == hashlib.sha256(third.path.read_bytes()).hexdigest()
+    assert json.loads(third.path.read_text(encoding="utf-8"))["seq"] == 3
+    assert not list(directory.glob("*.tmp"))
+
+
+def test_persist_bounded_json_artifact_rejects_oversized_payload_before_write(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-bundles"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            bundle_max_bytes=32,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="exceeding its 32-byte limit"):
+        soak_storage.persist_bounded_json_artifact(
+            store=store,
+            active_campaign=campaign,
+            directory=directory,
+            stream_name="diagnostic_bundles",
+            stem="rust-diagnostic-bundle-ready",
+            payload={"value": "x" * 100},
+            now_ns=1,
+        )
+
+    assert not directory.exists()
+
+
+def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-bundles"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=100,
+            bundle_max_bytes=1_024,
+        ),
+        disk_space=lambda root: fake_disk_space(root, free_bytes=100),
+    )
+
+    with pytest.raises(RuntimeError, match="reservation failed"):
+        soak_storage.persist_bounded_json_artifact(
+            store=store,
+            active_campaign=campaign,
+            directory=directory,
+            stream_name="diagnostic_bundles",
+            stem="rust-diagnostic-bundle-ready",
+            payload={"schema": "emulebb.diagnostic-bundle.v4"},
+            now_ns=1,
+        )
+
+    assert not list(directory.glob("*.json"))
