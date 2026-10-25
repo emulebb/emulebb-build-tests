@@ -39,6 +39,9 @@ def artifact_store(
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
                     1_048_576, segment_retained
                 ),
+                "observer_actions": soak_storage.ArtifactStreamPolicy(1_024, 2),
+                "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1_024, 2),
+                "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
             }
         ),
     )
@@ -74,6 +77,59 @@ def write_diag_segment(
         encoding="utf-8",
     )
     return path
+
+
+def test_persist_observer_artifacts_enforces_each_stream_budget(tmp_path: Path) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+
+    action_results = [
+        soak_run_layout.persist_observer_action_report(
+            paths=paths,
+            store=store,
+            report={"schema": "action", "seq": sequence},
+            now_ns=sequence,
+        )
+        for sequence in range(1, 4)
+    ]
+    checkpoint_results = [
+        soak_run_layout.persist_observer_checkpoint(
+            paths=paths,
+            store=store,
+            checkpoint={"schema": "checkpoint", "sequence": sequence},
+            now_ns=sequence,
+        )
+        for sequence in range(1, 4)
+    ]
+    first_summary = soak_run_layout.persist_observer_summary(
+        paths=paths,
+        store=store,
+        summary={"schema": "summary", "actions": 1},
+        now_ns=1,
+    )
+    second_summary = soak_run_layout.persist_observer_summary(
+        paths=paths,
+        store=store,
+        summary={"schema": "summary", "actions": 2},
+        now_ns=2,
+    )
+
+    assert [path.name for path in sorted(paths.actions_dir.glob("*.json"))] == [
+        "action-00000000000000000002.json",
+        "action-00000000000000000003.json",
+    ]
+    assert action_results[-1].deleted_paths == (
+        paths.actions_dir.resolve() / "action-00000000000000000001.json",
+    )
+    assert [path.name for path in sorted(paths.checkpoints_dir.glob("*.json"))] == [
+        "checkpoint-00000000000000000002.json",
+        "checkpoint-00000000000000000003.json",
+    ]
+    assert checkpoint_results[-1].deleted_paths == (
+        paths.checkpoints_dir.resolve() / "checkpoint-00000000000000000001.json",
+    )
+    assert first_summary.path == second_summary.path == paths.report_dir / "summary.json"
+    assert json.loads(second_summary.path.read_text(encoding="utf-8"))["actions"] == 2
 
 
 def test_utc_campaign_id_uses_canonical_format() -> None:

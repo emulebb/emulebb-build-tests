@@ -99,6 +99,66 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
     )
 
 
+def persist_observer_action_report(
+    *,
+    paths: SoakRunPaths,
+    store: soak_storage.BoundedArtifactStore,
+    report: dict[str, Any],
+    now_ns: int | None = None,
+) -> soak_storage.PersistedArtifact:
+    """Persists one immutable observer action report under its stream budget."""
+
+    return soak_storage.persist_bounded_json_artifact(
+        store=store,
+        active_campaign=paths.campaign_dir,
+        directory=paths.actions_dir,
+        stream_name="observer_actions",
+        stem="action",
+        payload=report,
+        now_ns=now_ns,
+    )
+
+
+def persist_observer_checkpoint(
+    *,
+    paths: SoakRunPaths,
+    store: soak_storage.BoundedArtifactStore,
+    checkpoint: dict[str, Any],
+    now_ns: int | None = None,
+) -> soak_storage.PersistedArtifact:
+    """Persists one immutable observer checkpoint under its stream budget."""
+
+    return soak_storage.persist_bounded_json_artifact(
+        store=store,
+        active_campaign=paths.campaign_dir,
+        directory=paths.checkpoints_dir,
+        stream_name="observer_checkpoints",
+        stem="checkpoint",
+        payload=checkpoint,
+        now_ns=now_ns,
+    )
+
+
+def persist_observer_summary(
+    *,
+    paths: SoakRunPaths,
+    store: soak_storage.BoundedArtifactStore,
+    summary: dict[str, Any],
+    now_ns: int | None = None,
+) -> soak_storage.PersistedArtifact:
+    """Atomically replaces the singleton observer summary under hard bounds."""
+
+    return soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=paths.campaign_dir,
+        directory=paths.report_dir,
+        stream_name="observer_summary",
+        artifact_name="summary.json",
+        payload=summary,
+        now_ns=now_ns,
+    )
+
+
 def require_output_soak_root(soak_root: Path, output_root: Path) -> Path:
     """Returns the canonical soak root, rejecting repo/workspace-local reports."""
 
