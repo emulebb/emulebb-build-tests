@@ -1178,6 +1178,75 @@ def persist_terminal_watch_sample(
     return errors
 
 
+def capture_exact_process_tree(identity: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Captures exact identities for the currently owned launcher tree."""
+
+    processes = windows_processes.collect_processes()
+    root = exact_process_row(identity, processes)
+    if root is None:
+        return ()
+    return tuple(
+        {
+            "pid": row.pid,
+            "parentPid": row.parent_pid,
+            "creationDate": row.creation_date,
+            "name": row.name,
+        }
+        for row in windows_processes.collect_process_tree(root.pid, processes)
+    )
+
+
+def remaining_exact_tree_rows(
+    identities: tuple[dict[str, Any], ...],
+) -> list[windows_processes.WindowsProcessInfo]:
+    """Returns captured process instances that are still live."""
+
+    processes = windows_processes.collect_processes()
+    return [
+        row
+        for identity in identities
+        if (row := exact_process_row(identity, processes)) is not None
+    ]
+
+
+def stop_captured_process_tree(
+    identities: tuple[dict[str, Any], ...],
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Force-stops the remaining roots of one pre-stop exact tree snapshot."""
+
+    remaining = remaining_exact_tree_rows(identities)
+    if not remaining:
+        return {
+            "forced": False,
+            "alreadyStopped": True,
+            "verifiedStopped": True,
+            "capturedCount": len(identities),
+            "remainingPids": [],
+        }
+    remaining_pids = {row.pid for row in remaining}
+    roots = [row for row in remaining if row.parent_pid not in remaining_pids]
+    results = [
+        windows_processes.terminate_process_tree(
+            row.pid,
+            timeout_seconds=timeout_seconds,
+            expected_root_creation_date=row.creation_date,
+        )
+        for row in roots
+    ]
+    survivors = remaining_exact_tree_rows(identities)
+    return {
+        "forced": True,
+        "alreadyStopped": False,
+        "verifiedStopped": not survivors,
+        "capturedCount": len(identities),
+        "forcedRootPids": [row.pid for row in roots],
+        "results": results,
+        "remainingPids": [row.pid for row in survivors],
+    }
+
+
 def request_watch_failure_stop(
     paths: ControlPaths,
     manifest: dict[str, Any],
@@ -1190,16 +1259,6 @@ def request_watch_failure_stop(
     requested_at = datetime.now(UTC).isoformat()
     stop_errors: list[str] = []
     try:
-        paths.control_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        stop_errors.append(f"{paths.control_dir}: {type(error).__name__}: {error}"[:1024])
-    for stop_path in (paths.stop_file, paths.watch_stop_file):
-        try:
-            stop_path.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
-        except OSError as error:
-            stop_errors.append(f"{stop_path}: {type(error).__name__}: {error}"[:1024])
-
-    try:
         launcher_identity = resolve_watcher_launcher_identity(manifest, launcher_fallback)
     except RuntimeError as error:
         stop_errors.append(f"launcherIdentity: {error}"[:1024])
@@ -1209,6 +1268,23 @@ def request_watch_failure_stop(
             or {}
         )
     identity_available = bool(launcher_identity)
+    captured_tree: tuple[dict[str, Any], ...] = ()
+    if identity_available:
+        try:
+            captured_tree = capture_exact_process_tree(launcher_identity)
+        except Exception as error:  # noqa: BLE001 - stop requests and exact fallback remain available
+            stop_errors.append(f"launcherTreeCapture: {type(error).__name__}: {error}"[:1024])
+
+    try:
+        paths.control_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        stop_errors.append(f"{paths.control_dir}: {type(error).__name__}: {error}"[:1024])
+    for stop_path in (paths.stop_file, paths.watch_stop_file):
+        try:
+            stop_path.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
+        except OSError as error:
+            stop_errors.append(f"{stop_path}: {type(error).__name__}: {error}"[:1024])
+
     if not identity_available:
         launcher_graceful = False
         launcher_force = {
@@ -1220,23 +1296,44 @@ def request_watch_failure_stop(
         }
     else:
         try:
-            launcher_graceful = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
+            launcher_root_exited = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
         except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
-            launcher_graceful = False
+            launcher_root_exited = False
             stop_errors.append(f"launcherWait: {type(error).__name__}: {error}"[:1024])
+        try:
+            captured_tree_stopped = bool(captured_tree) and not remaining_exact_tree_rows(captured_tree)
+        except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
+            captured_tree_stopped = False
+            stop_errors.append(f"launcherTreeVerify: {type(error).__name__}: {error}"[:1024])
+        launcher_graceful = launcher_root_exited and captured_tree_stopped
         if launcher_graceful:
             launcher_force = {
                 "forced": False,
                 "alreadyStopped": True,
                 "verifiedStopped": True,
+                "capturedCount": len(captured_tree),
             }
         else:
             try:
-                launcher_force = stop_exact_process(
-                    launcher_identity,
-                    markers=("launch-soak.py",),
-                    timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
-                )
+                if captured_tree:
+                    launcher_force = stop_captured_process_tree(
+                        captured_tree,
+                        timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+                    )
+                elif not launcher_root_exited:
+                    launcher_force = stop_exact_process(
+                        launcher_identity,
+                        markers=("launch-soak.py",),
+                        timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+                    )
+                else:
+                    launcher_force = {
+                        "forced": False,
+                        "alreadyStopped": True,
+                        "verifiedStopped": False,
+                        "errorType": "LauncherTreeUnavailable",
+                        "error": "Launcher exited before its owned process tree could be captured.",
+                    }
             except Exception as error:  # noqa: BLE001 - preserve terminal shutdown evidence
                 launcher_force = {
                     "forced": False,
@@ -1250,6 +1347,7 @@ def request_watch_failure_stop(
         "stopRequestedUtc": requested_at,
         "stopWriteErrors": stop_errors,
         "launcherIdentityAvailable": identity_available,
+        "capturedProcessCount": len(captured_tree),
         "launcherGraceful": launcher_graceful,
         "launcherForce": launcher_force,
         "launcherStopped": launcher_stopped,

@@ -1121,6 +1121,7 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
     paths = make_paths(tmp_path)
     manifest = {"launcher": {"pid": 10, "creationDate": "launcher"}}
     forced: list[tuple[dict[str, object], tuple[str, ...], float]] = []
+    monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: ())
     monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: False)
 
     def fake_stop(identity, *, markers, timeout_seconds):
@@ -1156,6 +1157,9 @@ def test_watch_failure_stop_uses_fallback_when_manifest_is_missing(
     paths = make_paths(tmp_path)
     fallback = {"pid": 10, "creationDate": "launcher"}
     waited: list[dict[str, object]] = []
+    captured = ({"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},)
+    monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: captured)
+    monkeypatch.setattr(controller, "remaining_exact_tree_rows", lambda _identities: [])
     monkeypatch.setattr(
         controller,
         "wait_exact_exit",
@@ -1172,6 +1176,42 @@ def test_watch_failure_stop_uses_fallback_when_manifest_is_missing(
     assert waited == [fallback]
     assert result["launcherIdentityAvailable"] is True
     assert result["launcherStopped"] is True
+
+
+def test_watch_failure_stop_forces_captured_orphans_after_launcher_exit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    fallback = {"pid": 10, "creationDate": "launcher"}
+    captured = (
+        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
+        {"pid": 11, "parentPid": 10, "creationDate": "rust", "name": "rust.exe"},
+    )
+    orphan = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
+    forced: list[tuple[dict[str, object], ...]] = []
+    monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: captured)
+    monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: True)
+    monkeypatch.setattr(controller, "remaining_exact_tree_rows", lambda _identities: [orphan])
+
+    def fake_force(identities, *, timeout_seconds):
+        del timeout_seconds
+        forced.append(identities)
+        return {"forced": True, "verifiedStopped": True}
+
+    monkeypatch.setattr(controller, "stop_captured_process_tree", fake_force)
+
+    result = controller.request_watch_failure_stop(
+        paths,
+        {},
+        launcher_fallback=fallback,
+        graceful_timeout_seconds=0.1,
+    )
+
+    assert result["launcherGraceful"] is False
+    assert result["launcherForce"]["forced"] is True
+    assert result["launcherStopped"] is True
+    assert forced == [captured]
 
 
 def test_watch_failure_stop_reports_unavailable_launcher_identity(
@@ -1245,3 +1285,32 @@ def test_stop_exact_process_rejects_orphaned_owned_children(
     assert result["verifiedRootStopped"] is True
     assert result["verifiedStopped"] is False
     assert result["result"]["remaining_pids"] == [11]
+
+
+def test_stop_captured_process_tree_terminates_orphaned_exact_child(
+    monkeypatch,
+) -> None:
+    identities = (
+        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
+        {"pid": 11, "parentPid": 10, "creationDate": "rust", "name": "rust.exe"},
+    )
+    orphan = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
+    remaining_snapshots = iter(([orphan], []))
+    terminated: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        controller,
+        "remaining_exact_tree_rows",
+        lambda _identities: list(next(remaining_snapshots)),
+    )
+
+    def fake_terminate(pid, **kwargs):
+        terminated.append((pid, kwargs["expected_root_creation_date"]))
+        return {"return_code": 0, "remaining_pids": []}
+
+    monkeypatch.setattr(controller.windows_processes, "terminate_process_tree", fake_terminate)
+
+    result = controller.stop_captured_process_tree(identities, timeout_seconds=0.1)
+
+    assert result["verifiedStopped"] is True
+    assert result["forcedRootPids"] == [11]
+    assert terminated == [(11, "rust")]
