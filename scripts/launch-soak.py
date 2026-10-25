@@ -28,6 +28,7 @@ import json
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -61,6 +62,37 @@ from emule_test_harness.vm_guest_profiles import api_data, retry_http_json
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class PeriodicBundleCaptureSchedule:
+    """Monotonic low-cadence schedule for campaign-owned diagnostic bundles."""
+
+    interval_seconds: float
+    next_capture_monotonic: float
+
+    @classmethod
+    def start(
+        cls,
+        *,
+        interval_seconds: float,
+        now_monotonic: float,
+    ) -> PeriodicBundleCaptureSchedule:
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive.")
+        return cls(
+            interval_seconds=interval_seconds,
+            next_capture_monotonic=now_monotonic + interval_seconds,
+        )
+
+    def is_due(self, now_monotonic: float) -> bool:
+        return now_monotonic >= self.next_capture_monotonic
+
+    def after_capture(self, now_monotonic: float) -> PeriodicBundleCaptureSchedule:
+        return type(self).start(
+            interval_seconds=self.interval_seconds,
+            now_monotonic=now_monotonic,
+        )
 
 
 def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStoragePolicy:
@@ -137,6 +169,34 @@ def capture_rust_diagnostic_bundle(
         "retainedCount": persisted.retained_count,
         "retainedBytes": persisted.retained_bytes,
     }
+
+
+def record_diagnostic_bundle_capture(
+    captures: list[dict[str, object]],
+    capture: dict[str, object],
+) -> None:
+    """Keeps manifest evidence aligned with the retained bundle ring."""
+
+    deleted_paths = capture.get("deletedPaths")
+    if not isinstance(deleted_paths, list) or any(
+        not isinstance(path, str) for path in deleted_paths
+    ):
+        raise RuntimeError("Diagnostic bundle capture deletedPaths must be a string list.")
+    deleted = set(deleted_paths)
+    captures[:] = [item for item in captures if item.get("path") not in deleted]
+    captures.append(capture)
+
+    retained_count = capture.get("retainedCount")
+    if (
+        isinstance(retained_count, bool)
+        or not isinstance(retained_count, int)
+        or retained_count < 1
+    ):
+        raise RuntimeError("Diagnostic bundle capture retainedCount must be positive.")
+    if len(captures) > retained_count:
+        raise RuntimeError(
+            "Diagnostic bundle manifest inventory exceeds the retained bundle count."
+        )
 
 
 def raise_rust_output_failure(rust_handles: dict | None) -> None:
@@ -697,6 +757,7 @@ def main(argv: list[str] | None = None) -> int:
     diagnostic_bundle_policy = storage_policy.stream("diagnostic_bundles")
     preflight_manifest["rustDiagnosticBundles"] = {
         "path": str(run_paths.diagnostic_bundles_dir.resolve()),
+        "intervalSeconds": storage_policy.bundle_interval_seconds,
         "policy": {
             "maxSegmentBytes": diagnostic_bundle_policy.max_segment_bytes,
             "retainedSegments": diagnostic_bundle_policy.retained_segments,
@@ -831,13 +892,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             mfc_base = mfc_handles["baseUrl"]
 
-        diagnostic_bundle_captures.append(
+        record_diagnostic_bundle_capture(
+            diagnostic_bundle_captures,
             capture_rust_diagnostic_bundle(
                 base_url=rust_base,
                 run_paths=run_paths,
                 storage_policy=storage_policy,
                 phase="ready",
-            )
+            ),
+        )
+        bundle_capture_schedule = PeriodicBundleCaptureSchedule.start(
+            interval_seconds=storage_policy.bundle_interval_seconds,
+            now_monotonic=time.monotonic(),
         )
 
         log("=" * 70)
@@ -877,14 +943,30 @@ def main(argv: list[str] | None = None) -> int:
                     f"handles={row['handles']}"
                 )
                 last_metrics_log = time.monotonic()
-            if profile_deadline is not None and time.monotonic() >= profile_deadline:
+            loop_now = time.monotonic()
+            if profile_deadline is not None and loop_now >= profile_deadline:
                 log("CPU profile window complete - stopping.")
                 status = "profile-complete"
                 break
-            if duration_deadline is not None and time.monotonic() >= duration_deadline:
+            if duration_deadline is not None and loop_now >= duration_deadline:
                 log("duration window complete - stopping.")
                 status = "duration-complete"
                 break
+            if bundle_capture_schedule.is_due(loop_now):
+                periodic_capture = capture_rust_diagnostic_bundle(
+                    base_url=rust_base,
+                    run_paths=run_paths,
+                    storage_policy=storage_policy,
+                    phase="periodic",
+                )
+                record_diagnostic_bundle_capture(
+                    diagnostic_bundle_captures,
+                    periodic_capture,
+                )
+                log(f"captured periodic Rust diagnostic bundle: {periodic_capture['path']}")
+                bundle_capture_schedule = bundle_capture_schedule.after_capture(
+                    time.monotonic()
+                )
             time.sleep(2.0)
     except KeyboardInterrupt:
         log("Ctrl-C - stopping all launched apps gracefully...")
@@ -903,13 +985,14 @@ def main(argv: list[str] | None = None) -> int:
             and rust_handles["process"].poll() is None
         ):
             try:
-                diagnostic_bundle_captures.append(
+                record_diagnostic_bundle_capture(
+                    diagnostic_bundle_captures,
                     capture_rust_diagnostic_bundle(
                         base_url=rust_base,
                         run_paths=run_paths,
                         storage_policy=storage_policy,
                         phase="final",
-                    )
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - teardown and evidence must continue
                 status = "failed"
