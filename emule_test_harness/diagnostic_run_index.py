@@ -20,6 +20,7 @@ MAX_OPCODES_PER_FAMILY = 2_048
 MAX_OPCODE_NAMES = 8
 
 _WRITER_MONOTONIC_FIELDS = (
+    "activeSegmentId",
     "recordsWritten",
     "bytesWritten",
     "droppedEvents",

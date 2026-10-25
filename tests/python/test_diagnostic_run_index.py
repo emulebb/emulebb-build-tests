@@ -257,6 +257,23 @@ def test_advance_writer_health_rejects_counter_regression() -> None:
         )
 
 
+def test_advance_writer_health_rejects_active_segment_regression() -> None:
+    index = diagnostic_run_index.advance_writer_health(
+        diagnostic_run_index.new_index(client="rust", process_id=42, run_id="run-a"),
+        writer_health(activeSegmentId=2),
+        observed_utc="2026-10-25T10:00:00+00:00",
+    )
+
+    with pytest.raises(
+        diagnostic_run_index.DiagnosticRunIndexError, match="activeSegmentId"
+    ):
+        diagnostic_run_index.advance_writer_health(
+            index,
+            writer_health(activeSegmentId=1),
+            observed_utc="2026-10-25T10:01:00+00:00",
+        )
+
+
 def test_advance_writer_health_requires_exact_contract_and_identity() -> None:
     index = diagnostic_run_index.new_index(client="rust", process_id=42, run_id="run-a")
     incomplete = writer_health()
