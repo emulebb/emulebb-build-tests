@@ -1210,6 +1210,14 @@ def remaining_exact_tree_rows(
         if pid in current_by_pid
         and current_by_pid[pid].creation_date != identity["creationDate"]
     }
+    ambiguous_children = [
+        row.pid for row in processes if row.parent_pid in blocked_parent_pids
+    ]
+    if ambiguous_children:
+        raise RuntimeError(
+            "Captured launcher-tree PID reuse made descendant ownership ambiguous: "
+            + ", ".join(str(pid) for pid in sorted(ambiguous_children))
+        )
     owned_parent_pids = set(captured_by_pid) - blocked_parent_pids
     selected = {
         row.pid: row
