@@ -287,6 +287,31 @@ def diagnostic_writer_health() -> dict[str, object]:
     }
 
 
+def healthy_rest_health() -> dict[str, object]:
+    return {
+        "ok": True,
+        "responseType": "dict",
+        "vpnGuard": {
+            "ok": True,
+            "health": {
+                "enabled": True,
+                "mode": "block",
+                "allowedPublicIpCidrs": "149.88.27.0/24",
+                "startupBlocked": False,
+            },
+            "violations": [],
+        },
+        "p2pBinding": {
+            "ok": True,
+            "health": {
+                "activeInterfaceName": "hide.me",
+                "resolveResult": "resolved",
+            },
+            "violations": [],
+        },
+    }
+
+
 def storage_context_manifest(
     tmp_path: Path,
     *,
@@ -703,7 +728,7 @@ def test_session_status_reports_exact_dual_process_tree(
         ),
     ]
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
-    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: {"ok": True})
+    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: healthy_rest_health())
     monkeypatch.setattr(
         controller,
         "diagnostic_writer_health",
@@ -755,6 +780,39 @@ def test_diagnostic_writer_health_retains_complete_strict_payload(
     assert "writeErrors=1 expected 0" in result["violations"]
 
 
+def test_rest_health_requires_blocking_guard_and_hide_me_binding(monkeypatch) -> None:
+    status = {
+        "network": {
+            "vpnGuard": {
+                "enabled": True,
+                "mode": "block",
+                "allowedPublicIpCidrs": "149.88.27.0/24",
+                "startupBlocked": False,
+            },
+            "binding": {
+                "activeInterfaceName": "hide.me",
+                "resolveResult": "resolved",
+            },
+        }
+    }
+    monkeypatch.setattr(
+        controller,
+        "http_json",
+        lambda *_args, **_kwargs: {"data": status},
+    )
+
+    result = controller.rest_health("http://127.0.0.1/api/v1", "key")
+
+    assert result == healthy_rest_health()
+
+    status["network"]["vpnGuard"]["mode"] = "off"
+    status["network"]["binding"]["activeInterfaceName"] = "Ethernet"
+    result = controller.rest_health("http://127.0.0.1/api/v1", "key")
+    assert result["ok"] is True
+    assert result["vpnGuard"]["ok"] is False
+    assert result["p2pBinding"]["ok"] is False
+
+
 def test_session_status_requires_both_writers_after_persisted_readiness(
     tmp_path: Path,
     monkeypatch,
@@ -781,7 +839,7 @@ def test_session_status_requires_both_writers_after_persisted_readiness(
         WindowsProcessInfo(12, 10, "emule.exe", "mfc", "mfc"),
     ]
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
-    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: {"ok": True})
+    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: healthy_rest_health())
     monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
 
     def fake_writer_health(_url: str, key: str) -> dict[str, object]:

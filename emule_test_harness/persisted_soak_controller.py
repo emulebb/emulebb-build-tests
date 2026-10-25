@@ -899,11 +899,64 @@ def process_summary(row: windows_processes.WindowsProcessInfo, role: str) -> dic
 
 
 def rest_health(base_url: str, api_key: str) -> dict[str, Any]:
-    """Returns a bounded REST health result without retaining response payloads."""
+    """Returns REST, blocking VPN Guard, and hide.me binding health."""
 
     try:
         payload = http_json(base_url, "/status", api_key=api_key, timeout_seconds=5.0)
-        return {"ok": True, "responseType": type(payload).__name__}
+        data = api_data(payload)
+        network = data.get("network") if isinstance(data, dict) else None
+        vpn_guard = network.get("vpnGuard") if isinstance(network, dict) else None
+        binding = network.get("binding") if isinstance(network, dict) else None
+        guard_violations: list[str] = []
+        if not isinstance(vpn_guard, dict):
+            guard_violations.append("missing network.vpnGuard")
+        else:
+            expected_guard = {
+                "enabled": True,
+                "mode": "block",
+                "startupBlocked": False,
+            }
+            guard_violations.extend(
+                f"{name}={vpn_guard.get(name)!r} expected {expected!r}"
+                for name, expected in expected_guard.items()
+                if vpn_guard.get(name) != expected
+            )
+            allowed_cidrs = vpn_guard.get("allowedPublicIpCidrs")
+            if not isinstance(allowed_cidrs, str) or not allowed_cidrs.strip():
+                guard_violations.append(
+                    "allowedPublicIpCidrs expected non-empty string"
+                )
+
+        binding_violations: list[str] = []
+        if not isinstance(binding, dict):
+            binding_violations.append("missing network.binding")
+        else:
+            active_interface = binding.get("activeInterfaceName")
+            if (
+                not isinstance(active_interface, str)
+                or active_interface.casefold() != "hide.me"
+            ):
+                binding_violations.append(
+                    f"activeInterfaceName={active_interface!r} expected 'hide.me'"
+                )
+            if binding.get("resolveResult") != "resolved":
+                binding_violations.append(
+                    f"resolveResult={binding.get('resolveResult')!r} expected 'resolved'"
+                )
+        return {
+            "ok": True,
+            "responseType": type(payload).__name__,
+            "vpnGuard": {
+                "ok": not guard_violations,
+                "health": dict(vpn_guard) if isinstance(vpn_guard, dict) else None,
+                "violations": guard_violations,
+            },
+            "p2pBinding": {
+                "ok": not binding_violations,
+                "health": dict(binding) if isinstance(binding, dict) else None,
+                "violations": binding_violations,
+            },
+        }
     except Exception as error:  # noqa: BLE001 - health status retains only bounded error metadata
         return {"ok": False, "errorType": type(error).__name__, "error": str(error)[:256]}
 
@@ -1057,8 +1110,20 @@ def status_findings(status: dict[str, Any]) -> list[str]:
         findings.append("mfc-process-count")
     rest = status.get("rest") or {}
     for client in ("rust", "mfc"):
-        if client in rest and not rest[client].get("ok"):
+        health = rest.get(client)
+        if not isinstance(health, dict):
+            continue
+        if not health.get("ok"):
             findings.append(f"{client}-rest-unhealthy")
+            continue
+        if not isinstance(health.get("vpnGuard"), dict) or not health[
+            "vpnGuard"
+        ].get("ok"):
+            findings.append(f"{client}-vpn-guard-unhealthy")
+        if not isinstance(health.get("p2pBinding"), dict) or not health[
+            "p2pBinding"
+        ].get("ok"):
+            findings.append(f"{client}-p2p-binding-unhealthy")
     diagnostic_writers = status.get("diagnosticWriters") or {}
     if diagnostic_writers.get("required"):
         for client in ("rust", "mfc"):
