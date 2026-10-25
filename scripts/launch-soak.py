@@ -70,6 +70,16 @@ def required_daemon_output_policy(inputs: LiveWireInputs) -> soak_storage.Artifa
     return inputs.soak_storage.stream("daemon_output")
 
 
+def required_rust_diagnostic_writer_policy(
+    inputs: LiveWireInputs,
+) -> soak_storage.RustDiagnosticWriterPolicy:
+    """Returns the mandatory bounded Rust profile-writer policy."""
+
+    if inputs.soak_storage is None:
+        raise RuntimeError("Persisted soaks require soak_storage in the live-wire inputs.")
+    return inputs.soak_storage.rust_diagnostics
+
+
 def raise_rust_output_failure(rust_handles: dict | None) -> None:
     """Fails the launch loop when asynchronous Rust output capture failed."""
 
@@ -569,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
     daemon_output_policy = required_daemon_output_policy(inputs)
+    rust_diagnostic_writer_policy = required_rust_diagnostic_writer_policy(inputs)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
     if args.rust_profile_dir is not None:
         rust_profile_dir = args.rust_profile_dir.resolve()
@@ -623,6 +634,17 @@ def main(argv: list[str] | None = None) -> int:
         mfc_log_dir=mfc_log_dir,
     )
     preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
+    preflight_manifest["rustDiagnosticWriter"] = {
+        "enabled": not args.rust_regular,
+        "path": str((rust_profile_dir / "packet-dump").resolve()),
+        "policy": (
+            soak_storage.rust_diagnostic_writer_policy_payload(
+                rust_diagnostic_writer_policy
+            )
+            if not args.rust_regular
+            else None
+        ),
+    }
     soak_run_layout.write_last_run_manifest(run_paths, preflight_manifest)
     mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
     mfc_preferences_path = (
@@ -710,6 +732,9 @@ def main(argv: list[str] | None = None) -> int:
             vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
             daemon_output_path=run_paths.rust_daemon_output,
             daemon_output_policy=daemon_output_policy,
+            diagnostic_writer_policy=(
+                rust_diagnostic_writer_policy if not args.rust_regular else None
+            ),
         )
         rust_proc = rust_handles["process"]
         rust_base = rust_handles["baseUrl"]
@@ -743,7 +768,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_mfc:
             log(f"  MFC diagnostics   : {mfc_base}   (X-API-Key: {MFC_API_KEY}) + its GUI window")
         log(f"  operator server   : {OPERATOR_SERVER}")
-        log("Dumps accumulate under the persistent profiles; analyze later from this repo.")
+        log("Bounded diagnostic rings remain under the persistent profiles; analyze later from this repo.")
         if args.cpu_profile:
             log(f"Profiling for {args.cpu_profile_seconds:.0f}s; artifacts: {run_paths.report_dir / 'analysis'}")
         log("Press Ctrl-C to stop everything (profiles + dumps are kept).")
@@ -856,6 +881,11 @@ def main(argv: list[str] | None = None) -> int:
             "vpnGuard": vpn_guard_profile,
             "cpuProfile": profile_report,
             "processMetrics": process_metrics_summary,
+            "rustDiagnosticWriterHealth": (
+                rust_handles.get("diagnosticWriterHealth")
+                if rust_handles is not None
+                else None
+            ),
         },
     )
     log("soak environment stopped; profiles + dumps preserved under " + str(soak_root))

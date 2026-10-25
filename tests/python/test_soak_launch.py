@@ -10,6 +10,116 @@ import pytest
 from emule_test_harness import soak_launch, soak_storage, vpn_guard_live
 
 
+def rust_diagnostic_writer_policy() -> soak_storage.RustDiagnosticWriterPolicy:
+    return soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=1_048_576,
+        max_segment_seconds=60,
+        retained_segments=2,
+        max_total_bytes=2_097_152,
+        max_retained_seconds=3_600,
+        minimum_free_bytes=500,
+    )
+
+
+def rust_diagnostic_writer_health(
+    policy: soak_storage.RustDiagnosticWriterPolicy,
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "enabled": True,
+        "configured": True,
+        "initialized": True,
+        "maxSegmentBytes": policy.max_segment_bytes,
+        "maxSegmentSeconds": policy.max_segment_seconds,
+        "retainedSegments": policy.retained_segments,
+        "maxTotalBytes": policy.max_total_bytes,
+        "maxRetainedSeconds": policy.max_retained_seconds,
+        "minimumFreeBytes": policy.minimum_free_bytes,
+        "storageAuthorityFaulted": False,
+        "writerIoFaulted": False,
+        "storageBlockReason": None,
+        "storagePolicySatisfied": True,
+        "initializationFailure": None,
+        "droppedEvents": 0,
+        "encodeErrors": 0,
+        "writeErrors": 0,
+        "retentionDeleteErrors": 0,
+        "retentionScanErrors": 0,
+        "freeSpaceProbeErrors": 0,
+        "retentionPolicyErrors": 0,
+        "storagePolicyDrops": 0,
+        "storageFaultDrops": 0,
+        "retentionLimitDrops": 0,
+        "aggregateLimitDrops": 0,
+        "minimumFreeSpaceDrops": 0,
+        "writerFaultDrops": 0,
+        "maximumGrowthBytes": policy.max_segment_bytes,
+        "processId": 42,
+        "runId": "run-a",
+        "activeSegmentId": 0,
+        "activeFileName": "emulebb-rust-diag-42-run-a-000000.jsonl",
+        "retainedSegmentCount": 1,
+        "retainedBytes": 0,
+        "availableBytes": policy.minimum_free_bytes + policy.max_segment_bytes,
+    }
+
+
+def test_rust_process_environment_is_explicit_and_does_not_mutate_parent(
+    tmp_path: Path,
+) -> None:
+    policy = rust_diagnostic_writer_policy()
+    base = {"KEEP": "yes", **{name: "stale" for name in soak_launch.RUST_DIAGNOSTIC_ENV_KEYS}}
+    original = dict(base)
+
+    environment = soak_launch.rust_process_environment(
+        diagnostics_dir=tmp_path / "diagnostics",
+        diagnostic_writer_policy=policy,
+        base_environment=base,
+    )
+    disabled = soak_launch.rust_process_environment(
+        diagnostics_dir=None,
+        diagnostic_writer_policy=None,
+        base_environment=base,
+    )
+
+    assert base == original
+    assert environment["KEEP"] == "yes"
+    assert environment["EMULEBB_RUST_LOG_DIR"] == str(
+        (tmp_path / "diagnostics").resolve()
+    )
+    assert environment["EMULEBB_RUST_DIAG_SEGMENT_BYTES"] == "1048576"
+    assert environment["EMULEBB_RUST_DIAG_SEGMENT_SECONDS"] == "60"
+    assert environment["EMULEBB_RUST_DIAG_RETAINED_SEGMENTS"] == "2"
+    assert environment["EMULEBB_RUST_DIAG_MAX_TOTAL_BYTES"] == "2097152"
+    assert environment["EMULEBB_RUST_DIAG_MAX_RETAINED_SECONDS"] == "3600"
+    assert environment["EMULEBB_RUST_DIAG_MIN_FREE_BYTES"] == "500"
+    assert all(name not in disabled for name in soak_launch.RUST_DIAGNOSTIC_ENV_KEYS)
+
+
+def test_require_rust_diagnostic_writer_ready_requires_full_segment_growth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = rust_diagnostic_writer_policy()
+    health = rust_diagnostic_writer_health(policy)
+    monkeypatch.setattr(
+        soak_launch,
+        "retry_http_json",
+        lambda *_args, **_kwargs: {"data": {"diagnosticWriter": health}},
+    )
+
+    assert soak_launch.require_rust_diagnostic_writer_ready(
+        "http://127.0.0.1:4731",
+        policy,
+    ) == health
+
+    health["maximumGrowthBytes"] = policy.max_segment_bytes - 1
+    with pytest.raises(RuntimeError, match="maximumGrowthBytes"):
+        soak_launch.require_rust_diagnostic_writer_ready(
+            "http://127.0.0.1:4731",
+            policy,
+        )
+
+
 def write_diag_segment(path: Path, records: list[dict[str, object]]) -> None:
     path.write_text(
         "".join(f"{json.dumps(record, separators=(',', ':'))}\n" for record in records),
@@ -181,7 +291,9 @@ def test_bring_up_rust_cleans_process_on_connection_timeout(tmp_path: Path, monk
     launched: dict[str, object] = {}
     stopped: list[object] = []
 
-    def fake_start(_exe_path: Path, _profile_dir: Path, handle) -> FakeProcess:
+    def fake_start(
+        _exe_path: Path, _profile_dir: Path, handle, **_kwargs
+    ) -> FakeProcess:
         launched["handle"] = handle
         return fake_process
 
@@ -243,7 +355,7 @@ def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeyp
     monkeypatch.setattr(
         soak_launch,
         "start_rust_client_executable_with_output",
-        lambda *_args: type("FakeProcess", (), {"pid": 5151})(),
+        lambda *_args, **_kwargs: type("FakeProcess", (), {"pid": 5151})(),
     )
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
     monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
@@ -299,18 +411,39 @@ def test_bring_up_rust_preserves_daemon_identity_with_bounded_binary_output(
 
     fake_process = FakeProcess()
     launched: dict[str, object] = {}
+    actions: list[str] = []
+    writer_policy = rust_diagnostic_writer_policy()
+    writer_health = rust_diagnostic_writer_health(writer_policy)
 
     def fake_start(_exe_path, _profile_dir, output_handle, **kwargs):
         launched["outputHandle"] = output_handle
+        environment = kwargs.pop("env")
+        launched["diagnosticEnvironment"] = {
+            name: environment[name] for name in soak_launch.RUST_DIAGNOSTIC_ENV_KEYS
+        }
         launched.update(kwargs)
         return fake_process
+
+    def fake_retry(_description, _attempts, _base_url, path, **_kwargs):
+        actions.append(path)
+        if path == "/api/v1/diagnostics":
+            return {"data": {"diagnosticWriter": writer_health}}
+        return {}
 
     monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "start_rust_client_executable_with_output", fake_start)
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
-    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        soak_launch,
+        "patch_upload_limit",
+        lambda *_args, **_kwargs: actions.append("upload-limit"),
+    )
+    monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
+    monkeypatch.setattr(
+        soak_launch,
+        "connect_operator_server",
+        lambda *_args, **_kwargs: actions.append("server-connect") or {},
+    )
 
     daemon_output = tmp_path / "campaign" / "daemon-output" / "rust-daemon.out"
     result = soak_launch.bring_up_rust(
@@ -333,6 +466,7 @@ def test_bring_up_rust_preserves_daemon_identity_with_bounded_binary_output(
             max_segment_bytes=64,
             retained_segments=2,
         ),
+        diagnostic_writer_policy=writer_policy,
     )
     result["outputCapture"].close()
     result["outputCapture"].raise_if_failed()
@@ -341,9 +475,27 @@ def test_bring_up_rust_preserves_daemon_identity_with_bounded_binary_output(
     assert result["logHandle"] is None
     assert launched == {
         "outputHandle": subprocess.PIPE,
+        "diagnosticEnvironment": {
+            "EMULEBB_RUST_LOG_DIR": str(
+                (tmp_path / "profile" / "packet-dump").resolve()
+            ),
+            "EMULEBB_RUST_DIAG_SEGMENT_BYTES": "1048576",
+            "EMULEBB_RUST_DIAG_SEGMENT_SECONDS": "60",
+            "EMULEBB_RUST_DIAG_RETAINED_SEGMENTS": "2",
+            "EMULEBB_RUST_DIAG_MAX_TOTAL_BYTES": "2097152",
+            "EMULEBB_RUST_DIAG_MAX_RETAINED_SECONDS": "3600",
+            "EMULEBB_RUST_DIAG_MIN_FREE_BYTES": "500",
+        },
         "new_process_group": False,
         "text": False,
     }
+    assert actions == [
+        "/api/v1/diagnostics",
+        "upload-limit",
+        "/api/v1/kad/operations/start",
+        "server-connect",
+    ]
+    assert result["diagnosticWriterHealth"] == writer_health
     assert daemon_output.read_bytes() == b"daemon-out\x00\xff"
     assert not (tmp_path / "profile" / "daemon.out").exists()
 
@@ -438,7 +590,7 @@ def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeyp
     monkeypatch.setattr(
         soak_launch,
         "start_rust_client_executable_with_output",
-        lambda _exe_path, _profile_dir, _handle: fake_process,
+        lambda _exe_path, _profile_dir, _handle, **_kwargs: fake_process,
     )
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
     monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
@@ -508,7 +660,7 @@ def test_bring_up_rust_tries_explicit_fallback_server_after_primary_timeout(
     monkeypatch.setattr(
         soak_launch,
         "start_rust_client_executable_with_output",
-        lambda _exe_path, _profile_dir, _handle: FakeProcess(),
+        lambda _exe_path, _profile_dir, _handle, **_kwargs: FakeProcess(),
     )
     monkeypatch.setattr(soak_launch, "wait_until", fake_wait_until)
     monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)

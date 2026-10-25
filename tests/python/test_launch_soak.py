@@ -278,6 +278,43 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
     assert module.required_daemon_output_policy(inputs) is daemon_policy
 
 
+def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
+    tmp_path: Path,
+) -> None:
+    module = load_launch_soak_module()
+    rust_policy = soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=1_048_576,
+        max_segment_seconds=60,
+        retained_segments=2,
+        max_total_bytes=2_097_152,
+        max_retained_seconds=3_600,
+        minimum_free_bytes=1,
+    )
+    inputs = LiveWireInputs(
+        path=tmp_path / "inputs.json",
+        generic_open_terms=(),
+        document_terms=(),
+        radarr_movie_terms=(),
+        sonarr_series_terms=(),
+        video_roots=(),
+        bootstrap_transfer_hashes=(),
+        direct_bootstrap_transfers=(),
+        soak_storage=soak_storage.SoakStoragePolicy(
+            max_total_bytes=1_000,
+            max_age_seconds=3_600,
+            minimum_free_bytes=1,
+            bundle_interval_seconds=900,
+            rust_diagnostics=rust_policy,
+            streams={
+                "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
+                "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
+            },
+        ),
+    )
+
+    assert module.required_rust_diagnostic_writer_policy(inputs) is rust_policy
+
+
 def test_daemon_output_manifest_records_exact_campaign_policy(tmp_path: Path) -> None:
     module = load_launch_soak_module()
     run_paths = module.soak_run_layout.build_run_paths(

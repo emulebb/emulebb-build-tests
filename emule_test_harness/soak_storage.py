@@ -357,14 +357,9 @@ def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:
         "max_age_seconds": policy.max_age_seconds,
         "minimum_free_bytes": policy.minimum_free_bytes,
         "bundle_interval_seconds": policy.bundle_interval_seconds,
-        "rust_diagnostics": {
-            "max_segment_bytes": policy.rust_diagnostics.max_segment_bytes,
-            "max_segment_seconds": policy.rust_diagnostics.max_segment_seconds,
-            "retained_segments": policy.rust_diagnostics.retained_segments,
-            "max_total_bytes": policy.rust_diagnostics.max_total_bytes,
-            "max_retained_seconds": policy.rust_diagnostics.max_retained_seconds,
-            "minimum_free_bytes": policy.rust_diagnostics.minimum_free_bytes,
-        },
+        "rust_diagnostics": rust_diagnostic_writer_policy_payload(
+            policy.rust_diagnostics
+        ),
         "streams": {
             name: {
                 "max_segment_bytes": policy.stream(name).max_segment_bytes,
@@ -372,6 +367,21 @@ def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:
             }
             for name in REQUIRED_STREAMS
         },
+    }
+
+
+def rust_diagnostic_writer_policy_payload(
+    policy: RustDiagnosticWriterPolicy,
+) -> dict[str, int]:
+    """Returns the exact Rust diagnostic-writer configuration payload."""
+
+    return {
+        "max_segment_bytes": policy.max_segment_bytes,
+        "max_segment_seconds": policy.max_segment_seconds,
+        "retained_segments": policy.retained_segments,
+        "max_total_bytes": policy.max_total_bytes,
+        "max_retained_seconds": policy.max_retained_seconds,
+        "minimum_free_bytes": policy.minimum_free_bytes,
     }
 
 
