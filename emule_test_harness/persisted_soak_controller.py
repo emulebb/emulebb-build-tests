@@ -34,6 +34,7 @@ DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
 WATCH_FAILURE_GRACE_SECONDS = 15.0
 STORAGE_FAILURE_FINDING = "campaign-storage-enforcement-failed"
+WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -762,6 +763,18 @@ def start_session(
         "campaignDir": str(campaign_dir),
         "launcher": process_identity(launcher_row, launch_command),
         "watcher": None,
+        "watchConfig": {
+            "enabled": start_watch,
+            "intervalSeconds": watch_interval_seconds if start_watch else None,
+            "heartbeatStaleSeconds": (
+                max(
+                    watch_interval_seconds * 3,
+                    watch_interval_seconds + WATCH_HEARTBEAT_MIN_STALE_SECONDS,
+                )
+                if start_watch
+                else None
+            ),
+        },
         "command": launch_command,
         "targetCommand": launch_target_command,
         "preflight": preflight,
@@ -862,6 +875,90 @@ def full_tunnel_health() -> dict[str, Any]:
         return {"ok": False, "errorType": type(error).__name__, "error": str(error)[:256]}
 
 
+def parse_aware_timestamp(value: object) -> datetime | None:
+    """Parses one timezone-aware ISO timestamp."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def watch_heartbeat_health(
+    manifest: dict[str, Any],
+    heartbeat: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Validates heartbeat freshness and authority for the current campaign."""
+
+    watch_config = manifest.get("watchConfig")
+    if not isinstance(watch_config, dict) or watch_config.get("enabled") is not True:
+        return {"state": "disabled", "accepted": False}
+    stale_seconds = watch_config.get("heartbeatStaleSeconds")
+    if isinstance(stale_seconds, bool) or not isinstance(stale_seconds, (int, float)) or stale_seconds <= 0:
+        return {"state": "invalid", "accepted": False, "reason": "watch-config"}
+
+    observed_now = (now or datetime.now(UTC)).astimezone(UTC)
+    started_at = parse_aware_timestamp(manifest.get("startedUtc"))
+    if not heartbeat:
+        if started_at is not None and (observed_now - started_at).total_seconds() <= stale_seconds:
+            return {"state": "pending", "accepted": False, "staleAfterSeconds": stale_seconds}
+        return {"state": "stale", "accepted": False, "reason": "missing"}
+
+    campaign_id = manifest.get("campaignId")
+    manifest_storage = manifest.get("storage")
+    heartbeat_storage = heartbeat.get("storage")
+    if heartbeat.get("schema") != WATCH_SCHEMA:
+        return {"state": "invalid", "accepted": False, "reason": "schema"}
+    if not isinstance(campaign_id, str) or heartbeat.get("campaignId") != campaign_id:
+        if started_at is not None and (observed_now - started_at).total_seconds() <= stale_seconds:
+            return {
+                "state": "pending",
+                "accepted": False,
+                "reason": "previous-campaign",
+                "staleAfterSeconds": stale_seconds,
+            }
+        return {"state": "invalid", "accepted": False, "reason": "campaign"}
+    if not isinstance(manifest_storage, dict) or not isinstance(heartbeat_storage, dict):
+        return {"state": "invalid", "accepted": False, "reason": "storage"}
+    if heartbeat_storage.get("policySha256") != manifest_storage.get("policySha256"):
+        return {"state": "invalid", "accepted": False, "reason": "policy-sha256"}
+    if heartbeat_storage.get("activeCampaignDir") != manifest_storage.get("activeCampaignDir"):
+        return {"state": "invalid", "accepted": False, "reason": "active-campaign"}
+
+    heartbeat_at = parse_aware_timestamp(heartbeat.get("timestampUtc"))
+    if heartbeat_at is None:
+        return {"state": "invalid", "accepted": False, "reason": "timestamp"}
+    age_seconds = (observed_now - heartbeat_at).total_seconds()
+    if age_seconds < -5:
+        return {"state": "invalid", "accepted": False, "reason": "future-timestamp"}
+    if isinstance(heartbeat.get("shutdown"), dict):
+        return {
+            "state": "terminal",
+            "accepted": True,
+            "ageSeconds": max(0.0, age_seconds),
+        }
+    if age_seconds > stale_seconds:
+        return {
+            "state": "stale",
+            "accepted": False,
+            "ageSeconds": age_seconds,
+            "staleAfterSeconds": stale_seconds,
+        }
+    return {
+        "state": "current",
+        "accepted": True,
+        "ageSeconds": max(0.0, age_seconds),
+        "staleAfterSeconds": stale_seconds,
+    }
+
+
 def status_findings(status: dict[str, Any]) -> list[str]:
     """Returns actionable health findings for one session status."""
 
@@ -872,6 +969,11 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     watcher = status.get("watcher") or {}
     if manifest.get("state") == "running" and watcher.get("identity") and not watcher.get("alive"):
         findings.append("watcher-not-running")
+    heartbeat_health = watcher.get("heartbeatHealth") or {}
+    if manifest.get("state") == "running" and heartbeat_health.get("state") == "stale":
+        findings.append("watcher-heartbeat-stale")
+    if manifest.get("state") == "running" and heartbeat_health.get("state") == "invalid":
+        findings.append("watcher-heartbeat-invalid")
     if status["clients"]["rustCount"] != 1:
         findings.append("rust-process-count")
     if status["clients"]["mfcCount"] != 1:
@@ -935,14 +1037,8 @@ def session_status(
     last_run = load_json(paths.last_run_manifest)
     heartbeat = load_json(paths.watch_heartbeat)
     campaign_id = manifest.get("campaignId")
-    heartbeat_storage = None
-    if (
-        isinstance(campaign_id, str)
-        and campaign_id
-        and heartbeat.get("campaignId") == campaign_id
-        and isinstance(heartbeat.get("storage"), dict)
-    ):
-        heartbeat_storage = heartbeat["storage"]
+    heartbeat_health = watch_heartbeat_health(manifest, heartbeat)
+    heartbeat_storage = heartbeat.get("storage") if heartbeat_health.get("accepted") else None
     result: dict[str, Any] = {
         "schema": STATUS_SCHEMA,
         "timestampUtc": datetime.now(UTC).isoformat(),
@@ -960,6 +1056,7 @@ def session_status(
             "alive": watcher is not None,
             "identity": watcher_identity,
             "heartbeat": heartbeat,
+            "heartbeatHealth": heartbeat_health,
         },
         "clients": {
             "rustCount": len(rust_rows),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 
@@ -601,22 +602,41 @@ def test_session_status_reports_current_storage_failure_and_dead_watcher(
 ) -> None:
     paths = make_paths(tmp_path)
     campaign_id = "20261025T120000Z"
-    controller.write_json_atomic(
-        paths.manifest,
+    output_root, manifest = storage_context_manifest(tmp_path)
+    del output_root
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    manifest.update(
         {
             "schema": controller.MANIFEST_SCHEMA,
             "state": "running",
+            "startedUtc": datetime.now(UTC).isoformat(),
             "campaignId": campaign_id,
             "launcher": {"pid": 10, "creationDate": "launcher"},
             "watcher": {"pid": 20, "creationDate": "watcher"},
-        },
+            "watchConfig": {
+                "enabled": True,
+                "intervalSeconds": 60.0,
+                "heartbeatStaleSeconds": 180.0,
+            },
+        }
+    )
+    controller.write_json_atomic(
+        paths.manifest,
+        manifest,
     )
     controller.write_json_atomic(
         paths.watch_heartbeat,
         {
             "schema": controller.WATCH_SCHEMA,
             "campaignId": campaign_id,
-            "storage": {"ok": False, "error": "minimum_free_bytes"},
+            "timestampUtc": datetime.now(UTC).isoformat(),
+            "storage": {
+                "ok": False,
+                "error": "minimum_free_bytes",
+                "policySha256": storage["policySha256"],
+                "activeCampaignDir": storage["activeCampaignDir"],
+            },
         },
     )
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
@@ -638,9 +658,15 @@ def test_session_status_ignores_stale_watch_storage_failure(
         {
             "schema": controller.MANIFEST_SCHEMA,
             "state": "running",
+            "startedUtc": datetime.now(UTC).isoformat(),
             "campaignId": "20261025T120000Z",
             "launcher": {},
             "watcher": None,
+            "watchConfig": {
+                "enabled": True,
+                "intervalSeconds": 60.0,
+                "heartbeatStaleSeconds": 180.0,
+            },
         },
     )
     controller.write_json_atomic(
@@ -648,6 +674,7 @@ def test_session_status_ignores_stale_watch_storage_failure(
         {
             "schema": controller.WATCH_SCHEMA,
             "campaignId": "20261024T120000Z",
+            "timestampUtc": datetime.now(UTC).isoformat(),
             "storage": {"ok": False, "error": "stale"},
         },
     )
@@ -657,6 +684,50 @@ def test_session_status_ignores_stale_watch_storage_failure(
 
     assert result["storage"] is None
     assert controller.STORAGE_FAILURE_FINDING not in result["findings"]
+    assert result["watcher"]["heartbeatHealth"]["state"] == "pending"
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "policy_sha256", "expected_state"),
+    [(10, "expected", "current"), (181, "expected", "stale"), (10, "tampered", "invalid")],
+)
+def test_watch_heartbeat_health_requires_fresh_manifest_authority(
+    tmp_path: Path,
+    age_seconds: int,
+    policy_sha256: str,
+    expected_state: str,
+) -> None:
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    _output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    manifest.update(
+        {
+            "startedUtc": (now - timedelta(minutes=10)).isoformat(),
+            "watchConfig": {
+                "enabled": True,
+                "intervalSeconds": 60.0,
+                "heartbeatStaleSeconds": 180.0,
+            },
+        }
+    )
+    heartbeat = {
+        "schema": controller.WATCH_SCHEMA,
+        "campaignId": manifest["campaignId"],
+        "timestampUtc": (now - timedelta(seconds=age_seconds)).isoformat(),
+        "storage": {
+            "ok": True,
+            "policySha256": (
+                storage["policySha256"] if policy_sha256 == "expected" else policy_sha256
+            ),
+            "activeCampaignDir": storage["activeCampaignDir"],
+        },
+    }
+
+    result = controller.watch_heartbeat_health(manifest, heartbeat, now=now)
+
+    assert result["state"] == expected_state
+    assert result["accepted"] is (expected_state == "current")
 
 
 def test_stop_session_requests_graceful_teardown_without_force(
