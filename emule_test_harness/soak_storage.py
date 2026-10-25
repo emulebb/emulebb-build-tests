@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import time
@@ -303,6 +305,37 @@ class BoundedArtifactStore:
                 )
             roots.append(resolved)
         return tuple(roots)
+
+
+def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:
+    """Returns the canonical strict payload accepted by the policy parser."""
+
+    return {
+        "schema": SCHEMA,
+        "max_total_bytes": policy.max_total_bytes,
+        "max_age_seconds": policy.max_age_seconds,
+        "minimum_free_bytes": policy.minimum_free_bytes,
+        "bundle_interval_seconds": policy.bundle_interval_seconds,
+        "streams": {
+            name: {
+                "max_segment_bytes": policy.stream(name).max_segment_bytes,
+                "retained_segments": policy.stream(name).retained_segments,
+            }
+            for name in REQUIRED_STREAMS
+        },
+    }
+
+
+def storage_policy_sha256(policy: SoakStoragePolicy) -> str:
+    """Returns a deterministic SHA-256 for one canonical policy payload."""
+
+    encoded = json.dumps(
+        storage_policy_payload(policy),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
