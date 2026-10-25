@@ -90,7 +90,6 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
 
 def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     output_root = tmp_path / "output"
     campaigns = controller.campaign_storage_root(output_root)
@@ -104,10 +103,9 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
     os.utime(old_file, ns=(100, 100))
     os.utime(latest_file, ns=(200, 200))
     inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=70))
-    monkeypatch.setattr(controller, "load_live_wire_inputs", lambda _path: inputs)
 
     summary = controller.enforce_campaign_storage(
-        inputs.path,
+        inputs,
         output_root,
         protected_campaigns=(latest_campaign,),
     )
@@ -215,6 +213,9 @@ def test_start_session_records_launcher_and_watcher_identities(
         inputs=tmp_path / "inputs.json",
         vpn_guard_config=tmp_path / "vpn.json",
     )
+    loaded_inputs = live_inputs(tmp_path, policy=storage_policy())
+    input_loads: list[Path] = []
+    observed_inputs: list[LiveWireInputs] = []
     spawned: list[list[str]] = []
 
     class FakeProcess:
@@ -245,13 +246,27 @@ def test_start_session_records_launcher_and_watcher_identities(
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
     monkeypatch.setattr(
         controller,
+        "load_live_wire_inputs",
+        lambda path: input_loads.append(path) or loaded_inputs,
+    )
+
+    def fake_preflight(_config, _root, *, inputs, **_kwargs):
+        observed_inputs.append(inputs)
+        return preflight_payload(tmp_path)
+
+    def fake_enforcement(inputs, *_args, **_kwargs):
+        observed_inputs.append(inputs)
+        return {"withinLimits": True}
+
+    monkeypatch.setattr(
+        controller,
         "preflight_session",
-        lambda _config, _root, **_kwargs: preflight_payload(tmp_path),
+        fake_preflight,
     )
     monkeypatch.setattr(
         controller,
         "enforce_campaign_storage",
-        lambda *_args, **_kwargs: {"withinLimits": True},
+        fake_enforcement,
     )
     monkeypatch.setattr(
         controller.soak_run_layout,
@@ -271,6 +286,8 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert result["watcher"]["creationDate"] == "created-102"
     assert result["campaignId"] == "20261025T120000Z"
     assert result["storageEnforcement"]["withinLimits"] is True
+    assert input_loads == [config.inputs.resolve()]
+    assert observed_inputs == [loaded_inputs, loaded_inputs]
     assert len(spawned) == 2
     assert "launch-soak.py" in spawned[0][1]
     assert "persisted-soak-control.py" in spawned[1][1]
@@ -298,6 +315,11 @@ def test_start_session_enforces_storage_before_control_mutation_or_spawn(
         raise AssertionError("spawn must not be reached")
 
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "load_live_wire_inputs",
+        lambda _path: live_inputs(tmp_path, policy=storage_policy()),
+    )
     monkeypatch.setattr(
         controller,
         "preflight_session",
