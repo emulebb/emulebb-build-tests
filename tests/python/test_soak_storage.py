@@ -396,6 +396,7 @@ def test_bounded_store_enforce_deletes_only_planned_whole_files(
     assert result.deleted_paths == (oldest.resolve(),)
     assert not oldest.exists()
     assert newest.read_bytes() == b"b" * 60
+    assert not result.verification.deletions
     assert result.within_limits
 
 
@@ -417,4 +418,27 @@ def test_bounded_store_enforcement_reports_removal_failure(tmp_path: Path) -> No
 
     assert not result.deleted_paths
     assert result.failures == ("old.bin: PermissionError: busy",)
+    assert not result.within_limits
+
+
+def test_bounded_store_enforcement_verifies_actual_free_space(tmp_path: Path) -> None:
+    artifact = tmp_path / "old.bin"
+    artifact.write_bytes(b"x" * 100)
+    os.utime(artifact, ns=(1, 1))
+    snapshots = iter(
+        [
+            fake_disk_space(tmp_path, free_bytes=10),
+            fake_disk_space(tmp_path, free_bytes=10),
+        ]
+    )
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        direct_policy(minimum_free_bytes=100),
+        disk_space=lambda _root: next(snapshots),
+    )
+
+    result = store.enforce(now_ns=1)
+
+    assert result.deleted_paths == (artifact.resolve(),)
+    assert result.verification.unresolved_constraints == ("minimum_free_bytes",)
     assert not result.within_limits

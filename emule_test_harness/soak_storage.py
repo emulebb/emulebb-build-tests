@@ -111,6 +111,7 @@ class StorageEnforcementResult:
     """Applied whole-file deletions and any fail-closed removal errors."""
 
     plan: StoragePrunePlan
+    verification: StoragePrunePlan
     deleted_paths: tuple[Path, ...]
     failures: tuple[str, ...]
 
@@ -118,7 +119,12 @@ class StorageEnforcementResult:
     def within_limits(self) -> bool:
         """Returns whether planning succeeded and every deletion was applied."""
 
-        return self.plan.within_limits and not self.failures
+        return (
+            self.plan.within_limits
+            and not self.failures
+            and self.verification.within_limits
+            and not self.verification.deletions
+        )
 
 
 class BoundedArtifactStore:
@@ -266,8 +272,14 @@ class BoundedArtifactStore:
                 )
             else:
                 deleted_paths.append(deletion.artifact.path)
+        verification = self.plan(
+            active_campaign=active_campaign,
+            pinned_paths=pinned_paths,
+            now_ns=now_ns,
+        )
         return StorageEnforcementResult(
             plan=plan,
+            verification=verification,
             deleted_paths=tuple(deleted_paths),
             failures=tuple(failures),
         )
