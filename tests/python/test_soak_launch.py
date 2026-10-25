@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
-from emule_test_harness import soak_launch, vpn_guard_live
+from emule_test_harness import soak_launch, soak_storage, vpn_guard_live
 
 
 def write_diag_segment(path: Path, records: list[dict[str, object]]) -> None:
@@ -272,6 +274,143 @@ def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeyp
     assert captured["p2p_bind_interface"] is None
     assert captured["nat_enabled"] is False
     result["logHandle"].close()
+
+
+def test_bring_up_rust_preserves_daemon_identity_with_bounded_binary_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeRustMod:
+        @staticmethod
+        def get_stats(_base_url: str) -> dict[str, object]:
+            return {"ed2kConnected": True, "ed2kHighId": True}
+
+        @staticmethod
+        def import_server_met(_base_url: str, _server_met_url: str) -> None:
+            return None
+
+        @staticmethod
+        def share_directories(_base_url: str, _shared_roots: list[object]) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 5252
+        stdout = io.BytesIO(b"daemon-out\x00\xff")
+
+    fake_process = FakeProcess()
+    launched: dict[str, object] = {}
+
+    def fake_start(_exe_path, _profile_dir, output_handle, **kwargs):
+        launched["outputHandle"] = output_handle
+        launched.update(kwargs)
+        return fake_process
+
+    monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "start_rust_client_executable_with_output", fake_start)
+    monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
+
+    daemon_output = tmp_path / "campaign" / "daemon-output" / "rust-daemon.out"
+    result = soak_launch.bring_up_rust(
+        rust_mod=FakeRustMod(),
+        exe_path=tmp_path / "emulebb-rust-diagnostics.exe",
+        bind_ip="192.0.2.10",
+        rest_addr="192.0.2.10",
+        rest_port=4731,
+        profile_dir=tmp_path / "profile",
+        packet_dump_dir=tmp_path / "profile" / "packet-dump",
+        incoming_dir=tmp_path / "profile" / "incoming",
+        bootstrap_nodes=[],
+        shared_roots=[],
+        server_met_url="",
+        server_endpoint=soak_launch.OPERATOR_SERVER,
+        obfuscation=True,
+        timeouts={"rest": 1.0, "connect": 1.0},
+        daemon_output_path=daemon_output,
+        daemon_output_policy=soak_storage.ArtifactStreamPolicy(
+            max_segment_bytes=64,
+            retained_segments=2,
+        ),
+    )
+    result["outputCapture"].close()
+    result["outputCapture"].raise_if_failed()
+
+    assert result["process"] is fake_process
+    assert result["logHandle"] is None
+    assert launched == {
+        "outputHandle": subprocess.PIPE,
+        "new_process_group": False,
+        "text": False,
+    }
+    assert daemon_output.read_bytes() == b"daemon-out\x00\xff"
+    assert not (tmp_path / "profile" / "daemon.out").exists()
+
+
+def test_bring_up_rust_stops_daemon_when_bounded_output_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeRustMod:
+        @staticmethod
+        def get_stats(_base_url: str) -> dict[str, object]:
+            return {"ed2kConnected": True, "ed2kHighId": True}
+
+    class FakeProcess:
+        pid = 5353
+        stdout = io.BytesIO(b"failure")
+
+    class FailingCapture:
+        closed = False
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def start(self, _source, *, stop_process) -> None:
+            self.stop_process = stop_process
+
+        def raise_if_failed(self) -> None:
+            raise RuntimeError("bounded daemon output failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_process = FakeProcess()
+    stopped: list[object] = []
+    capture = FailingCapture()
+    monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        soak_launch,
+        "start_rust_client_executable_with_output",
+        lambda *_args, **_kwargs: fake_process,
+    )
+    monkeypatch.setattr(soak_launch.bounded_process_output, "AsyncBinaryCapture", lambda *_args, **_kwargs: capture)
+    monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate())
+    monkeypatch.setattr(soak_launch, "stop_process_tree", lambda process: stopped.append(process))
+
+    with pytest.raises(RuntimeError, match="bounded daemon output failed"):
+        soak_launch.bring_up_rust(
+            rust_mod=FakeRustMod(),
+            exe_path=tmp_path / "emulebb-rust-diagnostics.exe",
+            bind_ip="192.0.2.10",
+            rest_addr="192.0.2.10",
+            rest_port=4731,
+            profile_dir=tmp_path / "profile",
+            packet_dump_dir=tmp_path / "profile" / "packet-dump",
+            incoming_dir=tmp_path / "profile" / "incoming",
+            bootstrap_nodes=[],
+            shared_roots=[],
+            server_met_url="",
+            server_endpoint=soak_launch.OPERATOR_SERVER,
+            obfuscation=True,
+            timeouts={"rest": 1.0, "connect": 1.0},
+            daemon_output_path=tmp_path / "daemon.out",
+            daemon_output_policy=soak_storage.ArtifactStreamPolicy(64, 2),
+        )
+
+    assert stopped == [fake_process]
+    assert capture.closed is True
 
 
 def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeypatch) -> None:

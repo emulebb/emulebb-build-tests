@@ -16,12 +16,13 @@ import importlib.util
 import ipaddress
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from . import diag_event_runs, hideme_split_tunnel, hideme_vpn, vpn_guard_live
+from . import bounded_process_output, diag_event_runs, hideme_split_tunnel, hideme_vpn, soak_storage, vpn_guard_live
 from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
 from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
@@ -820,6 +821,8 @@ def bring_up_rust(
     ctrl_c_shutdown: bool = False,
     replace_servers: bool = False,
     fallback_server_endpoints: list[str] | None = None,
+    daemon_output_path: Path | None = None,
+    daemon_output_policy: soak_storage.ArtifactStreamPolicy | None = None,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent profile and returns live handles.
 
@@ -833,6 +836,8 @@ def bring_up_rust(
     profile_dir.mkdir(parents=True, exist_ok=True)
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_addr}:{rest_port}"
+    if (daemon_output_path is None) != (daemon_output_policy is None):
+        raise ValueError("daemon_output_path and daemon_output_policy must be provided together.")
 
     write_rust_profile(
         profile_dir,
@@ -867,19 +872,58 @@ def bring_up_rust(
         os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     else:
         os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
-    handle = (profile_dir / "daemon.out").open("a", encoding="utf-8")
-    if ctrl_c_shutdown:
-        process = start_rust_client_executable_with_output(
-            exe_path,
-            profile_dir,
-            handle,
-            new_process_group=True,
+    output_capture = (
+        bounded_process_output.AsyncBinaryCapture(
+            daemon_output_path,
+            max_segment_bytes=daemon_output_policy.max_segment_bytes,
+            retained_segments=daemon_output_policy.retained_segments,
         )
-    else:
-        process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
+        if daemon_output_path is not None and daemon_output_policy is not None
+        else None
+    )
+    handle = None
+    try:
+        if output_capture is None:
+            handle = (profile_dir / "daemon.out").open("a", encoding="utf-8")
+            if ctrl_c_shutdown:
+                process = start_rust_client_executable_with_output(
+                    exe_path,
+                    profile_dir,
+                    handle,
+                    new_process_group=True,
+                )
+            else:
+                process = start_rust_client_executable_with_output(exe_path, profile_dir, handle)
+        else:
+            process = start_rust_client_executable_with_output(
+                exe_path,
+                profile_dir,
+                subprocess.PIPE,
+                new_process_group=ctrl_c_shutdown,
+                text=False,
+            )
+            if process.stdout is None:
+                raise RuntimeError("Rust daemon bounded output pipe was not created.")
+            output_capture.start(
+                process.stdout,
+                stop_process=lambda: stop_process_tree(process),
+            )
+    except Exception:
+        if "process" in locals():
+            stop_process_tree(process)
+        if handle is not None:
+            handle.close()
+        if output_capture is not None:
+            output_capture.close()
+        raise
+
+    def checked_stats() -> dict[str, Any]:
+        if output_capture is not None:
+            output_capture.raise_if_failed()
+        return rust_mod.get_stats(base_url)
 
     try:
-        wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
+        wait_until("rust REST ready", timeouts["rest"], lambda: checked_stats() or None)
         patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
         if server_met_url:
             rust_mod.import_server_met(base_url, server_met_url)
@@ -900,7 +944,7 @@ def bring_up_rust(
             log("rust shared-directory PATCH skipped; reusing existing Rust profile shared roots.")
 
         def connected() -> dict[str, Any] | None:
-            stats = rust_mod.get_stats(base_url)
+            stats = checked_stats()
             return stats if rust_stats_connected(stats, require_kad=False) else None
 
         try:
@@ -940,12 +984,19 @@ def bring_up_rust(
                 ) from latest_exc
     except Exception:
         stop_process_tree(process)
-        handle.close()
+        if handle is not None:
+            handle.close()
+        if output_capture is not None:
+            output_capture.close()
+            output_capture.raise_if_failed()
         raise
+    if output_capture is not None:
+        output_capture.raise_if_failed()
     log(f"rust connected (highId={bool(stats.get('ed2kHighId'))}) - REST {base_url}")
     return {
         "process": process,
         "logHandle": handle,
+        "outputCapture": output_capture,
         "baseUrl": base_url,
         "profileDir": profile_dir,
         "incomingDir": incoming_dir,
