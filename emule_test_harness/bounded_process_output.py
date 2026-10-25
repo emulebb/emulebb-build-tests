@@ -124,8 +124,11 @@ def _pump_stream(
 
 def _request_stop(paths: Sequence[Path]) -> None:
     for path in paths:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(exist_ok=True)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        except OSError:
+            continue
 
 
 def _force_stop(process: subprocess.Popen[bytes]) -> None:
@@ -137,11 +140,12 @@ def _force_stop(process: subprocess.Popen[bytes]) -> None:
             None,
         )
         if row is not None:
-            windows_processes.terminate_process_tree(
+            result = windows_processes.terminate_process_tree(
                 process.pid,
                 expected_root_creation_date=row.creation_date,
             )
-            return
+            if result.get("return_code") == 0:
+                return
     process.terminate()
     try:
         process.wait(timeout=5.0)
@@ -212,10 +216,7 @@ def run_bounded_process(
             break
 
         if failure is not None:
-            try:
-                _request_stop(stop_files)
-            except OSError:
-                pass
+            _request_stop(stop_files)
             try:
                 process.wait(timeout=graceful_timeout_seconds)
             except subprocess.TimeoutExpired:
