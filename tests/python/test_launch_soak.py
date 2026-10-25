@@ -271,6 +271,7 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
             streams={
                 "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
                 "daemon_output": daemon_policy,
+                "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(16, 2),
             },
         ),
     )
@@ -308,6 +309,7 @@ def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
             streams={
                 "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
                 "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
+                "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(16, 2),
             },
         ),
     )
