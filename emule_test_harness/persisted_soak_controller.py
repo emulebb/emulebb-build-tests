@@ -32,6 +32,8 @@ DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
 DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
+WATCH_FAILURE_GRACE_SECONDS = 15.0
+STORAGE_FAILURE_FINDING = "campaign-storage-enforcement-failed"
 
 
 @dataclass(frozen=True)
@@ -949,6 +951,121 @@ def append_bounded_jsonl(path: Path, payload: dict[str, Any], *, max_bytes: int,
         handle.write(encoded)
 
 
+def build_watch_sample(
+    status: dict[str, Any] | None,
+    storage: dict[str, Any],
+    *,
+    status_error: Exception | None = None,
+) -> dict[str, Any]:
+    """Builds one bounded health and storage enforcement record."""
+
+    findings = list(status.get("findings", [])) if status is not None else ["watch-status-unavailable"]
+    if not storage.get("ok") and STORAGE_FAILURE_FINDING not in findings:
+        findings.append(STORAGE_FAILURE_FINDING)
+    sample = {
+        "schema": WATCH_SCHEMA,
+        "timestampUtc": (
+            status.get("timestampUtc") if status is not None else datetime.now(UTC).isoformat()
+        ),
+        "ok": bool(status is not None and status.get("ok") and storage.get("ok")),
+        "findings": findings,
+        "launcherAlive": bool(status is not None and status.get("launcher", {}).get("alive")),
+        "rustProcessCount": status.get("clients", {}).get("rustCount", 0) if status is not None else 0,
+        "mfcProcessCount": status.get("clients", {}).get("mfcCount", 0) if status is not None else 0,
+        "rest": status.get("rest") if status is not None else None,
+        "vpn": status.get("vpn") if status is not None else None,
+        "lastRun": status.get("lastRun") if status is not None else None,
+        "storage": storage,
+    }
+    if status_error is not None:
+        sample["statusError"] = {
+            "type": type(status_error).__name__,
+            "message": str(status_error)[:1024],
+        }
+    return sample
+
+
+def persist_watch_sample(
+    paths: ControlPaths,
+    sample: dict[str, Any],
+    *,
+    max_bytes: int,
+    segments: int,
+) -> None:
+    """Persists one watch sample to both bounded history and heartbeat."""
+
+    append_bounded_jsonl(paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments)
+    write_json_atomic(paths.watch_heartbeat, sample)
+
+
+def persist_terminal_watch_sample(
+    paths: ControlPaths,
+    sample: dict[str, Any],
+    *,
+    max_bytes: int,
+    segments: int,
+) -> list[str]:
+    """Best-effort persists terminal evidence to each independent watch sink."""
+
+    errors: list[str] = []
+    try:
+        append_bounded_jsonl(paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments)
+    except Exception as error:  # noqa: BLE001 - continue to the independent heartbeat sink
+        errors.append(f"watchJsonl: {type(error).__name__}: {error}"[:1024])
+    try:
+        write_json_atomic(paths.watch_heartbeat, sample)
+    except Exception as error:  # noqa: BLE001 - fail-closed shutdown must still continue
+        errors.append(f"watchHeartbeat: {type(error).__name__}: {error}"[:1024])
+    return errors
+
+
+def request_watch_failure_stop(
+    paths: ControlPaths,
+    manifest: dict[str, Any],
+    *,
+    graceful_timeout_seconds: float = WATCH_FAILURE_GRACE_SECONDS,
+) -> dict[str, Any]:
+    """Stops the launcher without waiting on or terminating the current watcher."""
+
+    requested_at = datetime.now(UTC).isoformat()
+    stop_errors: list[str] = []
+    paths.control_dir.mkdir(parents=True, exist_ok=True)
+    for stop_path in (paths.stop_file, paths.watch_stop_file):
+        try:
+            stop_path.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
+        except OSError as error:
+            stop_errors.append(f"{stop_path}: {type(error).__name__}: {error}"[:1024])
+
+    launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
+    try:
+        launcher_graceful = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
+    except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
+        launcher_graceful = False
+        stop_errors.append(f"launcherWait: {type(error).__name__}: {error}"[:1024])
+    if launcher_graceful:
+        launcher_force = {"forced": False, "alreadyStopped": True}
+    else:
+        try:
+            launcher_force = stop_exact_process(
+                launcher_identity,
+                markers=("launch-soak.py",),
+                timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+            )
+        except Exception as error:  # noqa: BLE001 - preserve terminal shutdown evidence
+            launcher_force = {
+                "forced": False,
+                "alreadyStopped": False,
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            }
+    return {
+        "stopRequestedUtc": requested_at,
+        "stopWriteErrors": stop_errors,
+        "launcherGraceful": launcher_graceful,
+        "launcherForce": launcher_force,
+    }
+
+
 def watch_session(
     paths: ControlPaths,
     *,
@@ -962,33 +1079,98 @@ def watch_session(
 
     if interval_seconds <= 0:
         raise ValueError("interval_seconds must be greater than zero.")
+    manifest: dict[str, Any] = {}
     sample_count = 0
     latest: dict[str, Any] | None = None
+    try:
+        manifest = load_json(paths.manifest)
+        storage_context = parse_session_storage_context(
+            manifest,
+            get_workspace_output_root(),
+        )
+    except Exception as error:  # noqa: BLE001 - invalid storage authority is terminal
+        storage = {
+            "ok": False,
+            "phase": "context",
+            "errorType": type(error).__name__,
+            "error": str(error)[:1024],
+        }
+        status_error = None
+        try:
+            status = session_status(paths)
+        except Exception as error:  # noqa: BLE001 - retain the primary storage failure
+            status = None
+            status_error = error
+        latest = build_watch_sample(status, storage, status_error=status_error)
+        persistence_errors = persist_terminal_watch_sample(
+            paths,
+            latest,
+            max_bytes=max_bytes,
+            segments=segments,
+        )
+        if emit is not None:
+            emit(latest)
+        stop = request_watch_failure_stop(paths, manifest)
+        return {
+            "ok": False,
+            "samples": 1,
+            "latest": latest,
+            "watchJsonl": str(paths.watch_jsonl),
+            "persistenceErrors": persistence_errors,
+            "stop": stop,
+        }
+
     while max_samples <= 0 or sample_count < max_samples:
         if paths.watch_stop_file.exists():
             break
+        storage = enforce_session_storage_context(storage_context)
         status = session_status(paths)
-        latest = {
-            "schema": WATCH_SCHEMA,
-            "timestampUtc": status["timestampUtc"],
-            "ok": status["ok"],
-            "findings": status["findings"],
-            "launcherAlive": status["launcher"]["alive"],
-            "rustProcessCount": status["clients"]["rustCount"],
-            "mfcProcessCount": status["clients"]["mfcCount"],
-            "rest": status["rest"],
-            "vpn": status["vpn"],
-            "lastRun": status["lastRun"],
-        }
-        append_bounded_jsonl(paths.watch_jsonl, latest, max_bytes=max_bytes, segments=segments)
-        write_json_atomic(paths.watch_heartbeat, latest)
+        latest = build_watch_sample(status, storage)
+        try:
+            persist_watch_sample(
+                paths,
+                latest,
+                max_bytes=max_bytes,
+                segments=segments,
+            )
+            persistence_errors: list[str] = []
+        except Exception as error:  # noqa: BLE001 - watch evidence loss is terminal
+            storage = {
+                **storage,
+                "ok": False,
+                "phase": "watchEvidence",
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            }
+            latest = build_watch_sample(status, storage)
+            persistence_errors = persist_terminal_watch_sample(
+                paths,
+                latest,
+                max_bytes=max_bytes,
+                segments=segments,
+            )
         if emit is not None:
             emit(latest)
         sample_count += 1
+        if not storage.get("ok"):
+            stop = request_watch_failure_stop(paths, manifest)
+            return {
+                "ok": False,
+                "samples": sample_count,
+                "latest": latest,
+                "watchJsonl": str(paths.watch_jsonl),
+                "persistenceErrors": persistence_errors,
+                "stop": stop,
+            }
         if not status["launcher"]["alive"] or (max_samples > 0 and sample_count >= max_samples):
             break
         time.sleep(interval_seconds)
-    return {"samples": sample_count, "latest": latest, "watchJsonl": str(paths.watch_jsonl)}
+    return {
+        "ok": True,
+        "samples": sample_count,
+        "latest": latest,
+        "watchJsonl": str(paths.watch_jsonl),
+    }
 
 
 def wait_exact_exit(identity: dict[str, Any], timeout_seconds: float) -> bool:

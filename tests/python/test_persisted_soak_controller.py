@@ -649,12 +649,8 @@ def test_append_bounded_jsonl_rotates_old_segments(tmp_path: Path) -> None:
     assert not controller.rotated_path(path, 3).exists()
 
 
-def test_watch_session_persists_one_bounded_health_sample(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    paths = make_paths(tmp_path)
-    status = {
+def watch_status_payload() -> dict[str, object]:
+    return {
         "timestampUtc": "2026-10-24T12:00:00+00:00",
         "ok": True,
         "findings": [],
@@ -664,7 +660,23 @@ def test_watch_session_persists_one_bounded_health_sample(
         "vpn": {"ok": True},
         "lastRun": {"status": "starting"},
     }
+
+
+def test_watch_session_persists_one_bounded_health_sample(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    status = watch_status_payload()
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
     monkeypatch.setattr(controller, "session_status", lambda _paths: status)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
 
     result = controller.watch_session(
         paths,
@@ -674,6 +686,157 @@ def test_watch_session_persists_one_bounded_health_sample(
         max_samples=1,
     )
 
+    assert result["ok"] is True
     assert result["samples"] == 1
     assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["ok"] is True
-    assert json.loads(paths.watch_jsonl.read_text(encoding="utf-8"))["rustProcessCount"] == 1
+    sample = json.loads(paths.watch_jsonl.read_text(encoding="utf-8"))
+    assert sample["rustProcessCount"] == 1
+    assert sample["storage"]["policySha256"] == "abc"
+
+
+def test_watch_session_fails_closed_on_storage_enforcement_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {
+            "ok": False,
+            "policySha256": "abc",
+            "errorType": "StoragePolicyUnsatisfied",
+            "error": "minimum_free_bytes",
+        },
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["samples"] == 1
+    assert result["latest"]["storage"]["error"] == "minimum_free_bytes"
+    assert controller.STORAGE_FAILURE_FINDING in result["latest"]["findings"]
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_fails_closed_on_invalid_storage_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root = tmp_path / "output"
+    manifest = {
+        "schema": controller.MANIFEST_SCHEMA,
+        "state": "running",
+        "launcher": {"pid": 10, "creationDate": "launcher"},
+    }
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["latest"]["storage"]["phase"] == "context"
+    assert "missing storage context" in result["latest"]["storage"]["error"]
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_fails_closed_on_watch_evidence_write_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "persist_watch_sample",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["latest"]["storage"]["phase"] == "watchEvidence"
+    assert result["latest"]["storage"]["error"] == "disk full"
+    assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["ok"] is False
+    assert stop_requests == [manifest]
+
+
+def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    manifest = {"launcher": {"pid": 10, "creationDate": "launcher"}}
+    forced: list[tuple[dict[str, object], tuple[str, ...], float]] = []
+    monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: False)
+
+    def fake_stop(identity, *, markers, timeout_seconds):
+        forced.append((identity, markers, timeout_seconds))
+        return {"forced": True, "alreadyStopped": False}
+
+    monkeypatch.setattr(controller, "stop_exact_process", fake_stop)
+
+    result = controller.request_watch_failure_stop(
+        paths,
+        manifest,
+        graceful_timeout_seconds=0.1,
+    )
+
+    assert paths.stop_file.is_file()
+    assert paths.watch_stop_file.is_file()
+    assert result["launcherGraceful"] is False
+    assert result["launcherForce"]["forced"] is True
+    assert forced == [
+        (
+            manifest["launcher"],
+            ("launch-soak.py",),
+            controller.WATCH_FAILURE_GRACE_SECONDS,
+        )
+    ]
