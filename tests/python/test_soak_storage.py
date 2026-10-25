@@ -92,6 +92,25 @@ def test_parse_soak_storage_policy_accepts_strict_complete_contract() -> None:
     assert policy.stream("daemon_output").max_segment_bytes == 200
 
 
+def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
+    policy = soak_storage.parse_soak_storage_policy(policy_payload())
+    payload = soak_storage.storage_policy_payload(policy)
+
+    assert payload == policy_payload()
+    assert soak_storage.parse_soak_storage_policy(payload) == policy
+    assert soak_storage.storage_policy_sha256(policy) == soak_storage.storage_policy_sha256(
+        soak_storage.parse_soak_storage_policy(
+            {
+                **payload,
+                "streams": {
+                    "daemon_output": payload["streams"]["daemon_output"],
+                    "controller_output": payload["streams"]["controller_output"],
+                },
+            }
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
