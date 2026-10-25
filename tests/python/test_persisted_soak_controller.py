@@ -24,6 +24,14 @@ def storage_policy(*, max_total_bytes: int = 1_000) -> soak_storage.SoakStorageP
         max_age_seconds=3_600,
         minimum_free_bytes=1,
         bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
         streams=MappingProxyType(
             {
                 "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),

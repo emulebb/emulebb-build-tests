@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v1"
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v2"
 REQUIRED_STREAMS = ("controller_output", "daemon_output")
 REQUIRED_STREAM_INSTANCES = {
     "controller_output": 4,
@@ -24,9 +24,24 @@ _POLICY_KEYS = {
     "max_age_seconds",
     "minimum_free_bytes",
     "bundle_interval_seconds",
+    "rust_diagnostics",
     "streams",
 }
 _STREAM_KEYS = {"max_segment_bytes", "retained_segments"}
+_RUST_DIAGNOSTIC_KEYS = {
+    "max_segment_bytes",
+    "max_segment_seconds",
+    "retained_segments",
+    "max_total_bytes",
+    "max_retained_seconds",
+    "minimum_free_bytes",
+}
+_MEBIBYTE = 1024 * 1024
+_RUST_MAX_SEGMENT_BYTES = 1024 * _MEBIBYTE
+_RUST_MAX_SEGMENT_SECONDS = 24 * 60 * 60
+_RUST_MAX_RETAINED_SEGMENTS = 128
+_RUST_MAX_TOTAL_BYTES = 16 * 1024 * 1024 * 1024 * 1024
+_RUST_MAX_RETAINED_SECONDS = 365 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -38,6 +53,18 @@ class ArtifactStreamPolicy:
 
 
 @dataclass(frozen=True)
+class RustDiagnosticWriterPolicy:
+    """Hard limits for the Rust profile-resident diagnostic event ring."""
+
+    max_segment_bytes: int
+    max_segment_seconds: int
+    retained_segments: int
+    max_total_bytes: int
+    max_retained_seconds: int
+    minimum_free_bytes: int
+
+
+@dataclass(frozen=True)
 class SoakStoragePolicy:
     """Aggregate and per-stream limits for one persisted soak evidence store."""
 
@@ -45,6 +72,7 @@ class SoakStoragePolicy:
     max_age_seconds: int
     minimum_free_bytes: int
     bundle_interval_seconds: int
+    rust_diagnostics: RustDiagnosticWriterPolicy
     streams: Mapping[str, ArtifactStreamPolicy]
 
     def stream(self, name: str) -> ArtifactStreamPolicy:
@@ -329,6 +357,14 @@ def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:
         "max_age_seconds": policy.max_age_seconds,
         "minimum_free_bytes": policy.minimum_free_bytes,
         "bundle_interval_seconds": policy.bundle_interval_seconds,
+        "rust_diagnostics": {
+            "max_segment_bytes": policy.rust_diagnostics.max_segment_bytes,
+            "max_segment_seconds": policy.rust_diagnostics.max_segment_seconds,
+            "retained_segments": policy.rust_diagnostics.retained_segments,
+            "max_total_bytes": policy.rust_diagnostics.max_total_bytes,
+            "max_retained_seconds": policy.rust_diagnostics.max_retained_seconds,
+            "minimum_free_bytes": policy.rust_diagnostics.minimum_free_bytes,
+        },
         "streams": {
             name: {
                 "max_segment_bytes": policy.stream(name).max_segment_bytes,
@@ -384,6 +420,64 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
         payload, "bundle_interval_seconds", context="soak_storage"
     )
 
+    rust_payload = payload.get("rust_diagnostics")
+    if not isinstance(rust_payload, dict):
+        raise RuntimeError("soak_storage.rust_diagnostics must be an object.")
+    _require_exact_keys(
+        rust_payload,
+        _RUST_DIAGNOSTIC_KEYS,
+        context="soak_storage.rust_diagnostics",
+    )
+    rust_diagnostics = RustDiagnosticWriterPolicy(
+        max_segment_bytes=_bounded_integer(
+            rust_payload,
+            "max_segment_bytes",
+            context="soak_storage.rust_diagnostics",
+            minimum=_MEBIBYTE,
+            maximum=_RUST_MAX_SEGMENT_BYTES,
+        ),
+        max_segment_seconds=_bounded_integer(
+            rust_payload,
+            "max_segment_seconds",
+            context="soak_storage.rust_diagnostics",
+            minimum=60,
+            maximum=_RUST_MAX_SEGMENT_SECONDS,
+        ),
+        retained_segments=_bounded_integer(
+            rust_payload,
+            "retained_segments",
+            context="soak_storage.rust_diagnostics",
+            minimum=2,
+            maximum=_RUST_MAX_RETAINED_SEGMENTS,
+        ),
+        max_total_bytes=_bounded_integer(
+            rust_payload,
+            "max_total_bytes",
+            context="soak_storage.rust_diagnostics",
+            minimum=_MEBIBYTE,
+            maximum=_RUST_MAX_TOTAL_BYTES,
+        ),
+        max_retained_seconds=_bounded_integer(
+            rust_payload,
+            "max_retained_seconds",
+            context="soak_storage.rust_diagnostics",
+            minimum=60,
+            maximum=_RUST_MAX_RETAINED_SECONDS,
+        ),
+        minimum_free_bytes=_bounded_integer(
+            rust_payload,
+            "minimum_free_bytes",
+            context="soak_storage.rust_diagnostics",
+            minimum=1,
+            maximum=_RUST_MAX_TOTAL_BYTES,
+        ),
+    )
+    if rust_diagnostics.max_total_bytes < rust_diagnostics.max_segment_bytes:
+        raise RuntimeError(
+            "soak_storage.rust_diagnostics.max_total_bytes must not be below "
+            "soak_storage.rust_diagnostics.max_segment_bytes."
+        )
+
     streams_payload = payload.get("streams")
     if not isinstance(streams_payload, dict):
         raise RuntimeError("soak_storage.streams must be an object.")
@@ -418,6 +512,7 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
         max_age_seconds=max_age_seconds,
         minimum_free_bytes=minimum_free_bytes,
         bundle_interval_seconds=bundle_interval_seconds,
+        rust_diagnostics=rust_diagnostics,
         streams=MappingProxyType(streams),
     )
     if required_stream_capacity_bytes(policy) > max_total_bytes:
@@ -532,6 +627,27 @@ def _positive_integer(payload: dict[str, Any], key: str, *, context: str) -> int
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise RuntimeError(f"{context}.{key} must be a positive integer.")
+    return value
+
+
+def _bounded_integer(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    context: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = payload.get(key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > maximum
+    ):
+        raise RuntimeError(
+            f"{context}.{key} must be an integer in {minimum}..={maximum}."
+        )
     return value
 
 
