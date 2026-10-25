@@ -149,41 +149,20 @@ def require_rust_diagnostic_writer_ready(
     if not isinstance(health, dict):
         raise RuntimeError("Rust diagnostics response is missing diagnosticWriter health.")
 
+    mismatches = list(diag_event_runs.diagnostic_writer_health_violations(health))
     expected = {
-        "schema": "diag_event_v2",
-        "enabled": True,
-        "configured": True,
-        "initialized": True,
         "maxSegmentBytes": policy.max_segment_bytes,
         "maxSegmentSeconds": policy.max_segment_seconds,
         "retainedSegments": policy.retained_segments,
         "maxTotalBytes": policy.max_total_bytes,
         "maxRetainedSeconds": policy.max_retained_seconds,
         "minimumFreeBytes": policy.minimum_free_bytes,
-        "storageAuthorityFaulted": False,
-        "writerIoFaulted": False,
-        "storageBlockReason": None,
-        "storagePolicySatisfied": True,
-        "initializationFailure": None,
-        "droppedEvents": 0,
-        "encodeErrors": 0,
-        "writeErrors": 0,
-        "retentionDeleteErrors": 0,
-        "retentionScanErrors": 0,
-        "freeSpaceProbeErrors": 0,
-        "retentionPolicyErrors": 0,
-        "storagePolicyDrops": 0,
-        "storageFaultDrops": 0,
-        "retentionLimitDrops": 0,
-        "aggregateLimitDrops": 0,
-        "minimumFreeSpaceDrops": 0,
-        "writerFaultDrops": 0,
     }
-    mismatches = [
+    mismatches.extend(
         f"{name}={health.get(name)!r} expected {value!r}"
         for name, value in expected.items()
         if health.get(name) != value
-    ]
+    )
     maximum_growth = health.get("maximumGrowthBytes")
     if (
         isinstance(maximum_growth, bool)

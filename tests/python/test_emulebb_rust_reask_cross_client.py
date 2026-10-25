@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "emulebb-rust-reask-cross-client.py"
@@ -49,21 +51,12 @@ def _write_mfc_run(log_dir: Path) -> None:
     active = log_dir / "emulebb-mfc-diag-42-active-000001.jsonl"
     (log_dir / "emulebb-mfc-diag-health.json").write_text(
         json.dumps(
-            {
-                "schema": "diag_event_v2",
-                "enabled": True,
-                "configured": True,
-                "initialized": True,
-                "runId": "active",
-                "processId": 42,
-                "activeSegmentId": 1,
-                "activeFileName": active.name,
-                "droppedEvents": 0,
-                "encodeErrors": 0,
-                "writeErrors": 0,
-                "retentionDeleteErrors": 0,
-                "initializationFailure": None,
-            }
+            current_diagnostic_writer_health(
+                client="mfc",
+                run_id="active",
+                segment_id=1,
+                active_file_name=active.name,
+            )
         ),
         encoding="utf-8",
     )

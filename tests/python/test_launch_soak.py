@@ -600,6 +600,12 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     )
     assert source.index("profile_overlay.begin_file_overlay(") < source.index("bring_up_mfc(")
     assert source.index('phase="ready"') < source.index('log("=" * 70)')
+    assert source.index('phase="ready"') < source.index(
+        "soak_run_layout.mark_run_running("
+    )
+    assert source.index("soak_run_layout.mark_run_running(") < source.index(
+        'log("=" * 70)'
+    )
     assert source.index('phase="periodic"') < source.index("time.sleep(2.0)")
     assert source.index('phase="final"') < source.index("graceful_teardown(")
     assert source.index("graceful_teardown(") < source.rindex("mfc_preferences_overlay.restore()")

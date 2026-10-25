@@ -905,6 +905,15 @@ def main(argv: list[str] | None = None) -> int:
             interval_seconds=storage_policy.bundle_interval_seconds,
             now_monotonic=time.monotonic(),
         )
+        soak_run_layout.mark_run_running(
+            run_paths,
+            extra={
+                "rustDiagnosticWriterHealth": rust_handles.get(
+                    "diagnosticWriterHealth"
+                ),
+                "rustDiagnosticBundles": diagnostic_bundle_captures,
+            },
+        )
 
         log("=" * 70)
         log("SOAK ENVIRONMENT UP. Drive searches/downloads through REST automation:")

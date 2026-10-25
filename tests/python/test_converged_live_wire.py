@@ -13,6 +13,7 @@ import pytest
 
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import live_profile_seed
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
@@ -396,21 +397,11 @@ def test_converged_runner_uses_selected_unified_runs_for_packet_diff(
     os.utime(mfc_stale, ns=(2, 2))
     (mfc_dir / clw.EMULE_DIAG_HEALTH_FILE).write_text(
         json.dumps(
-            {
-                "schema": "diag_event_v2",
-                "enabled": True,
-                "configured": True,
-                "initialized": True,
-                "runId": "mfc-run",
-                "processId": 42,
-                "activeSegmentId": 0,
-                "activeFileName": mfc_segment.name,
-                "droppedEvents": 0,
-                "encodeErrors": 0,
-                "writeErrors": 0,
-                "retentionDeleteErrors": 0,
-                "initializationFailure": None,
-            }
+            current_diagnostic_writer_health(
+                client="mfc",
+                run_id="mfc-run",
+                active_file_name=mfc_segment.name,
+            )
         ),
         encoding="utf-8",
     )
