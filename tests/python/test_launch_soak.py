@@ -464,6 +464,49 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
     assert not list(run_paths.diagnostic_bundles_dir.glob("*.json"))
 
 
+def test_periodic_bundle_capture_schedule_waits_and_restarts_after_capture() -> None:
+    module = load_launch_soak_module()
+
+    schedule = module.PeriodicBundleCaptureSchedule.start(
+        interval_seconds=900,
+        now_monotonic=100.0,
+    )
+
+    assert not schedule.is_due(999.999)
+    assert schedule.is_due(1_000.0)
+    assert schedule.after_capture(1_025.0).next_capture_monotonic == 1_925.0
+
+
+def test_record_diagnostic_bundle_capture_prunes_rotated_manifest_entries() -> None:
+    module = load_launch_soak_module()
+    captures = [
+        {
+            "path": "C:/soak/report/diagnostic-bundles/old.json",
+            "deletedPaths": [],
+            "retainedCount": 2,
+        },
+        {
+            "path": "C:/soak/report/diagnostic-bundles/current.json",
+            "deletedPaths": [],
+            "retainedCount": 2,
+        },
+    ]
+
+    module.record_diagnostic_bundle_capture(
+        captures,
+        {
+            "path": "C:/soak/report/diagnostic-bundles/new.json",
+            "deletedPaths": ["C:/soak/report/diagnostic-bundles/old.json"],
+            "retainedCount": 2,
+        },
+    )
+
+    assert [capture["path"] for capture in captures] == [
+        "C:/soak/report/diagnostic-bundles/current.json",
+        "C:/soak/report/diagnostic-bundles/new.json",
+    ]
+
+
 def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None:
     module = load_launch_soak_module()
     config_path = tmp_path / "vpn-guard-live.local.json"
@@ -557,6 +600,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     )
     assert source.index("profile_overlay.begin_file_overlay(") < source.index("bring_up_mfc(")
     assert source.index('phase="ready"') < source.index('log("=" * 70)')
+    assert source.index('phase="periodic"') < source.index("time.sleep(2.0)")
     assert source.index('phase="final"') < source.index("graceful_teardown(")
     assert source.index("graceful_teardown(") < source.rindex("mfc_preferences_overlay.restore()")
     assert "resolve_rust_ui_exe" not in source
@@ -573,6 +617,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "\"rustFallbackServers\": list(args.rust_fallback_server)" in source
     assert "\"rustProfileSetup\": rust_profile_setup" in source
     assert "\"rustDiagnosticBundles\": diagnostic_bundle_captures" in source
+    assert '"intervalSeconds": storage_policy.bundle_interval_seconds' in source
     assert "\"mfcProfileOverlay\":" in source
     assert "except Exception as exc:" in source
     assert "\"error\": failure" in source
