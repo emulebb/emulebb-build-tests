@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import sys
 from pathlib import Path
 
@@ -338,6 +339,131 @@ def test_daemon_output_manifest_records_exact_campaign_policy(tmp_path: Path) ->
     }
 
 
+def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_launch_soak_module()
+    run_paths = module.soak_run_layout.build_run_paths(
+        tmp_path / "soak",
+        "20261025T120000Z",
+    )
+    storage_policy = soak_storage.SoakStoragePolicy(
+        max_total_bytes=1_000_000,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams={
+            "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
+            "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
+        },
+    )
+    bundle = {
+        "schema": "emulebb.diagnostic-bundle.v4",
+        "capturedAt": "2026-10-25T12:00:00Z",
+        "summary": {
+            "artifactFileCount": 1,
+            "missingArtifactFamilies": [],
+            "issueCount": 0,
+        },
+        "settingsProvenance": {"sensitiveValues": "exact"},
+    }
+    requests: list[tuple] = []
+
+    def fake_retry(*args, **kwargs):
+        requests.append((args, kwargs))
+        return {"data": bundle}
+
+    monkeypatch.setattr(module, "retry_http_json", fake_retry)
+
+    evidence = module.capture_rust_diagnostic_bundle(
+        base_url="http://127.0.0.1:4711",
+        run_paths=run_paths,
+        storage_policy=storage_policy,
+        phase="ready",
+        now_ns=123,
+    )
+
+    assert requests == [
+        (
+            (
+                "rust diagnostic bundle (ready)",
+                3,
+                "http://127.0.0.1:4711",
+                "/api/v1/diagnostics/bundles",
+            ),
+            {
+                "api_key": module.RUST_API_KEY,
+                "method": "POST",
+                "body": {"confirmCapture": True},
+                "timeout_seconds": 30.0,
+            },
+        )
+    ]
+    artifact = Path(str(evidence["path"]))
+    assert artifact.parent == run_paths.diagnostic_bundles_dir.resolve()
+    assert json.loads(artifact.read_text(encoding="utf-8")) == bundle
+    assert evidence["phase"] == "ready"
+    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v4"
+    assert evidence["bundleSummary"] == bundle["summary"]
+    assert evidence["retainedCount"] == 1
+
+
+def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_launch_soak_module()
+    run_paths = module.soak_run_layout.build_run_paths(
+        tmp_path / "soak",
+        "20261025T120000Z",
+    )
+    storage_policy = soak_storage.SoakStoragePolicy(
+        max_total_bytes=1_000_000,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams={
+            "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
+            "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "retry_http_json",
+        lambda *_args, **_kwargs: {"data": {"schema": "emulebb.diagnostic-bundle.v3"}},
+    )
+
+    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v4"):
+        module.capture_rust_diagnostic_bundle(
+            base_url="http://127.0.0.1:4711",
+            run_paths=run_paths,
+            storage_policy=storage_policy,
+            phase="ready",
+            now_ns=123,
+        )
+
+    assert not list(run_paths.diagnostic_bundles_dir.glob("*.json"))
+
+
 def test_launch_soak_resolves_vpn_guard_from_live_config(tmp_path: Path) -> None:
     module = load_launch_soak_module()
     config_path = tmp_path / "vpn-guard-live.local.json"
@@ -430,6 +556,8 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
         "profile_overlay.begin_file_overlay("
     )
     assert source.index("profile_overlay.begin_file_overlay(") < source.index("bring_up_mfc(")
+    assert source.index('phase="ready"') < source.index('log("=" * 70)')
+    assert source.index('phase="final"') < source.index("graceful_teardown(")
     assert source.index("graceful_teardown(") < source.rindex("mfc_preferences_overlay.restore()")
     assert "resolve_rust_ui_exe" not in source
     assert "launch_rust_ui(" not in source
@@ -444,6 +572,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "\"reuseRustSharedProfile\": bool(args.reuse_rust_shared_profile)" in source
     assert "\"rustFallbackServers\": list(args.rust_fallback_server)" in source
     assert "\"rustProfileSetup\": rust_profile_setup" in source
+    assert "\"rustDiagnosticBundles\": diagnostic_bundle_captures" in source
     assert "\"mfcProfileOverlay\":" in source
     assert "except Exception as exc:" in source
     assert "\"error\": failure" in source
