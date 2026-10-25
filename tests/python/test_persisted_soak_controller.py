@@ -250,6 +250,64 @@ def test_session_storage_context_rejects_missing_or_unknown_fields(tmp_path: Pat
         controller.parse_session_storage_context(manifest, output_root)
 
 
+def test_session_storage_enforcement_protects_active_and_previous_campaigns(
+    tmp_path: Path,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    active_campaign = root / "20261025T120000Z"
+    previous_campaign = root / "20261024T120000Z"
+    old_campaign = root / "20261023T120000Z"
+    active_file = active_campaign / "active.log"
+    previous_file = previous_campaign / "previous.log"
+    old_file = old_campaign / "old.log"
+    for path, contents in (
+        (active_file, b"active"),
+        (previous_file, b"previous"),
+        (old_file, b"old artifact"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    policy = storage_policy(max_total_bytes=20)
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=active_campaign,
+        previous_campaign=previous_campaign,
+    )
+
+    result = controller.enforce_session_storage_context(context)
+
+    assert result["ok"] is True
+    assert result["enforcement"]["deletedCount"] == 1
+    assert active_file.is_file()
+    assert previous_file.is_file()
+    assert not old_file.exists()
+
+
+def test_session_storage_enforcement_reports_unprunable_active_growth(tmp_path: Path) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    active_campaign = root / "20261025T120000Z"
+    active_file = active_campaign / "active.log"
+    active_file.parent.mkdir(parents=True)
+    active_file.write_bytes(b"active")
+    policy = storage_policy(max_total_bytes=5)
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=active_campaign,
+        previous_campaign=None,
+    )
+
+    result = controller.enforce_session_storage_context(context)
+
+    assert result["ok"] is False
+    assert result["errorType"] == "StoragePolicyUnsatisfied"
+    assert result["error"] == "max_total_bytes"
+    assert active_file.is_file()
+
+
 def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     config = controller.SessionConfig(
