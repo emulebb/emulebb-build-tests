@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, profile_overlay
-from emule_test_harness import soak_launch, soak_run_layout
+from emule_test_harness import soak_launch, soak_run_layout, soak_storage
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
@@ -60,6 +60,39 @@ from emule_test_harness.vm_guest_profiles import retry_http_json
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
+
+
+def required_daemon_output_policy(inputs: LiveWireInputs) -> soak_storage.ArtifactStreamPolicy:
+    """Returns the mandatory bounded Rust daemon-output policy."""
+
+    if inputs.soak_storage is None:
+        raise RuntimeError("Persisted soaks require soak_storage in the live-wire inputs.")
+    return inputs.soak_storage.stream("daemon_output")
+
+
+def raise_rust_output_failure(rust_handles: dict | None) -> None:
+    """Fails the launch loop when asynchronous Rust output capture failed."""
+
+    if rust_handles is None:
+        return
+    capture = rust_handles.get("outputCapture")
+    if capture is not None:
+        capture.raise_if_failed()
+
+
+def daemon_output_manifest(
+    run_paths: soak_run_layout.SoakRunPaths,
+    policy: soak_storage.ArtifactStreamPolicy,
+) -> dict[str, object]:
+    """Returns exact bounded Rust daemon-output evidence for the run manifest."""
+
+    return {
+        "path": str(run_paths.rust_daemon_output),
+        "maxSegmentBytes": policy.max_segment_bytes,
+        "retainedSegments": policy.retained_segments,
+        "exactBytes": True,
+        "stderr": "merged",
+    }
 
 
 def resolve_direct_mfc_profile(inputs: LiveWireInputs, *, no_mfc: bool) -> Path | None:
@@ -457,15 +490,25 @@ def graceful_teardown(
             summary["forced"] = True
             stop_process_tree(rust_handles["process"])
         summary["exitCode"] = rust_handles["process"].poll()
-        try:
-            rust_handles["logHandle"].close()
-        except Exception:  # noqa: BLE001
-            pass
+        log_handle = rust_handles.get("logHandle")
+        if log_handle is not None:
+            try:
+                log_handle.close()
+            except Exception:  # noqa: BLE001
+                pass
+        output_capture = rust_handles.get("outputCapture")
+        if output_capture is not None:
+            try:
+                output_capture.close()
+                output_capture.raise_if_failed()
+            except Exception as error:  # noqa: BLE001 - output integrity participates in teardown health
+                summary["outputError"] = f"{type(error).__name__}: {error}"
     summary["elapsedSeconds"] = round(time.monotonic() - started, 3)
     summary["clean"] = bool(
         summary["requestSucceeded"]
         and not summary["forced"]
         and summary["exitCode"] == 0
+        and "outputError" not in summary
     )
     return summary
 
@@ -525,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     if not inputs_path.is_file():
         raise RuntimeError(f"live-wire inputs not found: {inputs_path} (pass --inputs).")
     inputs = load_live_wire_inputs(inputs_path)
+    daemon_output_policy = required_daemon_output_policy(inputs)
     direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)
     if args.rust_profile_dir is not None:
         rust_profile_dir = args.rust_profile_dir.resolve()
@@ -578,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
     )
+    preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
+    soak_run_layout.write_last_run_manifest(run_paths, preflight_manifest)
     mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
     mfc_preferences_path = (
         direct_mfc_profile / "config" / "preferences.ini"
@@ -662,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
             fallback_server_endpoints=list(args.rust_fallback_server),
             vpn_guard_mode=str(vpn_guard_profile["mode"]),
             vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
+            daemon_output_path=run_paths.rust_daemon_output,
+            daemon_output_policy=daemon_output_policy,
         )
         rust_proc = rust_handles["process"]
         rust_base = rust_handles["baseUrl"]
@@ -705,6 +753,7 @@ def main(argv: list[str] | None = None) -> int:
         profile_deadline = time.monotonic() + args.cpu_profile_seconds if args.cpu_profile and duration_deadline is None else None
         last_metrics_log = 0.0
         while True:
+            raise_rust_output_failure(rust_handles)
             if rust_proc.poll() is not None:
                 log("rust daemon exited - stopping.")
                 status = "rust-exited"
