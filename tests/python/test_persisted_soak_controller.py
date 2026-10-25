@@ -1314,3 +1314,43 @@ def test_stop_captured_process_tree_terminates_orphaned_exact_child(
     assert result["verifiedStopped"] is True
     assert result["forcedRootPids"] == [11]
     assert terminated == [(11, "rust")]
+
+
+def test_remaining_exact_tree_rows_discovers_post_capture_descendant(
+    monkeypatch,
+) -> None:
+    identities = (
+        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
+    )
+    late_child = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [late_child])
+
+    remaining = controller.remaining_exact_tree_rows(identities)
+
+    assert remaining == [late_child]
+
+
+def test_stop_captured_process_tree_rejects_reported_late_survivors(
+    monkeypatch,
+) -> None:
+    identities = (
+        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
+        {"pid": 11, "parentPid": 10, "creationDate": "rust", "name": "rust.exe"},
+    )
+    orphan = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
+    remaining_snapshots = iter(([orphan], []))
+    monkeypatch.setattr(
+        controller,
+        "remaining_exact_tree_rows",
+        lambda _identities: list(next(remaining_snapshots)),
+    )
+    monkeypatch.setattr(
+        controller.windows_processes,
+        "terminate_process_tree",
+        lambda *_args, **_kwargs: {"return_code": 1, "remaining_pids": [12]},
+    )
+
+    result = controller.stop_captured_process_tree(identities, timeout_seconds=0.1)
+
+    assert result["verifiedStopped"] is False
+    assert result["results"][0]["remaining_pids"] == [12]
