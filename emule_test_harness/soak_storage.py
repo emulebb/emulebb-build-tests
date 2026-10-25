@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 SCHEMA = "emulebb-build-tests.soak-storage-policy.v1"
 REQUIRED_STREAMS = ("controller_output", "daemon_output")
-ACTIVE_SEGMENT_INSTANCES = {
+REQUIRED_STREAM_INSTANCES = {
     "controller_output": 4,
     "daemon_output": 1,
 }
@@ -351,6 +351,17 @@ def storage_policy_sha256(policy: SoakStoragePolicy) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def required_stream_capacity_bytes(policy: SoakStoragePolicy) -> int:
+    """Returns maximum retained bytes for every required stream instance."""
+
+    return sum(
+        policy.stream(name).max_segment_bytes
+        * policy.stream(name).retained_segments
+        * REQUIRED_STREAM_INSTANCES[name]
+        for name in REQUIRED_STREAMS
+    )
+
+
 def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
     """Validates one strict ignored-input storage-policy object."""
 
@@ -381,7 +392,6 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
     )
 
     streams: dict[str, ArtifactStreamPolicy] = {}
-    active_segment_budget = 0
     for name in REQUIRED_STREAMS:
         stream_payload = streams_payload[name]
         context = f"soak_storage.streams.{name}"
@@ -398,24 +408,23 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
             raise RuntimeError(
                 f"{context}.max_segment_bytes must not exceed soak_storage.max_total_bytes."
             )
-        active_segment_budget += max_segment_bytes * ACTIVE_SEGMENT_INSTANCES[name]
         streams[name] = ArtifactStreamPolicy(
             max_segment_bytes=max_segment_bytes,
             retained_segments=retained_segments,
         )
 
-    if active_segment_budget > max_total_bytes:
-        raise RuntimeError(
-            "soak_storage.max_total_bytes must cover every active required-stream instance."
-        )
-
-    return SoakStoragePolicy(
+    policy = SoakStoragePolicy(
         max_total_bytes=max_total_bytes,
         max_age_seconds=max_age_seconds,
         minimum_free_bytes=minimum_free_bytes,
         bundle_interval_seconds=bundle_interval_seconds,
         streams=MappingProxyType(streams),
     )
+    if required_stream_capacity_bytes(policy) > max_total_bytes:
+        raise RuntimeError(
+            "soak_storage.max_total_bytes must cover every retained required-stream instance."
+        )
+    return policy
 
 
 def inventory_artifacts(root: Path) -> ArtifactInventory:

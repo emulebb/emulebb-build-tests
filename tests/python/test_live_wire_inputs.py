@@ -137,7 +137,7 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
     with_storage = payload()
     with_storage["soak_storage"] = {
         "schema": soak_storage.SCHEMA,
-        "max_total_bytes": 1_000,
+        "max_total_bytes": 4_000,
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
@@ -151,6 +151,7 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
 
     assert inputs.soak_storage is not None
     assert inputs.soak_storage.minimum_free_bytes == 500
+    assert soak_storage.required_stream_capacity_bytes(inputs.soak_storage) == 3_200
 
 
 def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> (
