@@ -24,6 +24,7 @@ from .vm_guest_profiles import http_json
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
+BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v1"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
@@ -43,11 +44,18 @@ class ControlPaths:
     watch_stop_file: Path
     watch_jsonl: Path
     watch_heartbeat: Path
+    last_run_manifest: Path
+
+
+@dataclass(frozen=True)
+class CampaignOutputPaths:
+    """Campaign-owned bounded controller output paths."""
+
+    root: Path
     launcher_stdout: Path
     launcher_stderr: Path
     watch_stdout: Path
     watch_stderr: Path
-    last_run_manifest: Path
 
 
 @dataclass(frozen=True)
@@ -84,11 +92,20 @@ def build_control_paths(output_root: Path, control_dir: Path | None = None) -> C
         watch_stop_file=root / "persisted-soak-watch.stop",
         watch_jsonl=root / "persisted-soak-watch.jsonl",
         watch_heartbeat=root / "persisted-soak-watch.latest.json",
-        launcher_stdout=root / "persisted-soak.stdout.log",
-        launcher_stderr=root / "persisted-soak.stderr.log",
-        watch_stdout=root / "persisted-soak-watch.stdout.log",
-        watch_stderr=root / "persisted-soak-watch.stderr.log",
         last_run_manifest=resolved_output_root / "soak" / "last-run" / "manifest.json",
+    )
+
+
+def build_campaign_output_paths(campaign_dir: Path) -> CampaignOutputPaths:
+    """Builds bounded process-output paths owned by one campaign."""
+
+    root = campaign_dir.resolve() / "controller-output"
+    return CampaignOutputPaths(
+        root=root,
+        launcher_stdout=root / "launcher.stdout.log",
+        launcher_stderr=root / "launcher.stderr.log",
+        watch_stdout=root / "watcher.stdout.log",
+        watch_stderr=root / "watcher.stderr.log",
     )
 
 
@@ -433,6 +450,35 @@ def build_watch_command(
     ]
 
 
+def build_bounded_process_command(
+    command: list[str],
+    *,
+    stdout_path: Path,
+    stderr_path: Path,
+    policy: soak_storage.ArtifactStreamPolicy,
+    stop_files: tuple[Path, ...],
+) -> list[str]:
+    """Builds one detached supervisor command for exact bounded output."""
+
+    result = [
+        sys.executable,
+        str(BOUNDED_PROCESS_SCRIPT),
+        "--stdout-path",
+        str(stdout_path),
+        "--stderr-path",
+        str(stderr_path),
+        "--max-segment-bytes",
+        str(policy.max_segment_bytes),
+        "--retained-segments",
+        str(policy.retained_segments),
+    ]
+    for stop_file in stop_files:
+        result.extend(("--stop-file", str(stop_file)))
+    result.append("--")
+    result.extend(command)
+    return result
+
+
 def detached_creation_flags() -> int:
     """Returns Windows flags that let the controller processes outlive the caller."""
 
@@ -441,25 +487,18 @@ def detached_creation_flags() -> int:
     return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
 
 
-def spawn_detached(command: list[str], *, stdout_path: Path, stderr_path: Path) -> subprocess.Popen[bytes]:
-    """Starts one detached process with persistent output files."""
+def spawn_detached(command: list[str]) -> subprocess.Popen[bytes]:
+    """Starts one detached bounded-output supervisor."""
 
-    stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    stdout = stdout_path.open("ab", buffering=0)
-    stderr = stderr_path.open("ab", buffering=0)
-    try:
-        return subprocess.Popen(
-            command,
-            cwd=str(REPO_ROOT),
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            close_fds=False,
-            creationflags=detached_creation_flags(),
-        )
-    finally:
-        stdout.close()
-        stderr.close()
+    return subprocess.Popen(
+        command,
+        cwd=str(REPO_ROOT),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=False,
+        creationflags=detached_creation_flags(),
+    )
 
 
 def process_identity(row: windows_processes.WindowsProcessInfo, command: list[str]) -> dict[str, Any]:
@@ -502,9 +541,11 @@ def start_session(
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
+    controller_output_policy = required_storage_policy(inputs).stream("controller_output")
     campaigns_root = campaign_storage_root(output_root)
     campaign_id = soak_run_layout.utc_campaign_id()
     campaign_dir = (campaigns_root / campaign_id).resolve()
+    campaign_output = build_campaign_output_paths(campaign_dir)
     if campaign_dir.exists():
         raise RuntimeError(f"Persisted soak campaign path already exists: {campaign_dir}")
     previous_campaign = latest_campaign_path(paths, campaigns_root)
@@ -530,12 +571,15 @@ def start_session(
     paths.stop_file.unlink(missing_ok=True)
     paths.watch_stop_file.unlink(missing_ok=True)
 
-    launch_command = build_launch_command(config, paths, campaign_id=campaign_id)
-    launcher_process = spawn_detached(
-        launch_command,
-        stdout_path=paths.launcher_stdout,
-        stderr_path=paths.launcher_stderr,
+    launch_target_command = build_launch_command(config, paths, campaign_id=campaign_id)
+    launch_command = build_bounded_process_command(
+        launch_target_command,
+        stdout_path=campaign_output.launcher_stdout,
+        stderr_path=campaign_output.launcher_stderr,
+        policy=controller_output_policy,
+        stop_files=(paths.stop_file, paths.watch_stop_file),
     )
+    launcher_process = spawn_detached(launch_command)
     try:
         launcher_row = wait_process_identity(launcher_process.pid, markers=("launch-soak.py",))
     except Exception:
@@ -552,6 +596,7 @@ def start_session(
         "launcher": process_identity(launcher_row, launch_command),
         "watcher": None,
         "command": launch_command,
+        "targetCommand": launch_target_command,
         "preflight": preflight,
         "storageEnforcement": storage_enforcement,
         "controlFiles": {
@@ -563,27 +608,33 @@ def start_session(
             "lastRunManifest": str(paths.last_run_manifest),
         },
         "logs": {
-            "launcherStdout": str(paths.launcher_stdout),
-            "launcherStderr": str(paths.launcher_stderr),
-            "watchStdout": str(paths.watch_stdout),
-            "watchStderr": str(paths.watch_stderr),
+            "root": str(campaign_output.root),
+            "maxSegmentBytes": controller_output_policy.max_segment_bytes,
+            "retainedSegments": controller_output_policy.retained_segments,
+            "launcherStdout": str(campaign_output.launcher_stdout),
+            "launcherStderr": str(campaign_output.launcher_stderr),
+            "watchStdout": str(campaign_output.watch_stdout),
+            "watchStderr": str(campaign_output.watch_stderr),
         },
     }
     write_json_atomic(paths.manifest, manifest)
 
     if start_watch:
-        watch_command = build_watch_command(
+        watch_target_command = build_watch_command(
             paths,
             interval_seconds=watch_interval_seconds,
             max_bytes=watch_max_bytes,
             segments=watch_segments,
         )
+        watch_command = build_bounded_process_command(
+            watch_target_command,
+            stdout_path=campaign_output.watch_stdout,
+            stderr_path=campaign_output.watch_stderr,
+            policy=controller_output_policy,
+            stop_files=(paths.stop_file, paths.watch_stop_file),
+        )
         try:
-            watch_process = spawn_detached(
-                watch_command,
-                stdout_path=paths.watch_stdout,
-                stderr_path=paths.watch_stderr,
-            )
+            watch_process = spawn_detached(watch_command)
             watch_row = wait_process_identity(watch_process.pid, markers=("persisted-soak-control.py", "watch"))
         except Exception:
             paths.stop_file.write_text(datetime.now(UTC).isoformat() + "\n", encoding="utf-8", newline="\n")
@@ -592,6 +643,7 @@ def start_session(
             raise
         manifest["watcher"] = process_identity(watch_row, watch_command)
         manifest["watchCommand"] = watch_command
+        manifest["watchTargetCommand"] = watch_target_command
         write_json_atomic(paths.manifest, manifest)
 
     return manifest
