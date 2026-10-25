@@ -84,6 +84,25 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     assert summary["deletionCount"] == 1
     assert summary["deletionBytes"] == 60
     assert summary["protectedFileCount"] == 1
+    assert summary["reservedBytes"] == 5
+    assert summary["projectedTotalBytes"] == 65
+    assert summary["reservation"] == {
+        "totalBytes": 5,
+        "streams": {
+            "controller_output": {
+                "instances": 4,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 4,
+            },
+            "daemon_output": {
+                "instances": 1,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 1,
+            },
+        },
+    }
     assert summary["feasible"] is True
     assert old_file.is_file()
     assert latest_file.is_file()
@@ -113,10 +132,52 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
 
     assert summary["deletedCount"] == 1
     assert summary["deletedBytes"] == 60
+    assert summary["planned"]["reservedBytes"] == 5
+    assert summary["verification"]["reservedBytes"] == 5
+    assert summary["verification"]["projectedTotalBytes"] == 65
+    assert summary["reservation"]["totalBytes"] == 5
+    assert summary["reservation"]["streams"]["controller_output"]["capacityBytes"] == 4
     assert summary["verification"]["deletionCount"] == 0
     assert summary["withinLimits"] is True
     assert not old_file.exists()
     assert latest_file.read_bytes() == b"n" * 60
+
+
+def test_campaign_storage_preflight_rejects_unreservable_required_streams(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+
+    with pytest.raises(RuntimeError, match="max_total_bytes"):
+        controller.preflight_campaign_storage(
+            live_inputs(tmp_path, policy=storage_policy(max_total_bytes=4)),
+            output_root,
+            protected_campaigns=(),
+        )
+
+
+def test_campaign_storage_preflight_reserves_minimum_free_space(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(
+        soak_storage,
+        "disk_space_snapshot",
+        lambda root: soak_storage.DiskSpaceSnapshot(
+            measured_path=root,
+            total_bytes=100,
+            used_bytes=95,
+            free_bytes=5,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="minimum_free_bytes"):
+        controller.preflight_campaign_storage(
+            live_inputs(tmp_path, policy=storage_policy()),
+            output_root,
+            protected_campaigns=(),
+        )
 
 
 def test_latest_campaign_path_rejects_manifest_escape(tmp_path: Path) -> None:

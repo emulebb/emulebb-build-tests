@@ -166,6 +166,7 @@ def storage_plan_summary(root: Path, plan: soak_storage.StoragePrunePlan) -> dic
         "fileCount": len(plan.inventory.files),
         "totalBytes": plan.inventory.total_bytes,
         "freeBytes": plan.disk_space.free_bytes,
+        "reservedBytes": plan.reserved_bytes,
         "protectedFileCount": len(plan.protected_files),
         "deletionCount": len(plan.deletions),
         "deletionBytes": sum(item.artifact.size_bytes for item in plan.deletions),
@@ -197,6 +198,29 @@ def storage_enforcement_summary(
         "failureCount": len(result.failures),
         "verification": storage_plan_summary(root, result.verification),
         "withinLimits": result.within_limits,
+    }
+
+
+def required_stream_reservation(
+    policy: soak_storage.SoakStoragePolicy,
+) -> dict[str, Any]:
+    """Returns auditable capacity reserved for standard persisted-session streams."""
+
+    streams: dict[str, dict[str, int]] = {}
+    for name in soak_storage.REQUIRED_STREAMS:
+        stream = policy.stream(name)
+        instances = soak_storage.REQUIRED_STREAM_INSTANCES[name]
+        streams[name] = {
+            "instances": instances,
+            "maxSegmentBytes": stream.max_segment_bytes,
+            "retainedSegments": stream.retained_segments,
+            "capacityBytes": (
+                instances * stream.max_segment_bytes * stream.retained_segments
+            ),
+        }
+    return {
+        "totalBytes": soak_storage.required_stream_capacity_bytes(policy),
+        "streams": streams,
     }
 
 
@@ -362,11 +386,18 @@ def preflight_campaign_storage(
 
     policy = required_storage_policy(inputs)
     root = campaign_storage_root(output_root)
-    plan = soak_storage.BoundedArtifactStore(root, policy).plan(pinned_paths=protected_campaigns)
+    reservation = required_stream_reservation(policy)
+    plan = soak_storage.BoundedArtifactStore(root, policy).plan(
+        pinned_paths=protected_campaigns,
+        reserved_bytes=reservation["totalBytes"],
+    )
     if not plan.within_limits:
         constraints = ", ".join(plan.unresolved_constraints) or "unknown"
         raise RuntimeError(f"Persisted soak storage cannot satisfy required limits: {constraints}.")
-    return storage_plan_summary(root, plan)
+    return {
+        **storage_plan_summary(root, plan),
+        "reservation": reservation,
+    }
 
 
 def enforce_campaign_storage(
@@ -379,8 +410,13 @@ def enforce_campaign_storage(
 
     policy = required_storage_policy(inputs)
     root = campaign_storage_root(output_root)
-    result = soak_storage.BoundedArtifactStore(root, policy).enforce(pinned_paths=protected_campaigns)
+    reservation = required_stream_reservation(policy)
+    result = soak_storage.BoundedArtifactStore(root, policy).enforce(
+        pinned_paths=protected_campaigns,
+        reserved_bytes=reservation["totalBytes"],
+    )
     summary = storage_enforcement_summary(root, result)
+    summary["reservation"] = reservation
     if not result.within_limits:
         constraints = ", ".join(result.verification.unresolved_constraints)
         detail = constraints or (result.failures[0] if result.failures else "pending deletions remain")
