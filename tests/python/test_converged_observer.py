@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
 from types import MappingProxyType
+
+import pytest
 
 from emule_test_harness import converged_observer, converged_observer_state
 from emule_test_harness import soak_run_layout, soak_storage
@@ -105,6 +108,162 @@ def test_capture_checkpoint_persists_full_health_and_cumulative_state(
     )
 
 
+def test_parse_action_config_requires_gentle_complete_schedule() -> None:
+    config = converged_observer.parse_action_config(
+        {
+            "actionDriving": {
+                "enabled": True,
+                "sourceProfile": "generic_open",
+                "terms": ["linux", "debian", "linux"],
+                "method": "kad",
+                "startDelaySeconds": 30,
+                "searchIntervalSeconds": 900,
+                "searchTimeoutSeconds": 120,
+                "maxCycles": 12,
+            }
+        }
+    )
+
+    assert config == converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux", "debian"),
+        method="kad",
+        start_delay_seconds=30.0,
+        search_interval_seconds=900.0,
+        search_timeout_seconds=120.0,
+        max_cycles=12,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("sourceProfile", None),
+        ("startDelaySeconds", True),
+        ("searchIntervalSeconds", float("inf")),
+        ("searchTimeoutSeconds", float("nan")),
+    ),
+)
+def test_parse_action_config_rejects_ambiguous_or_nonfinite_values(
+    field: str,
+    value: object,
+) -> None:
+    payload = {
+        "enabled": True,
+        "sourceProfile": "generic_open",
+        "terms": ["linux"],
+        "method": "server",
+        "startDelaySeconds": 60,
+        "searchIntervalSeconds": 900,
+        "searchTimeoutSeconds": 120,
+        "maxCycles": 0,
+    }
+    payload[field] = value
+
+    with pytest.raises(RuntimeError):
+        converged_observer.parse_action_config({"actionDriving": payload})
+
+
+def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    subject = runtime(tmp_path)
+    observed: dict[str, object] = {}
+
+    def drive(**kwargs):
+        observed.update(kwargs)
+        return {
+            "cycle": kwargs["cycle_index"],
+            "queryIndex": kwargs["cycle_index"] - 1,
+            "method": kwargs["method"],
+            "query": kwargs["query"],
+            "downloadRequested": False,
+            "searchIds": {"rust": "rust-search", "mfc": "mfc-search"},
+            "resultCounts": {"rust": 4, "mfc": 3},
+        }
+
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "drive_automatic_cycle",
+        drive,
+    )
+    timestamps = iter(
+        (
+            datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+            datetime(2026, 10, 25, 12, 2, tzinfo=UTC),
+        )
+    )
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="explicit",
+        terms=("Exact Local Search Term",),
+        method="server",
+        start_delay_seconds=0,
+        search_interval_seconds=900,
+        search_timeout_seconds=120,
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        new_state(),
+        config,
+        now_utc=lambda: next(timestamps),
+        now_ns=1_000_000_000,
+    )
+
+    assert observed["query"] == "Exact Local Search Term"
+    assert observed["download"] is False
+    assert observed["safety"] is None
+    assert observed["rust"].base_url == subject.rust_base_url
+    assert observed["mfc"].base_url == subject.mfc_base_url
+    assert updated["driver"]["cycles"] == 1
+    assert updated["driver"]["latestCycle"]["query"] == "Exact Local Search Term"
+    assert (
+        updated["driver"]["latestCycle"]["startedAtUtc"] == "2026-10-25T12:01:00+00:00"
+    )
+    assert (
+        updated["driver"]["latestCycle"]["completedAtUtc"]
+        == "2026-10-25T12:02:00+00:00"
+    )
+    assert (
+        converged_observer.load_json_object(
+            subject.run_paths.report_dir / "summary.json"
+        )
+        == updated
+    )
+
+
+def test_capture_action_cycle_records_rest_failure_without_stopping_soak(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    subject = runtime(tmp_path)
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "drive_automatic_cycle",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("REST unavailable")),
+    )
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_interval_seconds=900,
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        new_state(),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+    )
+
+    assert updated["driver"]["cycles"] == 1
+    assert updated["driver"]["cycleErrors"] == 1
+    assert updated["driver"]["latestCycle"]["error"] == "RuntimeError: REST unavailable"
+
+
 def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
     tmp_path: Path,
 ) -> None:
@@ -151,6 +310,81 @@ def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
 
     assert captured == [1, 2]
     assert result["checkpoints"]["count"] == 2
+
+
+def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -> None:
+    subject = replace(
+        runtime(tmp_path),
+        action_config=converged_observer.ObserverActionConfig(
+            enabled=True,
+            source_profile="generic_open",
+            terms=("linux", "debian"),
+            method="global",
+            start_delay_seconds=0,
+            search_interval_seconds=300,
+            search_timeout_seconds=120,
+            max_cycles=2,
+        ),
+    )
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    clock = [0.0]
+    action_cycles: list[int] = []
+
+    def capture(_runtime, state):
+        return converged_observer_state.record_checkpoint(
+            state,
+            {
+                "schema": "soak_checkpoint_v1",
+                "ts_utc": "2026-10-25T12:00:00+00:00",
+                "rustAlive": True,
+                "packetRecords": {"rust": 1, "mfc": 1},
+                "totals": {"actions": 0},
+            },
+        )
+
+    def drive_action(_runtime, state, config):
+        cycle = int(state["driver"]["cycles"]) + 1
+        action_cycles.append(cycle)
+        assert config.method == "global"
+        updated = converged_observer_state.record_driver_cycle(
+            state,
+            {
+                "cycle": cycle,
+                "query": config.terms[(cycle - 1) % len(config.terms)],
+                "method": config.method,
+            },
+        )
+        if cycle == 2:
+            subject.stop_file.parent.mkdir(parents=True, exist_ok=True)
+            subject.stop_file.write_text("stop\n", encoding="utf-8")
+        return updated
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=60,
+        checkpoint_interval_seconds=1_000,
+        failure_threshold=3,
+        monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        launcher_alive=lambda _identity: True,
+        capture=capture,
+        drive_action=drive_action,
+    )
+
+    assert action_cycles == [1, 2]
+    assert result["driver"]["cycles"] == 2
+    assert result["driver"]["latestCycle"]["query"] == "debian"
 
 
 def test_run_observer_honors_shared_stop_before_process_probe(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import (
+    converged_action_driver,
     converged_observer_state,
     diag_event_runs,
     soak_launch,
@@ -27,6 +29,26 @@ DEFAULT_CHECKPOINT_INTERVAL_SECONDS = 300.0
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_RECENT_ACTION_LIMIT = 64
 DEFAULT_RECENT_ANOMALY_LIMIT = 64
+MIN_ACTION_INTERVAL_SECONDS = 300.0
+DEFAULT_ACTION_START_DELAY_SECONDS = 60.0
+DEFAULT_ACTION_INTERVAL_SECONDS = 1_800.0
+DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS = 180.0
+DEFAULT_ACTION_METHOD = "server"
+ACTION_METHODS = ("server", "global", "kad")
+
+
+@dataclass(frozen=True)
+class ObserverActionConfig:
+    """Immutable synchronized search schedule owned by the observer."""
+
+    enabled: bool = False
+    source_profile: str | None = None
+    terms: tuple[str, ...] = ()
+    method: str = DEFAULT_ACTION_METHOD
+    start_delay_seconds: float = DEFAULT_ACTION_START_DELAY_SECONDS
+    search_interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
+    search_timeout_seconds: float = DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS
+    max_cycles: int = 0
 
 
 @dataclass(frozen=True)
@@ -41,6 +63,93 @@ class ObserverRuntime:
     launcher_identity: dict[str, Any]
     rust_base_url: str
     mfc_base_url: str
+    action_config: ObserverActionConfig = ObserverActionConfig()
+
+
+def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig:
+    """Validates the optional observer-owned synchronized search schedule."""
+
+    payload = observer_config.get("actionDriving")
+    if payload is None:
+        return ObserverActionConfig()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Persisted soak observer action config is invalid.")
+    required_fields = {
+        "enabled",
+        "sourceProfile",
+        "terms",
+        "method",
+        "startDelaySeconds",
+        "searchIntervalSeconds",
+        "searchTimeoutSeconds",
+        "maxCycles",
+    }
+    if set(payload) != required_fields:
+        raise RuntimeError("Persisted soak observer action config fields are invalid.")
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise RuntimeError("Persisted soak observer action enabled flag is invalid.")
+    source_profile = payload.get("sourceProfile")
+    if source_profile is not None and (
+        not isinstance(source_profile, str) or not source_profile.strip()
+    ):
+        raise RuntimeError("Persisted soak observer action source profile is invalid.")
+    if enabled and source_profile is None:
+        raise RuntimeError("Enabled observer action driving requires a source profile.")
+    raw_terms = payload.get("terms")
+    if not isinstance(raw_terms, list) or any(
+        not isinstance(term, str) or not term.strip() for term in raw_terms
+    ):
+        raise RuntimeError("Persisted soak observer action terms are invalid.")
+    terms = tuple(dict.fromkeys(term.strip() for term in raw_terms))
+    if enabled and not terms:
+        raise RuntimeError("Enabled observer action driving requires search terms.")
+    method = payload.get("method")
+    if not isinstance(method, str) or method not in ACTION_METHODS:
+        raise RuntimeError("Persisted soak observer action method is invalid.")
+    start_delay = payload.get("startDelaySeconds")
+    interval = payload.get("searchIntervalSeconds")
+    search_timeout = payload.get("searchTimeoutSeconds")
+    max_cycles = payload.get("maxCycles")
+    if (
+        isinstance(start_delay, bool)
+        or not isinstance(start_delay, (int, float))
+        or not math.isfinite(start_delay)
+        or start_delay < 0
+    ):
+        raise RuntimeError("Persisted soak observer action start delay is invalid.")
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, (int, float))
+        or not math.isfinite(interval)
+        or interval < MIN_ACTION_INTERVAL_SECONDS
+    ):
+        raise RuntimeError(
+            f"Persisted soak observer action interval must be at least {MIN_ACTION_INTERVAL_SECONDS:g} seconds."
+        )
+    if (
+        isinstance(search_timeout, bool)
+        or not isinstance(search_timeout, (int, float))
+        or not math.isfinite(search_timeout)
+        or search_timeout <= 0
+    ):
+        raise RuntimeError("Persisted soak observer action search timeout is invalid.")
+    if (
+        not isinstance(max_cycles, int)
+        or isinstance(max_cycles, bool)
+        or max_cycles < 0
+    ):
+        raise RuntimeError("Persisted soak observer action max cycles is invalid.")
+    return ObserverActionConfig(
+        enabled=enabled,
+        source_profile=source_profile,
+        terms=terms,
+        method=method,
+        start_delay_seconds=float(start_delay),
+        search_interval_seconds=float(interval),
+        search_timeout_seconds=float(search_timeout),
+        max_cycles=max_cycles,
+    )
 
 
 def load_json_object(path: Path) -> dict[str, Any]:
@@ -136,6 +245,7 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
         launcher_identity=launcher_identity,
         rust_base_url=rust_base_url,
         mfc_base_url=mfc_base_url,
+        action_config=parse_action_config(observer_config),
     )
 
 
@@ -263,6 +373,86 @@ def capture_checkpoint(
     return updated
 
 
+def persist_state(
+    runtime: ObserverRuntime,
+    state: dict[str, Any],
+    *,
+    now_ns: int | None = None,
+) -> dict[str, Any]:
+    """Validates and atomically persists the cumulative observer state."""
+
+    validated = converged_observer_state.validate_state(
+        state,
+        campaign_id=runtime.run_paths.campaign_id,
+    )
+    soak_run_layout.persist_observer_summary(
+        paths=runtime.run_paths,
+        store=runtime.store,
+        summary=validated,
+        now_ns=now_ns,
+    )
+    return validated
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def capture_action_cycle(
+    runtime: ObserverRuntime,
+    state: dict[str, Any],
+    config: ObserverActionConfig,
+    *,
+    now_utc: Callable[[], datetime] = utc_now,
+    now_ns: int | None = None,
+) -> dict[str, Any]:
+    """Issues and records one synchronized search without owning either client."""
+
+    validated = converged_observer_state.validate_state(
+        state,
+        campaign_id=runtime.run_paths.campaign_id,
+    )
+    if not config.enabled or not config.terms:
+        raise RuntimeError("Observer action driving is not enabled.")
+    cycle_index = int(validated["driver"]["cycles"]) + 1
+    query = config.terms[(cycle_index - 1) % len(config.terms)]
+    started_at = now_utc().astimezone(UTC).isoformat()
+    rust_client = converged_action_driver.ClientEndpoint(
+        name="rust",
+        base_url=runtime.rust_base_url,
+        api_key=soak_launch.RUST_API_KEY,
+    )
+    mfc_client = converged_action_driver.ClientEndpoint(
+        name="mfc",
+        base_url=runtime.mfc_base_url,
+        api_key=soak_launch.MFC_API_KEY,
+    )
+    try:
+        cycle = converged_action_driver.drive_automatic_cycle(
+            cycle_index=cycle_index,
+            query=query,
+            method=config.method,
+            rust=rust_client,
+            mfc=mfc_client,
+            safety=None,
+            download=False,
+            search_timeout_seconds=config.search_timeout_seconds,
+        )
+    except Exception as error:  # noqa: BLE001 - persist live action failures and continue the soak
+        cycle = {
+            "cycle": cycle_index,
+            "queryIndex": cycle_index - 1,
+            "method": config.method,
+            "query": query,
+            "downloadRequested": False,
+            "error": f"{type(error).__name__}: {error}",
+        }
+    cycle["startedAtUtc"] = started_at
+    cycle["completedAtUtc"] = now_utc().astimezone(UTC).isoformat()
+    updated = converged_observer_state.record_driver_cycle(validated, cycle)
+    return persist_state(runtime, updated, now_ns=now_ns)
+
+
 def run_observer(
     runtime: ObserverRuntime,
     *,
@@ -275,6 +465,7 @@ def run_observer(
     sleep: Callable[[float], None] = time.sleep,
     launcher_alive: Callable[[dict[str, Any]], bool] = launcher_is_alive,
     capture: Callable[..., dict[str, Any]] = capture_checkpoint,
+    drive_action: Callable[..., dict[str, Any]] = capture_action_cycle,
 ) -> dict[str, Any]:
     """Runs one attach-only observer until the shared stop contract is requested."""
 
@@ -307,6 +498,11 @@ def run_observer(
     checkpoint_count = 0
     consecutive_failures = 0
     next_checkpoint = monotonic()
+    next_action = (
+        monotonic() + runtime.action_config.start_delay_seconds
+        if runtime.action_config.enabled
+        else float("inf")
+    )
     while True:
         if runtime.stop_file.exists():
             return state
@@ -315,6 +511,7 @@ def run_observer(
                 "Persisted soak launcher exited while observer was attached."
             )
         now = monotonic()
+        checkpoint_failed = False
         if now >= next_checkpoint:
             try:
                 state = capture(runtime, state)
@@ -323,13 +520,30 @@ def run_observer(
                 if consecutive_failures >= failure_threshold:
                     raise
                 next_checkpoint = now + poll_interval_seconds
+                checkpoint_failed = True
             else:
                 consecutive_failures = 0
                 checkpoint_count += 1
                 if max_checkpoints and checkpoint_count >= max_checkpoints:
                     return state
                 next_checkpoint = now + checkpoint_interval_seconds
-        sleep(min(poll_interval_seconds, max(next_checkpoint - monotonic(), 0.0)))
+        if checkpoint_failed:
+            sleep(min(poll_interval_seconds, max(next_checkpoint - monotonic(), 0.0)))
+            continue
+
+        action_config = runtime.action_config
+        action_cycles = int(state["driver"]["cycles"])
+        action_limit_reached = bool(
+            action_config.max_cycles and action_cycles >= action_config.max_cycles
+        )
+        if action_limit_reached:
+            next_action = float("inf")
+        elif action_config.enabled and now >= next_action:
+            state = drive_action(runtime, state, action_config)
+            next_action = monotonic() + action_config.search_interval_seconds
+
+        next_due = min(next_checkpoint, next_action)
+        sleep(min(poll_interval_seconds, max(next_due - monotonic(), 0.0)))
 
 
 def build_parser() -> argparse.ArgumentParser:
