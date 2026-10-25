@@ -879,6 +879,44 @@ def test_bounded_process_command_preserves_policy_paths_and_target(tmp_path: Pat
     assert command[-3:] == ["python", "target.py", "--flag"]
 
 
+def test_build_observer_action_config_resolves_exact_manifest_terms(tmp_path: Path) -> None:
+    inputs = live_inputs(tmp_path, policy=storage_policy())
+
+    fallback = controller.build_observer_action_config(
+        inputs,
+        enabled=True,
+        terms=(),
+        method="kad",
+        start_delay_seconds=30,
+        search_interval_seconds=900,
+        search_timeout_seconds=120,
+        max_cycles=12,
+    )
+    explicit = controller.build_observer_action_config(
+        inputs,
+        enabled=True,
+        terms=("Exact Local Term", "Exact Local Term", "debian"),
+        method="global",
+        start_delay_seconds=60,
+        search_interval_seconds=1_800,
+        search_timeout_seconds=180,
+        max_cycles=0,
+    )
+
+    assert fallback == {
+        "enabled": True,
+        "sourceProfile": "generic_open",
+        "terms": ["linux"],
+        "method": "kad",
+        "startDelaySeconds": 30.0,
+        "searchIntervalSeconds": 900.0,
+        "searchTimeoutSeconds": 120.0,
+        "maxCycles": 12,
+    }
+    assert explicit["sourceProfile"] == "explicit"
+    assert explicit["terms"] == ["Exact Local Term", "debian"]
+
+
 def test_exact_process_row_rejects_pid_reuse() -> None:
     rows = [
         WindowsProcessInfo(
@@ -970,7 +1008,17 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
     monkeypatch.setattr(controller, "spawn_detached", fake_spawn)
     monkeypatch.setattr(controller, "wait_process_identity", fake_identity)
 
-    result = controller.start_session(config, paths, watch_interval_seconds=30.0)
+    result = controller.start_session(
+        config,
+        paths,
+        watch_interval_seconds=30.0,
+        observer_drive_actions=True,
+        observer_action_method="kad",
+        observer_action_start_delay_seconds=30,
+        observer_action_search_interval_seconds=900,
+        observer_action_search_timeout_seconds=120,
+        observer_action_max_cycles=12,
+    )
 
     assert result["schema"] == controller.MANIFEST_SCHEMA
     assert result["launcher"]["pid"] == 101
@@ -981,6 +1029,16 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
     assert result["watcher"]["creationDate"] == "created-103"
     assert result["campaignId"] == "20261025T120000Z"
     assert result["storage"]["launchEnforcement"]["withinLimits"] is True
+    assert result["observerConfig"]["actionDriving"] == {
+        "enabled": True,
+        "sourceProfile": "generic_open",
+        "terms": ["linux"],
+        "method": "kad",
+        "startDelaySeconds": 30.0,
+        "searchIntervalSeconds": 900.0,
+        "searchTimeoutSeconds": 120.0,
+        "maxCycles": 12,
+    }
     storage_context = controller.parse_session_storage_context(result, output_root)
     assert storage_context.active_campaign == (
         output_root / "soak" / "campaigns" / "20261025T120000Z"
@@ -995,6 +1053,7 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
     assert Path(spawned[1][1]).name == "run-bounded-process.py"
     assert any(Path(value).name == "converged-soak-observer.py" for value in spawned[1])
     assert not any(Path(value).name == "launch-soak.py" for value in spawned[1])
+    assert "linux" not in result["observerTargetCommand"]
     assert Path(spawned[2][1]).name == "run-bounded-process.py"
     assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[2])
     assert result["watchTargetCommand"][result["watchTargetCommand"].index("--launcher-pid") + 1] == "101"
@@ -1082,6 +1141,8 @@ def test_start_session_can_disable_optional_observer(
 
     assert result["observer"] is None
     assert result["observerConfig"]["enabled"] is False
+    assert result["observerConfig"]["actionDriving"]["enabled"] is False
+    assert result["observerConfig"]["actionDriving"]["terms"] == []
     assert len(spawned) == 2
     assert not any(
         Path(value).name == "converged-soak-observer.py"
@@ -1232,6 +1293,63 @@ def test_start_session_rejects_invalid_watch_budget_before_preflight(tmp_path: P
         controller.start_session(config, paths, watch_max_bytes=0)
 
     assert preflight_called is False
+
+
+def test_start_session_rejects_action_driving_without_observer_before_preflight(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    preflight_called = False
+
+    def fake_preflight(*_args, **_kwargs):
+        nonlocal preflight_called
+        preflight_called = True
+
+    monkeypatch.setattr(controller, "preflight_session", fake_preflight)
+
+    with pytest.raises(ValueError, match="requires the converged observer"):
+        controller.start_session(
+            config,
+            paths,
+            start_observer=False,
+            observer_drive_actions=True,
+        )
+
+    assert preflight_called is False
+
+
+def test_start_parser_accepts_observer_action_schedule() -> None:
+    args = controller.build_parser().parse_args(
+        [
+            "start",
+            "--observer-drive-actions",
+            "--observer-action-term",
+            "Exact Local Term",
+            "--observer-action-method",
+            "global",
+            "--observer-action-start-delay-seconds",
+            "30",
+            "--observer-action-search-interval-seconds",
+            "900",
+            "--observer-action-search-timeout-seconds",
+            "120",
+            "--observer-action-max-cycles",
+            "12",
+        ]
+    )
+
+    assert args.observer_drive_actions is True
+    assert args.observer_action_term == ["Exact Local Term"]
+    assert args.observer_action_method == "global"
+    assert args.observer_action_start_delay_seconds == 30
+    assert args.observer_action_search_interval_seconds == 900
+    assert args.observer_action_search_timeout_seconds == 120
+    assert args.observer_action_max_cycles == 12
 
 
 def test_session_status_reports_exact_dual_process_tree(
