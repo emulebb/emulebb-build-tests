@@ -89,6 +89,8 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
         [
             "--lan-bind-addr",
             "127.0.0.1",
+            "--campaign-id",
+            "20261025T120000Z",
             "--rust-regular",
             "--no-mfc",
             "--cpu-profile",
@@ -120,6 +122,7 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     )
 
     assert args.rust_regular is True
+    assert args.campaign_id == "20261025T120000Z"
     assert args.no_mfc is True
     assert args.cpu_profile is True
     assert args.cpu_profile_seconds == 60

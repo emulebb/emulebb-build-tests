@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
 from emule_test_harness import persisted_soak_controller as controller
+from emule_test_harness import soak_storage
+from emule_test_harness.live_wire_inputs import LiveWireInputs
 from emule_test_harness.windows_processes import WindowsProcessInfo
 
 
@@ -13,9 +17,121 @@ def make_paths(tmp_path: Path) -> controller.ControlPaths:
     return controller.build_control_paths(tmp_path / "output")
 
 
+def storage_policy(*, max_total_bytes: int = 1_000) -> soak_storage.SoakStoragePolicy:
+    return soak_storage.SoakStoragePolicy(
+        max_total_bytes=max_total_bytes,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        streams=MappingProxyType(
+            {
+                "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
+                "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
+            }
+        ),
+    )
+
+
+def live_inputs(
+    tmp_path: Path,
+    *,
+    policy: soak_storage.SoakStoragePolicy | None,
+) -> LiveWireInputs:
+    return LiveWireInputs(
+        path=tmp_path / "inputs.json",
+        generic_open_terms=("linux",),
+        document_terms=("manual",),
+        radarr_movie_terms=("movie",),
+        sonarr_series_terms=("series",),
+        video_roots=(),
+        bootstrap_transfer_hashes=(),
+        direct_bootstrap_transfers=(),
+        soak_storage=policy,
+    )
+
+
 def test_control_paths_must_stay_under_output_root(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="must stay below"):
         controller.build_control_paths(tmp_path / "output", tmp_path / "elsewhere")
+
+
+def test_persisted_storage_policy_is_mandatory(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="require soak_storage"):
+        controller.required_storage_policy(live_inputs(tmp_path, policy=None))
+
+
+def test_campaign_storage_preflight_is_read_only_and_protects_latest(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    campaigns = controller.campaign_storage_root(output_root)
+    old_file = campaigns / "20261023T120000Z" / "report" / "old.json"
+    latest_file = campaigns / "20261024T120000Z" / "report" / "latest.json"
+    old_file.parent.mkdir(parents=True)
+    latest_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"o" * 60)
+    latest_file.write_bytes(b"n" * 60)
+    os.utime(old_file, ns=(100, 100))
+    os.utime(latest_file, ns=(200, 200))
+
+    summary = controller.preflight_campaign_storage(
+        live_inputs(tmp_path, policy=storage_policy(max_total_bytes=70)),
+        output_root,
+        protected_campaigns=(latest_file.parents[1],),
+    )
+
+    assert summary["plan"]["deletionCount"] == 1
+    assert summary["plan"]["deletionBytes"] == 60
+    assert summary["plan"]["protectedFileCount"] == 1
+    assert summary["plan"]["feasible"] is True
+    assert old_file.is_file()
+    assert latest_file.is_file()
+
+
+def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_root = tmp_path / "output"
+    campaigns = controller.campaign_storage_root(output_root)
+    old_file = campaigns / "20261023T120000Z" / "report" / "old.json"
+    latest_campaign = campaigns / "20261024T120000Z"
+    latest_file = latest_campaign / "report" / "latest.json"
+    old_file.parent.mkdir(parents=True)
+    latest_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"o" * 60)
+    latest_file.write_bytes(b"n" * 60)
+    os.utime(old_file, ns=(100, 100))
+    os.utime(latest_file, ns=(200, 200))
+    inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=70))
+    monkeypatch.setattr(controller, "load_live_wire_inputs", lambda _path: inputs)
+
+    summary = controller.enforce_campaign_storage(
+        inputs.path,
+        output_root,
+        protected_campaigns=(latest_campaign,),
+    )
+
+    assert summary["deletedCount"] == 1
+    assert summary["deletedBytes"] == 60
+    assert summary["verification"]["deletionCount"] == 0
+    assert summary["withinLimits"] is True
+    assert not old_file.exists()
+    assert latest_file.read_bytes() == b"n" * 60
+
+
+def test_latest_campaign_path_rejects_manifest_escape(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path)
+    controller.write_json_atomic(
+        paths.last_run_manifest,
+        {"campaignDir": str(tmp_path / "outside")},
+    )
+
+    with pytest.raises(RuntimeError, match="escaped"):
+        controller.latest_campaign_path(
+            paths,
+            controller.campaign_storage_root(tmp_path / "output"),
+        )
 
 
 def preflight_payload(tmp_path: Path) -> dict[str, object]:
@@ -51,12 +167,17 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
         vpn_guard_config=tmp_path / "vpn.json",
     )
 
-    command = controller.build_launch_command(config, paths)
+    command = controller.build_launch_command(
+        config,
+        paths,
+        campaign_id="20261025T120000Z",
+    )
 
     assert command[1].endswith("scripts\\launch-soak.py")
     assert command[command.index("--vpn-topology") + 1] == "full-tunnel"
     assert command[command.index("--lan-bind-addr") + 1] == "127.0.0.1"
     assert command[command.index("--duration-seconds") + 1] == "0"
+    assert command[command.index("--campaign-id") + 1] == "20261025T120000Z"
     assert command[command.index("--stop-file") + 1] == str(paths.stop_file)
     assert "--vpn-guard-scenario" in command
     assert "success" in command
@@ -122,7 +243,21 @@ def test_start_session_records_launcher_and_watcher_identities(
         )
 
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(controller, "preflight_session", lambda _config, _root: preflight_payload(tmp_path))
+    monkeypatch.setattr(
+        controller,
+        "preflight_session",
+        lambda _config, _root, **_kwargs: preflight_payload(tmp_path),
+    )
+    monkeypatch.setattr(
+        controller,
+        "enforce_campaign_storage",
+        lambda *_args, **_kwargs: {"withinLimits": True},
+    )
+    monkeypatch.setattr(
+        controller.soak_run_layout,
+        "utc_campaign_id",
+        lambda: "20261025T120000Z",
+    )
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
     monkeypatch.setattr(controller, "spawn_detached", fake_spawn)
     monkeypatch.setattr(controller, "wait_process_identity", fake_identity)
@@ -134,10 +269,54 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert result["launcher"]["creationDate"] == "created-101"
     assert result["watcher"]["pid"] == 102
     assert result["watcher"]["creationDate"] == "created-102"
+    assert result["campaignId"] == "20261025T120000Z"
+    assert result["storageEnforcement"]["withinLimits"] is True
     assert len(spawned) == 2
     assert "launch-soak.py" in spawned[0][1]
     assert "persisted-soak-control.py" in spawned[1][1]
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["watcher"]["pid"] == 102
+
+
+def test_start_session_enforces_storage_before_control_mutation_or_spawn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root = tmp_path / "output"
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    spawned = False
+
+    def reject_storage(*_args, **_kwargs):
+        raise RuntimeError("reserve verification failed")
+
+    def reject_spawn(*_args, **_kwargs):
+        nonlocal spawned
+        spawned = True
+        raise AssertionError("spawn must not be reached")
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "preflight_session",
+        lambda _config, _root, **_kwargs: preflight_payload(tmp_path),
+    )
+    monkeypatch.setattr(controller, "enforce_campaign_storage", reject_storage)
+    monkeypatch.setattr(controller, "spawn_detached", reject_spawn)
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+    monkeypatch.setattr(
+        controller.soak_run_layout,
+        "utc_campaign_id",
+        lambda: "20261025T120000Z",
+    )
+
+    with pytest.raises(RuntimeError, match="reserve verification failed"):
+        controller.start_session(config, paths)
+
+    assert spawned is False
+    assert not paths.control_dir.exists()
 
 
 def test_start_session_rejects_invalid_watch_budget_before_preflight(tmp_path: Path, monkeypatch) -> None:
