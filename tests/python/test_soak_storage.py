@@ -39,6 +39,10 @@ def policy_payload() -> dict[str, object]:
                 "max_segment_bytes": 300,
                 "retained_segments": 2,
             },
+            "diagnostic_segments": {
+                "max_segment_bytes": 50,
+                "retained_segments": 2,
+            },
         },
     }
 
@@ -72,6 +76,7 @@ def direct_policy(
                     bundle_max_bytes,
                     bundle_retained,
                 ),
+                "diagnostic_segments": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
     )
@@ -142,6 +147,7 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "daemon_output": payload["streams"]["daemon_output"],
                     "controller_output": payload["streams"]["controller_output"],
                     "diagnostic_bundles": payload["streams"]["diagnostic_bundles"],
+                    "diagnostic_segments": payload["streams"]["diagnostic_segments"],
                 },
             }
         )
@@ -225,7 +231,7 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 3_800
+    assert soak_storage.required_stream_capacity_bytes(policy) == 4_000
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
