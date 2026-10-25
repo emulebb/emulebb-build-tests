@@ -80,10 +80,10 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
         protected_campaigns=(latest_file.parents[1],),
     )
 
-    assert summary["plan"]["deletionCount"] == 1
-    assert summary["plan"]["deletionBytes"] == 60
-    assert summary["plan"]["protectedFileCount"] == 1
-    assert summary["plan"]["feasible"] is True
+    assert summary["deletionCount"] == 1
+    assert summary["deletionBytes"] == 60
+    assert summary["protectedFileCount"] == 1
+    assert summary["feasible"] is True
     assert old_file.is_file()
     assert latest_file.is_file()
 
@@ -155,7 +155,99 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "guardMode": "block",
             "guardConfig": str(tmp_path / "vpn.json"),
         },
+        "storage": {
+            "feasible": True,
+            "deletionCount": 0,
+            "deletionBytes": 0,
+            "protectedFileCount": 0,
+        },
     }
+
+
+def storage_context_manifest(
+    tmp_path: Path,
+    *,
+    previous_campaign: Path | None = None,
+) -> tuple[Path, dict[str, object]]:
+    output_root = tmp_path / "output"
+    root = controller.campaign_storage_root(output_root)
+    active_campaign = root / "20261025T120000Z"
+    policy = storage_policy()
+    return output_root, {
+        "campaignId": active_campaign.name,
+        "storage": controller.session_storage_manifest(
+            root=root,
+            policy=policy,
+            active_campaign=active_campaign,
+            previous_campaign=previous_campaign,
+            preflight_plan={"feasible": True},
+            launch_enforcement={"withinLimits": True},
+        ),
+    }
+
+
+def test_session_storage_context_round_trips_previous_campaign(tmp_path: Path) -> None:
+    previous_campaign = (
+        controller.campaign_storage_root(tmp_path / "output") / "20261024T120000Z"
+    )
+    output_root, manifest = storage_context_manifest(
+        tmp_path,
+        previous_campaign=previous_campaign,
+    )
+
+    context = controller.parse_session_storage_context(manifest, output_root)
+
+    assert context.root == controller.campaign_storage_root(output_root)
+    assert context.active_campaign.name == "20261025T120000Z"
+    assert context.previous_campaign == previous_campaign
+    assert context.policy_sha256 == soak_storage.storage_policy_sha256(context.policy)
+
+
+def test_session_storage_context_rejects_policy_tampering(tmp_path: Path) -> None:
+    output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    policy = storage["policy"]
+    assert isinstance(policy, dict)
+    policy["max_total_bytes"] = 2_000
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        controller.parse_session_storage_context(manifest, output_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("root", "outside", "root mismatch"),
+        ("activeCampaignDir", "outside", "escaped its storage root"),
+        ("preflightPlan", [], "preflight plan is invalid"),
+        ("launchEnforcement", [], "launch enforcement is invalid"),
+    ],
+)
+def test_session_storage_context_rejects_invalid_authority(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    storage[field] = str(tmp_path / value) if value == "outside" else value
+
+    with pytest.raises(RuntimeError, match=message):
+        controller.parse_session_storage_context(manifest, output_root)
+
+
+def test_session_storage_context_rejects_missing_or_unknown_fields(tmp_path: Path) -> None:
+    output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    del storage["launchEnforcement"]
+    storage["unexpected"] = True
+
+    with pytest.raises(RuntimeError, match=r"missing=launchEnforcement unknown=unexpected"):
+        controller.parse_session_storage_context(manifest, output_root)
 
 
 def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) -> None:
@@ -304,7 +396,13 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert result["watcher"]["pid"] == 102
     assert result["watcher"]["creationDate"] == "created-102"
     assert result["campaignId"] == "20261025T120000Z"
-    assert result["storageEnforcement"]["withinLimits"] is True
+    assert result["storage"]["launchEnforcement"]["withinLimits"] is True
+    storage_context = controller.parse_session_storage_context(result, output_root)
+    assert storage_context.active_campaign == (
+        output_root / "soak" / "campaigns" / "20261025T120000Z"
+    )
+    assert storage_context.previous_campaign is None
+    assert storage_context.policy == loaded_inputs.soak_storage
     assert input_loads == [config.inputs.resolve()]
     assert observed_inputs == [loaded_inputs, loaded_inputs]
     assert len(spawned) == 2
