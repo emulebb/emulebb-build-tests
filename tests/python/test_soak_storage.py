@@ -14,7 +14,7 @@ from emule_test_harness import soak_storage
 def policy_payload() -> dict[str, object]:
     return {
         "schema": soak_storage.SCHEMA,
-        "max_total_bytes": 4_000,
+        "max_total_bytes": 4_400,
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
@@ -39,6 +39,14 @@ def policy_payload() -> dict[str, object]:
                 "max_segment_bytes": 300,
                 "retained_segments": 2,
             },
+            "diagnostic_indexes": {
+                "max_segment_bytes": 100,
+                "retained_segments": 1,
+            },
+            "diagnostic_pins": {
+                "max_segment_bytes": 50,
+                "retained_segments": 2,
+            },
             "diagnostic_segments": {
                 "max_segment_bytes": 50,
                 "retained_segments": 2,
@@ -54,6 +62,10 @@ def direct_policy(
     minimum_free_bytes: int = 100,
     bundle_max_bytes: int = 256,
     bundle_retained: int = 2,
+    index_max_bytes: int = 1,
+    index_retained: int = 1,
+    pin_max_bytes: int = 1,
+    pin_retained: int = 1,
     segment_max_bytes: int = 1,
     segment_retained: int = 1,
 ) -> soak_storage.SoakStoragePolicy:
@@ -77,6 +89,14 @@ def direct_policy(
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(
                     bundle_max_bytes,
                     bundle_retained,
+                ),
+                "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(
+                    index_max_bytes,
+                    index_retained,
+                ),
+                "diagnostic_pins": soak_storage.ArtifactStreamPolicy(
+                    pin_max_bytes,
+                    pin_retained,
                 ),
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
                     segment_max_bytes,
@@ -119,7 +139,7 @@ def fake_disk_space(
 def test_parse_soak_storage_policy_accepts_strict_complete_contract() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert policy.max_total_bytes == 4_000
+    assert policy.max_total_bytes == 4_400
     assert policy.max_age_seconds == 3_600
     assert policy.minimum_free_bytes == 500
     assert policy.bundle_interval_seconds == 900
@@ -154,6 +174,8 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "daemon_output": payload["streams"]["daemon_output"],
                     "controller_output": payload["streams"]["controller_output"],
                     "diagnostic_bundles": payload["streams"]["diagnostic_bundles"],
+                    "diagnostic_indexes": payload["streams"]["diagnostic_indexes"],
+                    "diagnostic_pins": payload["streams"]["diagnostic_pins"],
                     "diagnostic_segments": payload["streams"]["diagnostic_segments"],
                 },
             }
@@ -244,12 +266,12 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 4_000
+    assert soak_storage.required_stream_capacity_bytes(policy) == 4_400
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
     payload = policy_payload()
-    payload["max_total_bytes"] = 3_799
+    payload["max_total_bytes"] = 4_399
 
     with pytest.raises(RuntimeError, match="every retained required-stream instance"):
         soak_storage.parse_soak_storage_policy(payload)
@@ -752,6 +774,131 @@ def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
         )
 
     assert not list(directory.glob("*.json"))
+
+
+def test_persist_bounded_json_checkpoint_replaces_one_verified_file(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-indexes" / "rust"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            index_max_bytes=1_024,
+        ),
+    )
+
+    first = soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name="diagnostic-run-index.json",
+        payload={"schema": "checkpoint-v1", "seq": 1},
+        now_ns=1,
+    )
+    second = soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name="diagnostic-run-index.json",
+        payload={"schema": "checkpoint-v1", "seq": 2},
+        now_ns=2,
+    )
+
+    assert first.path == second.path
+    assert json.loads(second.path.read_text(encoding="utf-8"))["seq"] == 2
+    assert second.sha256 == hashlib.sha256(second.path.read_bytes()).hexdigest()
+    assert second.retained_count == 1
+    assert second.retained_bytes == second.byte_count
+    assert not list(directory.glob("*.tmp"))
+
+
+def test_persist_bounded_json_checkpoint_recovers_stale_temporary_file(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-indexes" / "mfc"
+    directory.mkdir(parents=True)
+    temporary = directory / ".diagnostic-run-index.json.tmp"
+    temporary.write_text("stale", encoding="utf-8")
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            index_max_bytes=1_024,
+        ),
+    )
+
+    persisted = soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name="diagnostic-run-index.json",
+        payload={"schema": "checkpoint-v1"},
+        now_ns=1,
+    )
+
+    assert persisted.path.is_file()
+    assert not temporary.exists()
+
+
+def test_persist_bounded_json_checkpoint_rejects_oversized_payload(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-indexes" / "rust"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            index_max_bytes=32,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="exceeding its 32-byte limit"):
+        soak_storage.persist_bounded_json_checkpoint(
+            store=store,
+            active_campaign=campaign,
+            directory=directory,
+            stream_name="diagnostic_indexes",
+            artifact_name="diagnostic-run-index.json",
+            payload={"value": "x" * 100},
+            now_ns=1,
+        )
+
+    assert not directory.exists()
+
+
+def test_persist_bounded_json_checkpoint_requires_single_retained_artifact(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(index_max_bytes=1_024, index_retained=2),
+    )
+
+    with pytest.raises(RuntimeError, match="retain exactly one"):
+        soak_storage.persist_bounded_json_checkpoint(
+            store=store,
+            active_campaign=campaign,
+            directory=campaign / "report" / "diagnostic-indexes" / "rust",
+            stream_name="diagnostic_indexes",
+            artifact_name="diagnostic-run-index.json",
+            payload={"schema": "checkpoint-v1"},
+            now_ns=1,
+        )
 
 
 def test_persist_bounded_file_artifact_copies_exact_bytes_and_preserves_source(

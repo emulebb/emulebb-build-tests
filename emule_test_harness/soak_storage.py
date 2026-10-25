@@ -12,17 +12,21 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v4"
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v6"
 REQUIRED_STREAMS = (
     "controller_output",
     "daemon_output",
     "diagnostic_bundles",
+    "diagnostic_indexes",
+    "diagnostic_pins",
     "diagnostic_segments",
 )
 REQUIRED_STREAM_INSTANCES = {
     "controller_output": 4,
     "daemon_output": 1,
     "diagnostic_bundles": 1,
+    "diagnostic_indexes": 2,
+    "diagnostic_pins": 2,
     "diagnostic_segments": 2,
 }
 _POLICY_KEYS = {
@@ -643,6 +647,145 @@ def persist_bounded_file_artifact(
         deleted_paths=tuple(deleted_paths),
         retained_count=len(retained),
         retained_bytes=sum(item.stat().st_size for item in retained),
+    )
+
+
+def persist_bounded_json_checkpoint(
+    *,
+    store: BoundedArtifactStore,
+    active_campaign: Path,
+    directory: Path,
+    stream_name: str,
+    artifact_name: str,
+    payload: object,
+    now_ns: int | None = None,
+) -> PersistedArtifact:
+    """Atomically replaces one mutable JSON checkpoint under hard storage bounds."""
+
+    if (
+        not artifact_name
+        or Path(artifact_name).name != artifact_name
+        or artifact_name in {".", ".."}
+        or not artifact_name.isascii()
+        or any(
+            not (character.isalnum() or character in {".", "_", "-"})
+            for character in artifact_name
+        )
+        or not artifact_name.endswith(".json")
+    ):
+        raise ValueError(
+            "artifact_name must be one safe ASCII .json filename using letters, digits, "
+            "dots, underscores, and hyphens."
+        )
+    timestamp_ns = time.time_ns() if now_ns is None else now_ns
+    if (
+        isinstance(timestamp_ns, bool)
+        or not isinstance(timestamp_ns, int)
+        or timestamp_ns < 0
+    ):
+        raise ValueError("now_ns must be a non-negative integer.")
+
+    resolved_campaign = active_campaign.resolve()
+    resolved_directory = directory.resolve()
+    if not _path_is_relative_to(resolved_campaign, store.root):
+        raise RuntimeError(
+            f"Active campaign escaped its soak artifact store: {resolved_campaign}"
+        )
+    if not _path_is_relative_to(resolved_directory, resolved_campaign):
+        raise RuntimeError(
+            f"Bounded JSON checkpoint directory escaped its active campaign: {resolved_directory}"
+        )
+
+    policy = store.policy.stream(stream_name)
+    if policy.retained_segments != 1:
+        raise RuntimeError(
+            f"Mutable checkpoint stream {stream_name!r} must retain exactly one artifact."
+        )
+    encoded = (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(encoded) > policy.max_segment_bytes:
+        raise RuntimeError(
+            f"{stream_name} checkpoint requires {len(encoded)} bytes, exceeding its "
+            f"{policy.max_segment_bytes}-byte limit."
+        )
+
+    resolved_directory.mkdir(parents=True, exist_ok=True)
+    path = resolved_directory / artifact_name
+    temporary = path.with_name(f".{path.name}.tmp")
+    for candidate in (path, temporary):
+        if candidate.is_symlink():
+            raise RuntimeError(
+                f"Bounded JSON checkpoint path must not be a symlink: {candidate}"
+            )
+        if candidate.exists() and not candidate.is_file():
+            raise RuntimeError(
+                f"Bounded JSON checkpoint path must be a file: {candidate}"
+            )
+    temporary.unlink(missing_ok=True)
+
+    reservation = store.enforce(
+        active_campaign=resolved_campaign,
+        reserved_bytes=len(encoded),
+        now_ns=timestamp_ns,
+    )
+    if not reservation.within_limits:
+        raise RuntimeError(
+            "Bounded JSON checkpoint reservation failed: "
+            f"failures={reservation.failures!r}, "
+            f"constraints={reservation.verification.unresolved_constraints!r}."
+        )
+
+    digest = hashlib.sha256(encoded).hexdigest()
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if (
+            temporary.stat().st_size != len(encoded)
+            or _sha256_file(temporary) != digest
+        ):
+            raise RuntimeError(
+                f"Bounded JSON checkpoint temporary verification failed: {temporary}"
+            )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    if path.stat().st_size != len(encoded) or _sha256_file(path) != digest:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"Bounded JSON checkpoint verification failed: {path}")
+
+    verification = store.enforce(
+        active_campaign=resolved_campaign,
+        now_ns=timestamp_ns,
+    )
+    if not verification.within_limits:
+        raise RuntimeError(
+            "Bounded JSON checkpoint persistence violated the aggregate policy: "
+            f"failures={verification.failures!r}, "
+            f"constraints={verification.verification.unresolved_constraints!r}."
+        )
+    retained = _file_stream_artifacts(resolved_directory)
+    if retained != [path.resolve()]:
+        raise RuntimeError(
+            f"{stream_name} mutable checkpoint directory contains unexpected artifacts."
+        )
+    return PersistedArtifact(
+        path=path,
+        byte_count=len(encoded),
+        sha256=digest,
+        deleted_paths=(),
+        retained_count=1,
+        retained_bytes=len(encoded),
     )
 
 

@@ -18,6 +18,7 @@ from typing import Any, Callable
 from . import converged_live_wire as clw
 from . import (
     diag_event_runs,
+    diagnostic_run_scan,
     hideme_vpn,
     soak_launch,
     soak_run_layout,
@@ -67,6 +68,20 @@ CONSECUTIVE_FAILURE_THRESHOLDS = {
     "mfc-diagnostic-writer-unavailable": 3,
 }
 WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
+DIAGNOSTIC_INDEX_FILE_NAME = "diagnostic-run-index.json"
+_EVIDENCE_PIN_FIELDS = frozenset(
+    {
+        "segmentId",
+        "fileName",
+        "source",
+        "destination",
+        "bytes",
+        "sha256",
+        "priority",
+        "reasons",
+        "pinnedUtc",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -391,7 +406,6 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
             "errorType": type(error).__name__,
             "error": str(error)[:1024],
         }
-
     summary = storage_enforcement_summary(context.root, result)
     response = {
         **identity,
@@ -406,6 +420,505 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
             or (result.failures[0] if result.failures else "pending deletions remain")
         )[:1024]
     return response
+
+
+def advance_diagnostic_indexes(
+    status: dict[str, Any], context: SessionStorageContext
+) -> dict[str, Any]:
+    """Advances and persists one compact closed-segment index per available writer."""
+
+    diagnostic_writers = status.get("diagnosticWriters")
+    if not isinstance(diagnostic_writers, dict):
+        raise RuntimeError("Watch status is missing diagnostic writer state.")
+    required = diagnostic_writers.get("required") is True
+    result: dict[str, Any] = {
+        "required": required,
+        "rust": None,
+        "mfc": None,
+    }
+    if not required:
+        return result
+
+    profiles = status.get("profiles")
+    if not isinstance(profiles, dict):
+        raise RuntimeError("Watch status is missing diagnostic profile paths.")
+    observed_utc = status.get("timestampUtc")
+    if not isinstance(observed_utc, str) or not observed_utc:
+        raise RuntimeError("Watch status timestampUtc is invalid.")
+    store = soak_storage.BoundedArtifactStore(context.root, context.policy)
+    for client in ("rust", "mfc"):
+        writer = diagnostic_writers.get(client)
+        if not isinstance(writer, dict) or not isinstance(writer.get("health"), dict):
+            result[client] = {
+                "ok": False,
+                "status": "writer-health-unavailable",
+            }
+            continue
+        profile_value = profiles.get(client)
+        if not isinstance(profile_value, str) or not profile_value.strip():
+            raise RuntimeError(
+                f"Watch status {client} diagnostic profile path is invalid."
+            )
+        profile_dir = Path(profile_value).resolve()
+        directory = (
+            context.active_campaign / "report" / "diagnostic-indexes" / client
+        ).resolve()
+        checkpoint_path = directory / DIAGNOSTIC_INDEX_FILE_NAME
+        checkpoint = load_json(checkpoint_path) if checkpoint_path.is_file() else None
+        advanced = diagnostic_run_scan.scan_closed_segments(
+            profile_dir=profile_dir,
+            client=client,
+            writer_health=writer["health"],
+            observed_utc=observed_utc,
+            checkpoint=checkpoint,
+        )
+        pin_result = reconcile_diagnostic_evidence_pins(
+            client=client,
+            checkpoint=advanced.checkpoint,
+            prior_checkpoint=checkpoint,
+            processed_segments=advanced.processed_segments,
+            context=context,
+            observed_utc=observed_utc,
+        )
+        advanced.checkpoint["evidencePins"] = pin_result["pins"]
+        persisted = soak_storage.persist_bounded_json_checkpoint(
+            store=store,
+            active_campaign=context.active_campaign,
+            directory=directory,
+            stream_name="diagnostic_indexes",
+            artifact_name=DIAGNOSTIC_INDEX_FILE_NAME,
+            payload=advanced.checkpoint,
+        )
+        _finalize_diagnostic_evidence_pin_swaps(pin_result["pendingCleanup"])
+        source = advanced.checkpoint["source"]
+        index = advanced.checkpoint["index"]
+        result[client] = {
+            "ok": True,
+            "status": "indexed",
+            "checkpoint": str(persisted.path),
+            "bytes": persisted.byte_count,
+            "sha256": persisted.sha256,
+            "coverage": source["coverage"],
+            "closedSegmentCount": source["closedSegmentCount"],
+            "recordCount": index["recordCount"],
+            "writerHealthSamples": index["writerHealth"]["samples"],
+            "writerHealthViolationsSeen": index["writerHealth"]["violationsSeen"],
+            "processedSegments": list(advanced.processed_segments),
+            "evidencePins": pin_result["pins"],
+            "pinActions": pin_result["actions"],
+        }
+    return result
+
+
+def reconcile_diagnostic_evidence_pins(
+    *,
+    client: str,
+    checkpoint: dict[str, Any],
+    prior_checkpoint: dict[str, Any] | None,
+    processed_segments: tuple[dict[str, Any], ...],
+    context: SessionStorageContext,
+    observed_utc: str,
+) -> dict[str, Any]:
+    """Keeps the highest-value exact raw segments within one client budget."""
+
+    policy = context.policy.stream("diagnostic_pins")
+    directory = (
+        context.active_campaign / "archive" / "diagnostic-pins" / client
+    ).resolve()
+    _recover_diagnostic_evidence_pin_swaps(
+        checkpoint.get("evidencePins"),
+        directory=directory,
+        retained_segments=policy.retained_segments,
+    )
+    pins = _validated_evidence_pins(
+        checkpoint.get("evidencePins"),
+        directory=directory,
+        retained_segments=policy.retained_segments,
+    )
+    candidates = _diagnostic_pin_candidates(
+        processed_segments,
+        pins=pins,
+        prior_checkpoint=prior_checkpoint,
+    )
+    store = soak_storage.BoundedArtifactStore(context.root, context.policy)
+    actions: list[dict[str, Any]] = []
+    pending_cleanup: list[Path] = []
+    for candidate in candidates:
+        existing = next(
+            (pin for pin in pins if pin["fileName"] == candidate["fileName"]),
+            None,
+        )
+        if existing is not None:
+            existing["priority"] = max(existing["priority"], candidate["priority"])
+            existing["reasons"] = sorted(
+                set(existing["reasons"]) | set(candidate["reasons"])
+            )
+            actions.append(
+                {
+                    "action": "updated",
+                    "segmentId": existing["segmentId"],
+                    "priority": existing["priority"],
+                    "reasons": existing["reasons"],
+                }
+            )
+            continue
+
+        source = Path(candidate["source"])
+        if not source.is_file() and candidate["priority"] < 200:
+            actions.append(
+                {
+                    "action": "skipped-missing-context",
+                    "segmentId": candidate["segmentId"],
+                    "reasons": candidate["reasons"],
+                }
+            )
+            continue
+        victim = None
+        if len(pins) >= policy.retained_segments:
+            victim = min(pins, key=_pin_rank)
+            if _pin_rank(candidate) <= _pin_rank(victim):
+                actions.append(
+                    {
+                        "action": "skipped-budget",
+                        "segmentId": candidate["segmentId"],
+                        "priority": candidate["priority"],
+                        "reasons": candidate["reasons"],
+                    }
+                )
+                continue
+
+        victim_backup: Path | None = None
+        victim_path: Path | None = None
+        candidate_path = directory / candidate["fileName"]
+        if victim is not None:
+            victim_path = Path(victim["destination"])
+            victim_backup = victim_path.with_name(f".{victim_path.name}.pin-swap.tmp")
+            if victim_backup.exists() or victim_backup.is_symlink():
+                raise RuntimeError(
+                    f"Diagnostic evidence pin swap path already exists: {victim_backup}"
+                )
+            os.replace(victim_path, victim_backup)
+        try:
+            persisted = soak_storage.persist_bounded_file_artifact(
+                store=store,
+                active_campaign=context.active_campaign,
+                directory=directory,
+                stream_name="diagnostic_pins",
+                source=source,
+                artifact_name=candidate["fileName"],
+            )
+            if persisted.deleted_paths:
+                raise RuntimeError(
+                    "Diagnostic evidence pin persistence deleted an unselected artifact."
+                )
+            if (
+                persisted.byte_count != candidate["bytes"]
+                or persisted.sha256 != candidate["sha256"]
+            ):
+                raise RuntimeError(
+                    "Diagnostic evidence pin does not match its indexed segment snapshot."
+                )
+        except Exception:
+            candidate_path.unlink(missing_ok=True)
+            if victim_backup is not None and victim_path is not None:
+                os.replace(victim_backup, victim_path)
+            raise
+        if victim_backup is not None:
+            pending_cleanup.append(victim_backup)
+        if victim is not None:
+            pins.remove(victim)
+        pin = {
+            "segmentId": candidate["segmentId"],
+            "fileName": candidate["fileName"],
+            "source": candidate["source"],
+            "destination": str(persisted.path),
+            "bytes": persisted.byte_count,
+            "sha256": persisted.sha256,
+            "priority": candidate["priority"],
+            "reasons": candidate["reasons"],
+            "pinnedUtc": observed_utc,
+        }
+        pins.append(pin)
+        actions.append(
+            {
+                "action": "replaced" if victim is not None else "pinned",
+                "segmentId": pin["segmentId"],
+                "priority": pin["priority"],
+                "reasons": pin["reasons"],
+                "replacedSegmentId": victim["segmentId"]
+                if victim is not None
+                else None,
+            }
+        )
+    pins.sort(key=lambda pin: (pin["segmentId"], pin["fileName"]))
+    return {
+        "pins": pins,
+        "actions": actions,
+        "pendingCleanup": tuple(pending_cleanup),
+    }
+
+
+def _diagnostic_pin_candidates(
+    processed_segments: tuple[dict[str, Any], ...],
+    *,
+    pins: list[dict[str, Any]],
+    prior_checkpoint: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    processed_by_id = {
+        item["segmentId"]: item
+        for item in processed_segments
+        if isinstance(item.get("segmentId"), int)
+    }
+    candidates: dict[str, dict[str, Any]] = {}
+
+    def add(metadata: dict[str, Any], reason: str | None = None) -> None:
+        reasons = set(metadata.get("interestingReasons") or ())
+        if reason is not None:
+            reasons.add(reason)
+        if not reasons:
+            return
+        file_name = metadata.get("fileName")
+        if not isinstance(file_name, str):
+            raise RuntimeError("Indexed diagnostic segment fileName is invalid.")
+        candidate = candidates.setdefault(
+            file_name,
+            {
+                **metadata,
+                "reasons": [],
+                "priority": 0,
+            },
+        )
+        merged_reasons = sorted(set(candidate["reasons"]) | reasons)
+        candidate["reasons"] = merged_reasons
+        candidate["priority"] = _pin_priority(merged_reasons)
+
+    signal_segments = [
+        item for item in processed_segments if item.get("interestingReasons")
+    ]
+    for metadata in signal_segments:
+        add(metadata)
+        previous_id = metadata["segmentId"] - 1
+        previous = processed_by_id.get(previous_id)
+        if previous is None and prior_checkpoint is not None:
+            source = prior_checkpoint.get("source")
+            if isinstance(source, dict):
+                prior_last = source.get("lastClosedSegment")
+                if (
+                    isinstance(prior_last, dict)
+                    and prior_last.get("segmentId") == previous_id
+                ):
+                    previous = prior_last
+        if previous is not None:
+            add(previous, f"context-before:{metadata['segmentId']}")
+
+    signal_pin_ids = {
+        pin["segmentId"] for pin in pins if pin.get("priority", 0) >= 200
+    } | {item["segmentId"] for item in signal_segments}
+    for metadata in processed_segments:
+        if metadata["segmentId"] - 1 in signal_pin_ids:
+            add(metadata, f"context-after:{metadata['segmentId'] - 1}")
+
+    return sorted(
+        candidates.values(),
+        key=lambda candidate: (candidate["segmentId"], candidate["fileName"]),
+    )
+
+
+def _pin_priority(reasons: list[str]) -> int:
+    severity_values = {
+        reason.partition(":")[2] for reason in reasons if reason.startswith("severity:")
+    }
+    if severity_values & {"critical", "fatal", "error", "high"}:
+        return 400
+    if severity_values:
+        return 300
+    if any(reason.startswith(("event:", "outcome:")) for reason in reasons):
+        return 250
+    return 100
+
+
+def _pin_rank(pin: dict[str, Any]) -> tuple[int, int, str]:
+    return (pin["priority"], pin["segmentId"], pin["fileName"])
+
+
+def _validated_evidence_pins(
+    raw_pins: object,
+    *,
+    directory: Path,
+    retained_segments: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_pins, list) or len(raw_pins) > retained_segments:
+        raise RuntimeError("Diagnostic evidence pin manifest exceeds its file budget.")
+    pins: list[dict[str, Any]] = []
+    destinations: set[Path] = set()
+    for raw_pin in raw_pins:
+        if not isinstance(raw_pin, dict) or set(raw_pin) != _EVIDENCE_PIN_FIELDS:
+            raise RuntimeError("Diagnostic evidence pin manifest fields are invalid.")
+        pin = dict(raw_pin)
+        file_name = pin["fileName"]
+        source_value = pin["source"]
+        destination_value = pin["destination"]
+        byte_count = pin["bytes"]
+        sha256 = pin["sha256"]
+        reasons = pin["reasons"]
+        pinned_utc = pin["pinnedUtc"]
+        if (
+            not isinstance(file_name, str)
+            or not file_name
+            or Path(file_name).name != file_name
+            or not isinstance(source_value, str)
+            or not source_value
+            or Path(source_value).name != file_name
+            or not isinstance(destination_value, str)
+            or not destination_value
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count <= 0
+            or not isinstance(sha256, str)
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+            or not isinstance(reasons, list)
+            or not reasons
+            or any(not isinstance(reason, str) or not reason for reason in reasons)
+            or reasons != sorted(set(reasons))
+            or not isinstance(pinned_utc, str)
+            or not pinned_utc
+        ):
+            raise RuntimeError("Diagnostic evidence pin manifest values are invalid.")
+        destination = Path(destination_value).resolve()
+        if (
+            destination.parent != directory
+            or destination.name != file_name
+            or destination in destinations
+            or destination.is_symlink()
+            or not destination.is_file()
+            or destination.stat().st_size != byte_count
+        ):
+            raise RuntimeError(
+                f"Diagnostic evidence pin destination is invalid: {destination}"
+            )
+        if (
+            isinstance(pin["segmentId"], bool)
+            or not isinstance(pin["segmentId"], int)
+            or pin["segmentId"] < 0
+            or isinstance(pin["priority"], bool)
+            or not isinstance(pin["priority"], int)
+            or pin["priority"] <= 0
+        ):
+            raise RuntimeError("Diagnostic evidence pin manifest values are invalid.")
+        destinations.add(destination)
+        pins.append(pin)
+    if directory.exists():
+        actual = {
+            path.resolve()
+            for path in directory.iterdir()
+            if path.is_file() and not path.name.endswith(".tmp")
+        }
+        if actual != destinations:
+            raise RuntimeError(
+                "Diagnostic evidence pin directory does not match its checkpoint manifest."
+            )
+    return pins
+
+
+def _recover_diagnostic_evidence_pin_swaps(
+    raw_pins: object,
+    *,
+    directory: Path,
+    retained_segments: int,
+) -> None:
+    manifest_destinations = _evidence_pin_manifest_destinations(
+        raw_pins,
+        directory=directory,
+        retained_segments=retained_segments,
+    )
+    if not directory.exists():
+        return
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError(f"Diagnostic evidence pin directory is invalid: {directory}")
+
+    entries = list(directory.iterdir())
+    if any(entry.is_symlink() or not entry.is_file() for entry in entries):
+        raise RuntimeError(
+            f"Diagnostic evidence pin directory contains an invalid entry: {directory}"
+        )
+    swap_suffix = ".pin-swap.tmp"
+    for backup in sorted(
+        (entry for entry in entries if entry.name.endswith(swap_suffix)),
+        key=lambda path: path.name,
+    ):
+        if not backup.name.startswith("."):
+            raise RuntimeError(
+                f"Diagnostic evidence pin swap name is invalid: {backup}"
+            )
+        original_name = backup.name[1 : -len(swap_suffix)]
+        if not original_name or Path(original_name).name != original_name:
+            raise RuntimeError(
+                f"Diagnostic evidence pin swap name is invalid: {backup}"
+            )
+        original = (directory / original_name).resolve()
+        if original in manifest_destinations:
+            if original.exists():
+                raise RuntimeError(
+                    f"Diagnostic evidence pin swap is ambiguous: {backup}"
+                )
+            os.replace(backup, original)
+        else:
+            backup.unlink()
+
+    for entry in directory.iterdir():
+        if entry.name.endswith(".tmp"):
+            entry.unlink()
+            continue
+        if entry.resolve() not in manifest_destinations:
+            entry.unlink()
+
+
+def _evidence_pin_manifest_destinations(
+    raw_pins: object,
+    *,
+    directory: Path,
+    retained_segments: int,
+) -> set[Path]:
+    if not isinstance(raw_pins, list) or len(raw_pins) > retained_segments:
+        raise RuntimeError("Diagnostic evidence pin manifest exceeds its file budget.")
+    destinations: set[Path] = set()
+    for raw_pin in raw_pins:
+        if not isinstance(raw_pin, dict) or set(raw_pin) != _EVIDENCE_PIN_FIELDS:
+            raise RuntimeError("Diagnostic evidence pin manifest fields are invalid.")
+        file_name = raw_pin.get("fileName")
+        destination_value = raw_pin.get("destination")
+        if (
+            not isinstance(file_name, str)
+            or not file_name
+            or Path(file_name).name != file_name
+            or not isinstance(destination_value, str)
+            or not destination_value
+        ):
+            raise RuntimeError("Diagnostic evidence pin manifest values are invalid.")
+        destination = Path(destination_value).resolve()
+        if (
+            destination.parent != directory
+            or destination.name != file_name
+            or destination in destinations
+        ):
+            raise RuntimeError("Diagnostic evidence pin manifest paths are invalid.")
+        destinations.add(destination)
+    return destinations
+
+
+def _finalize_diagnostic_evidence_pin_swaps(paths: tuple[Path, ...]) -> None:
+    for path in paths:
+        if (
+            not path.name.startswith(".")
+            or not path.name.endswith(".pin-swap.tmp")
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise RuntimeError(
+                f"Diagnostic evidence pin swap cleanup path is invalid: {path}"
+            )
+        path.unlink()
 
 
 def preflight_campaign_storage(
@@ -1331,6 +1844,9 @@ def build_watch_sample(
         "diagnosticWriters": (
             status.get("diagnosticWriters") if status is not None else None
         ),
+        "diagnosticIndexes": (
+            status.get("diagnosticIndexes") if status is not None else None
+        ),
         "vpn": status.get("vpn") if status is not None else None,
         "lastRun": status.get("lastRun") if status is not None else None,
         "storage": storage,
@@ -1831,6 +2347,27 @@ def watch_session(
                 "errorType": type(error).__name__,
                 "error": str(error)[:1024],
             }
+        if status is not None and storage.get("ok"):
+            try:
+                status["diagnosticIndexes"] = advance_diagnostic_indexes(
+                    status,
+                    storage_context,
+                )
+            except Exception as error:  # noqa: BLE001 - index evidence loss is terminal
+                status["diagnosticIndexes"] = {
+                    "required": bool(
+                        (status.get("diagnosticWriters") or {}).get("required")
+                    ),
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
+                storage = {
+                    **storage,
+                    "ok": False,
+                    "phase": "diagnosticIndexes",
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
         latest = build_watch_sample(status, storage, status_error=status_error)
         finding_annotation = watch_finding_annotation(latest, finding_streaks)
         finding_streaks = finding_annotation["findingStreaks"]
