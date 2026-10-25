@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from emule_test_harness.diag_event_runs import (
     diagnostic_writer_health_violations,
     diag_segment_identity,
     load_and_validate_writer_health,
+    load_diag_event_segment_snapshot,
     load_latest_diag_records,
     select_latest_diag_run,
 )
@@ -91,7 +93,9 @@ def _segment_name(client: str, process_id: int, run_id: str, segment_id: int) ->
 
 
 @pytest.mark.parametrize("client", ["rust", "mfc"])
-def test_segment_identity_parses_run_ids_with_hyphens(tmp_path: Path, client: str) -> None:
+def test_segment_identity_parses_run_ids_with_hyphens(
+    tmp_path: Path, client: str
+) -> None:
     path = tmp_path / _segment_name(client, 42, "run-with-hyphens", 123)
     assert diag_segment_identity(path, client=client) == (42, "run-with-hyphens", 123)
 
@@ -101,9 +105,13 @@ def test_loader_selects_one_newest_run_and_orders_its_segments(
     tmp_path: Path, client: str
 ) -> None:
     stale = tmp_path / _segment_name(client, 41, "stale", 0)
-    stale.write_text(_record("stale", 41, 0, 99, client=client) + "\n", encoding="utf-8")
+    stale.write_text(
+        _record("stale", 41, 0, 99, client=client) + "\n", encoding="utf-8"
+    )
     first = tmp_path / _segment_name(client, 42, "active", 0)
-    first.write_text(_record("active", 42, 0, 1, client=client) + "\n", encoding="utf-8")
+    first.write_text(
+        _record("active", 42, 0, 1, client=client) + "\n", encoding="utf-8"
+    )
     second = tmp_path / _segment_name(client, 42, "active", 1)
     second.write_text(
         _record("active", 42, 1, 2, client=client) + "\n{", encoding="utf-8"
@@ -128,12 +136,16 @@ def test_loader_selects_one_newest_run_and_orders_its_segments(
 def test_process_selection_never_falls_back_to_another_process(tmp_path: Path) -> None:
     other = tmp_path / _segment_name("rust", 43, "newer", 0)
     other.write_text(_record("newer", 43, 0, 1) + "\n", encoding="utf-8")
-    assert select_latest_diag_run(tmp_path.iterdir(), client="rust", process_id=42) == []
+    assert (
+        select_latest_diag_run(tmp_path.iterdir(), client="rust", process_id=42) == []
+    )
 
 
 def test_loader_rejects_legacy_schema_without_explicit_adapter(tmp_path: Path) -> None:
     legacy = tmp_path / "emulebb-rust-diag-42.jsonl"
-    legacy.write_text(json.dumps({"schema": "diag_event_v1", "seq": 1}) + "\n", encoding="utf-8")
+    legacy.write_text(
+        json.dumps({"schema": "diag_event_v1", "seq": 1}) + "\n", encoding="utf-8"
+    )
     with pytest.raises(DiagnosticTraceError, match="no diag_event_v2"):
         load_latest_diag_records([legacy], client="rust")
 
@@ -152,9 +164,38 @@ def test_loader_rejects_unterminated_tail_for_completed_run(tmp_path: Path) -> N
         load_latest_diag_records([segment], client="rust")
 
 
+def test_segment_snapshot_hashes_the_exact_stable_bytes(tmp_path: Path) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    payload = ("\ufeff" + _record("active", 42, 0, 1) + "\n").encode()
+    segment.write_bytes(payload)
+
+    snapshot = load_diag_event_segment_snapshot(segment)
+
+    assert snapshot.path == segment.resolve()
+    assert snapshot.byte_count == len(payload)
+    assert snapshot.modified_ns == segment.stat().st_mtime_ns
+    assert snapshot.sha256 == hashlib.sha256(payload).hexdigest()
+    assert [record["seq"] for record in snapshot.records] == [1]
+
+
+def test_segment_snapshot_rejects_symlinks(tmp_path: Path) -> None:
+    target = tmp_path / _segment_name("rust", 42, "active", 0)
+    target.write_text(_record("active", 42, 0, 1) + "\n", encoding="utf-8")
+    link = tmp_path / "linked.jsonl"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(DiagnosticTraceError, match="must not be a symlink"):
+        load_diag_event_segment_snapshot(link)
+
+
 def test_loader_rejects_mixed_run_identity(tmp_path: Path) -> None:
     segment = tmp_path / _segment_name("mfc", 42, "active", 0)
-    segment.write_text(_record("other", 42, 0, 1, client="mfc") + "\n", encoding="utf-8")
+    segment.write_text(
+        _record("other", 42, 0, 1, client="mfc") + "\n", encoding="utf-8"
+    )
     with pytest.raises(DiagnosticTraceError, match="mixed run identity"):
         load_latest_diag_records([segment], client="mfc")
 
@@ -171,18 +212,25 @@ def test_loader_rejects_sequence_gap(tmp_path: Path) -> None:
 
 def test_writer_health_must_match_selected_lossless_run(tmp_path: Path) -> None:
     segment = tmp_path / _segment_name("mfc", 42, "active", 7)
-    segment.write_text(_record("active", 42, 7, 99, client="mfc") + "\n", encoding="utf-8")
+    segment.write_text(
+        _record("active", 42, 7, 99, client="mfc") + "\n", encoding="utf-8"
+    )
     health_path = tmp_path / "emulebb-mfc-diag-health.json"
     health = _writer_health(segment_name=segment.name)
     health_path.write_text(json.dumps(health), encoding="utf-8")
-    assert load_and_validate_writer_health(
-        health_path, client="mfc", selected_segments=[segment]
-    ) == health
+    assert (
+        load_and_validate_writer_health(
+            health_path, client="mfc", selected_segments=[segment]
+        )
+        == health
+    )
 
     health["droppedEvents"] = 1
     health_path.write_text(json.dumps(health), encoding="utf-8")
     with pytest.raises(DiagnosticTraceError, match="not lossless"):
-        load_and_validate_writer_health(health_path, client="mfc", selected_segments=[segment])
+        load_and_validate_writer_health(
+            health_path, client="mfc", selected_segments=[segment]
+        )
 
 
 def test_writer_health_integrity_requires_exact_current_contract() -> None:
@@ -216,6 +264,5 @@ def test_writer_health_integrity_rejects_every_fault_class(
     health = _writer_health(segment_name="emulebb-mfc-diag-42-active-000007.jsonl")
     health[field] = value
     assert any(
-        field in violation
-        for violation in diagnostic_writer_health_violations(health)
+        field in violation for violation in diagnostic_writer_health_violations(health)
     )

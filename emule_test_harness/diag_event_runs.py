@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -12,6 +14,17 @@ from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
 
 class DiagnosticTraceError(ValueError):
     """Raised when a current diagnostic run is incomplete or internally inconsistent."""
+
+
+@dataclass(frozen=True)
+class DiagnosticSegmentSnapshot:
+    """One stable, hash-bearing read of an immutable diagnostic segment."""
+
+    path: Path
+    byte_count: int
+    modified_ns: int
+    sha256: str
+    records: tuple[dict[str, Any], ...]
 
 
 _SEGMENT_NAMES = {
@@ -206,7 +219,9 @@ def diag_segment_identity(path: Path, *, client: str) -> tuple[int, str, int] | 
     try:
         pattern = _SEGMENT_NAMES[client]
     except KeyError as error:
-        raise ValueError(f"client must be one of {sorted(_SEGMENT_NAMES)}, got {client!r}") from error
+        raise ValueError(
+            f"client must be one of {sorted(_SEGMENT_NAMES)}, got {client!r}"
+        ) from error
     match = pattern.fullmatch(path.name)
     if match is None:
         return None
@@ -234,7 +249,9 @@ def select_latest_diag_run(
             unrecognized.append(path)
             continue
         candidate_process_id, run_id, segment_id = identity
-        grouped.setdefault((candidate_process_id, run_id), []).append((segment_id, path))
+        grouped.setdefault((candidate_process_id, run_id), []).append(
+            (segment_id, path)
+        )
 
     if files and not grouped:
         names = ", ".join(path.name for path in unrecognized)
@@ -260,7 +277,9 @@ def select_latest_diag_run(
     ordered = sorted(selected)
     segment_ids = [segment_id for segment_id, _ in ordered]
     if len(segment_ids) != len(set(segment_ids)):
-        raise DiagnosticTraceError(f"duplicate segment IDs in selected {client} diagnostic run")
+        raise DiagnosticTraceError(
+            f"duplicate segment IDs in selected {client} diagnostic run"
+        )
     if segment_ids != list(range(segment_ids[0], segment_ids[-1] + 1)):
         raise DiagnosticTraceError(
             f"non-contiguous segment IDs in selected {client} diagnostic run: {segment_ids}"
@@ -273,7 +292,68 @@ def load_diag_event_segment(
 ) -> list[dict[str, Any]]:
     """Loads one current segment and rejects malformed or foreign-schema records."""
 
-    text = path.read_text(encoding="utf-8-sig")
+    snapshot = load_diag_event_segment_snapshot(
+        path, allow_incomplete_tail=allow_incomplete_tail
+    )
+    return list(snapshot.records)
+
+
+def load_diag_event_segment_snapshot(
+    path: Path, *, allow_incomplete_tail: bool = False
+) -> DiagnosticSegmentSnapshot:
+    """Reads one stable segment exactly once and returns its records and digest."""
+
+    if path.is_symlink():
+        raise DiagnosticTraceError(f"diagnostic segment must not be a symlink: {path}")
+    try:
+        before = path.stat()
+        payload = path.read_bytes()
+        after = path.stat()
+    except OSError as error:
+        raise DiagnosticTraceError(
+            f"unable to read diagnostic segment {path}: {error}"
+        ) from error
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity or len(payload) != after.st_size:
+        raise DiagnosticTraceError(
+            f"diagnostic segment changed while being read: {path}"
+        )
+    try:
+        text = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise DiagnosticTraceError(
+            f"diagnostic segment is not valid UTF-8: {path}: {error}"
+        ) from error
+    records = _parse_diag_event_segment_text(
+        text,
+        path=path,
+        allow_incomplete_tail=allow_incomplete_tail,
+    )
+    return DiagnosticSegmentSnapshot(
+        path=path.resolve(),
+        byte_count=len(payload),
+        modified_ns=after.st_mtime_ns,
+        sha256=hashlib.sha256(payload).hexdigest(),
+        records=tuple(records),
+    )
+
+
+def _parse_diag_event_segment_text(
+    text: str, *, path: Path, allow_incomplete_tail: bool
+) -> list[dict[str, Any]]:
     lines = text.splitlines(keepends=True)
     records: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(lines, start=1):
@@ -341,13 +421,19 @@ def load_latest_diag_records(
                 or record.get("runId") != selected_run_id
                 or record.get("segmentId") != selected_segment_id
             ):
-                raise DiagnosticTraceError(f"mixed run identity in diagnostic segment {path}")
+                raise DiagnosticTraceError(
+                    f"mixed run identity in diagnostic segment {path}"
+                )
             sequence = record.get("seq")
             stream_sequence = record.get("streamSeq")
             if not isinstance(sequence, int) or sequence <= 0:
-                raise DiagnosticTraceError(f"invalid process sequence in diagnostic segment {path}")
+                raise DiagnosticTraceError(
+                    f"invalid process sequence in diagnostic segment {path}"
+                )
             if not isinstance(stream_sequence, int) or stream_sequence <= 0:
-                raise DiagnosticTraceError(f"invalid stream sequence in diagnostic segment {path}")
+                raise DiagnosticTraceError(
+                    f"invalid stream sequence in diagnostic segment {path}"
+                )
             if previous_sequence is not None and sequence != previous_sequence + 1:
                 raise DiagnosticTraceError(
                     f"non-contiguous process sequence in selected {client} run: "
@@ -367,13 +453,19 @@ def load_and_validate_writer_health(
     """Loads writer health and requires it to describe the selected lossless run."""
 
     if not selected_segments:
-        raise DiagnosticTraceError("writer health validation requires selected segments")
+        raise DiagnosticTraceError(
+            "writer health validation requires selected segments"
+        )
     try:
         health = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
-        raise DiagnosticTraceError(f"unable to read diagnostic writer health {path}: {error}") from error
+        raise DiagnosticTraceError(
+            f"unable to read diagnostic writer health {path}: {error}"
+        ) from error
     if not isinstance(health, dict):
-        raise DiagnosticTraceError(f"diagnostic writer health {path} is not a JSON object")
+        raise DiagnosticTraceError(
+            f"diagnostic writer health {path} is not a JSON object"
+        )
 
     violations = diagnostic_writer_health_violations(health)
     if violations:
@@ -399,6 +491,8 @@ def load_and_validate_writer_health(
         if health.get(key) != value
     }
     if mismatches:
-        raise DiagnosticTraceError(f"diagnostic writer health identity mismatch: {mismatches}")
+        raise DiagnosticTraceError(
+            f"diagnostic writer health identity mismatch: {mismatches}"
+        )
 
     return health
