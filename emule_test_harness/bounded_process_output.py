@@ -109,6 +109,73 @@ class RotatingBinaryLog:
             self._handle = None
 
 
+class AsyncBinaryCapture:
+    """Drains one binary pipe into a bounded log without replacing its process."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        max_segment_bytes: int,
+        retained_segments: int,
+        sink_factory: Callable[..., RotatingBinaryLog] = RotatingBinaryLog,
+    ) -> None:
+        self.path = path.resolve()
+        self._sink = sink_factory(
+            self.path,
+            max_segment_bytes=max_segment_bytes,
+            retained_segments=retained_segments,
+        )
+        self._thread: threading.Thread | None = None
+        self._failure: BaseException | None = None
+        self._stop_failure: BaseException | None = None
+
+    def start(self, source: BinaryIO, *, stop_process: Callable[[], None]) -> None:
+        """Starts draining one pipe and stops its process on any sink failure."""
+
+        if self._thread is not None:
+            raise RuntimeError("Binary capture has already been started.")
+
+        def capture() -> None:
+            try:
+                while chunk := source.read(READ_CHUNK_BYTES):
+                    self._sink.write(chunk)
+            except BaseException as error:  # noqa: BLE001 - worker failure is re-raised by the owner
+                self._failure = error
+                try:
+                    stop_process()
+                except BaseException as stop_error:  # noqa: BLE001 - preserve both failures for the owner
+                    self._stop_failure = stop_error
+            finally:
+                source.close()
+                self._sink.close()
+
+        self._thread = threading.Thread(target=capture, daemon=True)
+        self._thread.start()
+
+    def raise_if_failed(self) -> None:
+        """Raises the exact capture failure observed by the drain thread."""
+
+        if self._failure is None:
+            return
+        message = f"Bounded process output failed: {type(self._failure).__name__}: {self._failure}"
+        if self._stop_failure is not None:
+            message += f"; process stop failed: {type(self._stop_failure).__name__}: {self._stop_failure}"
+        raise RuntimeError(message) from self._failure
+
+    def close(self, *, timeout_seconds: float = 15.0) -> None:
+        """Waits for final pipe bytes after the owner has stopped the process."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero.")
+        if self._thread is None:
+            self._sink.close()
+            return
+        self._thread.join(timeout_seconds)
+        if self._thread.is_alive():
+            raise RuntimeError(f"Timed out draining bounded process output: {self.path}")
+
+
 def _pump_stream(
     source: BinaryIO,
     sink: RotatingBinaryLog,
