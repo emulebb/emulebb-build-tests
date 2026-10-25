@@ -317,7 +317,7 @@ def record_driver_cycle(state: dict[str, Any], cycle: dict[str, Any]) -> dict[st
     if not isinstance(cycle, dict):
         raise RuntimeError("Converged observer driver cycle is invalid.")
     updated["driver"]["cycles"] += 1
-    if cycle.get("error"):
+    if cycle.get("error") or cycle.get("ok") is False or cycle.get("errors"):
         updated["driver"]["cycleErrors"] += 1
     download = cycle.get("download")
     if isinstance(download, dict) and download.get("scheduled") is True:

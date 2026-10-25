@@ -219,6 +219,34 @@ def test_observer_state_reduces_driver_activity_without_history_growth() -> None
     }
 
 
+def test_observer_state_counts_structured_cycle_failure() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+
+    state = observer_state.record_driver_cycle(
+        state,
+        {
+            "cycle": 1,
+            "ok": False,
+            "errors": [
+                {
+                    "client": "mfc",
+                    "phase": "search-create",
+                    "type": "RuntimeError",
+                    "message": "exact failure",
+                }
+            ],
+        },
+    )
+
+    assert state["driver"]["cycles"] == 1
+    assert state["driver"]["cycleErrors"] == 1
+    assert state["driver"]["latestCycle"]["errors"][0]["message"] == "exact failure"
+
+
 def test_three_day_observer_simulation_is_restart_safe_and_bounded(
     tmp_path: Path,
 ) -> None:
