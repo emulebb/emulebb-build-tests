@@ -4,13 +4,13 @@ import importlib.util
 import json
 import os
 import struct
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from emule_test_harness import soak_launch
+from emule_test_harness import converged_action_driver, soak_action_diff, soak_launch
 from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -24,6 +24,14 @@ def _load_soak_runner() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _action_client(name: str) -> converged_action_driver.ClientEndpoint:
+    return converged_action_driver.ClientEndpoint(
+        name=name,
+        base_url=f"http://{name}",
+        api_key=f"{name}-key",
+    )
 
 
 def test_soak_launch_requires_same_vpn_bind_ip() -> None:
@@ -718,7 +726,7 @@ def test_converged_soak_falls_back_to_nodes_url(
 
 
 def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     calls: list[dict[str, object]] = []
 
     def fake_retry(description: str, attempts: int, base_url: str, path: str, **kwargs: object) -> object:
@@ -735,12 +743,17 @@ def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(runner, "retry_http_json", fake_retry)
 
-    rows = runner._get_list("http://client", "/api/v1/searches", "key", "searches", timeout_seconds=42.5)
+    rows = runner.get_list(
+        _action_client("client"),
+        "/api/v1/searches",
+        "searches",
+        timeout_seconds=42.5,
+    )
 
     assert rows == [{"id": "one"}]
     assert calls == [
         {
-            "description": "poll /api/v1/searches",
+            "description": "poll client /api/v1/searches",
             "attempts": 1,
             "base_url": "http://client",
             "path": "/api/v1/searches",
@@ -1437,7 +1450,7 @@ def test_ensure_operator_server_adds_missing_row(monkeypatch: pytest.MonkeyPatch
 
 
 def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1455,7 +1468,7 @@ def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
             {"hash": "b" * 32},
             {"hash": "c" * 32},
         ],
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
     )
 
     assert candidate is not None
@@ -1463,7 +1476,7 @@ def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
 
 
 def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     mib = 1024 * 1024
 
     class _RustFilter:
@@ -1485,7 +1498,7 @@ def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
     candidate = runner.safe_common_download_candidate(
         rust_rows,
         mfc_rows,
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
         required_suffix=".iso",
         min_size_bytes=500 * mib,
     )
@@ -1496,7 +1509,7 @@ def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
     top = runner.top_common_download_candidates(
         rust_rows,
         mfc_rows,
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
         required_suffix=".iso",
         min_size_bytes=500 * mib,
     )
@@ -1504,7 +1517,7 @@ def test_common_candidate_enforces_min_size_iso_and_picks_best() -> None:
 
 
 def test_common_candidate_overrides_toolarge_within_max_ceiling() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     mib = 1024 * 1024
 
     class _RustFilter:
@@ -1524,7 +1537,7 @@ def test_common_candidate_overrides_toolarge_within_max_ceiling() -> None:
     top = runner.top_common_download_candidates(
         rows,
         mfc,
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
         required_suffix=".iso",
         min_size_bytes=500 * mib,
         max_size_bytes=5 * 1024 * mib,
@@ -1533,7 +1546,7 @@ def test_common_candidate_overrides_toolarge_within_max_ceiling() -> None:
 
 
 def test_safe_common_download_candidate_skips_existing_hashes() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1549,7 +1562,7 @@ def test_safe_common_download_candidate_skips_existing_hashes() -> None:
             {"hash": "a" * 32},
             {"hash": "b" * 32},
         ],
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
         existing_hashes={"a" * 32},
     )
 
@@ -1558,7 +1571,7 @@ def test_safe_common_download_candidate_skips_existing_hashes() -> None:
 
 
 def test_safe_common_download_candidate_skips_probe_existing_hashes() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1574,7 +1587,7 @@ def test_safe_common_download_candidate_skips_probe_existing_hashes() -> None:
             {"hash": "a" * 32},
             {"hash": "b" * 32},
         ],
-        rust_mod=_RustFilter,
+        safety=_RustFilter,
         existing_probe=lambda file_hash: file_hash == "a" * 32,
     )
 
@@ -1583,7 +1596,7 @@ def test_safe_common_download_candidate_skips_probe_existing_hashes() -> None:
 
 
 def test_safe_common_download_candidate_returns_none_without_common_safe_hash() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1594,14 +1607,14 @@ def test_safe_common_download_candidate_returns_none_without_common_safe_hash() 
         runner.safe_common_download_candidate(
             [{"hash": "a" * 32, "safe": True}],
             [{"hash": "b" * 32}],
-            rust_mod=_RustFilter,
+            safety=_RustFilter,
         )
         is None
     )
 
 
 def test_action_tracker_prime_suppresses_existing_rows() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
     baseline = tracker.prime(
         rust_searches=[{"id": "old-rs", "key": "linux", "label": "linux"}],
@@ -1611,7 +1624,7 @@ def test_action_tracker_prime_suppresses_existing_rows() -> None:
     )
 
     pairs, unpaired = tracker.tick(
-        runner.datetime.now(runner.timezone.utc),
+        datetime.now(UTC),
         rust_searches=[
             {"id": "old-rs", "key": "linux", "label": "linux"},
             {"id": "new-rs", "key": "python", "label": "python"},
@@ -1636,14 +1649,13 @@ def test_action_tracker_prime_suppresses_existing_rows() -> None:
     assert [action.key for action in tracker.mfc] == ["python"]
 
 
-def test_action_tracker_logs_redacted_action_labels(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _load_soak_runner()
-    messages: list[str] = []
-    monkeypatch.setattr(runner, "log", messages.append)
+def test_action_tracker_retains_full_local_action_evidence() -> None:
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    observed_at = datetime.now(UTC)
 
     tracker.tick(
-        runner.datetime.now(runner.timezone.utc),
+        observed_at,
         rust_searches=[{"id": "rs", "key": "private search", "label": "Private Search"}],
         rust_transfers=[
             {"id": "rt", "key": "a" * 32, "label": "Private Download Title.pdf"}
@@ -1652,26 +1664,22 @@ def test_action_tracker_logs_redacted_action_labels(monkeypatch: pytest.MonkeyPa
         mfc_transfers=[],
     )
     tracker.record_synchronized_action(
-        kind=runner.sad.DOWNLOAD,
+        kind=soak_action_diff.DOWNLOAD,
         key="b" * 32,
         label="Another Private Download Title.pdf",
-        observed_at=runner.datetime.now(runner.timezone.utc),
+        observed_at=observed_at,
         action_id="auto-download-1",
     )
 
-    joined = "\n".join(messages)
-    assert "Private Search" not in joined
-    assert "Private Download Title" not in joined
-    assert "Another Private" not in joined
-    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in joined
-    assert "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" not in joined
-    assert "observed rust search action" in joined
-    assert "observed rust download action" in joined
-    assert "observed synchronized download action" in joined
+    assert [(action.key, action.label) for action in tracker.rust] == [
+        ("private search", "Private Search"),
+        ("a" * 32, "Private Download Title.pdf"),
+        ("b" * 32, "Another Private Download Title.pdf"),
+    ]
 
 
 def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     triggered: list[str] = []
 
     class _RustFilter:
@@ -1682,16 +1690,14 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
     monkeypatch.setattr(
         runner,
         "create_search",
-        lambda base_url, api_key, *, query, method: "rust-search"
-        if api_key == runner.RUST_API_KEY
-        else "mfc-search",
+        lambda client, *, query, method: f"{client.name}-search",
     )
     monkeypatch.setattr(
         runner,
         "poll_search_results",
         lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
     )
-    monkeypatch.setattr(runner, "_get_list", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner, "get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(runner, "transfer_exists", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(runner, "trigger_download", lambda *_args, **_kwargs: triggered.append("download"))
 
@@ -1699,9 +1705,9 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
         cycle_index=1,
         query="python",
         method="server",
-        rust_base="http://rust",
-        mfc_base="http://mfc",
-        rust_mod=_RustFilter,
+        rust=_action_client("rust"),
+        mfc=_action_client("mfc"),
+        safety=_RustFilter,
         download=True,
         search_timeout_seconds=1.0,
     )
@@ -1717,7 +1723,7 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
 def test_automatic_cycle_download_hash_forces_repeatable_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     want = "0123456789abcdef0123456789abcdef"
 
     class _RustFilter:
@@ -1728,9 +1734,7 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
     monkeypatch.setattr(
         runner,
         "create_search",
-        lambda base_url, api_key, *, query, method: "rust-search"
-        if api_key == runner.RUST_API_KEY
-        else "mfc-search",
+        lambda client, *, query, method: f"{client.name}-search",
     )
     monkeypatch.setattr(
         runner,
@@ -1740,16 +1744,16 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
         ],
     )
     # Both clients ALREADY hold the file: download_hash must ignore the existing skip.
-    monkeypatch.setattr(runner, "_get_list", lambda *_a, **_k: [{"hash": want}])
+    monkeypatch.setattr(runner, "get_list", lambda *_a, **_k: [{"hash": want}])
     monkeypatch.setattr(runner, "transfer_exists", lambda *_a, **_k: True)
 
     cycle = runner.drive_automatic_cycle(
         cycle_index=1,
         query="linux iso",
         method="server",
-        rust_base="http://rust",
-        mfc_base="http://mfc",
-        rust_mod=_RustFilter,
+        rust=_action_client("rust"),
+        mfc=_action_client("mfc"),
+        safety=_RustFilter,
         download=True,
         search_timeout_seconds=1.0,
         download_hash=want,
@@ -1763,7 +1767,7 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
 def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1773,9 +1777,7 @@ def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
     monkeypatch.setattr(
         runner,
         "create_search",
-        lambda base_url, api_key, *, query, method: "rust-search"
-        if api_key == runner.RUST_API_KEY
-        else "mfc-search",
+        lambda client, *, query, method: f"{client.name}-search",
     )
     monkeypatch.setattr(
         runner,
@@ -1784,27 +1786,26 @@ def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
     )
 
     def fake_get_list(
-        _base_url: str,
+        client: converged_action_driver.ClientEndpoint,
         _path: str,
-        api_key: str,
         *_keys: str,
         timeout_seconds: float = 10.0,
     ) -> list[dict[str, object]]:
         del timeout_seconds
-        if api_key == runner.RUST_API_KEY:
+        if client.name == "rust":
             return [{"hash": "d" * 32, "state": "completed"}]
         return []
 
-    monkeypatch.setattr(runner, "_get_list", fake_get_list)
+    monkeypatch.setattr(runner, "get_list", fake_get_list)
     monkeypatch.setattr(runner, "transfer_exists", lambda *_args, **_kwargs: False)
 
     cycle = runner.drive_automatic_cycle(
         cycle_index=1,
         query="python",
         method="server",
-        rust_base="http://rust",
-        mfc_base="http://mfc",
-        rust_mod=_RustFilter,
+        rust=_action_client("rust"),
+        mfc=_action_client("mfc"),
+        safety=_RustFilter,
         download=True,
         search_timeout_seconds=1.0,
     )
@@ -1818,7 +1819,7 @@ def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
 def test_automatic_cycle_does_not_schedule_probe_existing_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
 
     class _RustFilter:
         @staticmethod
@@ -1828,29 +1829,27 @@ def test_automatic_cycle_does_not_schedule_probe_existing_hash(
     monkeypatch.setattr(
         runner,
         "create_search",
-        lambda base_url, api_key, *, query, method: "rust-search"
-        if api_key == runner.RUST_API_KEY
-        else "mfc-search",
+        lambda client, *, query, method: f"{client.name}-search",
     )
     monkeypatch.setattr(
         runner,
         "poll_search_results",
         lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
     )
-    monkeypatch.setattr(runner, "_get_list", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner, "get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         runner,
         "transfer_exists",
-        lambda _base_url, api_key, _file_hash, **_kwargs: api_key == runner.RUST_API_KEY,
+        lambda client, _file_hash, **_kwargs: client.name == "rust",
     )
 
     cycle = runner.drive_automatic_cycle(
         cycle_index=1,
         query="python",
         method="server",
-        rust_base="http://rust",
-        mfc_base="http://mfc",
-        rust_mod=_RustFilter,
+        rust=_action_client("rust"),
+        mfc=_action_client("mfc"),
+        safety=_RustFilter,
         download=True,
         search_timeout_seconds=1.0,
     )
@@ -2011,12 +2010,12 @@ def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch:
 
 
 def test_tracker_records_synchronized_download_action() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
 
     tracker.record_synchronized_action(
-        kind=runner.sad.DOWNLOAD,
+        kind=soak_action_diff.DOWNLOAD,
         key="e" * 32,
         label="e" * 32,
         observed_at=now,
@@ -2028,17 +2027,17 @@ def test_tracker_records_synchronized_download_action() -> None:
 
 
 def test_tracker_uses_download_specific_settle_window() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(
         window_seconds=90.0,
         settle_seconds=45.0,
         lead_seconds=8.0,
         download_settle_seconds=300.0,
     )
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
 
     tracker.record_synchronized_action(
-        kind=runner.sad.DOWNLOAD,
+        kind=soak_action_diff.DOWNLOAD,
         key="e" * 32,
         label="e" * 32,
         observed_at=now,
@@ -2062,23 +2061,23 @@ def test_tracker_uses_download_specific_settle_window() -> None:
         mfc_searches=[],
         mfc_transfers=[],
     )
-    assert [(pair.kind, pair.key) for pair in pairs] == [(runner.sad.DOWNLOAD, "e" * 32)]
+    assert [(pair.kind, pair.key) for pair in pairs] == [(soak_action_diff.DOWNLOAD, "e" * 32)]
     assert unpaired == []
 
 
 def test_tracker_uses_download_specific_settle_window_for_unpaired_actions() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(
         window_seconds=90.0,
         settle_seconds=45.0,
         lead_seconds=8.0,
         download_settle_seconds=300.0,
     )
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
     tracker.rust.append(
-        runner.sad.Action(
+        soak_action_diff.Action(
             client="rust",
-            kind=runner.sad.DOWNLOAD,
+            kind=soak_action_diff.DOWNLOAD,
             action_id="rust-transfer",
             key="e" * 32,
             label="e" * 32,
@@ -2104,17 +2103,19 @@ def test_tracker_uses_download_specific_settle_window_for_unpaired_actions() -> 
         mfc_transfers=[],
     )
     assert pairs == []
-    assert [(action.kind, action.key) for action in unpaired] == [(runner.sad.DOWNLOAD, "e" * 32)]
+    assert [(action.kind, action.key) for action in unpaired] == [
+        (soak_action_diff.DOWNLOAD, "e" * 32)
+    ]
 
 
 def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
     file_hash = "f" * 32
 
     tracker.record_synchronized_action(
-        kind=runner.sad.DOWNLOAD,
+        kind=soak_action_diff.DOWNLOAD,
         key=file_hash,
         label=file_hash,
         observed_at=now,
@@ -2135,9 +2136,9 @@ def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:
 
 
 def test_tracker_suppresses_baseline_transfer_even_when_rest_id_changes() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
     file_hash = "a" * 32
 
     baseline = [{"id": "old-transfer-id", "key": file_hash, "label": "Private Title.pdf"}]
@@ -2163,9 +2164,9 @@ def test_tracker_suppresses_baseline_transfer_even_when_rest_id_changes() -> Non
 
 
 def test_tracker_suppresses_baseline_search_even_when_rest_id_changes() -> None:
-    runner = _load_soak_runner()
+    runner = converged_action_driver
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
-    now = runner.datetime.now(runner.timezone.utc)
+    now = datetime.now(UTC)
 
     tracker.prime(
         rust_searches=[{"id": "old-search-id", "key": "ubuntu", "label": "Ubuntu"}],

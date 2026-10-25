@@ -40,7 +40,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
@@ -48,6 +48,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import (
+    converged_action_driver,
     diag_event_diff,
     live_process_monitor,
     mfc_known_met,
@@ -80,7 +81,7 @@ from emule_test_harness.soak_launch import (
     bring_up_rust,
     log,
 )
-from emule_test_harness.vm_guest_profiles import retry_http_json
+from emule_test_harness.vm_guest_profiles import api_data, retry_http_json
 from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_repo
 
 SCENARIO = "emulebb.flow.converged.soak.hideme.v1"
@@ -123,249 +124,27 @@ def parse_duration(text: str) -> float:
     return float(text[:-1]) * factor
 
 
-# --------------------------------------------------------------------------- #
-# REST list extraction (both clients share the /api/v1 envelope shape).
-# --------------------------------------------------------------------------- #
+def action_clients(
+    rust_base_url: str,
+    mfc_base_url: str,
+) -> tuple[
+    converged_action_driver.ClientEndpoint,
+    converged_action_driver.ClientEndpoint,
+]:
+    """Build the shared action engine's immutable REST authorities."""
 
-
-def _extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
-    """Extracts dict rows from an eMuleBB REST list response, tolerating shapes.
-
-    Thin wrapper over the shared soak_launch.api_items envelope logic (dict rows only):
-    accepts a bare list, ``{"items": [...]}``, ``{"data": {"items": [...]}}``, or a named
-    collection key (``searches`` / ``transfers``) at either level.
-    """
-
-    return soak_launch.api_items(payload, *keys, require_dict=True)
-
-
-def _get_list(
-    base_url: str,
-    path: str,
-    api_key: str,
-    *keys: str,
-    timeout_seconds: float = 10.0,
-) -> list[dict[str, Any]]:
-    try:
-        payload = retry_http_json(
-            f"poll {path}", 1, base_url, path, api_key=api_key, timeout_seconds=timeout_seconds
-        )
-    except RuntimeError:
-        return []
-    return _extract_items(payload, *keys)
-
-
-def _api_data(payload: dict[str, Any]) -> dict[str, Any]:
-    data = payload.get("data")
-    return data if isinstance(data, dict) else payload
-
-
-def _row_hash(row: dict[str, Any]) -> str:
-    return str(row.get("hash") or row.get("fileHash") or "").strip().lower()
-
-
-def transfer_hashes(rows: list[dict[str, Any]]) -> set[str]:
-    """Returns all transfer hashes visible in a raw REST transfer list."""
-
-    return {file_hash for row in rows if (file_hash := _row_hash(row))}
-
-
-def transfer_exists(
-    base_url: str,
-    api_key: str,
-    file_hash: str,
-    *,
-    timeout_seconds: float = 5.0,
-) -> bool:
-    """Returns whether a client already exposes a transfer/known-file hash."""
-
-    try:
-        payload = retry_http_json(
-            "probe transfer",
-            1,
-            base_url,
-            f"/api/v1/transfers/{file_hash}",
-            api_key=api_key,
-            timeout_seconds=timeout_seconds,
-        )
-    except RuntimeError:
-        return False
-    return bool(_api_data(payload))
-
-
-def _row_sources(row: dict[str, Any]) -> int:
-    return int(row.get("sources") or row.get("completeSources") or 0)
-
-
-def _row_size(row: dict[str, Any]) -> int:
-    return int(row.get("sizeBytes") or row.get("size") or 0)
-
-
-def _row_name(row: dict[str, Any]) -> str:
-    return str(row.get("name") or row.get("fileName") or "")
-
-
-# Download-content policy for the linux-ISO soak: accept only genuine `.iso`
-# files, never the `.iso.torrent` files (or pdf/zip/etc.) that peers also share on
-# eD2k. `download_name_allowed` gates every candidate + seed pick.
-def download_name_allowed(name: str, required_suffix: str | None) -> bool:
-    if not required_suffix:
-        return True
-    lowered = name.strip().lower()
-    # Explicitly reject `.torrent` (incl. `foo.iso.torrent`): we want the ISO, not
-    # a torrent of it.
-    if lowered.endswith(".torrent"):
-        return False
-    return lowered.endswith(required_suffix.lower())
-
-
-def top_common_download_candidates(
-    rust_rows: list[dict[str, Any]],
-    mfc_rows: list[dict[str, Any]],
-    *,
-    rust_mod: Any,
-    limit: int | None = None,
-    existing_hashes: set[str] | None = None,
-    existing_probe: Callable[[str], bool] | None = None,
-    prefer_hashes: set[str] | None = None,
-    required_suffix: str | None = None,
-    min_size_bytes: int = 0,
-    max_size_bytes: int = 0,
-) -> list[dict[str, Any]]:
-    """Safe, not-yet-present results common to both search pages, most-sourced
-    first. ``prefer_hashes`` (deterministic fixtures) sort ahead of the rest so a
-    re-run picks the same files; within each group the order is source count
-    desc, then larger size (the most-sourced, biggest ISO is the "best"
-    candidate). ``required_suffix`` (e.g. ``.iso``) restricts to that file type
-    (and always rejects ``.torrent``). ``min_size_bytes`` drops anything smaller
-    (e.g. 500 MiB, so we grab a real ISO not a checksum/stub). ``limit`` caps the
-    returned list."""
-
-    mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
-    existing_hashes = {item.strip().lower() for item in (existing_hashes or set()) if item}
-    prefer_hashes = {item.strip().lower() for item in (prefer_hashes or set()) if item}
-    candidates: list[dict[str, Any]] = []
-    for row in rust_rows:
-        file_hash = _row_hash(row)
-        if not file_hash or file_hash not in mfc_hashes:
-            continue
-        if file_hash in existing_hashes:
-            continue
-        if _row_size(row) < min_size_bytes:
-            continue
-        if not download_name_allowed(_row_name(row), required_suffix):
-            continue
-        if existing_probe is not None and existing_probe(file_hash):
-            continue
-        reason = rust_mod.safe_download_rejection_reason(row)
-        # The shared safe filter caps downloads at a tiny gentle size (8 MiB) so
-        # live tests never leech a real file. The ISO parity soak deliberately
-        # wants a >500 MiB ISO, so accept the "tooLarge" verdict when the file is
-        # within our explicit ceiling; every other safety check (unsafe tokens,
-        # hash shape, source floor) still applies.
-        if reason is None or (
-            reason == "tooLarge" and max_size_bytes > 0 and _row_size(row) <= max_size_bytes
-        ):
-            candidates.append(row)
-    candidates.sort(
-        key=lambda row: (
-            0 if _row_hash(row) in prefer_hashes else 1,
-            -_row_sources(row),
-            -_row_size(row),
-            _row_hash(row),
-        )
+    return (
+        converged_action_driver.ClientEndpoint(
+            name="rust",
+            base_url=rust_base_url,
+            api_key=RUST_API_KEY,
+        ),
+        converged_action_driver.ClientEndpoint(
+            name="mfc",
+            base_url=mfc_base_url,
+            api_key=MFC_API_KEY,
+        ),
     )
-    return candidates if limit is None else candidates[: max(0, limit)]
-
-
-def safe_common_download_candidate(
-    rust_rows: list[dict[str, Any]],
-    mfc_rows: list[dict[str, Any]],
-    *,
-    rust_mod: Any,
-    existing_hashes: set[str] | None = None,
-    existing_probe: Callable[[str], bool] | None = None,
-    required_suffix: str | None = None,
-    min_size_bytes: int = 0,
-    max_size_bytes: int = 0,
-) -> dict[str, Any] | None:
-    """Selects one safe, not-yet-present, most-sourced result common to both."""
-
-    top = top_common_download_candidates(
-        rust_rows,
-        mfc_rows,
-        rust_mod=rust_mod,
-        limit=1,
-        existing_hashes=existing_hashes,
-        existing_probe=existing_probe,
-        required_suffix=required_suffix,
-        min_size_bytes=min_size_bytes,
-        max_size_bytes=max_size_bytes,
-    )
-    return top[0] if top else None
-
-
-def create_search(base_url: str, api_key: str, *, query: str, method: str) -> str:
-    created = retry_http_json(
-        "soak search create",
-        2,
-        base_url,
-        "/api/v1/searches",
-        api_key=api_key,
-        method="POST",
-        body={"query": query, "method": method, "type": ""},
-        timeout_seconds=45.0,
-    )
-    return str(_api_data(created).get("id") or "")
-
-
-def poll_search_results(base_url: str, api_key: str, search_id: str, *, timeout_seconds: float) -> list[dict[str, Any]]:
-    deadline = time.monotonic() + timeout_seconds
-    last_rows: list[dict[str, Any]] = []
-    while time.monotonic() < deadline:
-        page = retry_http_json(
-            "soak search poll",
-            2,
-            base_url,
-            f"/api/v1/searches/{search_id}",
-            api_key=api_key,
-            timeout_seconds=30.0,
-        )
-        data = _api_data(page)
-        rows = _extract_items(data, "items")
-        if rows:
-            last_rows = rows
-        if str(data.get("status") or "").casefold() in {"complete", "completed"}:
-            return rows
-        time.sleep(2.0)
-    return last_rows
-
-
-def trigger_download(base_url: str, api_key: str, search_id: str, file_hash: str) -> dict[str, Any]:
-    download = retry_http_json(
-        "soak download",
-        2,
-        base_url,
-        f"/api/v1/searches/{search_id}/results/{file_hash}/operations/download",
-        api_key=api_key,
-        method="POST",
-        body={"paused": False, "categoryId": 0},
-        timeout_seconds=30.0,
-    )
-    try:
-        retry_http_json(
-            "soak download resume",
-            1,
-            base_url,
-            f"/api/v1/transfers/{file_hash}/operations/resume",
-            api_key=api_key,
-            method="POST",
-            body={},
-            timeout_seconds=15.0,
-        )
-    except RuntimeError:
-        pass
-    return download
 
 
 def read_vpn_guard(base: str, api_key: str, name: str) -> dict[str, Any]:
@@ -374,7 +153,7 @@ def read_vpn_guard(base: str, api_key: str, name: str) -> dict[str, Any]:
     HTTP+STUN egress probes and validates its public IP against the allowlist; we
     only observe its verdict, symmetrically for rust and MFC."""
 
-    data = _api_data(
+    data = api_data(
         retry_http_json(f"{name} status", 2, base, "/api/v1/status", api_key=api_key, timeout_seconds=20.0)
     )
     network = data.get("network") if isinstance(data, dict) else {}
@@ -460,14 +239,14 @@ def capture_deterministic_fixtures(
         if isinstance(row, dict) and str(row.get("hash") or "").strip():
             merged[str(row["hash"]).strip().lower()] = row
     for row in downloaded:
-        file_hash = _row_hash(row)
-        if not file_hash or _row_sources(row) < min_sources:
+        file_hash = converged_action_driver.row_hash(row)
+        if not file_hash or converged_action_driver.row_sources(row) < min_sources:
             continue
         merged[file_hash] = {
             "name": row.get("name"),
             "hash": file_hash,
             "size": row.get("sizeBytes") or row.get("size"),
-            "sources": _row_sources(row),
+            "sources": converged_action_driver.row_sources(row),
         }
     ordered = sorted(merged.values(), key=lambda row: -int(row.get("sources") or 0))[:target]
     section["fixtures"] = ordered
@@ -499,19 +278,32 @@ def seed_linux_downloads(
     prefer = {str(row.get("hash") or "").strip().lower() for row in load_deterministic_fixtures(inputs_path)}
     scheduled: list[dict[str, Any]] = []
     seen: set[str] = set()
+    rust_client, mfc_client = action_clients(rust_base, mfc_base)
     for index, term in enumerate(terms):
         if len(scheduled) >= target_count:
             break
         if index > 0:
             time.sleep(search_interval)  # be-gentle: space public searches
-        rust_search_id = create_search(rust_base, RUST_API_KEY, query=term, method="automatic")
-        mfc_search_id = create_search(mfc_base, MFC_API_KEY, query=term, method="automatic")
-        rust_rows = poll_search_results(rust_base, RUST_API_KEY, rust_search_id, timeout_seconds=search_timeout_seconds)
-        mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
-        top = top_common_download_candidates(
+        rust_search_id = converged_action_driver.create_search(
+            rust_client, query=term, method="automatic"
+        )
+        mfc_search_id = converged_action_driver.create_search(
+            mfc_client, query=term, method="automatic"
+        )
+        rust_rows = converged_action_driver.poll_search_results(
+            rust_client,
+            rust_search_id,
+            timeout_seconds=search_timeout_seconds,
+        )
+        mfc_rows = converged_action_driver.poll_search_results(
+            mfc_client,
+            mfc_search_id,
+            timeout_seconds=search_timeout_seconds,
+        )
+        top = converged_action_driver.top_common_download_candidates(
             rust_rows,
             mfc_rows,
-            rust_mod=rust_mod,
+            safety=rust_mod,
             existing_hashes=seen,
             prefer_hashes=prefer,
             required_suffix=required_suffix,
@@ -521,13 +313,17 @@ def seed_linux_downloads(
         for row in top:
             if len(scheduled) >= target_count:
                 break
-            file_hash = _row_hash(row)
+            file_hash = converged_action_driver.row_hash(row)
             if not file_hash or file_hash in seen:
                 continue
             seen.add(file_hash)
             try:
-                trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash)
-                trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash)
+                converged_action_driver.trigger_download(
+                    rust_client, rust_search_id, file_hash
+                )
+                converged_action_driver.trigger_download(
+                    mfc_client, mfc_search_id, file_hash
+                )
             except RuntimeError:
                 continue
             scheduled.append(row)
@@ -538,134 +334,13 @@ def seed_linux_downloads(
         "capturedCount": len(captured),
         "reusedFixtureCount": len(prefer),
         "downloads": [
-            {"name": row.get("name"), "hash": _row_hash(row), "sources": _row_sources(row)} for row in scheduled
+            {
+                "name": row.get("name"),
+                "hash": converged_action_driver.row_hash(row),
+                "sources": converged_action_driver.row_sources(row),
+            }
+            for row in scheduled
         ],
-    }
-
-
-def drive_automatic_cycle(
-    *,
-    cycle_index: int,
-    query: str,
-    method: str,
-    rust_base: str,
-    mfc_base: str,
-    rust_mod: Any,
-    download: bool,
-    search_timeout_seconds: float,
-    required_suffix: str | None = None,
-    min_size_bytes: int = 0,
-    max_size_bytes: int = 0,
-    download_hash: str | None = None,
-) -> dict[str, Any]:
-    """Runs one gentle synchronized search and records one candidate for later download."""
-
-    cycle: dict[str, Any] = {
-        "cycle": cycle_index,
-        "queryIndex": cycle_index - 1,
-        "method": method,
-        "query": query,
-        "downloadRequested": download,
-    }
-    rust_search_id = create_search(rust_base, RUST_API_KEY, query=query, method=method)
-    mfc_search_id = create_search(mfc_base, MFC_API_KEY, query=query, method=method)
-    cycle["searchIds"] = {"rust": rust_search_id, "mfc": mfc_search_id}
-    rust_rows = poll_search_results(rust_base, RUST_API_KEY, rust_search_id, timeout_seconds=search_timeout_seconds)
-    mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
-    cycle["resultCounts"] = {"rust": len(rust_rows), "mfc": len(mfc_rows)}
-    if download:
-        rust_transfer_hashes = transfer_hashes(
-            _get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers", timeout_seconds=30.0)
-        )
-        mfc_transfer_hashes = transfer_hashes(
-            _get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers", timeout_seconds=30.0)
-        )
-        existing_hashes = rust_transfer_hashes | mfc_transfer_hashes
-        cycle["downloadExistingHashCounts"] = {
-            "rust": len(rust_transfer_hashes),
-            "mfc": len(mfc_transfer_hashes),
-            "combined": len(existing_hashes),
-        }
-
-        probe_skips = {"rust": 0, "mfc": 0, "combined": 0}
-
-        def existing_hash_probe(file_hash: str) -> bool:
-            rust_known = transfer_exists(rust_base, RUST_API_KEY, file_hash)
-            mfc_known = transfer_exists(mfc_base, MFC_API_KEY, file_hash)
-            if rust_known:
-                probe_skips["rust"] += 1
-            if mfc_known:
-                probe_skips["mfc"] += 1
-            if rust_known or mfc_known:
-                probe_skips["combined"] += 1
-                return True
-            return False
-
-        if download_hash:
-            # Repeatable deterministic candidate: always (re)download this exact,
-            # well-sourced ISO hash on both clients whenever it appears in both
-            # search pages, ignoring the most-sourced pick and the existing-transfer
-            # skip so parity re-tests use the identical file every run.
-            want = download_hash.strip().lower()
-            r_row = next((r for r in rust_rows if _row_hash(r) == want), None)
-            m_present = any(_row_hash(r) == want for r in mfc_rows)
-            candidate = r_row if (r_row is not None and m_present) else None
-        else:
-            candidate = safe_common_download_candidate(
-                rust_rows,
-                mfc_rows,
-                rust_mod=rust_mod,
-                existing_hashes=existing_hashes,
-                existing_probe=existing_hash_probe,
-                required_suffix=required_suffix,
-                min_size_bytes=min_size_bytes,
-                max_size_bytes=max_size_bytes,
-            )
-        cycle["downloadExistingHashProbeSkips"] = probe_skips
-        cycle["downloadCandidateConstraints"] = {
-            "requiredSuffix": required_suffix,
-            "minSizeBytes": min_size_bytes,
-            "maxSizeBytes": max_size_bytes,
-        }
-        if candidate is None:
-            cycle["download"] = {
-                "ok": False,
-                "reason": (
-                    f"no common safe candidate matching suffix={required_suffix!r} "
-                    f"size>={min_size_bytes}B on both clients"
-                ),
-            }
-        else:
-            file_hash = _row_hash(candidate)
-            cycle["download"] = {
-                "ok": None,
-                "scheduled": True,
-                "hash": file_hash,
-                "name": _row_name(candidate),
-                "sizeBytes": _row_size(candidate),
-                "sources": _row_sources(candidate),
-                "searchIds": {"rust": rust_search_id, "mfc": mfc_search_id},
-            }
-    return cycle
-
-
-def execute_scheduled_download(
-    *,
-    rust_base: str,
-    mfc_base: str,
-    download: dict[str, Any],
-) -> dict[str, Any]:
-    """Triggers a previously selected common download on both clients."""
-
-    file_hash = str(download.get("hash") or "").strip().lower()
-    search_ids = download.get("searchIds") if isinstance(download.get("searchIds"), dict) else {}
-    rust_search_id = str(search_ids.get("rust") or "")
-    mfc_search_id = str(search_ids.get("mfc") or "")
-    if not file_hash or not rust_search_id or not mfc_search_id:
-        raise RuntimeError("scheduled download is missing hash or search ids")
-    return {
-        "rust": trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash),
-        "mfc": trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash),
     }
 
 
@@ -681,7 +356,7 @@ def status_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.
         )
     except RuntimeError as exc:
         return {"error": str(exc)}
-    data = _api_data(status)
+    data = api_data(status)
     runtime = data.get("runtimeDiagnostics") if isinstance(data.get("runtimeDiagnostics"), dict) else {}
     servers = data.get("servers") if isinstance(data.get("servers"), dict) else {}
     current_server = servers.get("currentServer") if isinstance(servers.get("currentServer"), dict) else {}
@@ -711,7 +386,7 @@ def stats_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.0
         )
     except RuntimeError as exc:
         return {"error": str(exc)}
-    data = _api_data(stats)
+    data = api_data(stats)
     return {
         "activeUploads": data.get("activeUploads"),
         "waitingUploads": data.get("waitingUploads"),
@@ -1012,7 +687,7 @@ def checkpoint_operator_reconnect(
         )
     except RuntimeError as exc:
         return {"attempted": True, "ok": False, "error": str(exc)}
-    connect_data = _api_data(result.get("connect") if isinstance(result, dict) else result)
+    connect_data = api_data(result.get("connect") if isinstance(result, dict) else result)
     return {
         "attempted": True,
         "ok": True,
@@ -1045,169 +720,6 @@ def load_diag(
         allow_incomplete_active_tail=True,
     )
     return records
-
-
-def public_action_label(kind: str) -> str:
-    """Returns a privacy-safe label for retained soak logs."""
-
-    return f"{kind} action"
-
-
-# --------------------------------------------------------------------------- #
-# Action tracker: detect new actions per poll, correlate across clients.
-# --------------------------------------------------------------------------- #
-
-
-class ActionTracker:
-    """Accumulates observed actions and yields settled, correlated pairs.
-
-    ``tick`` is fed each poll's normalized REST snapshots; it returns the action
-    pairs whose capture window has elapsed (ready to diff) and the actions that
-    have aged out of the correlation window with no counterpart (manual-marker
-    candidates), each at most once.
-    """
-
-    def __init__(
-        self,
-        *,
-        window_seconds: float,
-        settle_seconds: float,
-        lead_seconds: float,
-        download_settle_seconds: float | None = None,
-    ) -> None:
-        self.window = window_seconds
-        self.settle = settle_seconds
-        self.download_settle = (
-            download_settle_seconds if download_settle_seconds is not None else settle_seconds
-        )
-        self.lead = lead_seconds
-        self.seen: dict[tuple[str, str], set[str]] = {}
-        self.baseline_keys: dict[tuple[str, str], set[str]] = {}
-        self.rust: list[sad.Action] = []
-        self.mfc: list[sad.Action] = []
-        self.processed: set[str] = set()
-        self.synchronized_keys: set[tuple[str, str]] = set()
-
-    def settle_seconds_for(self, kind: str) -> float:
-        """Returns the post-action capture padding for one action kind."""
-
-        return self.download_settle if kind == sad.DOWNLOAD else self.settle
-
-    def _ingest(self, client: str, kind: str, items: list[dict[str, str]], now: datetime) -> None:
-        key = (client, kind)
-        fresh, self.seen[key] = sad.detect_actions(
-            self.seen.get(key), items, client=client, kind=kind, observed_at=now
-        )
-        baseline_keys = self.baseline_keys.get(key, set())
-        fresh = [
-            action
-            for action in fresh
-            if (action.kind, action.key) not in self.synchronized_keys
-            and action.key not in baseline_keys
-        ]
-        bucket = self.rust if client == "rust" else self.mfc
-        bucket.extend(fresh)
-        for action in fresh:
-            log(f"observed {client} {public_action_label(kind)}")
-
-    def prime(
-        self,
-        *,
-        rust_searches: list[dict[str, str]],
-        rust_transfers: list[dict[str, str]],
-        mfc_searches: list[dict[str, str]],
-        mfc_transfers: list[dict[str, str]],
-    ) -> dict[str, int]:
-        """Seeds the seen-id sets from existing REST rows without recording actions."""
-
-        snapshots = {
-            ("rust", sad.SEARCH): rust_searches,
-            ("rust", sad.DOWNLOAD): rust_transfers,
-            ("mfc", sad.SEARCH): mfc_searches,
-            ("mfc", sad.DOWNLOAD): mfc_transfers,
-        }
-        for key, items in snapshots.items():
-            self.seen[key] = {item["id"] for item in items}
-            self.baseline_keys[key] = {item["key"] for item in items}
-        return {
-            "rustSearches": len(rust_searches),
-            "rustTransfers": len(rust_transfers),
-            "mfcSearches": len(mfc_searches),
-            "mfcTransfers": len(mfc_transfers),
-        }
-
-    def record_synchronized_action(
-        self,
-        *,
-        kind: str,
-        key: str,
-        label: str,
-        observed_at: datetime,
-        action_id: str,
-    ) -> None:
-        """Records an action the auto-driver successfully issued to both clients."""
-
-        self.synchronized_keys.add((kind, key))
-        self.rust.append(
-            sad.Action(
-                client="rust",
-                kind=kind,
-                action_id=f"rust:{action_id}",
-                key=key,
-                label=label,
-                observed_at=observed_at,
-            )
-        )
-        self.mfc.append(
-            sad.Action(
-                client="mfc",
-                kind=kind,
-                action_id=f"mfc:{action_id}",
-                key=key,
-                label=label,
-                observed_at=observed_at,
-            )
-        )
-        log(f"observed synchronized {public_action_label(kind)}")
-
-    def tick(
-        self,
-        now: datetime,
-        *,
-        rust_searches: list[dict[str, str]],
-        rust_transfers: list[dict[str, str]],
-        mfc_searches: list[dict[str, str]],
-        mfc_transfers: list[dict[str, str]],
-    ) -> tuple[list[sad.ActionPair], list[sad.Action]]:
-        self._ingest("rust", sad.SEARCH, rust_searches, now)
-        self._ingest("rust", sad.DOWNLOAD, rust_transfers, now)
-        self._ingest("mfc", sad.SEARCH, mfc_searches, now)
-        self._ingest("mfc", sad.DOWNLOAD, mfc_transfers, now)
-
-        active_rust = [a for a in self.rust if a.action_id not in self.processed]
-        active_mfc = [a for a in self.mfc if a.action_id not in self.processed]
-        pairs, unpaired_rust, unpaired_mfc = sad.correlate_actions(
-            active_rust, active_mfc, window_seconds=self.window
-        )
-
-        ready_pairs: list[sad.ActionPair] = []
-        for pair in pairs:
-            _, t1 = pair.window(
-                lead_seconds=self.lead,
-                settle_seconds=self.settle_seconds_for(pair.kind),
-            )
-            if now >= t1:
-                self.processed.add(pair.rust.action_id)
-                self.processed.add(pair.mfc.action_id)
-                ready_pairs.append(pair)
-
-        aged_unpaired: list[sad.Action] = []
-        for action in (*unpaired_rust, *unpaired_mfc):
-            age = (now - action.observed_at).total_seconds()
-            if age > self.window + self.settle_seconds_for(action.kind):
-                self.processed.add(action.action_id)
-                aged_unpaired.append(action)
-        return ready_pairs, aged_unpaired
 
 
 # --------------------------------------------------------------------------- #
@@ -2267,6 +1779,7 @@ def main(argv: list[str] | None = None) -> int:
         mfc_app = mfc_handles["app"]
         rust_base = rust_handles["baseUrl"]
         mfc_base = mfc_handles["baseUrl"]
+        rust_action_client, mfc_action_client = action_clients(rust_base, mfc_base)
         rust_dump_dir = Path(rust_handles["packetDumpDir"])
         mfc_dump_dir = Path(mfc_handles["packetDumpDir"])
 
@@ -2343,7 +1856,7 @@ def main(argv: list[str] | None = None) -> int:
             "'status', 'quit'.")
         log("=" * 70)
 
-        tracker = ActionTracker(
+        tracker = converged_action_driver.ActionTracker(
             window_seconds=args.correlation_window,
             settle_seconds=args.settle_seconds,
             lead_seconds=args.lead_seconds,
@@ -2351,37 +1864,33 @@ def main(argv: list[str] | None = None) -> int:
         )
         baseline = tracker.prime(
             rust_searches=sad.normalize_search_items(
-                _get_list(
-                    rust_base,
+                converged_action_driver.get_list(
+                    rust_action_client,
                     "/api/v1/searches",
-                    RUST_API_KEY,
                     "searches",
                     timeout_seconds=args.poll_rest_timeout,
                 )
             ),
             rust_transfers=sad.normalize_transfer_items(
-                _get_list(
-                    rust_base,
+                converged_action_driver.get_list(
+                    rust_action_client,
                     "/api/v1/transfers",
-                    RUST_API_KEY,
                     "transfers",
                     timeout_seconds=args.poll_rest_timeout,
                 )
             ),
             mfc_searches=sad.normalize_search_items(
-                _get_list(
-                    mfc_base,
+                converged_action_driver.get_list(
+                    mfc_action_client,
                     "/api/v1/searches",
-                    MFC_API_KEY,
                     "searches",
                     timeout_seconds=args.poll_rest_timeout,
                 )
             ),
             mfc_transfers=sad.normalize_transfer_items(
-                _get_list(
-                    mfc_base,
+                converged_action_driver.get_list(
+                    mfc_action_client,
                     "/api/v1/transfers",
-                    MFC_API_KEY,
                     "transfers",
                     timeout_seconds=args.poll_rest_timeout,
                 )
@@ -2420,8 +1929,12 @@ def main(argv: list[str] | None = None) -> int:
             path = sad.write_action_report(full, actions_dir)
             sad.append_to_summary(summary, full)
             write_summary(summary, summary_path)
-            action_label = public_action_label(str(full.get("kind") or "action"))
-            log(f"action #{seq} [{full.get('verdict')}] {action_label} -> {path.name}")
+            action_kind = str(full.get("kind") or "action")
+            action_label = str(full.get("label") or full.get("key") or action_kind)
+            log(
+                f"action #{seq} [{full.get('verdict')}] "
+                f"{action_kind} {action_label!r} -> {path.name}"
+            )
 
         def maybe_reconnect_rust(status: dict[str, Any]) -> None:
             nonlocal last_connectivity_reconnect
@@ -2456,9 +1969,9 @@ def main(argv: list[str] | None = None) -> int:
                 file_hash = str(download.get("hash") or "").strip().lower()
                 log(f"auto cycle {pending['cycle']}: starting delayed download action")
                 try:
-                    result = execute_scheduled_download(
-                        rust_base=rust_base,
-                        mfc_base=mfc_base,
+                    result = converged_action_driver.execute_scheduled_download(
+                        rust=rust_action_client,
+                        mfc=mfc_action_client,
                         download=download,
                     )
                     download.update(result)
@@ -2520,13 +2033,13 @@ def main(argv: list[str] | None = None) -> int:
                             f"'{query}' (download={str(should_download).lower()})"
                         )
                         try:
-                            cycle = drive_automatic_cycle(
+                            cycle = converged_action_driver.drive_automatic_cycle(
                                 cycle_index=auto_cycle,
                                 query=query,
                                 method=args.auto_method,
-                                rust_base=rust_base,
-                                mfc_base=mfc_base,
-                                rust_mod=rust_mod,
+                                rust=rust_action_client,
+                                mfc=mfc_action_client,
+                                safety=rust_mod,
                                 download=should_download,
                                 search_timeout_seconds=args.auto_search_timeout,
                                 required_suffix=args.download_ext,
@@ -2560,37 +2073,33 @@ def main(argv: list[str] | None = None) -> int:
                 pairs, aged_unpaired = tracker.tick(
                     now,
                     rust_searches=sad.normalize_search_items(
-                        _get_list(
-                            rust_base,
+                        converged_action_driver.get_list(
+                            rust_action_client,
                             "/api/v1/searches",
-                            RUST_API_KEY,
                             "searches",
                             timeout_seconds=args.poll_rest_timeout,
                         )
                     ),
                     rust_transfers=sad.normalize_transfer_items(
-                        _get_list(
-                            rust_base,
+                        converged_action_driver.get_list(
+                            rust_action_client,
                             "/api/v1/transfers",
-                            RUST_API_KEY,
                             "transfers",
                             timeout_seconds=args.poll_rest_timeout,
                         )
                     ),
                     mfc_searches=sad.normalize_search_items(
-                        _get_list(
-                            mfc_base,
+                        converged_action_driver.get_list(
+                            mfc_action_client,
                             "/api/v1/searches",
-                            MFC_API_KEY,
                             "searches",
                             timeout_seconds=args.poll_rest_timeout,
                         )
                     ),
                     mfc_transfers=sad.normalize_transfer_items(
-                        _get_list(
-                            mfc_base,
+                        converged_action_driver.get_list(
+                            mfc_action_client,
                             "/api/v1/transfers",
-                            MFC_API_KEY,
                             "transfers",
                             timeout_seconds=args.poll_rest_timeout,
                         )
