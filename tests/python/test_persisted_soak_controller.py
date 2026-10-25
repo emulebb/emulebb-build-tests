@@ -770,14 +770,33 @@ def test_diagnostic_writer_health_retains_complete_strict_payload(
 
     result = controller.diagnostic_writer_health("http://127.0.0.1/api/v1", "key")
 
-    assert result == {"ok": True, "health": health, "violations": []}
+    assert result == {
+        "reachable": True,
+        "ok": True,
+        "health": health,
+        "violations": [],
+    }
     assert calls == [("http://127.0.0.1/api/v1", "/diagnostics", "key")]
 
     health["writeErrors"] = 1
     result = controller.diagnostic_writer_health("http://127.0.0.1/api/v1", "key")
     assert result["ok"] is False
+    assert result["reachable"] is True
     assert result["health"] == health
     assert "writeErrors=1 expected 0" in result["violations"]
+
+    monkeypatch.setattr(
+        controller,
+        "http_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("offline")),
+    )
+    result = controller.diagnostic_writer_health("http://127.0.0.1/api/v1", "key")
+    assert result == {
+        "reachable": False,
+        "ok": False,
+        "health": None,
+        "violations": ["TimeoutError: offline"],
+    }
 
 
 def test_rest_health_requires_blocking_guard_and_hide_me_binding(monkeypatch) -> None:
@@ -844,8 +863,14 @@ def test_session_status_requires_both_writers_after_persisted_readiness(
 
     def fake_writer_health(_url: str, key: str) -> dict[str, object]:
         if key == controller.soak_launch.RUST_API_KEY:
-            return {"ok": True, "health": diagnostic_writer_health(), "violations": []}
+            return {
+                "reachable": True,
+                "ok": True,
+                "health": diagnostic_writer_health(),
+                "violations": [],
+            }
         return {
+            "reachable": True,
             "ok": False,
             "health": diagnostic_writer_health(),
             "violations": ["writeErrors=1 expected 0"],
@@ -859,6 +884,43 @@ def test_session_status_requires_both_writers_after_persisted_readiness(
     assert result["diagnosticWriters"]["rust"]["ok"] is True
     assert result["diagnosticWriters"]["mfc"]["ok"] is False
     assert "mfc-diagnostic-writer-unhealthy" in result["findings"]
+
+
+def test_status_findings_distinguishes_writer_transport_from_integrity() -> None:
+    status = {
+        "launcher": {"alive": True},
+        "manifest": {"state": "running"},
+        "watcher": {},
+        "clients": {"rustCount": 1, "mfcCount": 1},
+        "rest": {
+            "rust": healthy_rest_health(),
+            "mfc": healthy_rest_health(),
+        },
+        "diagnosticWriters": {
+            "required": True,
+            "rust": {
+                "reachable": False,
+                "ok": False,
+                "health": None,
+                "violations": ["TimeoutError: offline"],
+            },
+            "mfc": {
+                "reachable": True,
+                "ok": False,
+                "health": diagnostic_writer_health(),
+                "violations": ["writeErrors=1 expected 0"],
+            },
+        },
+        "vpn": {"ok": True},
+        "lastRun": {"status": "running"},
+        "storage": {"ok": True},
+    }
+
+    findings = controller.status_findings(status)
+
+    assert "rust-diagnostic-writer-unavailable" in findings
+    assert "rust-diagnostic-writer-unhealthy" not in findings
+    assert "mfc-diagnostic-writer-unhealthy" in findings
 
 
 def test_session_status_reports_current_storage_failure_and_dead_watcher(
@@ -1094,17 +1156,91 @@ def test_append_bounded_jsonl_rotates_old_segments(tmp_path: Path) -> None:
 
 
 def watch_status_payload() -> dict[str, object]:
+    campaign_id = "20261025T120000Z"
     return {
         "timestampUtc": "2026-10-24T12:00:00+00:00",
         "ok": True,
         "findings": [],
+        "manifest": {"campaignId": campaign_id},
         "launcher": {"alive": True},
         "clients": {"rustCount": 1, "mfcCount": 1},
         "rest": {"rust": {"ok": True}, "mfc": {"ok": True}},
         "diagnosticWriters": {"required": False, "rust": None, "mfc": None},
         "vpn": {"ok": True},
-        "lastRun": {"status": "starting"},
+        "lastRun": {"campaignId": campaign_id, "status": "starting"},
     }
+
+
+def test_watch_finding_annotation_gates_terminal_health_on_readiness() -> None:
+    sample = {
+        "campaignId": "campaign",
+        "lastRun": {"campaignId": "campaign", "status": "starting"},
+        "findings": [
+            "full-tunnel-unhealthy",
+            "rust-vpn-guard-unhealthy",
+            "rust-process-count",
+        ],
+    }
+
+    assert controller.watch_finding_annotation(sample, {}) == {
+        "findingStreaks": {},
+        "terminalFindings": [],
+    }
+
+    sample["lastRun"]["status"] = "running"
+    annotation = controller.watch_finding_annotation(sample, {})
+    assert annotation["findingStreaks"] == {}
+    assert annotation["terminalFindings"] == [
+        "full-tunnel-unhealthy",
+        "rust-process-count",
+        "rust-vpn-guard-unhealthy",
+    ]
+
+
+def test_watch_finding_annotation_requires_three_consecutive_rest_failures() -> None:
+    sample = {
+        "campaignId": "campaign",
+        "lastRun": {"campaignId": "campaign", "status": "running"},
+        "findings": ["rust-rest-unhealthy"],
+    }
+
+    first = controller.watch_finding_annotation(sample, {})
+    second = controller.watch_finding_annotation(sample, first["findingStreaks"])
+    third = controller.watch_finding_annotation(sample, second["findingStreaks"])
+
+    assert first == {
+        "findingStreaks": {"rust-rest-unhealthy": 1},
+        "terminalFindings": [],
+    }
+    assert second == {
+        "findingStreaks": {"rust-rest-unhealthy": 2},
+        "terminalFindings": [],
+    }
+    assert third == {
+        "findingStreaks": {"rust-rest-unhealthy": 3},
+        "terminalFindings": ["rust-rest-unhealthy"],
+    }
+    assert controller.watch_finding_annotation(
+        {**sample, "findings": []}, third["findingStreaks"]
+    )["findingStreaks"] == {}
+
+
+def test_restored_finding_streaks_is_campaign_scoped_and_bounded() -> None:
+    heartbeat = {
+        "campaignId": "campaign",
+        "findingStreaks": {
+            "rust-rest-unhealthy": 2,
+            "mfc-rest-unhealthy": True,
+            "unknown": 99,
+        },
+    }
+
+    assert controller.restored_finding_streaks(heartbeat, "campaign") == {
+        "rust-rest-unhealthy": 2
+    }
+    assert controller.restored_finding_streaks(heartbeat, "other") == {}
+    heartbeat["shutdown"] = {"launcherStopped": True}
+    assert controller.restored_finding_streaks(heartbeat, "campaign") == {}
 
 
 @pytest.mark.parametrize(
@@ -1227,6 +1363,10 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
         {
             "ok": False,
             "findings": ["rust-diagnostic-writer-unhealthy"],
+            "lastRun": {
+                "campaignId": "20261025T120000Z",
+                "status": "running",
+            },
             "diagnosticWriters": {
                 "required": True,
                 "rust": {
@@ -1268,7 +1408,70 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
     assert result["samples"] == 1
     assert result["latest"]["storage"]["ok"] is True
     assert result["latest"]["diagnosticWriters"]["rust"]["ok"] is False
+    assert result["latest"]["terminalFindings"] == [
+        "rust-diagnostic-writer-unhealthy"
+    ]
     assert result["latest"]["shutdown"]["launcherGraceful"] is True
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_restores_rest_failure_streak_and_stops_on_third_sample(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    controller.write_json_atomic(
+        paths.watch_heartbeat,
+        {
+            "campaignId": manifest["campaignId"],
+            "findingStreaks": {"rust-rest-unhealthy": 2},
+        },
+    )
+    status = watch_status_payload()
+    status.update(
+        {
+            "ok": False,
+            "findings": [
+                "rust-rest-unhealthy",
+                "rust-diagnostic-writer-unavailable",
+            ],
+            "lastRun": {
+                "campaignId": manifest["campaignId"],
+                "status": "running",
+            },
+        }
+    )
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: status)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024 * 1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["samples"] == 1
+    assert result["latest"]["findingStreaks"] == {
+        "rust-diagnostic-writer-unavailable": 1,
+        "rust-rest-unhealthy": 3,
+    }
+    assert result["latest"]["terminalFindings"] == ["rust-rest-unhealthy"]
     assert stop_requests == [manifest]
 
 

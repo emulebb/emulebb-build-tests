@@ -47,6 +47,25 @@ DIAGNOSTIC_WRITER_FAILURE_FINDINGS = frozenset(
         "mfc-diagnostic-writer-unhealthy",
     }
 )
+POST_READINESS_IMMEDIATE_FAILURE_FINDINGS = frozenset(
+    {
+        *DIAGNOSTIC_WRITER_FAILURE_FINDINGS,
+        "launcher-not-running",
+        "rust-process-count",
+        "mfc-process-count",
+        "rust-vpn-guard-unhealthy",
+        "mfc-vpn-guard-unhealthy",
+        "rust-p2p-binding-unhealthy",
+        "mfc-p2p-binding-unhealthy",
+        "full-tunnel-unhealthy",
+    }
+)
+CONSECUTIVE_FAILURE_THRESHOLDS = {
+    "rust-rest-unhealthy": 3,
+    "mfc-rest-unhealthy": 3,
+    "rust-diagnostic-writer-unavailable": 3,
+    "mfc-diagnostic-writer-unavailable": 3,
+}
 WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
 
 
@@ -975,12 +994,14 @@ def diagnostic_writer_health(base_url: str, api_key: str) -> dict[str, Any]:
         health = data.get("diagnosticWriter") if isinstance(data, dict) else None
         violations = diag_event_runs.diagnostic_writer_health_violations(health)
         return {
+            "reachable": True,
             "ok": not violations,
             "health": dict(health) if isinstance(health, dict) else None,
             "violations": list(violations),
         }
     except Exception as error:  # noqa: BLE001 - watcher must persist REST failures
         return {
+            "reachable": False,
             "ok": False,
             "health": None,
             "violations": [f"{type(error).__name__}: {error}"[:1024]],
@@ -1128,7 +1149,9 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     if diagnostic_writers.get("required"):
         for client in ("rust", "mfc"):
             health = diagnostic_writers.get(client)
-            if not isinstance(health, dict) or not health.get("ok"):
+            if isinstance(health, dict) and health.get("reachable") is False:
+                findings.append(f"{client}-diagnostic-writer-unavailable")
+            elif not isinstance(health, dict) or not health.get("ok"):
                 findings.append(f"{client}-diagnostic-writer-unhealthy")
     vpn = status.get("vpn")
     if isinstance(vpn, dict) and not vpn.get("ok"):
@@ -1318,6 +1341,91 @@ def build_watch_sample(
             "message": str(status_error)[:1024],
         }
     return sample
+
+
+def watch_sample_is_post_readiness(sample: dict[str, Any]) -> bool:
+    """Returns whether one watch sample is authoritative for runtime health."""
+
+    campaign_id = sample.get("campaignId")
+    last_run = sample.get("lastRun")
+    return bool(
+        campaign_id
+        and isinstance(last_run, dict)
+        and last_run.get("campaignId") == campaign_id
+        and last_run.get("status") == "running"
+    )
+
+
+def advance_finding_streaks(
+    previous: dict[str, int], findings: list[str]
+) -> dict[str, int]:
+    """Advances only findings that require consecutive unhealthy samples."""
+
+    active = set(findings)
+    return {
+        finding: previous.get(finding, 0) + 1
+        for finding in CONSECUTIVE_FAILURE_THRESHOLDS
+        if finding in active
+    }
+
+
+def restored_finding_streaks(
+    heartbeat: dict[str, Any], campaign_id: object
+) -> dict[str, int]:
+    """Restores bounded consecutive-failure state for the same campaign."""
+
+    if (
+        not campaign_id
+        or heartbeat.get("campaignId") != campaign_id
+        or isinstance(heartbeat.get("shutdown"), dict)
+    ):
+        return {}
+    streaks = heartbeat.get("findingStreaks")
+    if not isinstance(streaks, dict):
+        return {}
+    return {
+        finding: min(value, CONSECUTIVE_FAILURE_THRESHOLDS[finding])
+        for finding, value in streaks.items()
+        if finding in CONSECUTIVE_FAILURE_THRESHOLDS
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value > 0
+    }
+
+
+def terminal_watch_findings(
+    sample: dict[str, Any], finding_streaks: dict[str, int]
+) -> list[str]:
+    """Classifies terminal findings without treating transient REST loss as fatal."""
+
+    findings = set(sample.get("findings") or ())
+    terminal: set[str] = set()
+    if "launcher-reported-failure" in findings:
+        terminal.add("launcher-reported-failure")
+    if watch_sample_is_post_readiness(sample):
+        terminal.update(findings & POST_READINESS_IMMEDIATE_FAILURE_FINDINGS)
+        terminal.update(
+            finding
+            for finding, threshold in CONSECUTIVE_FAILURE_THRESHOLDS.items()
+            if finding_streaks.get(finding, 0) >= threshold
+        )
+    return sorted(terminal)
+
+
+def watch_finding_annotation(
+    sample: dict[str, Any], previous_streaks: dict[str, int]
+) -> dict[str, Any]:
+    """Builds persisted restart-safe finding streak and terminal evidence."""
+
+    streaks = (
+        advance_finding_streaks(previous_streaks, list(sample["findings"]))
+        if watch_sample_is_post_readiness(sample)
+        else {}
+    )
+    return {
+        "findingStreaks": streaks,
+        "terminalFindings": terminal_watch_findings(sample, streaks),
+    }
 
 
 def persist_watch_sample(
@@ -1652,6 +1760,7 @@ def watch_session(
     manifest: dict[str, Any] = {}
     sample_count = 0
     latest: dict[str, Any] | None = None
+    finding_streaks: dict[str, int] = {}
     try:
         manifest = load_json(paths.manifest)
         storage_context = parse_session_storage_context(
@@ -1659,6 +1768,10 @@ def watch_session(
             get_workspace_output_root(),
         )
         resolve_watcher_launcher_identity(manifest, launcher_fallback)
+        finding_streaks = restored_finding_streaks(
+            load_json(paths.watch_heartbeat),
+            manifest.get("campaignId"),
+        )
     except Exception as error:  # noqa: BLE001 - invalid storage authority is terminal
         storage = {
             "ok": False,
@@ -1673,6 +1786,7 @@ def watch_session(
             status = None
             status_error = error
         latest = build_watch_sample(status, storage, status_error=status_error)
+        latest.update(watch_finding_annotation(latest, {}))
         return finish_watch_failure(
             paths,
             manifest,
@@ -1718,6 +1832,9 @@ def watch_session(
                 "error": str(error)[:1024],
             }
         latest = build_watch_sample(status, storage, status_error=status_error)
+        finding_annotation = watch_finding_annotation(latest, finding_streaks)
+        finding_streaks = finding_annotation["findingStreaks"]
+        latest.update(finding_annotation)
         initial_persisted = False
         persistence_errors: list[str] = []
         try:
@@ -1737,6 +1854,7 @@ def watch_session(
                 "error": str(error)[:1024],
             }
             latest = build_watch_sample(status, storage, status_error=status_error)
+            latest.update(finding_annotation)
         if storage.get("ok") and emit is not None:
             try:
                 emit(latest)
@@ -1749,13 +1867,10 @@ def watch_session(
                     "error": str(error)[:1024],
                 }
                 latest = build_watch_sample(status, storage, status_error=status_error)
+                latest.update(finding_annotation)
                 initial_persisted = False
         sample_count += 1
-        terminal_writer_fault = any(
-            finding in DIAGNOSTIC_WRITER_FAILURE_FINDINGS
-            for finding in latest["findings"]
-        )
-        if not storage.get("ok") or terminal_writer_fault:
+        if not storage.get("ok") or latest["terminalFindings"]:
             return finish_watch_failure(
                 paths,
                 manifest,
