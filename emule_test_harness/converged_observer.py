@@ -69,6 +69,8 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
             f"Observer session manifest escaped EMULEBB_WORKSPACE_OUTPUT_ROOT: {resolved_manifest}"
         )
     manifest = load_json_object(resolved_manifest)
+    if manifest.get("schema") != persisted_soak_controller.MANIFEST_SCHEMA:
+        raise RuntimeError("Persisted soak observer session schema is invalid.")
     if manifest.get("state") != "running":
         raise RuntimeError("Observer requires a running persisted soak session.")
     observer_config = manifest.get("observerConfig")
