@@ -334,6 +334,90 @@ def test_bounded_store_deletes_oldest_artifacts_until_free_reserve_is_met(
     assert plan.within_limits
 
 
+def test_bounded_store_reserves_future_bytes_at_exact_policy_boundaries(
+    tmp_path: Path,
+) -> None:
+    inventory = fake_inventory(tmp_path, [("protected.bin", 40, 100)])
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        direct_policy(max_total_bytes=100, minimum_free_bytes=50),
+        inventory=lambda _root: inventory,
+        disk_space=lambda root: fake_disk_space(root, free_bytes=110),
+    )
+
+    plan = store.plan(
+        pinned_paths=[tmp_path / "protected.bin"],
+        reserved_bytes=60,
+        now_ns=100,
+    )
+
+    assert plan.reserved_bytes == 60
+    assert plan.projected_total_bytes == 100
+    assert plan.projected_free_bytes == 50
+    assert not plan.deletions
+    assert plan.within_limits
+
+
+def test_bounded_store_prunes_closed_artifacts_for_reserved_future_bytes(
+    tmp_path: Path,
+) -> None:
+    inventory = fake_inventory(
+        tmp_path,
+        [("old.bin", 60, 100), ("pinned/evidence.bin", 20, 200)],
+    )
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        direct_policy(max_total_bytes=100, minimum_free_bytes=50),
+        inventory=lambda _root: inventory,
+        disk_space=lambda root: fake_disk_space(root, free_bytes=100),
+    )
+
+    plan = store.plan(
+        pinned_paths=[tmp_path / "pinned"],
+        reserved_bytes=60,
+        now_ns=200,
+    )
+
+    assert [item.artifact.relative_path.as_posix() for item in plan.deletions] == [
+        "old.bin"
+    ]
+    assert plan.projected_total_bytes == 80
+    assert plan.projected_free_bytes == 100
+    assert plan.within_limits
+
+
+def test_bounded_store_reports_unresolved_reserved_future_bytes(
+    tmp_path: Path,
+) -> None:
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        direct_policy(max_total_bytes=50, minimum_free_bytes=10),
+        inventory=lambda _root: fake_inventory(tmp_path, []),
+        disk_space=lambda root: fake_disk_space(root, free_bytes=50),
+    )
+
+    plan = store.plan(reserved_bytes=60, now_ns=1)
+
+    assert plan.projected_total_bytes == 60
+    assert plan.projected_free_bytes == -10
+    assert plan.unresolved_constraints == (
+        "max_total_bytes",
+        "minimum_free_bytes",
+    )
+    assert not plan.within_limits
+
+
+@pytest.mark.parametrize("reserved_bytes", [-1, True, 1.5])
+def test_bounded_store_rejects_invalid_reserved_bytes(
+    tmp_path: Path,
+    reserved_bytes: object,
+) -> None:
+    store = soak_storage.BoundedArtifactStore(tmp_path, direct_policy())
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        store.plan(reserved_bytes=reserved_bytes)  # type: ignore[arg-type]
+
+
 def test_bounded_store_reports_limits_blocked_by_active_campaign(
     tmp_path: Path,
 ) -> None:

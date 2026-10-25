@@ -98,6 +98,7 @@ class StoragePrunePlan:
 
     inventory: ArtifactInventory
     disk_space: DiskSpaceSnapshot
+    reserved_bytes: int
     deletions: tuple[PlannedDeletion, ...]
     protected_files: tuple[ArtifactFile, ...]
     projected_total_bytes: int
@@ -156,9 +157,17 @@ class BoundedArtifactStore:
         *,
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
+        reserved_bytes: int = 0,
         now_ns: int | None = None,
     ) -> StoragePrunePlan:
-        """Builds one oldest-first byte, age, and reserve enforcement plan."""
+        """Builds one oldest-first plan including projected future allocation."""
+
+        if (
+            isinstance(reserved_bytes, bool)
+            or not isinstance(reserved_bytes, int)
+            or reserved_bytes < 0
+        ):
+            raise ValueError("reserved_bytes must be a non-negative integer.")
 
         inventory = self._inventory(self.root)
         disk_space = self._disk_space(self.root)
@@ -194,8 +203,8 @@ class BoundedArtifactStore:
         selected: list[PlannedDeletion] = []
         selected_paths: set[Path] = set()
         triggered: list[str] = []
-        projected_total = inventory.total_bytes
-        projected_free = disk_space.free_bytes
+        projected_total = inventory.total_bytes + reserved_bytes
+        projected_free = disk_space.free_bytes - reserved_bytes
 
         def select(artifact: ArtifactFile, reason: str) -> None:
             nonlocal projected_free, projected_total
@@ -245,6 +254,7 @@ class BoundedArtifactStore:
         return StoragePrunePlan(
             inventory=inventory,
             disk_space=disk_space,
+            reserved_bytes=reserved_bytes,
             deletions=tuple(selected),
             protected_files=tuple(protected_files),
             projected_total_bytes=projected_total,
@@ -258,6 +268,7 @@ class BoundedArtifactStore:
         *,
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
+        reserved_bytes: int = 0,
         now_ns: int | None = None,
     ) -> StorageEnforcementResult:
         """Deletes only whole planned artifacts and reports every failure."""
@@ -265,6 +276,7 @@ class BoundedArtifactStore:
         plan = self.plan(
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
+            reserved_bytes=reserved_bytes,
             now_ns=now_ns,
         )
         deleted_paths: list[Path] = []
@@ -281,6 +293,7 @@ class BoundedArtifactStore:
         verification = self.plan(
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
+            reserved_bytes=reserved_bytes,
             now_ns=now_ns,
         )
         return StorageEnforcementResult(
