@@ -18,6 +18,7 @@ from typing import Any, Callable
 from . import converged_live_wire as clw
 from . import (
     diag_event_runs,
+    diagnostic_run_scan,
     hideme_vpn,
     soak_launch,
     soak_run_layout,
@@ -67,6 +68,7 @@ CONSECUTIVE_FAILURE_THRESHOLDS = {
     "mfc-diagnostic-writer-unavailable": 3,
 }
 WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
+DIAGNOSTIC_INDEX_FILE_NAME = "diagnostic-run-index.json"
 
 
 @dataclass(frozen=True)
@@ -391,7 +393,6 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
             "errorType": type(error).__name__,
             "error": str(error)[:1024],
         }
-
     summary = storage_enforcement_summary(context.root, result)
     response = {
         **identity,
@@ -406,6 +407,82 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
             or (result.failures[0] if result.failures else "pending deletions remain")
         )[:1024]
     return response
+
+
+def advance_diagnostic_indexes(
+    status: dict[str, Any], context: SessionStorageContext
+) -> dict[str, Any]:
+    """Advances and persists one compact closed-segment index per available writer."""
+
+    diagnostic_writers = status.get("diagnosticWriters")
+    if not isinstance(diagnostic_writers, dict):
+        raise RuntimeError("Watch status is missing diagnostic writer state.")
+    required = diagnostic_writers.get("required") is True
+    result: dict[str, Any] = {
+        "required": required,
+        "rust": None,
+        "mfc": None,
+    }
+    if not required:
+        return result
+
+    profiles = status.get("profiles")
+    if not isinstance(profiles, dict):
+        raise RuntimeError("Watch status is missing diagnostic profile paths.")
+    observed_utc = status.get("timestampUtc")
+    if not isinstance(observed_utc, str) or not observed_utc:
+        raise RuntimeError("Watch status timestampUtc is invalid.")
+    store = soak_storage.BoundedArtifactStore(context.root, context.policy)
+    for client in ("rust", "mfc"):
+        writer = diagnostic_writers.get(client)
+        if not isinstance(writer, dict) or not isinstance(writer.get("health"), dict):
+            result[client] = {
+                "ok": False,
+                "status": "writer-health-unavailable",
+            }
+            continue
+        profile_value = profiles.get(client)
+        if not isinstance(profile_value, str) or not profile_value.strip():
+            raise RuntimeError(
+                f"Watch status {client} diagnostic profile path is invalid."
+            )
+        profile_dir = Path(profile_value).resolve()
+        directory = (
+            context.active_campaign / "report" / "diagnostic-indexes" / client
+        ).resolve()
+        checkpoint_path = directory / DIAGNOSTIC_INDEX_FILE_NAME
+        checkpoint = load_json(checkpoint_path) if checkpoint_path.is_file() else None
+        advanced = diagnostic_run_scan.scan_closed_segments(
+            profile_dir=profile_dir,
+            client=client,
+            writer_health=writer["health"],
+            observed_utc=observed_utc,
+            checkpoint=checkpoint,
+        )
+        persisted = soak_storage.persist_bounded_json_checkpoint(
+            store=store,
+            active_campaign=context.active_campaign,
+            directory=directory,
+            stream_name="diagnostic_indexes",
+            artifact_name=DIAGNOSTIC_INDEX_FILE_NAME,
+            payload=advanced.checkpoint,
+        )
+        source = advanced.checkpoint["source"]
+        index = advanced.checkpoint["index"]
+        result[client] = {
+            "ok": True,
+            "status": "indexed",
+            "checkpoint": str(persisted.path),
+            "bytes": persisted.byte_count,
+            "sha256": persisted.sha256,
+            "coverage": source["coverage"],
+            "closedSegmentCount": source["closedSegmentCount"],
+            "recordCount": index["recordCount"],
+            "writerHealthSamples": index["writerHealth"]["samples"],
+            "writerHealthViolationsSeen": index["writerHealth"]["violationsSeen"],
+            "processedSegments": list(advanced.processed_segments),
+        }
+    return result
 
 
 def preflight_campaign_storage(
@@ -1331,6 +1408,9 @@ def build_watch_sample(
         "diagnosticWriters": (
             status.get("diagnosticWriters") if status is not None else None
         ),
+        "diagnosticIndexes": (
+            status.get("diagnosticIndexes") if status is not None else None
+        ),
         "vpn": status.get("vpn") if status is not None else None,
         "lastRun": status.get("lastRun") if status is not None else None,
         "storage": storage,
@@ -1831,6 +1911,27 @@ def watch_session(
                 "errorType": type(error).__name__,
                 "error": str(error)[:1024],
             }
+        if status is not None and storage.get("ok"):
+            try:
+                status["diagnosticIndexes"] = advance_diagnostic_indexes(
+                    status,
+                    storage_context,
+                )
+            except Exception as error:  # noqa: BLE001 - index evidence loss is terminal
+                status["diagnosticIndexes"] = {
+                    "required": bool(
+                        (status.get("diagnosticWriters") or {}).get("required")
+                    ),
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
+                storage = {
+                    **storage,
+                    "ok": False,
+                    "phase": "diagnosticIndexes",
+                    "errorType": type(error).__name__,
+                    "error": str(error)[:1024],
+                }
         latest = build_watch_sample(status, storage, status_error=status_error)
         finding_annotation = watch_finding_annotation(latest, finding_streaks)
         finding_streaks = finding_annotation["findingStreaks"]

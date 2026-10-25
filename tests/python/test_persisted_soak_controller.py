@@ -18,7 +18,9 @@ def make_paths(tmp_path: Path) -> controller.ControlPaths:
     return controller.build_control_paths(tmp_path / "output")
 
 
-def storage_policy(*, max_total_bytes: int = 1_000) -> soak_storage.SoakStoragePolicy:
+def storage_policy(
+    *, max_total_bytes: int = 1_000, index_max_bytes: int = 1
+) -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=max_total_bytes,
         max_age_seconds=3_600,
@@ -37,7 +39,9 @@ def storage_policy(*, max_total_bytes: int = 1_000) -> soak_storage.SoakStorageP
                 "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
                 "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(1, 1),
-                "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(
+                    index_max_bytes, 1
+                ),
                 "diagnostic_segments": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
@@ -255,7 +259,10 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def diagnostic_writer_health() -> dict[str, object]:
+def diagnostic_writer_health(
+    *, client: str = "rust", active_segment_id: int = 0, records_written: int = 1
+) -> dict[str, object]:
+    prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
     return {
         "schema": "diag_event_v2",
         "enabled": True,
@@ -263,15 +270,15 @@ def diagnostic_writer_health() -> dict[str, object]:
         "initialized": True,
         "runId": "run-a",
         "processId": 42,
-        "activeSegmentId": 0,
-        "activeFileName": "emulebb-rust-diag-42-run-a-000000.jsonl",
+        "activeSegmentId": active_segment_id,
+        "activeFileName": (f"{prefix}-diag-42-run-a-{active_segment_id:06}.jsonl"),
         "activeSegmentBytes": 10,
-        "recordsWritten": 1,
+        "recordsWritten": records_written,
         "bytesWritten": 10,
         "droppedEvents": 0,
         "encodeErrors": 0,
         "writeErrors": 0,
-        "rotations": 0,
+        "rotations": active_segment_id,
         "retentionDeletes": 0,
         "retentionDeleteErrors": 0,
         "retentionScanErrors": 0,
@@ -298,6 +305,30 @@ def diagnostic_writer_health() -> dict[str, object]:
         "maxRetainedSeconds": 3_600,
         "minimumFreeBytes": 500,
         "initializationFailure": None,
+    }
+
+
+def diagnostic_record(
+    *, client: str, segment_id: int, sequence: int
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": client,
+        "processId": 42,
+        "runId": "run-a",
+        "segmentId": segment_id,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": "ed2k_tcp",
+        "event": "packet",
+        "severity": "info",
+        "keys": {"protocolMarker": 0xE3, "opcode": 1},
+        "body": {
+            "direction": "send",
+            "protocolMarker": 0xE3,
+            "opcode": 1,
+            "opcodeName": "OP_01",
+        },
     }
 
 
@@ -468,6 +499,75 @@ def test_session_storage_enforcement_reports_unprunable_active_growth(tmp_path: 
     assert result["errorType"] == "StoragePolicyUnsatisfied"
     assert result["error"] == "max_total_bytes"
     assert active_file.is_file()
+
+
+def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
+    tmp_path: Path,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    active_campaign = root / "20261025T120000Z"
+    policy = storage_policy(max_total_bytes=1_000_000, index_max_bytes=64 * 1024)
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=active_campaign,
+        previous_campaign=None,
+    )
+    profiles = {
+        "rust": tmp_path / "rust-profile",
+        "mfc": tmp_path / "mfc-profile",
+    }
+    for client, profile in profiles.items():
+        profile.mkdir()
+        prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
+        segment = profile / f"{prefix}-diag-42-run-a-000000.jsonl"
+        segment.write_text(
+            json.dumps(diagnostic_record(client=client, segment_id=0, sequence=1))
+            + "\n",
+            encoding="utf-8",
+        )
+    status = {
+        "timestampUtc": "2026-10-25T12:00:00+00:00",
+        "profiles": {client: str(path) for client, path in profiles.items()},
+        "diagnosticWriters": {
+            "required": True,
+            "rust": {
+                "ok": True,
+                "health": diagnostic_writer_health(
+                    client="rust", active_segment_id=1, records_written=1
+                ),
+                "violations": [],
+            },
+            "mfc": {
+                "ok": True,
+                "health": diagnostic_writer_health(
+                    client="mfc", active_segment_id=1, records_written=1
+                ),
+                "violations": [],
+            },
+        },
+    }
+
+    first = controller.advance_diagnostic_indexes(status, context)
+    status["timestampUtc"] = "2026-10-25T12:01:00+00:00"
+    second = controller.advance_diagnostic_indexes(status, context)
+
+    assert first["required"] is True
+    for client in ("rust", "mfc"):
+        first_client = first[client]
+        second_client = second[client]
+        assert first_client["coverage"] == "from-run-start"
+        assert first_client["closedSegmentCount"] == 1
+        assert first_client["recordCount"] == 1
+        assert [item["segmentId"] for item in first_client["processedSegments"]] == [0]
+        assert second_client["processedSegments"] == []
+        assert second_client["writerHealthSamples"] == 2
+        checkpoint = json.loads(
+            Path(second_client["checkpoint"]).read_text(encoding="utf-8")
+        )
+        assert checkpoint["client"] == client
+        assert checkpoint["index"]["recordCount"] == 1
 
 
 def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) -> None:
@@ -1318,6 +1418,11 @@ def test_watch_session_persists_one_bounded_health_sample(
     sample = json.loads(paths.watch_jsonl.read_text(encoding="utf-8"))
     assert sample["rustProcessCount"] == 1
     assert sample["storage"]["policySha256"] == "abc"
+    assert sample["diagnosticIndexes"] == {
+        "required": False,
+        "rust": None,
+        "mfc": None,
+    }
 
 
 def test_watch_session_fails_closed_on_storage_enforcement_failure(
@@ -1406,6 +1511,15 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
     )
     monkeypatch.setattr(
         controller,
+        "advance_diagnostic_indexes",
+        lambda _status, _context: {
+            "required": True,
+            "rust": {"ok": True},
+            "mfc": {"ok": True},
+        },
+    )
+    monkeypatch.setattr(
+        controller,
         "request_watch_failure_stop",
         lambda _paths, observed, **_kwargs: stop_requests.append(observed)
         or {"launcherGraceful": True},
@@ -1426,6 +1540,52 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
         "rust-diagnostic-writer-unhealthy"
     ]
     assert result["latest"]["shutdown"]["launcherGraceful"] is True
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_fails_closed_on_diagnostic_index_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    status = watch_status_payload()
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: status)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+
+    def reject_indexes(_status, _context):
+        raise RuntimeError("index checkpoint failed")
+
+    monkeypatch.setattr(controller, "advance_diagnostic_indexes", reject_indexes)
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024 * 1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["latest"]["storage"]["phase"] == "diagnosticIndexes"
+    assert result["latest"]["diagnosticIndexes"] == {
+        "required": False,
+        "errorType": "RuntimeError",
+        "error": "index checkpoint failed",
+    }
+    assert controller.STORAGE_FAILURE_FINDING in result["latest"]["findings"]
     assert stop_requests == [manifest]
 
 
