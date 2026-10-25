@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 import os
 import queue
 import subprocess
@@ -135,17 +136,18 @@ def _force_stop(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
     if os.name == "nt":
-        row = next(
-            (item for item in windows_processes.collect_processes() if item.pid == process.pid),
-            None,
-        )
-        if row is not None:
-            result = windows_processes.terminate_process_tree(
-                process.pid,
-                expected_root_creation_date=row.creation_date,
+        with suppress(Exception):
+            row = next(
+                (item for item in windows_processes.collect_processes() if item.pid == process.pid),
+                None,
             )
-            if result.get("return_code") == 0:
-                return
+            if row is not None:
+                result = windows_processes.terminate_process_tree(
+                    process.pid,
+                    expected_root_creation_date=row.creation_date,
+                )
+                if result.get("return_code") == 0:
+                    return
     process.terminate()
     try:
         process.wait(timeout=5.0)
