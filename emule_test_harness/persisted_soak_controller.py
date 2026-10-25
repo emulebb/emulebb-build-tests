@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from . import converged_live_wire as clw
 from . import (
+    converged_observer,
     diag_event_runs,
     diagnostic_run_scan,
     hideme_vpn,
@@ -33,7 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
-MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v1"
+OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
+MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v2"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
@@ -52,6 +54,7 @@ POST_READINESS_IMMEDIATE_FAILURE_FINDINGS = frozenset(
     {
         *DIAGNOSTIC_WRITER_FAILURE_FINDINGS,
         "launcher-not-running",
+        "observer-not-running",
         "rust-process-count",
         "mfc-process-count",
         "rust-vpn-guard-unhealthy",
@@ -104,6 +107,8 @@ class CampaignOutputPaths:
     root: Path
     launcher_stdout: Path
     launcher_stderr: Path
+    observer_stdout: Path
+    observer_stderr: Path
     watch_stdout: Path
     watch_stderr: Path
 
@@ -165,6 +170,8 @@ def build_campaign_output_paths(campaign_dir: Path) -> CampaignOutputPaths:
         root=root,
         launcher_stdout=root / "launcher.stdout.log",
         launcher_stderr=root / "launcher.stderr.log",
+        observer_stdout=root / "observer.stdout.log",
+        observer_stderr=root / "observer.stderr.log",
         watch_stdout=root / "watcher.stdout.log",
         watch_stderr=root / "watcher.stderr.log",
     )
@@ -1169,6 +1176,32 @@ def build_launch_command(
     ]
 
 
+def build_observer_command(
+    paths: ControlPaths,
+    *,
+    ready_timeout_seconds: float,
+    poll_interval_seconds: float,
+    checkpoint_interval_seconds: float,
+    failure_threshold: int,
+) -> list[str]:
+    """Builds the attach-only bounded observer command."""
+
+    return [
+        sys.executable,
+        str(OBSERVER_SCRIPT),
+        "--session-manifest",
+        str(paths.manifest),
+        "--ready-timeout-seconds",
+        str(ready_timeout_seconds),
+        "--poll-interval-seconds",
+        str(poll_interval_seconds),
+        "--checkpoint-interval-seconds",
+        str(checkpoint_interval_seconds),
+        "--failure-threshold",
+        str(failure_threshold),
+    ]
+
+
 def build_watch_command(
     paths: ControlPaths,
     *,
@@ -1259,14 +1292,55 @@ def process_identity(row: windows_processes.WindowsProcessInfo, command: list[st
     }
 
 
+def stop_owned_process(
+    identity: object,
+    *,
+    markers: tuple[str, ...],
+    graceful_timeout_seconds: float,
+) -> dict[str, Any]:
+    """Stops one exact controller-owned process without broad name matching."""
+
+    exact = exact_identity_payload(identity)
+    if exact is None:
+        return {
+            "identityAvailable": False,
+            "graceful": True,
+            "force": {
+                "forced": False,
+                "alreadyStopped": True,
+                "verifiedStopped": True,
+            },
+        }
+    graceful = wait_exact_exit(exact, graceful_timeout_seconds)
+    force = (
+        {"forced": False, "alreadyStopped": True, "verifiedStopped": True}
+        if graceful
+        else stop_exact_process(
+            exact,
+            markers=markers,
+            timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+        )
+    )
+    return {
+        "identityAvailable": True,
+        "graceful": graceful,
+        "force": force,
+    }
+
+
 def start_session(
     config: SessionConfig,
     paths: ControlPaths,
     *,
     start_watch: bool = True,
+    start_observer: bool = True,
     watch_interval_seconds: float = DEFAULT_WATCH_INTERVAL_SECONDS,
     watch_max_bytes: int = DEFAULT_WATCH_MAX_BYTES,
     watch_segments: int = DEFAULT_WATCH_SEGMENTS,
+    observer_ready_timeout_seconds: float = converged_observer.DEFAULT_READY_TIMEOUT_SECONDS,
+    observer_poll_interval_seconds: float = converged_observer.DEFAULT_POLL_INTERVAL_SECONDS,
+    observer_checkpoint_interval_seconds: float = converged_observer.DEFAULT_CHECKPOINT_INTERVAL_SECONDS,
+    observer_failure_threshold: int = converged_observer.DEFAULT_FAILURE_THRESHOLD,
 ) -> dict[str, Any]:
     """Starts one detached dual-client diagnostics session."""
 
@@ -1280,12 +1354,24 @@ def start_session(
         raise ValueError("watch_max_bytes must be greater than zero.")
     if start_watch and watch_segments <= 0:
         raise ValueError("watch_segments must be greater than zero.")
+    if start_observer and not start_watch:
+        raise ValueError("The converged observer requires the persisted health watcher.")
+    if start_observer and observer_ready_timeout_seconds <= 0:
+        raise ValueError("observer_ready_timeout_seconds must be greater than zero.")
+    if start_observer and observer_poll_interval_seconds <= 0:
+        raise ValueError("observer_poll_interval_seconds must be greater than zero.")
+    if start_observer and observer_checkpoint_interval_seconds <= 0:
+        raise ValueError("observer_checkpoint_interval_seconds must be greater than zero.")
+    if start_observer and observer_failure_threshold <= 0:
+        raise ValueError("observer_failure_threshold must be greater than zero.")
     existing = load_json(paths.manifest)
     processes = windows_processes.collect_processes()
     if exact_process_row(existing.get("launcher", {}), processes) is not None:
         raise RuntimeError(f"A persisted soak launcher is already active: {paths.manifest}")
     if exact_process_row(existing.get("watcher", {}), processes) is not None:
         raise RuntimeError(f"A persisted soak watcher is already active: {paths.manifest}")
+    if exact_process_row(existing.get("observer", {}), processes) is not None:
+        raise RuntimeError(f"A persisted soak observer is already active: {paths.manifest}")
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
@@ -1343,7 +1429,21 @@ def start_session(
         "campaignId": campaign_id,
         "campaignDir": str(campaign_dir),
         "launcher": process_identity(launcher_row, launch_command),
+        "observer": None,
         "watcher": None,
+        "observerConfig": {
+            "enabled": start_observer,
+            "readyTimeoutSeconds": (
+                observer_ready_timeout_seconds if start_observer else None
+            ),
+            "pollIntervalSeconds": (
+                observer_poll_interval_seconds if start_observer else None
+            ),
+            "checkpointIntervalSeconds": (
+                observer_checkpoint_interval_seconds if start_observer else None
+            ),
+            "failureThreshold": observer_failure_threshold if start_observer else None,
+        },
         "watchConfig": {
             "enabled": start_watch,
             "intervalSeconds": watch_interval_seconds if start_watch else None,
@@ -1381,11 +1481,62 @@ def start_session(
             "retainedSegments": controller_output_policy.retained_segments,
             "launcherStdout": str(campaign_output.launcher_stdout),
             "launcherStderr": str(campaign_output.launcher_stderr),
+            "observerStdout": str(campaign_output.observer_stdout),
+            "observerStderr": str(campaign_output.observer_stderr),
             "watchStdout": str(campaign_output.watch_stdout),
             "watchStderr": str(campaign_output.watch_stderr),
         },
     }
     write_json_atomic(paths.manifest, manifest)
+
+    if start_observer:
+        observer_target_command = build_observer_command(
+            paths,
+            ready_timeout_seconds=observer_ready_timeout_seconds,
+            poll_interval_seconds=observer_poll_interval_seconds,
+            checkpoint_interval_seconds=observer_checkpoint_interval_seconds,
+            failure_threshold=observer_failure_threshold,
+        )
+        observer_command = build_bounded_process_command(
+            observer_target_command,
+            stdout_path=campaign_output.observer_stdout,
+            stderr_path=campaign_output.observer_stderr,
+            policy=controller_output_policy,
+            stop_files=(paths.stop_file, paths.watch_stop_file),
+        )
+        observer_process: subprocess.Popen[bytes] | None = None
+        try:
+            observer_process = spawn_detached(observer_command)
+            observer_row = wait_process_identity(
+                observer_process.pid,
+                markers=("converged-soak-observer.py",),
+            )
+        except Exception as error:
+            paths.stop_file.write_text(
+                datetime.now(UTC).isoformat() + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            if observer_process is not None and observer_process.poll() is None:
+                observer_process.terminate()
+            launcher_stop = stop_owned_process(
+                manifest["launcher"],
+                markers=("launch-soak.py",),
+                graceful_timeout_seconds=15.0,
+            )
+            manifest["state"] = "start-failed"
+            manifest["startFailure"] = {
+                "role": "observer",
+                "type": type(error).__name__,
+                "message": str(error),
+                "launcherStop": launcher_stop,
+            }
+            write_json_atomic(paths.manifest, manifest)
+            raise
+        manifest["observer"] = process_identity(observer_row, observer_command)
+        manifest["observerCommand"] = observer_command
+        manifest["observerTargetCommand"] = observer_target_command
+        write_json_atomic(paths.manifest, manifest)
 
     if start_watch:
         watch_target_command = build_watch_command(
@@ -1405,10 +1556,33 @@ def start_session(
         try:
             watch_process = spawn_detached(watch_command)
             watch_row = wait_process_identity(watch_process.pid, markers=("persisted-soak-control.py", "watch"))
-        except Exception:
-            paths.stop_file.write_text(datetime.now(UTC).isoformat() + "\n", encoding="utf-8", newline="\n")
-            if not wait_exact_exit(manifest["launcher"], 15.0):
-                stop_exact_process(manifest["launcher"], markers=("launch-soak.py",), timeout_seconds=15.0)
+        except Exception as error:
+            requested_at = datetime.now(UTC).isoformat() + "\n"
+            paths.stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
+            paths.watch_stop_file.write_text(
+                requested_at,
+                encoding="utf-8",
+                newline="\n",
+            )
+            observer_stop = stop_owned_process(
+                manifest.get("observer"),
+                markers=("converged-soak-observer.py",),
+                graceful_timeout_seconds=15.0,
+            )
+            launcher_stop = stop_owned_process(
+                manifest["launcher"],
+                markers=("launch-soak.py",),
+                graceful_timeout_seconds=15.0,
+            )
+            manifest["state"] = "start-failed"
+            manifest["startFailure"] = {
+                "role": "watcher",
+                "type": type(error).__name__,
+                "message": str(error),
+                "observerStop": observer_stop,
+                "launcherStop": launcher_stop,
+            }
+            write_json_atomic(paths.manifest, manifest)
             raise
         manifest["watcher"] = process_identity(watch_row, watch_command)
         manifest["watchCommand"] = watch_command
@@ -1633,6 +1807,13 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     watcher = status.get("watcher") or {}
     if manifest.get("state") == "running" and watcher.get("identity") and not watcher.get("alive"):
         findings.append("watcher-not-running")
+    observer = status.get("observer") or {}
+    if (
+        manifest.get("state") == "running"
+        and observer.get("enabled") is True
+        and not observer.get("alive")
+    ):
+        findings.append("observer-not-running")
     heartbeat_health = watcher.get("heartbeatHealth") or {}
     if manifest.get("state") == "running" and heartbeat_health.get("state") == "stale":
         findings.append("watcher-heartbeat-stale")
@@ -1701,8 +1882,10 @@ def session_status(
     manifest = load_json(paths.manifest)
     processes = windows_processes.collect_processes()
     launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
+    observer_identity = manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
     watcher_identity = manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
     launcher = exact_process_row(launcher_identity, processes)
+    observer = exact_process_row(observer_identity, processes)
     watcher = exact_process_row(watcher_identity, processes)
     tree = windows_processes.collect_process_tree(launcher.pid, processes) if launcher is not None else []
     preflight = manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
@@ -1761,6 +1944,14 @@ def session_status(
         "launcher": {
             "alive": launcher is not None,
             "identity": launcher_identity,
+        },
+        "observer": {
+            "enabled": bool(
+                isinstance(manifest.get("observerConfig"), dict)
+                and manifest["observerConfig"].get("enabled") is True
+            ),
+            "alive": observer is not None,
+            "identity": observer_identity,
         },
         "watcher": {
             "alive": watcher is not None,
@@ -2130,6 +2321,26 @@ def request_watch_failure_stop(
         except OSError as error:
             stop_errors.append(f"{stop_path}: {type(error).__name__}: {error}"[:1024])
 
+    try:
+        observer_stop = stop_owned_process(
+            manifest.get("observer"),
+            markers=("converged-soak-observer.py",),
+            graceful_timeout_seconds=graceful_timeout_seconds,
+        )
+    except Exception as error:  # noqa: BLE001 - launcher shutdown must still proceed
+        stop_errors.append(f"observerStop: {type(error).__name__}: {error}"[:1024])
+        observer_stop = {
+            "identityAvailable": bool(exact_identity_payload(manifest.get("observer"))),
+            "graceful": False,
+            "force": {
+                "forced": False,
+                "alreadyStopped": False,
+                "verifiedStopped": False,
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            },
+        }
+
     if not identity_available:
         launcher_graceful = False
         launcher_force = {
@@ -2192,6 +2403,7 @@ def request_watch_failure_stop(
         "stopRequestedUtc": requested_at,
         "stopWriteErrors": stop_errors,
         "launcherIdentityAvailable": identity_available,
+        "observerStop": observer_stop,
         "capturedProcessCount": len(captured_tree),
         "launcherGraceful": launcher_graceful,
         "launcherForce": launcher_force,
@@ -2483,12 +2695,18 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
             "manifest": str(paths.manifest),
         }
     launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
+    observer_identity = manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
     watcher_identity = manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
     paths.control_dir.mkdir(parents=True, exist_ok=True)
     requested_at = datetime.now(UTC).isoformat()
     paths.stop_file.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
     paths.watch_stop_file.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
 
+    observer_stop = stop_owned_process(
+        observer_identity,
+        markers=("converged-soak-observer.py",),
+        graceful_timeout_seconds=min(graceful_timeout_seconds, 15.0),
+    )
     launcher_graceful = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
     launcher_force = (
         {"forced": False, "alreadyStopped": True}
@@ -2509,6 +2727,8 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
         "stopRequestedUtc": requested_at,
         "launcherGraceful": launcher_graceful,
         "launcherForce": launcher_force,
+        "observerGraceful": observer_stop["graceful"],
+        "observerForce": observer_stop["force"],
         "watcherGraceful": watcher_graceful,
         "watcherForce": watcher_force,
     }
@@ -2541,9 +2761,30 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     start.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
     start.add_argument("--no-watch", action="store_true")
+    start.add_argument("--no-observer", action="store_true")
     start.add_argument("--watch-interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS)
     start.add_argument("--watch-max-bytes", type=int, default=DEFAULT_WATCH_MAX_BYTES)
     start.add_argument("--watch-segments", type=int, default=DEFAULT_WATCH_SEGMENTS)
+    start.add_argument(
+        "--observer-ready-timeout-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_READY_TIMEOUT_SECONDS,
+    )
+    start.add_argument(
+        "--observer-poll-interval-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_POLL_INTERVAL_SECONDS,
+    )
+    start.add_argument(
+        "--observer-checkpoint-interval-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_CHECKPOINT_INTERVAL_SECONDS,
+    )
+    start.add_argument(
+        "--observer-failure-threshold",
+        type=int,
+        default=converged_observer.DEFAULT_FAILURE_THRESHOLD,
+    )
 
     status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
     status.add_argument("--no-rest", action="store_true")
@@ -2583,9 +2824,14 @@ def main(argv: list[str] | None = None) -> int:
             config,
             paths,
             start_watch=not args.no_watch,
+            start_observer=not args.no_observer,
             watch_interval_seconds=args.watch_interval_seconds,
             watch_max_bytes=args.watch_max_bytes,
             watch_segments=args.watch_segments,
+            observer_ready_timeout_seconds=args.observer_ready_timeout_seconds,
+            observer_poll_interval_seconds=args.observer_poll_interval_seconds,
+            observer_checkpoint_interval_seconds=args.observer_checkpoint_interval_seconds,
+            observer_failure_threshold=args.observer_failure_threshold,
         )
     elif args.command == "status":
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)

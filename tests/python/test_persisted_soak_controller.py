@@ -895,7 +895,7 @@ def test_exact_process_row_rejects_pid_reuse() -> None:
     assert controller.exact_process_row(None, rows) is None
 
 
-def test_start_session_records_launcher_and_watcher_identities(
+def test_start_session_records_launcher_observer_and_watcher_identities(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -975,8 +975,10 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert result["schema"] == controller.MANIFEST_SCHEMA
     assert result["launcher"]["pid"] == 101
     assert result["launcher"]["creationDate"] == "created-101"
-    assert result["watcher"]["pid"] == 102
-    assert result["watcher"]["creationDate"] == "created-102"
+    assert result["observer"]["pid"] == 102
+    assert result["observer"]["creationDate"] == "created-102"
+    assert result["watcher"]["pid"] == 103
+    assert result["watcher"]["creationDate"] == "created-103"
     assert result["campaignId"] == "20261025T120000Z"
     assert result["storage"]["launchEnforcement"]["withinLimits"] is True
     storage_context = controller.parse_session_storage_context(result, output_root)
@@ -987,11 +989,14 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert storage_context.policy == loaded_inputs.soak_storage
     assert input_loads == [config.inputs.resolve()]
     assert observed_inputs == [loaded_inputs, loaded_inputs]
-    assert len(spawned) == 2
+    assert len(spawned) == 3
     assert Path(spawned[0][1]).name == "run-bounded-process.py"
     assert any(Path(value).name == "launch-soak.py" for value in spawned[0])
     assert Path(spawned[1][1]).name == "run-bounded-process.py"
-    assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[1])
+    assert any(Path(value).name == "converged-soak-observer.py" for value in spawned[1])
+    assert not any(Path(value).name == "launch-soak.py" for value in spawned[1])
+    assert Path(spawned[2][1]).name == "run-bounded-process.py"
+    assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[2])
     assert result["watchTargetCommand"][result["watchTargetCommand"].index("--launcher-pid") + 1] == "101"
     assert (
         result["watchTargetCommand"][
@@ -1000,13 +1005,169 @@ def test_start_session_records_launcher_and_watcher_identities(
         == "created-101"
     )
     assert result["launcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[0])
-    assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[1])
+    assert result["observer"]["commandFingerprint"] == controller.command_fingerprint(spawned[1])
+    assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[2])
     assert result["logs"]["root"] == str(
         output_root / "soak" / "campaigns" / "20261025T120000Z" / "controller-output"
     )
     assert result["logs"]["maxSegmentBytes"] == 1
     assert result["logs"]["retainedSegments"] == 1
-    assert json.loads(paths.manifest.read_text(encoding="utf-8"))["watcher"]["pid"] == 102
+    assert result["logs"]["observerStdout"].endswith("observer.stdout.log")
+    persisted = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert persisted["observer"]["pid"] == 102
+    assert persisted["watcher"]["pid"] == 103
+
+
+def test_start_session_can_disable_optional_observer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    spawned: list[list[str]] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "load_live_wire_inputs",
+        lambda _path: live_inputs(tmp_path, policy=storage_policy()),
+    )
+    monkeypatch.setattr(
+        controller,
+        "preflight_session",
+        lambda *_args, **_kwargs: preflight_payload(tmp_path),
+    )
+    monkeypatch.setattr(
+        controller,
+        "enforce_campaign_storage",
+        lambda *_args, **_kwargs: {"withinLimits": True},
+    )
+    monkeypatch.setattr(
+        controller.soak_run_layout,
+        "utc_campaign_id",
+        lambda: "20261025T120000Z",
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+
+    def fake_spawn(command: list[str], **_kwargs) -> FakeProcess:
+        spawned.append(command)
+        return FakeProcess(100 + len(spawned))
+
+    monkeypatch.setattr(controller, "spawn_detached", fake_spawn)
+    monkeypatch.setattr(
+        controller,
+        "wait_process_identity",
+        lambda pid, **_kwargs: WindowsProcessInfo(
+            pid,
+            1,
+            "python.exe",
+            "python",
+            f"created-{pid}",
+        ),
+    )
+
+    result = controller.start_session(config, paths, start_observer=False)
+
+    assert result["observer"] is None
+    assert result["observerConfig"]["enabled"] is False
+    assert len(spawned) == 2
+    assert not any(
+        Path(value).name == "converged-soak-observer.py"
+        for command in spawned
+        for value in command
+    )
+
+
+def test_observer_start_failure_stops_launcher_and_persists_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    processes: list[FakeProcess] = []
+    stopped: list[tuple[object, tuple[str, ...]]] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "load_live_wire_inputs",
+        lambda _path: live_inputs(tmp_path, policy=storage_policy()),
+    )
+    monkeypatch.setattr(
+        controller,
+        "preflight_session",
+        lambda *_args, **_kwargs: preflight_payload(tmp_path),
+    )
+    monkeypatch.setattr(
+        controller,
+        "enforce_campaign_storage",
+        lambda *_args, **_kwargs: {"withinLimits": True},
+    )
+    monkeypatch.setattr(
+        controller.soak_run_layout,
+        "utc_campaign_id",
+        lambda: "20261025T120000Z",
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+
+    def fake_spawn(_command: list[str], **_kwargs) -> FakeProcess:
+        process = FakeProcess(101 + len(processes))
+        processes.append(process)
+        return process
+
+    def fake_identity(pid: int, *, markers: tuple[str, ...], **_kwargs):
+        if markers == ("converged-soak-observer.py",):
+            raise RuntimeError("observer identity unavailable")
+        return WindowsProcessInfo(pid, 1, "python.exe", "python", f"created-{pid}")
+
+    monkeypatch.setattr(controller, "spawn_detached", fake_spawn)
+    monkeypatch.setattr(controller, "wait_process_identity", fake_identity)
+    monkeypatch.setattr(
+        controller,
+        "stop_owned_process",
+        lambda identity, *, markers, **_kwargs: stopped.append((identity, markers))
+        or {"graceful": True, "force": {"forced": False}},
+    )
+
+    with pytest.raises(RuntimeError, match="observer identity unavailable"):
+        controller.start_session(config, paths)
+
+    assert len(processes) == 2
+    assert processes[1].terminated is True
+    assert stopped[0][0]["pid"] == 101
+    assert stopped[0][1] == ("launch-soak.py",)
+    persisted = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert persisted["state"] == "start-failed"
+    assert persisted["startFailure"]["role"] == "observer"
+    assert paths.stop_file.is_file()
 
 
 def test_start_session_enforces_storage_before_control_mutation_or_spawn(
@@ -1085,6 +1246,8 @@ def test_session_status_reports_exact_dual_process_tree(
             "schema": controller.MANIFEST_SCHEMA,
             "state": "running",
             "launcher": {"pid": 10, "creationDate": "launcher"},
+            "observer": {"pid": 30, "creationDate": "observer"},
+            "observerConfig": {"enabled": True},
             "watcher": {"pid": 20, "creationDate": "watcher"},
             "preflight": preflight,
         },
@@ -1095,6 +1258,13 @@ def test_session_status_reports_exact_dual_process_tree(
         WindowsProcessInfo(13, 10, "python.exe", "python launch-soak.py", "launch-target"),
         WindowsProcessInfo(11, 13, "emulebb-rust-diagnostics.exe", "rust", "rust"),
         WindowsProcessInfo(12, 13, "emule.exe", "mfc", "mfc"),
+        WindowsProcessInfo(
+            30,
+            1,
+            "python.exe",
+            "python run-bounded-process.py -- converged-soak-observer.py",
+            "observer",
+        ),
         WindowsProcessInfo(
             20,
             1,
@@ -1118,6 +1288,7 @@ def test_session_status_reports_exact_dual_process_tree(
 
     assert result["ok"] is True
     assert result["launcher"]["alive"] is True
+    assert result["observer"]["alive"] is True
     assert result["watcher"]["alive"] is True
     assert result["clients"]["rustCount"] == 1
     assert result["clients"]["mfcCount"] == 1
@@ -1481,6 +1652,7 @@ def test_stop_session_requests_graceful_teardown_without_force(
             "schema": controller.MANIFEST_SCHEMA,
             "state": "running",
             "launcher": {"pid": 10, "creationDate": "launcher"},
+            "observer": {"pid": 30, "creationDate": "observer"},
             "watcher": {"pid": 20, "creationDate": "watcher"},
         },
     )
@@ -1501,9 +1673,11 @@ def test_stop_session_requests_graceful_teardown_without_force(
 
     assert paths.stop_file.is_file()
     assert paths.watch_stop_file.is_file()
-    assert [identity["pid"] for identity in waited] == [10, 20]
+    assert [identity["pid"] for identity in waited] == [30, 10, 20]
     assert result["launcherGraceful"] is True
     assert result["launcherForce"]["forced"] is False
+    assert result["observerGraceful"] is True
+    assert result["observerForce"]["forced"] is False
     assert result["watcherGraceful"] is True
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["state"] == "stopped"
 
@@ -1570,6 +1744,20 @@ def test_watch_finding_annotation_gates_terminal_health_on_readiness() -> None:
         "full-tunnel-unhealthy",
         "rust-process-count",
         "rust-vpn-guard-unhealthy",
+    ]
+
+
+def test_dead_enabled_observer_is_terminal_only_after_readiness() -> None:
+    sample = {
+        "campaignId": "campaign",
+        "lastRun": {"campaignId": "campaign", "status": "starting"},
+        "findings": ["observer-not-running"],
+    }
+
+    assert controller.watch_finding_annotation(sample, {})["terminalFindings"] == []
+    sample["lastRun"]["status"] = "running"
+    assert controller.watch_finding_annotation(sample, {})["terminalFindings"] == [
+        "observer-not-running"
     ]
 
 
@@ -2081,7 +2269,10 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
     monkeypatch,
 ) -> None:
     paths = make_paths(tmp_path)
-    manifest = {"launcher": {"pid": 10, "creationDate": "launcher"}}
+    manifest = {
+        "launcher": {"pid": 10, "creationDate": "launcher"},
+        "observer": {"pid": 20, "creationDate": "observer"},
+    }
     forced: list[tuple[dict[str, object], tuple[str, ...], float]] = []
     monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: ())
     monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: False)
@@ -2103,7 +2294,14 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
     assert result["launcherGraceful"] is False
     assert result["launcherForce"]["forced"] is True
     assert result["launcherStopped"] is True
+    assert result["observerStop"]["graceful"] is False
+    assert result["observerStop"]["force"]["forced"] is True
     assert forced == [
+        (
+            manifest["observer"],
+            ("converged-soak-observer.py",),
+            controller.WATCH_FAILURE_GRACE_SECONDS,
+        ),
         (
             manifest["launcher"],
             ("launch-soak.py",),
