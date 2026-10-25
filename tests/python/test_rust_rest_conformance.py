@@ -314,28 +314,30 @@ def test_rust_openapi_stages_diagnostic_writer_health_as_optional() -> None:
     writer = schemas["DiagnosticWriterHealth"]
     assert writer["additionalProperties"] is False
     assert writer["properties"]["schema"]["enum"] == ["diag_event_v2"]
-    assert writer["required"] == [
-        "schema",
-        "enabled",
-        "configured",
-        "initialized",
-        "runId",
-        "processId",
-        "activeSegmentId",
-        "activeFileName",
-        "activeSegmentBytes",
-        "recordsWritten",
-        "bytesWritten",
-        "droppedEvents",
-        "encodeErrors",
-        "writeErrors",
-        "rotations",
-        "retentionDeletes",
-        "retentionDeleteErrors",
-        "maxSegmentBytes",
-        "maxSegmentSeconds",
-        "retainedSegments",
-        "initializationFailure",
+    assert writer["required"] == list(writer["properties"])
+    assert len(writer["required"]) == 41
+    assert {
+        "retentionScanErrors",
+        "freeSpaceProbeErrors",
+        "storagePolicyDrops",
+        "storageAuthorityFaulted",
+        "writerIoFaulted",
+        "storageBlockReason",
+        "storagePolicySatisfied",
+        "maximumGrowthBytes",
+        "maxTotalBytes",
+        "maxRetainedSeconds",
+        "minimumFreeBytes",
+    } <= set(writer["required"])
+    assert writer["properties"]["storageBlockReason"]["enum"] == [
+        "retentionScanFailure",
+        "retentionDeleteFailure",
+        "freeSpaceProbeFailure",
+        "retainedSegmentLimit",
+        "aggregateByteLimit",
+        "minimumFreeSpace",
+        "pendingRetentionDeletions",
+        None,
     ]
 
 
