@@ -8,7 +8,7 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v2"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v3"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -418,22 +418,47 @@ def driver_action_id(campaign_id: str, cycle: int) -> str:
     return f"{campaign_id}-cycle-{cycle:08d}"
 
 
-def record_search_create(
+def prepare_search_create(
     state: dict[str, Any],
     *,
     client: str,
-    issued_at_utc: str,
-    search_id: str | None,
-    error: dict[str, Any] | None,
+    prepared_at_utc: str,
 ) -> dict[str, Any]:
-    """Records one client's exact search-create outcome once."""
+    """Persists one client's create intent before the public POST."""
 
     updated = validate_state(state)
     pending = _require_pending_action(updated)
     client_state = _pending_client(pending, client)
     if client_state["create"] is not None:
-        raise RuntimeError("Converged observer search create is already recorded.")
-    _require_nonempty_string(issued_at_utc, "issued_at_utc")
+        raise RuntimeError("Converged observer search create is already prepared.")
+    _require_nonempty_string(prepared_at_utc, "prepared_at_utc")
+    client_state["create"] = {
+        "status": "prepared",
+        "preparedAtUtc": prepared_at_utc,
+        "completedAtUtc": None,
+        "searchId": None,
+        "error": None,
+    }
+    return validate_state(updated)
+
+
+def complete_search_create(
+    state: dict[str, Any],
+    *,
+    client: str,
+    completed_at_utc: str,
+    search_id: str | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Records one prepared search-create outcome exactly once."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    create = client_state["create"]
+    if not isinstance(create, dict) or create.get("status") != "prepared":
+        raise RuntimeError("Converged observer search create is not prepared.")
+    _require_nonempty_string(completed_at_utc, "completed_at_utc")
     if (search_id is None) == (error is None):
         raise RuntimeError(
             "Converged observer search create requires exactly one result or error."
@@ -441,9 +466,34 @@ def record_search_create(
     if search_id is not None:
         _require_nonempty_string(search_id, "search_id")
     _validate_optional_error(error)
+    create["status"] = "succeeded" if search_id is not None else "failed"
+    create["completedAtUtc"] = completed_at_utc
+    create["searchId"] = search_id
+    create["error"] = copy.deepcopy(error)
+    return validate_state(updated)
+
+
+def skip_search_create(
+    state: dict[str, Any],
+    *,
+    client: str,
+    completed_at_utc: str,
+    error: dict[str, Any],
+) -> dict[str, Any]:
+    """Records an exact fail-closed reason for not issuing a client's POST."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    if client_state["create"] is not None:
+        raise RuntimeError("Converged observer search create is already prepared.")
+    _require_nonempty_string(completed_at_utc, "completed_at_utc")
+    _validate_optional_error(error)
     client_state["create"] = {
-        "issuedAtUtc": issued_at_utc,
-        "searchId": search_id,
+        "status": "skipped",
+        "preparedAtUtc": None,
+        "completedAtUtc": completed_at_utc,
+        "searchId": None,
         "error": copy.deepcopy(error),
     }
     return validate_state(updated)
@@ -464,7 +514,7 @@ def record_search_results(
     pending = _require_pending_action(updated)
     client_state = _pending_client(pending, client)
     create = client_state["create"]
-    if not isinstance(create, dict) or create.get("searchId") is None:
+    if not isinstance(create, dict) or create.get("status") != "succeeded":
         raise RuntimeError("Converged observer search results require a search ID.")
     if client_state["results"] is not None:
         raise RuntimeError("Converged observer search results are already recorded.")
@@ -554,6 +604,8 @@ def record_driver_cycle(state: dict[str, Any], cycle: dict[str, Any]) -> dict[st
             raise RuntimeError("Converged observer pending action identity is invalid.")
         if pending["driverOutcome"] is not None:
             raise RuntimeError("Converged observer driver cycle is already recorded.")
+        if not all(_pending_client_is_terminal(pending, client) for client in _CLIENTS):
+            raise RuntimeError("Converged observer driver cycle is premature.")
     updated["driver"]["cycles"] += 1
     if cycle.get("error") or cycle.get("ok") is False or cycle.get("errors"):
         updated["driver"]["cycleErrors"] += 1
@@ -720,25 +772,79 @@ def _validate_pending_client(value: object, client: str) -> None:
     create = value["create"]
     if create is not None:
         if not isinstance(create, dict) or set(create) != {
-            "issuedAtUtc",
+            "status",
+            "preparedAtUtc",
+            "completedAtUtc",
             "searchId",
             "error",
         }:
             raise RuntimeError(
                 f"Converged observer pending {client} create outcome is invalid."
             )
-        _require_nonempty_string(
-            create["issuedAtUtc"], f"pendingAction.clients.{client}.issuedAtUtc"
-        )
+        status = create["status"]
+        if status not in {"prepared", "succeeded", "failed", "skipped"}:
+            raise RuntimeError(
+                f"Converged observer pending {client} create status is invalid."
+            )
+        prepared_at_utc = create["preparedAtUtc"]
+        completed_at_utc = create["completedAtUtc"]
         search_id = create["searchId"]
         error = create["error"]
-        if (search_id is None) == (error is None):
-            raise RuntimeError(
-                f"Converged observer pending {client} create outcome is ambiguous."
+        if status == "prepared":
+            _require_nonempty_string(
+                prepared_at_utc,
+                f"pendingAction.clients.{client}.preparedAtUtc",
             )
-        if search_id is not None:
+            if (
+                completed_at_utc is not None
+                or search_id is not None
+                or error is not None
+            ):
+                raise RuntimeError(
+                    f"Converged observer pending {client} prepared create is inconsistent."
+                )
+        elif status == "succeeded":
+            _require_nonempty_string(
+                prepared_at_utc,
+                f"pendingAction.clients.{client}.preparedAtUtc",
+            )
+            _require_nonempty_string(
+                completed_at_utc,
+                f"pendingAction.clients.{client}.completedAtUtc",
+            )
             _require_nonempty_string(
                 search_id, f"pendingAction.clients.{client}.searchId"
+            )
+            if error is not None:
+                raise RuntimeError(
+                    f"Converged observer pending {client} successful create is inconsistent."
+                )
+        elif status == "failed":
+            _require_nonempty_string(
+                prepared_at_utc,
+                f"pendingAction.clients.{client}.preparedAtUtc",
+            )
+            _require_nonempty_string(
+                completed_at_utc,
+                f"pendingAction.clients.{client}.completedAtUtc",
+            )
+            if search_id is not None or error is None:
+                raise RuntimeError(
+                    f"Converged observer pending {client} failed create is inconsistent."
+                )
+        elif (
+            prepared_at_utc is not None
+            or search_id is not None
+            or completed_at_utc is None
+            or error is None
+        ):
+            raise RuntimeError(
+                f"Converged observer pending {client} skipped create is inconsistent."
+            )
+        if completed_at_utc is not None:
+            _require_nonempty_string(
+                completed_at_utc,
+                f"pendingAction.clients.{client}.completedAtUtc",
             )
         _validate_optional_error(error)
 
@@ -754,7 +860,7 @@ def _validate_pending_client(value: object, client: str) -> None:
         raise RuntimeError(
             f"Converged observer pending {client} result outcome is invalid."
         )
-    if not isinstance(create, dict) or create.get("searchId") is None:
+    if not isinstance(create, dict) or create.get("status") != "succeeded":
         raise RuntimeError(
             f"Converged observer pending {client} results lack a search ID."
         )
@@ -796,9 +902,11 @@ def _pending_client(pending: dict[str, Any], client: str) -> dict[str, Any]:
 def _pending_client_is_terminal(pending: dict[str, Any], client: str) -> bool:
     client_state = _pending_client(pending, client)
     create = client_state["create"]
-    return isinstance(create, dict) and (
-        create.get("error") is not None or client_state["results"] is not None
-    )
+    if not isinstance(create, dict):
+        return False
+    if create.get("status") in {"failed", "skipped"}:
+        return True
+    return create.get("status") == "succeeded" and client_state["results"] is not None
 
 
 def _validate_optional_error(value: object) -> None:
