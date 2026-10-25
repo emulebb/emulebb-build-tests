@@ -35,6 +35,63 @@ class SearchResults(list[dict[str, Any]]):
         self.completed = completed
 
 
+@dataclass(frozen=True)
+class SearchCreatePhase:
+    """Terminal result of one search-create phase."""
+
+    search_id: str | None
+    error: dict[str, str] | None
+    resumed: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.search_id is None) == (self.error is None):
+            raise ValueError("search-create phase requires exactly one outcome")
+        if self.resumed and self.search_id is None:
+            raise ValueError("resumed search-create phase requires a search identifier")
+
+    @property
+    def ok(self) -> bool:
+        return self.search_id is not None
+
+    def cycle_record(self) -> dict[str, Any]:
+        """Return the stable cycle representation for this phase."""
+
+        if self.error is not None:
+            return {"ok": False, "error": self.error}
+        record: dict[str, Any] = {"ok": True, "searchId": self.search_id}
+        if self.resumed:
+            record["resumed"] = True
+        return record
+
+
+@dataclass(frozen=True)
+class SearchResultsPhase:
+    """Terminal result of one bounded search-results phase."""
+
+    rows: tuple[dict[str, Any], ...]
+    completed: bool
+    error: dict[str, str] | None
+
+    def __post_init__(self) -> None:
+        if self.completed and self.error is not None:
+            raise ValueError("completed search-results phase cannot contain an error")
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    def cycle_record(self) -> dict[str, Any]:
+        """Return the stable cycle representation for this phase."""
+
+        if self.error is not None:
+            return {"ok": False, "error": self.error}
+        return {
+            "ok": True,
+            "count": len(self.rows),
+            "completed": self.completed,
+        }
+
+
 def extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
     """Extract dict rows from the REST list envelope variants used by both clients."""
 
@@ -241,6 +298,76 @@ def poll_search_results(
     return SearchResults(last_rows, completed=False)
 
 
+def run_search_create_phase(
+    client: ClientEndpoint,
+    *,
+    query: str,
+    method: str,
+    existing_search_id: str | None = None,
+) -> SearchCreatePhase:
+    """Create a search once, or resume an already persisted search identifier."""
+
+    if existing_search_id is not None:
+        if not existing_search_id.strip():
+            raise ValueError("existing search identifier must not be empty")
+        return SearchCreatePhase(
+            search_id=existing_search_id,
+            error=None,
+            resumed=True,
+        )
+    try:
+        search_id = create_search(client, query=query, method=method)
+        if not search_id:
+            raise RuntimeError(
+                f"{client.name} search create returned an empty identifier"
+            )
+    except RuntimeError as error:
+        return SearchCreatePhase(
+            search_id=None,
+            error={
+                "client": client.name,
+                "phase": "search-create",
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+        )
+    return SearchCreatePhase(search_id=search_id, error=None)
+
+
+def run_search_results_phase(
+    client: ClientEndpoint,
+    search_id: str,
+    *,
+    timeout_seconds: float,
+) -> SearchResultsPhase:
+    """Poll an existing search identifier and preserve its exact terminal outcome."""
+
+    if not search_id.strip():
+        raise ValueError("search identifier must not be empty")
+    try:
+        rows = poll_search_results(
+            client,
+            search_id,
+            timeout_seconds=timeout_seconds,
+        )
+    except RuntimeError as error:
+        return SearchResultsPhase(
+            rows=(),
+            completed=False,
+            error={
+                "client": client.name,
+                "phase": "search-results",
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+        )
+    return SearchResultsPhase(
+        rows=tuple(rows),
+        completed=bool(getattr(rows, "completed", True)),
+        error=None,
+    )
+
+
 def trigger_download(
     client: ClientEndpoint,
     search_id: str,
@@ -306,56 +433,33 @@ def drive_automatic_cycle(
     searches: dict[str, dict[str, Any]] = {}
     errors: list[dict[str, str]] = []
     for client in clients:
-        outcome: dict[str, Any] = {
+        outcome = {
             "create": {"ok": False},
             "results": {"ok": False, "skipped": "search-create-failed"},
         }
         searches[client.name] = outcome
-        try:
-            search_id = create_search(client, query=query, method=method)
-            if not search_id:
-                raise RuntimeError(
-                    f"{client.name} search create returned an empty identifier"
-                )
-        except RuntimeError as error:
-            detail = {
-                "client": client.name,
-                "phase": "search-create",
-                "type": type(error).__name__,
-                "message": str(error),
-            }
-            outcome["create"] = {"ok": False, "error": detail}
-            errors.append(detail)
-        else:
-            search_ids[client.name] = search_id
-            outcome["create"] = {"ok": True, "searchId": search_id}
+        phase = run_search_create_phase(client, query=query, method=method)
+        outcome["create"] = phase.cycle_record()
+        if phase.error is not None:
+            errors.append(phase.error)
+            continue
+        assert phase.search_id is not None
+        search_ids[client.name] = phase.search_id
 
     for client in clients:
         search_id = search_ids.get(client.name)
         if search_id is None:
             continue
-        try:
-            rows = poll_search_results(
-                client,
-                search_id,
-                timeout_seconds=search_timeout_seconds,
-            )
-        except RuntimeError as error:
-            detail = {
-                "client": client.name,
-                "phase": "search-results",
-                "type": type(error).__name__,
-                "message": str(error),
-            }
-            searches[client.name]["results"] = {"ok": False, "error": detail}
-            errors.append(detail)
-        else:
-            search_rows[client.name] = rows
-            searches[client.name]["results"] = {
-                "ok": True,
-                "count": len(rows),
-                "completed": bool(getattr(rows, "completed", True)),
-            }
+        phase = run_search_results_phase(
+            client,
+            search_id,
+            timeout_seconds=search_timeout_seconds,
+        )
+        searches[client.name]["results"] = phase.cycle_record()
+        if phase.error is not None:
+            errors.append(phase.error)
+            continue
+        search_rows[client.name] = list(phase.rows)
 
     cycle["ok"] = not errors
     cycle["searches"] = searches

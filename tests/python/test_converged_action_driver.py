@@ -22,6 +22,60 @@ def endpoint(name: str) -> driver.ClientEndpoint:
     )
 
 
+def test_search_create_phase_resumes_persisted_identifier_without_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "create_search",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted search must not be created again")
+        ),
+    )
+
+    phase = driver.run_search_create_phase(
+        endpoint("rust"),
+        query="exact local term",
+        method="server",
+        existing_search_id="rust-search-17",
+    )
+
+    assert phase.search_id == "rust-search-17"
+    assert phase.error is None
+    assert phase.resumed is True
+    assert phase.cycle_record() == {
+        "ok": True,
+        "searchId": "rust-search-17",
+        "resumed": True,
+    }
+
+
+def test_search_results_phase_preserves_incomplete_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [{"hash": "a" * 32}, {"hash": "b" * 32}]
+    monkeypatch.setattr(
+        driver,
+        "poll_search_results",
+        lambda *_args, **_kwargs: driver.SearchResults(rows, completed=False),
+    )
+
+    phase = driver.run_search_results_phase(
+        endpoint("mfc"),
+        "mfc-search-9",
+        timeout_seconds=30.0,
+    )
+
+    assert list(phase.rows) == rows
+    assert phase.completed is False
+    assert phase.error is None
+    assert phase.cycle_record() == {
+        "ok": True,
+        "count": 2,
+        "completed": False,
+    }
+
+
 def test_common_candidates_enforce_intersection_policy_and_order() -> None:
     mib = 1024 * 1024
     rust_rows = [
