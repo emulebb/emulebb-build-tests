@@ -302,10 +302,15 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
         reserved_at_utc="2026-10-01T00:00:00+00:00",
         diagnostic_runs=diagnostic_runs(),
     )
-    state = observer_state.record_search_create(
+    state = observer_state.prepare_search_create(
         state,
         client="rust",
-        issued_at_utc="2026-10-01T00:00:01+00:00",
+        prepared_at_utc="2026-10-01T00:00:01+00:00",
+    )
+    state = observer_state.complete_search_create(
+        state,
+        client="rust",
+        completed_at_utc="2026-10-01T00:00:02+00:00",
         search_id="rust-search-1",
         error=None,
     )
@@ -313,10 +318,15 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
         "type": "RuntimeError",
         "message": "MFC exact create failure: ünicode",
     }
-    state = observer_state.record_search_create(
+    state = observer_state.prepare_search_create(
         state,
         client="mfc",
-        issued_at_utc="2026-10-01T00:00:02+00:00",
+        prepared_at_utc="2026-10-01T00:00:03+00:00",
+    )
+    state = observer_state.complete_search_create(
+        state,
+        client="mfc",
+        completed_at_utc="2026-10-01T00:00:04+00:00",
         search_id=None,
         error=exact_error,
     )
@@ -385,21 +395,89 @@ def test_pending_action_rejects_duplicate_reservation_and_create() -> None:
             diagnostic_runs=diagnostic_runs(),
         )
 
-    state = observer_state.record_search_create(
+    state = observer_state.prepare_search_create(
         state,
         client="rust",
-        issued_at_utc="2026-10-01T00:00:01+00:00",
-        search_id="rust-search-1",
-        error=None,
+        prepared_at_utc="2026-10-01T00:00:01+00:00",
     )
-    with pytest.raises(RuntimeError, match="create is already recorded"):
-        observer_state.record_search_create(
+    with pytest.raises(RuntimeError, match="create is already prepared"):
+        observer_state.prepare_search_create(
             state,
             client="rust",
-            issued_at_utc="2026-10-01T00:00:02+00:00",
-            search_id="rust-search-2",
-            error=None,
+            prepared_at_utc="2026-10-01T00:00:02+00:00",
         )
+
+
+def test_prepared_create_survives_restart_and_can_fail_closed() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="debian",
+        method="server",
+        reserved_at_utc="2026-10-01T00:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    state = observer_state.prepare_search_create(
+        state,
+        client="rust",
+        prepared_at_utc="2026-10-01T00:00:01+00:00",
+    )
+    state = observer_state.validate_state(
+        json.loads(observer_state.canonical_bytes(state))
+    )
+
+    assert state["pendingAction"]["clients"]["rust"]["create"] == {
+        "status": "prepared",
+        "preparedAtUtc": "2026-10-01T00:00:01+00:00",
+        "completedAtUtc": None,
+        "searchId": None,
+        "error": None,
+    }
+    with pytest.raises(RuntimeError, match="driver cycle is premature"):
+        observer_state.record_driver_cycle(
+            state,
+            {
+                "cycle": 1,
+                "actionId": "20261001T000000Z-cycle-00000001",
+            },
+        )
+    exact_error = {
+        "type": "AmbiguousSearchCreate",
+        "message": "restart observed a prepared POST without a terminal outcome",
+    }
+    state = observer_state.complete_search_create(
+        state,
+        client="rust",
+        completed_at_utc="2026-10-01T00:00:02+00:00",
+        search_id=None,
+        error=exact_error,
+    )
+    state = observer_state.skip_search_create(
+        state,
+        client="mfc",
+        completed_at_utc="2026-10-01T00:00:02+00:00",
+        error={
+            "type": "SearchCreateSkipped",
+            "message": "peer create is ambiguous",
+        },
+    )
+
+    assert state["pendingAction"]["clients"]["rust"]["create"]["error"] == exact_error
+    assert state["pendingAction"]["clients"]["mfc"]["create"]["status"] == "skipped"
+    state = observer_state.record_driver_cycle(
+        state,
+        {
+            "cycle": 1,
+            "actionId": "20261001T000000Z-cycle-00000001",
+            "ok": False,
+        },
+    )
+    assert state["driver"]["cycles"] == 1
 
 
 def test_matching_action_report_is_the_only_commit_that_clears_pending() -> None:
@@ -417,10 +495,15 @@ def test_matching_action_report_is_the_only_commit_that_clears_pending() -> None
         diagnostic_runs=diagnostic_runs(),
     )
     for client in ("rust", "mfc"):
-        state = observer_state.record_search_create(
+        state = observer_state.prepare_search_create(
             state,
             client=client,
-            issued_at_utc="2026-10-01T00:00:01+00:00",
+            prepared_at_utc="2026-10-01T00:00:01+00:00",
+        )
+        state = observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-01T00:00:02+00:00",
             search_id=f"{client}-search-1",
             error=None,
         )
