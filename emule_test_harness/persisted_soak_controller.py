@@ -831,6 +831,10 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     findings: list[str] = []
     if not status["launcher"]["alive"]:
         findings.append("launcher-not-running")
+    manifest = status.get("manifest") or {}
+    watcher = status.get("watcher") or {}
+    if manifest.get("state") == "running" and watcher.get("identity") and not watcher.get("alive"):
+        findings.append("watcher-not-running")
     if status["clients"]["rustCount"] != 1:
         findings.append("rust-process-count")
     if status["clients"]["mfcCount"] != 1:
@@ -845,6 +849,9 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     last_run = status.get("lastRun") or {}
     if last_run.get("status") == "failed":
         findings.append("launcher-reported-failure")
+    storage = status.get("storage")
+    if isinstance(storage, dict) and storage.get("ok") is False:
+        findings.append(STORAGE_FAILURE_FINDING)
     return findings
 
 
@@ -890,10 +897,24 @@ def session_status(
         }
     last_run = load_json(paths.last_run_manifest)
     heartbeat = load_json(paths.watch_heartbeat)
+    campaign_id = manifest.get("campaignId")
+    heartbeat_storage = None
+    if (
+        isinstance(campaign_id, str)
+        and campaign_id
+        and heartbeat.get("campaignId") == campaign_id
+        and isinstance(heartbeat.get("storage"), dict)
+    ):
+        heartbeat_storage = heartbeat["storage"]
     result: dict[str, Any] = {
         "schema": STATUS_SCHEMA,
         "timestampUtc": datetime.now(UTC).isoformat(),
-        "manifest": {"path": str(paths.manifest), "exists": bool(manifest), "state": manifest.get("state")},
+        "manifest": {
+            "path": str(paths.manifest),
+            "exists": bool(manifest),
+            "state": manifest.get("state"),
+            "campaignId": campaign_id,
+        },
         "launcher": {
             "alive": launcher is not None,
             "identity": launcher_identity,
@@ -919,6 +940,7 @@ def session_status(
         },
         "rest": rest,
         "vpn": full_tunnel_health() if check_vpn else None,
+        "storage": heartbeat_storage,
     }
     result["findings"] = status_findings(result)
     result["ok"] = not result["findings"]
@@ -964,6 +986,7 @@ def build_watch_sample(
         findings.append(STORAGE_FAILURE_FINDING)
     sample = {
         "schema": WATCH_SCHEMA,
+        "campaignId": status.get("manifest", {}).get("campaignId") if status is not None else None,
         "timestampUtc": (
             status.get("timestampUtc") if status is not None else datetime.now(UTC).isoformat()
         ),
