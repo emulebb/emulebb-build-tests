@@ -72,6 +72,17 @@ class SessionConfig:
     mfc_configuration: str = clw.DEFAULT_MFC_CONFIGURATION
 
 
+@dataclass(frozen=True)
+class SessionStorageContext:
+    """Validated immutable storage authority for one persisted session."""
+
+    root: Path
+    policy: soak_storage.SoakStoragePolicy
+    policy_sha256: str
+    active_campaign: Path
+    previous_campaign: Path | None
+
+
 def utc_timestamp() -> str:
     """Returns one filesystem-safe UTC timestamp."""
 
@@ -143,25 +154,6 @@ def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStorageP
     return inputs.soak_storage
 
 
-def storage_policy_summary(policy: soak_storage.SoakStoragePolicy) -> dict[str, Any]:
-    """Returns the complete non-secret storage policy for manifests."""
-
-    return {
-        "schema": soak_storage.SCHEMA,
-        "maxTotalBytes": policy.max_total_bytes,
-        "maxAgeSeconds": policy.max_age_seconds,
-        "minimumFreeBytes": policy.minimum_free_bytes,
-        "bundleIntervalSeconds": policy.bundle_interval_seconds,
-        "streams": {
-            name: {
-                "maxSegmentBytes": stream.max_segment_bytes,
-                "retainedSegments": stream.retained_segments,
-            }
-            for name, stream in policy.streams.items()
-        },
-    }
-
-
 def storage_plan_summary(root: Path, plan: soak_storage.StoragePrunePlan) -> dict[str, Any]:
     """Returns bounded planning evidence without an unbounded deletion listing."""
 
@@ -218,6 +210,102 @@ def latest_campaign_path(paths: ControlPaths, campaigns_root: Path) -> Path | No
     return campaign
 
 
+def session_storage_manifest(
+    *,
+    root: Path,
+    policy: soak_storage.SoakStoragePolicy,
+    active_campaign: Path,
+    previous_campaign: Path | None,
+    preflight_plan: dict[str, Any],
+    launch_enforcement: dict[str, Any],
+) -> dict[str, Any]:
+    """Builds the canonical immutable storage context for one session."""
+
+    return {
+        "root": str(root),
+        "policy": soak_storage.storage_policy_payload(policy),
+        "policySha256": soak_storage.storage_policy_sha256(policy),
+        "activeCampaignDir": str(active_campaign),
+        "previousCampaignDir": str(previous_campaign) if previous_campaign is not None else None,
+        "preflightPlan": preflight_plan,
+        "launchEnforcement": launch_enforcement,
+    }
+
+
+def parse_session_storage_context(
+    manifest: dict[str, Any],
+    output_root: Path,
+) -> SessionStorageContext:
+    """Validates and returns the manifest-owned storage authority."""
+
+    storage = manifest.get("storage")
+    if not isinstance(storage, dict):
+        raise RuntimeError("Persisted soak manifest is missing storage context.")
+    expected_keys = {
+        "root",
+        "policy",
+        "policySha256",
+        "activeCampaignDir",
+        "previousCampaignDir",
+        "preflightPlan",
+        "launchEnforcement",
+    }
+    actual_keys = set(storage)
+    if actual_keys != expected_keys:
+        missing = ", ".join(sorted(expected_keys - actual_keys))
+        unknown = ", ".join(sorted(actual_keys - expected_keys))
+        detail = f"missing={missing or '-'} unknown={unknown or '-'}"
+        raise RuntimeError(f"Persisted soak storage context fields are invalid: {detail}.")
+
+    root_value = storage.get("root")
+    if not isinstance(root_value, str) or not root_value.strip():
+        raise RuntimeError("Persisted soak storage root is invalid.")
+    expected_root = campaign_storage_root(output_root)
+    root = Path(root_value).resolve()
+    if root != expected_root:
+        raise RuntimeError(f"Persisted soak storage root mismatch: {root}")
+
+    policy = soak_storage.parse_soak_storage_policy(storage.get("policy"))
+    policy_sha256 = storage.get("policySha256")
+    if not isinstance(policy_sha256, str) or policy_sha256 != soak_storage.storage_policy_sha256(policy):
+        raise RuntimeError("Persisted soak storage policy SHA-256 mismatch.")
+    if not isinstance(storage.get("preflightPlan"), dict):
+        raise RuntimeError("Persisted soak storage preflight plan is invalid.")
+    if not isinstance(storage.get("launchEnforcement"), dict):
+        raise RuntimeError("Persisted soak storage launch enforcement is invalid.")
+
+    campaign_id = manifest.get("campaignId")
+    if not isinstance(campaign_id, str):
+        raise RuntimeError("Persisted soak manifest campaignId is invalid.")
+    try:
+        soak_run_layout.validate_campaign_id(campaign_id)
+    except ValueError as exc:
+        raise RuntimeError("Persisted soak manifest campaignId is invalid.") from exc
+    active_value = storage.get("activeCampaignDir")
+    if not isinstance(active_value, str) or not active_value.strip():
+        raise RuntimeError("Persisted soak active campaign path is invalid.")
+    active_campaign = Path(active_value).resolve()
+    if active_campaign.parent != root or active_campaign.name != campaign_id:
+        raise RuntimeError(f"Persisted soak active campaign escaped its storage root: {active_campaign}")
+
+    previous_value = storage.get("previousCampaignDir")
+    previous_campaign = None
+    if previous_value is not None:
+        if not isinstance(previous_value, str) or not previous_value.strip():
+            raise RuntimeError("Persisted soak previous campaign path is invalid.")
+        previous_campaign = Path(previous_value).resolve()
+        if previous_campaign.parent != root or previous_campaign == active_campaign:
+            raise RuntimeError(f"Persisted soak previous campaign escaped its storage root: {previous_campaign}")
+
+    return SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=policy_sha256,
+        active_campaign=active_campaign,
+        previous_campaign=previous_campaign,
+    )
+
+
 def preflight_campaign_storage(
     inputs: LiveWireInputs,
     output_root: Path,
@@ -232,10 +320,7 @@ def preflight_campaign_storage(
     if not plan.within_limits:
         constraints = ", ".join(plan.unresolved_constraints) or "unknown"
         raise RuntimeError(f"Persisted soak storage cannot satisfy required limits: {constraints}.")
-    return {
-        "policy": storage_policy_summary(policy),
-        "plan": storage_plan_summary(root, plan),
-    }
+    return storage_plan_summary(root, plan)
 
 
 def enforce_campaign_storage(
@@ -541,7 +626,8 @@ def start_session(
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
-    controller_output_policy = required_storage_policy(inputs).stream("controller_output")
+    storage_policy = required_storage_policy(inputs)
+    controller_output_policy = storage_policy.stream("controller_output")
     campaigns_root = campaign_storage_root(output_root)
     campaign_id = soak_run_layout.utc_campaign_id()
     campaign_dir = (campaigns_root / campaign_id).resolve()
@@ -598,7 +684,14 @@ def start_session(
         "command": launch_command,
         "targetCommand": launch_target_command,
         "preflight": preflight,
-        "storageEnforcement": storage_enforcement,
+        "storage": session_storage_manifest(
+            root=campaigns_root,
+            policy=storage_policy,
+            active_campaign=campaign_dir,
+            previous_campaign=previous_campaign,
+            preflight_plan=preflight["storage"],
+            launch_enforcement=storage_enforcement,
+        ),
         "controlFiles": {
             "manifest": str(paths.manifest),
             "stop": str(paths.stop_file),
