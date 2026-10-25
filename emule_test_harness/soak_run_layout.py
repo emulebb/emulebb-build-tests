@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import windows_processes
+from . import diag_event_runs, soak_storage, windows_processes
 from .paths import path_is_relative_to
 
 CAMPAIGN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
-RUST_DIAGNOSTIC_GLOBS = ("*.jsonl",)
 RUST_PROFILE_VOLATILE_FILES = ("daemon.out",)
+DIAGNOSTIC_SEGMENT_PROMOTION_SCHEMA = (
+    "emulebb-build-tests.diagnostic-segment-promotion.v1"
+)
 MFC_LOG_GLOBS = (
     "emulebb*.log",
     "emulebb*.trace.json",
@@ -40,6 +42,7 @@ class SoakRunPaths:
     actions_dir: Path
     checkpoints_dir: Path
     diagnostic_bundles_dir: Path
+    diagnostic_segments_dir: Path
     daemon_output_dir: Path
     rust_daemon_output: Path
     archive_dir: Path
@@ -85,6 +88,7 @@ def build_run_paths(soak_root: Path, campaign_id: str) -> SoakRunPaths:
         actions_dir=report_dir / "actions",
         checkpoints_dir=report_dir / "checkpoints",
         diagnostic_bundles_dir=report_dir / "diagnostic-bundles",
+        diagnostic_segments_dir=archive_dir / "preflight" / "diagnostic-segments",
         daemon_output_dir=daemon_output_dir,
         rust_daemon_output=daemon_output_dir / "rust-daemon.out",
         archive_dir=archive_dir,
@@ -268,28 +272,163 @@ def _glob_files(root: Path, patterns: Iterable[str]) -> list[Path]:
 def archive_rust_volatile_outputs(
     *,
     rust_profile_dir: Path,
-    rust_packet_dump_dir: Path,
     archive_dir: Path,
 ) -> dict[str, Any]:
-    """Archives Rust soak logs/dumps while preserving durable profile state."""
+    """Archives Rust runtime output while preserving profile diagnostic segments."""
 
     profile_files = [rust_profile_dir / name for name in RUST_PROFILE_VOLATILE_FILES]
-    packet_files = _glob_files(rust_packet_dump_dir, RUST_DIAGNOSTIC_GLOBS)
     archived_runtime = _archive_files(
         profile_files,
         source_root=rust_profile_dir,
         archive_root=archive_dir / "rust-profile",
     )
-    archived_packets = _archive_files(
-        packet_files,
-        source_root=rust_packet_dump_dir,
-        archive_root=archive_dir / "rust-packet-dump",
-    )
-    rust_packet_dump_dir.mkdir(parents=True, exist_ok=True)
     return {
         "runtimeFiles": archived_runtime,
-        "packetDumpFiles": archived_packets,
-        "archivedCount": len(archived_runtime) + len(archived_packets),
+        "archivedCount": len(archived_runtime),
+    }
+
+
+def _promote_client_diagnostic_segments(
+    *,
+    client: str,
+    source_dir: Path | None,
+    destination_dir: Path,
+    store: soak_storage.BoundedArtifactStore,
+    active_campaign: Path,
+) -> dict[str, Any]:
+    if source_dir is None:
+        return {"client": client, "status": "disabled", "reason": "no-source-dir"}
+    if not source_dir.exists():
+        return {
+            "client": client,
+            "status": "empty",
+            "sourceDir": str(source_dir),
+            "reason": "source-dir-missing",
+        }
+
+    candidates = [
+        path
+        for path in source_dir.glob("*.jsonl")
+        if path.is_file()
+        and diag_event_runs.diag_segment_identity(path, client=client) is not None
+    ]
+    selected_run = diag_event_runs.select_latest_diag_run(candidates, client=client)
+    if not selected_run:
+        return {
+            "client": client,
+            "status": "empty",
+            "sourceDir": str(source_dir),
+            "reason": "no-current-segments",
+        }
+
+    stream_policy = store.policy.stream("diagnostic_segments")
+    promoted_segments = selected_run[-stream_policy.retained_segments :]
+    records = diag_event_runs.load_latest_diag_records(
+        promoted_segments,
+        client=client,
+        allow_incomplete_active_tail=False,
+    )
+    first_identity = diag_event_runs.diag_segment_identity(
+        promoted_segments[0], client=client
+    )
+    last_identity = diag_event_runs.diag_segment_identity(
+        promoted_segments[-1], client=client
+    )
+    retained_first_identity = diag_event_runs.diag_segment_identity(
+        selected_run[0], client=client
+    )
+    assert (
+        first_identity is not None
+        and last_identity is not None
+        and retained_first_identity is not None
+    )
+    process_id, run_id, first_segment_id = first_identity
+    _, _, last_segment_id = last_identity
+    _, _, retained_first_segment_id = retained_first_identity
+
+    files: list[dict[str, Any]] = []
+    for source in promoted_segments:
+        source_stat = source.stat()
+        persisted = soak_storage.persist_bounded_file_artifact(
+            store=store,
+            active_campaign=active_campaign,
+            directory=destination_dir,
+            stream_name="diagnostic_segments",
+            source=source,
+            artifact_name=source.name,
+        )
+        identity = diag_event_runs.diag_segment_identity(source, client=client)
+        assert identity is not None
+        files.append(
+            {
+                "segmentId": identity[2],
+                "source": str(source.resolve()),
+                "destination": str(persisted.path),
+                "bytes": persisted.byte_count,
+                "modifiedNs": source_stat.st_mtime_ns,
+                "sha256": persisted.sha256,
+            }
+        )
+
+    return {
+        "client": client,
+        "status": "promoted",
+        "classification": "quiesced-immutable-retained-run-suffix",
+        "sourceDir": str(source_dir),
+        "destinationDir": str(destination_dir.resolve()),
+        "processId": process_id,
+        "runId": run_id,
+        "retainedRunSegmentCount": len(selected_run),
+        "promotedSegmentCount": len(files),
+        "recordCount": len(records),
+        "retainedFirstSegmentId": retained_first_segment_id,
+        "promotedFirstSegmentId": first_segment_id,
+        "promotedLastSegmentId": last_segment_id,
+        "omittedBeforeRetainedSuffix": retained_first_segment_id,
+        "omittedByPromotionLimit": first_segment_id - retained_first_segment_id,
+        "files": files,
+    }
+
+
+def promote_latest_diagnostic_segments(
+    *,
+    paths: SoakRunPaths,
+    rust_packet_dump_dir: Path,
+    mfc_log_dir: Path | None,
+    store: soak_storage.BoundedArtifactStore,
+) -> dict[str, Any]:
+    """Copies validated quiesced run suffixes into bounded campaign storage."""
+
+    clients = [
+        _promote_client_diagnostic_segments(
+            client="rust",
+            source_dir=rust_packet_dump_dir,
+            destination_dir=paths.diagnostic_segments_dir / "rust",
+            store=store,
+            active_campaign=paths.campaign_dir,
+        ),
+        _promote_client_diagnostic_segments(
+            client="mfc",
+            source_dir=mfc_log_dir,
+            destination_dir=paths.diagnostic_segments_dir / "mfc",
+            store=store,
+            active_campaign=paths.campaign_dir,
+        ),
+    ]
+    manifest = {
+        "schema": DIAGNOSTIC_SEGMENT_PROMOTION_SCHEMA,
+        "classification": "quiesced-immutable-retained-run-suffix",
+        "clients": clients,
+    }
+    manifest_path = paths.preflight_archive_dir / "diagnostic-segments-manifest.json"
+    write_json(manifest_path, manifest)
+    return {
+        "enabled": True,
+        "manifest": str(manifest_path.resolve()),
+        "clients": clients,
+        "promotedCount": sum(
+            int(client.get("promotedSegmentCount", 0)) for client in clients
+        ),
     }
 
 
@@ -324,9 +463,10 @@ def prepare_clean_run(
     rust_profile_dir: Path,
     rust_packet_dump_dir: Path,
     mfc_log_dir: Path | None,
+    artifact_store: soak_storage.BoundedArtifactStore,
     stop_process_cleanup: bool = True,
 ) -> dict[str, Any]:
-    """Archives stale volatile outputs and creates a clean report directory."""
+    """Quiesces old clients, promotes diagnostics, and prepares one campaign."""
 
     paths.report_dir.mkdir(parents=True, exist_ok=True)
     paths.actions_dir.mkdir(parents=True, exist_ok=True)
@@ -340,9 +480,37 @@ def prepare_clean_run(
         if stop_process_cleanup
         else {"enabled": False, "reason": "disabled", "targets": [], "results": []}
     )
+    if processes.get("enabled") is True:
+        current_processes = windows_processes.collect_processes()
+        remaining = select_stale_soak_process_roots(
+            current_processes,
+            rust_profile_dir=rust_profile_dir,
+            mfc_profile_base=mfc_profile_base_from_log_dir(mfc_log_dir),
+            exclude_pids=current_process_and_ancestor_pids(current_processes),
+        )
+        if remaining:
+            detail = ", ".join(
+                f"{process.name}[{process.pid}]" for process in remaining
+            )
+            raise RuntimeError(
+                "Previous soak processes remain after cleanup; diagnostic segments "
+                f"are not immutable: {detail}"
+            )
+        diagnostic_segments = promote_latest_diagnostic_segments(
+            paths=paths,
+            rust_packet_dump_dir=rust_packet_dump_dir,
+            mfc_log_dir=mfc_log_dir,
+            store=artifact_store,
+        )
+    else:
+        diagnostic_segments = {
+            "enabled": False,
+            "reason": str(processes.get("reason", "process-cleanup-disabled")),
+            "promotedCount": 0,
+            "clients": [],
+        }
     rust = archive_rust_volatile_outputs(
         rust_profile_dir=rust_profile_dir,
-        rust_packet_dump_dir=rust_packet_dump_dir,
         archive_dir=preflight,
     )
     mfc = archive_mfc_log_outputs(mfc_log_dir=mfc_log_dir, archive_dir=preflight)
@@ -357,7 +525,12 @@ def prepare_clean_run(
         "rustProfileDir": str(rust_profile_dir),
         "rustPacketDumpDir": str(rust_packet_dump_dir),
         "mfcLogDir": str(mfc_log_dir) if mfc_log_dir is not None else None,
-        "preflightCleanup": {"processes": processes, "rust": rust, "mfc": mfc},
+        "preflightCleanup": {
+            "processes": processes,
+            "rust": rust,
+            "mfc": mfc,
+            "diagnosticSegments": diagnostic_segments,
+        },
     }
     write_last_run_manifest(paths, manifest)
     write_latest_report_pointer(paths)

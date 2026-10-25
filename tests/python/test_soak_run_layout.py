@@ -3,11 +3,75 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
-from emule_test_harness import soak_run_layout
+from emule_test_harness import soak_run_layout, soak_storage
 from emule_test_harness.windows_processes import WindowsProcessInfo
+
+
+def artifact_store(
+    paths: soak_run_layout.SoakRunPaths,
+    *,
+    segment_retained: int = 2,
+) -> soak_storage.BoundedArtifactStore:
+    policy = soak_storage.SoakStoragePolicy(
+        max_total_bytes=10 * 1024 * 1024,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams=MappingProxyType(
+            {
+                "controller_output": soak_storage.ArtifactStreamPolicy(1, 1),
+                "daemon_output": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(1, 1),
+                "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
+                    1_048_576, segment_retained
+                ),
+            }
+        ),
+    )
+    return soak_storage.BoundedArtifactStore(paths.soak_root, policy)
+
+
+def write_diag_segment(
+    directory: Path,
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    segment_id: int,
+    sequence: int,
+) -> Path:
+    path = directory / (
+        f"emulebb-{client}-diag-{process_id}-{run_id}-{segment_id:06d}.jsonl"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "diag_event_v2",
+                "client": client,
+                "processId": process_id,
+                "runId": run_id,
+                "segmentId": segment_id,
+                "seq": sequence,
+                "streamSeq": sequence,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_utc_campaign_id_uses_canonical_format() -> None:
@@ -32,6 +96,10 @@ def test_build_run_paths_uses_owned_campaign_and_stable_pointers(
     assert paths.actions_dir == paths.report_dir / "actions"
     assert paths.checkpoints_dir == paths.report_dir / "checkpoints"
     assert paths.diagnostic_bundles_dir == paths.report_dir / "diagnostic-bundles"
+    assert (
+        paths.diagnostic_segments_dir
+        == paths.preflight_archive_dir / "diagnostic-segments"
+    )
     assert paths.daemon_output_dir == paths.campaign_dir / "daemon-output"
     assert paths.rust_daemon_output == paths.daemon_output_dir / "rust-daemon.out"
     assert paths.preflight_archive_dir == paths.campaign_dir / "archive" / "preflight"
@@ -100,19 +168,23 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        artifact_store=artifact_store(paths),
         stop_process_cleanup=False,
     )
 
-    assert manifest["preflightCleanup"]["rust"]["archivedCount"] == 2
+    assert manifest["preflightCleanup"]["rust"]["archivedCount"] == 1
     assert not (rust_profile_dir / "daemon.out").exists()
-    assert not (rust_packet_dump / "emulebb-rust-diag-1.jsonl").exists()
+    assert (rust_packet_dump / "emulebb-rust-diag-1.jsonl").is_file()
     assert (rust_profile_dir / "emulebb-rust-metadata.db").read_text(
         encoding="utf-8"
     ) == "durable"
     assert (paths.preflight_archive_dir / "rust-profile" / "daemon.out").is_file()
-    assert (
-        paths.preflight_archive_dir / "rust-packet-dump" / "emulebb-rust-diag-1.jsonl"
-    ).is_file()
+    assert manifest["preflightCleanup"]["diagnosticSegments"] == {
+        "enabled": False,
+        "reason": "disabled",
+        "promotedCount": 0,
+        "clients": [],
+    }
     assert paths.actions_dir.is_dir()
     assert paths.checkpoints_dir.is_dir()
     assert paths.diagnostic_bundles_dir.is_dir()
@@ -137,6 +209,7 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
+        artifact_store=artifact_store(paths),
         stop_process_cleanup=False,
     )
 
@@ -159,6 +232,123 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
     ).is_file()
 
 
+def test_promote_latest_diagnostic_segments_copies_bounded_validated_suffixes(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_dir = tmp_path / "rust-profile" / "packet-dump"
+    mfc_dir = tmp_path / "mfc-profile" / "logs"
+    rust_sources = [
+        write_diag_segment(
+            rust_dir,
+            client="rust",
+            process_id=41,
+            run_id="rust-run",
+            segment_id=segment_id,
+            sequence=segment_id + 1,
+        )
+        for segment_id in range(4)
+    ]
+    mfc_source = write_diag_segment(
+        mfc_dir,
+        client="mfc",
+        process_id=42,
+        run_id="mfc-run",
+        segment_id=7,
+        sequence=81,
+    )
+
+    result = soak_run_layout.promote_latest_diagnostic_segments(
+        paths=paths,
+        rust_packet_dump_dir=rust_dir,
+        mfc_log_dir=mfc_dir,
+        store=artifact_store(paths, segment_retained=2),
+    )
+
+    assert result["promotedCount"] == 3
+    rust = result["clients"][0]
+    assert rust["classification"] == "quiesced-immutable-retained-run-suffix"
+    assert rust["runId"] == "rust-run"
+    assert rust["retainedRunSegmentCount"] == 4
+    assert rust["promotedSegmentCount"] == 2
+    assert rust["recordCount"] == 2
+    assert rust["retainedFirstSegmentId"] == 0
+    assert rust["promotedFirstSegmentId"] == 2
+    assert rust["promotedLastSegmentId"] == 3
+    assert rust["omittedBeforeRetainedSuffix"] == 0
+    assert rust["omittedByPromotionLimit"] == 2
+    assert [row["segmentId"] for row in rust["files"]] == [2, 3]
+    assert all(source.is_file() for source in rust_sources)
+    assert mfc_source.is_file()
+    for client in result["clients"]:
+        for row in client.get("files", []):
+            destination = Path(row["destination"])
+            source = Path(row["source"])
+            assert destination.read_bytes() == source.read_bytes()
+    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["schema"] == soak_run_layout.DIAGNOSTIC_SEGMENT_PROMOTION_SCHEMA
+    assert manifest["clients"] == result["clients"]
+
+
+def test_promote_latest_diagnostic_segments_rejects_incomplete_tail(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_dir = tmp_path / "rust-profile" / "packet-dump"
+    segment = write_diag_segment(
+        rust_dir,
+        client="rust",
+        process_id=41,
+        run_id="rust-run",
+        segment_id=0,
+        sequence=1,
+    )
+    with segment.open("a", encoding="utf-8") as handle:
+        handle.write('{"schema":"diag_event_v2"')
+
+    with pytest.raises(ValueError, match="malformed JSON"):
+        soak_run_layout.promote_latest_diagnostic_segments(
+            paths=paths,
+            rust_packet_dump_dir=rust_dir,
+            mfc_log_dir=None,
+            store=artifact_store(paths),
+        )
+
+    assert not paths.diagnostic_segments_dir.exists()
+
+
+def test_prepare_clean_run_rejects_processes_remaining_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    remaining = WindowsProcessInfo(
+        pid=123,
+        parent_pid=1,
+        name="emulebb-rust-diagnostics.exe",
+        command_line=f"emulebb-rust-diagnostics.exe --profile {rust_profile_dir}",
+    )
+    monkeypatch.setattr(
+        soak_run_layout,
+        "stop_stale_soak_processes",
+        lambda **_kwargs: {"enabled": True, "targets": [], "results": []},
+    )
+    monkeypatch.setattr(
+        soak_run_layout.windows_processes,
+        "collect_processes",
+        lambda: [remaining],
+    )
+
+    with pytest.raises(RuntimeError, match="not immutable"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_profile_dir / "packet-dump",
+            mfc_log_dir=None,
+            artifact_store=artifact_store(paths),
+        )
+
+
 def test_prepare_clean_run_publishes_last_run_and_latest_pointers(
     tmp_path: Path,
 ) -> None:
@@ -171,6 +361,7 @@ def test_prepare_clean_run_publishes_last_run_and_latest_pointers(
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        artifact_store=artifact_store(paths),
         stop_process_cleanup=False,
     )
 
@@ -193,6 +384,7 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
+        artifact_store=artifact_store(paths),
         stop_process_cleanup=False,
     )
 
@@ -214,6 +406,7 @@ def test_mark_run_running_publishes_readiness_without_dropping_preflight(
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=None,
+        artifact_store=artifact_store(paths),
         stop_process_cleanup=False,
     )
 

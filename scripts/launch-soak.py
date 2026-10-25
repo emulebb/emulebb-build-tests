@@ -747,11 +747,13 @@ def main(argv: list[str] | None = None) -> int:
         direct_profile_dir=direct_mfc_profile,
     )
     run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
+    artifact_store = soak_storage.BoundedArtifactStore(soak_root, storage_policy)
     preflight_manifest = soak_run_layout.prepare_clean_run(
         paths=run_paths,
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
+        artifact_store=artifact_store,
     )
     preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
     diagnostic_bundle_policy = storage_policy.stream("diagnostic_bundles")
@@ -792,7 +794,10 @@ def main(argv: list[str] | None = None) -> int:
     log(
         "preflight cleanup archived "
         f"{preflight_manifest['preflightCleanup']['rust']['archivedCount']} rust file(s) and "
-        f"{preflight_manifest['preflightCleanup']['mfc']['archivedCount']} MFC log file(s)"
+        f"{preflight_manifest['preflightCleanup']['mfc']['archivedCount']} MFC log file(s); "
+        "promoted "
+        f"{preflight_manifest['preflightCleanup']['diagnosticSegments']['promotedCount']} "
+        "diagnostic segment(s)"
     )
     if direct_mfc_profile is not None:
         log(f"MFC direct profile from live-wire inputs: {direct_mfc_profile}")

@@ -12,12 +12,18 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v3"
-REQUIRED_STREAMS = ("controller_output", "daemon_output", "diagnostic_bundles")
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v4"
+REQUIRED_STREAMS = (
+    "controller_output",
+    "daemon_output",
+    "diagnostic_bundles",
+    "diagnostic_segments",
+)
 REQUIRED_STREAM_INSTANCES = {
     "controller_output": 4,
     "daemon_output": 1,
     "diagnostic_bundles": 1,
+    "diagnostic_segments": 2,
 }
 _POLICY_KEYS = {
     "schema",
@@ -164,8 +170,8 @@ class StorageEnforcementResult:
 
 
 @dataclass(frozen=True)
-class PersistedJsonArtifact:
-    """One atomically persisted artifact in a bounded immutable JSON stream."""
+class PersistedArtifact:
+    """One atomically persisted artifact in a bounded immutable stream."""
 
     path: Path
     byte_count: int
@@ -370,15 +376,21 @@ def persist_bounded_json_artifact(
     stem: str,
     payload: object,
     now_ns: int | None = None,
-) -> PersistedJsonArtifact:
+) -> PersistedArtifact:
     """Atomically writes one JSON artifact while enforcing stream and store bounds."""
 
-    if not stem or any(not (character.isalnum() or character == "-") for character in stem):
+    if not stem or any(
+        not (character.isalnum() or character == "-") for character in stem
+    ):
         raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
     if not stem.isascii():
         raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
     timestamp_ns = time.time_ns() if now_ns is None else now_ns
-    if isinstance(timestamp_ns, bool) or not isinstance(timestamp_ns, int) or timestamp_ns < 0:
+    if (
+        isinstance(timestamp_ns, bool)
+        or not isinstance(timestamp_ns, int)
+        or timestamp_ns < 0
+    ):
         raise ValueError("now_ns must be a non-negative integer.")
 
     resolved_campaign = active_campaign.resolve()
@@ -432,7 +444,9 @@ def persist_bounded_json_artifact(
     path = resolved_directory / f"{stem}-{timestamp_ns:020d}.json"
     temporary = path.with_suffix(path.suffix + ".tmp")
     if path.exists() or temporary.exists():
-        raise RuntimeError(f"Bounded JSON artifact identity already exists: {path.name}")
+        raise RuntimeError(
+            f"Bounded JSON artifact identity already exists: {path.name}"
+        )
     try:
         with temporary.open("xb") as handle:
             handle.write(encoded)
@@ -456,11 +470,176 @@ def persist_bounded_json_artifact(
 
     retained = _json_stream_artifacts(resolved_directory, stem)
     if len(retained) > policy.retained_segments:
-        raise RuntimeError(f"{stream_name} retention exceeded its configured file count.")
-    return PersistedJsonArtifact(
+        raise RuntimeError(
+            f"{stream_name} retention exceeded its configured file count."
+        )
+    return PersistedArtifact(
         path=path,
         byte_count=len(encoded),
         sha256=hashlib.sha256(encoded).hexdigest(),
+        deleted_paths=tuple(deleted_paths),
+        retained_count=len(retained),
+        retained_bytes=sum(item.stat().st_size for item in retained),
+    )
+
+
+def persist_bounded_file_artifact(
+    *,
+    store: BoundedArtifactStore,
+    active_campaign: Path,
+    directory: Path,
+    stream_name: str,
+    source: Path,
+    artifact_name: str,
+    now_ns: int | None = None,
+) -> PersistedArtifact:
+    """Atomically copies and verifies one immutable file into a bounded stream."""
+
+    if (
+        not artifact_name
+        or Path(artifact_name).name != artifact_name
+        or artifact_name in {".", ".."}
+        or not artifact_name.isascii()
+        or any(
+            not (character.isalnum() or character in {".", "_", "-"})
+            for character in artifact_name
+        )
+    ):
+        raise ValueError(
+            "artifact_name must be one safe ASCII filename using letters, digits, dots, "
+            "underscores, and hyphens."
+        )
+    timestamp_ns = time.time_ns() if now_ns is None else now_ns
+    if (
+        isinstance(timestamp_ns, bool)
+        or not isinstance(timestamp_ns, int)
+        or timestamp_ns < 0
+    ):
+        raise ValueError("now_ns must be a non-negative integer.")
+
+    if source.is_symlink():
+        raise RuntimeError(
+            f"Bounded file artifact source must not be a symlink: {source}"
+        )
+    resolved_source = source.resolve()
+    if not resolved_source.is_file():
+        raise RuntimeError(
+            f"Bounded file artifact source is not a file: {resolved_source}"
+        )
+    if resolved_source.name != artifact_name:
+        raise RuntimeError(
+            "Bounded file artifact name must preserve the source filename: "
+            f"{resolved_source.name!r}."
+        )
+
+    resolved_campaign = active_campaign.resolve()
+    resolved_directory = directory.resolve()
+    if not _path_is_relative_to(resolved_campaign, store.root):
+        raise RuntimeError(
+            f"Active campaign escaped its soak artifact store: {resolved_campaign}"
+        )
+    if not _path_is_relative_to(resolved_directory, resolved_campaign):
+        raise RuntimeError(
+            f"Bounded file artifact directory escaped its active campaign: {resolved_directory}"
+        )
+
+    policy = store.policy.stream(stream_name)
+    source_stat = resolved_source.stat()
+    if source_stat.st_size > policy.max_segment_bytes:
+        raise RuntimeError(
+            f"{stream_name} artifact requires {source_stat.st_size} bytes, exceeding its "
+            f"{policy.max_segment_bytes}-byte limit."
+        )
+
+    reservation = store.enforce(
+        active_campaign=resolved_campaign,
+        reserved_bytes=source_stat.st_size,
+        now_ns=timestamp_ns,
+    )
+    if not reservation.within_limits:
+        raise RuntimeError(
+            "Bounded file artifact reservation failed: "
+            f"failures={reservation.failures!r}, "
+            f"constraints={reservation.verification.unresolved_constraints!r}."
+        )
+
+    resolved_directory.mkdir(parents=True, exist_ok=True)
+    path = resolved_directory / artifact_name
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    if path.exists() or temporary.exists():
+        raise RuntimeError(
+            f"Bounded file artifact identity already exists: {path.name}"
+        )
+
+    digest = hashlib.sha256()
+    try:
+        with (
+            resolved_source.open("rb") as source_handle,
+            temporary.open("xb") as target_handle,
+        ):
+            while chunk := source_handle.read(1024 * 1024):
+                target_handle.write(chunk)
+                digest.update(chunk)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+
+        final_source_stat = resolved_source.stat()
+        if (
+            final_source_stat.st_size != source_stat.st_size
+            or final_source_stat.st_mtime_ns != source_stat.st_mtime_ns
+        ):
+            raise RuntimeError(
+                f"Bounded file artifact source changed during copy: {resolved_source}"
+            )
+        sha256 = digest.hexdigest()
+        if _sha256_file(resolved_source) != sha256:
+            raise RuntimeError(
+                f"Bounded file artifact source hash changed during copy: {resolved_source}"
+            )
+        if temporary.stat().st_size != source_stat.st_size:
+            raise RuntimeError(
+                f"Bounded file artifact copy size mismatch: {resolved_source}"
+            )
+        if _sha256_file(temporary) != sha256:
+            raise RuntimeError(
+                f"Bounded file artifact copy hash mismatch: {resolved_source}"
+            )
+
+        artifacts = _file_stream_artifacts(resolved_directory)
+        deleted_paths: list[Path] = []
+        while len(artifacts) >= policy.retained_segments:
+            oldest = artifacts.pop(0)
+            oldest.unlink()
+            deleted_paths.append(oldest)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+    if path.stat().st_size != source_stat.st_size or _sha256_file(path) != sha256:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"Bounded file artifact verification failed: {path}")
+
+    verification = store.enforce(
+        active_campaign=resolved_campaign,
+        now_ns=timestamp_ns,
+    )
+    if not verification.within_limits:
+        raise RuntimeError(
+            "Bounded file artifact persistence violated the aggregate policy: "
+            f"failures={verification.failures!r}, "
+            f"constraints={verification.verification.unresolved_constraints!r}."
+        )
+
+    retained = _file_stream_artifacts(resolved_directory)
+    if len(retained) > policy.retained_segments:
+        raise RuntimeError(
+            f"{stream_name} retention exceeded its configured file count."
+        )
+    return PersistedArtifact(
+        path=path,
+        byte_count=source_stat.st_size,
+        sha256=sha256,
         deleted_paths=tuple(deleted_paths),
         retained_count=len(retained),
         retained_bytes=sum(item.stat().st_size for item in retained),
@@ -471,13 +650,40 @@ def _json_stream_artifacts(directory: Path, stem: str) -> list[Path]:
     artifacts: list[tuple[int, str, Path]] = []
     for path in directory.glob(f"{stem}-*.json"):
         if path.is_symlink():
-            raise RuntimeError(f"Bounded JSON artifact stream contains a symlink: {path}")
+            raise RuntimeError(
+                f"Bounded JSON artifact stream contains a symlink: {path}"
+            )
         if not path.is_file():
             continue
         stat = path.stat()
         artifacts.append((stat.st_mtime_ns, path.name.casefold(), path.resolve()))
     artifacts.sort()
     return [path for _, _, path in artifacts]
+
+
+def _file_stream_artifacts(directory: Path) -> list[Path]:
+    artifacts: list[tuple[int, str, Path]] = []
+    for path in directory.iterdir():
+        if path.name.endswith(".tmp"):
+            continue
+        if path.is_symlink():
+            raise RuntimeError(
+                f"Bounded file artifact stream contains a symlink: {path}"
+            )
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        artifacts.append((stat.st_mtime_ns, path.name.casefold(), path.resolve()))
+    artifacts.sort()
+    return [path for _, _, path in artifacts]
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:

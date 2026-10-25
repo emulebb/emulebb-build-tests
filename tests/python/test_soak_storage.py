@@ -39,6 +39,10 @@ def policy_payload() -> dict[str, object]:
                 "max_segment_bytes": 300,
                 "retained_segments": 2,
             },
+            "diagnostic_segments": {
+                "max_segment_bytes": 50,
+                "retained_segments": 2,
+            },
         },
     }
 
@@ -50,6 +54,8 @@ def direct_policy(
     minimum_free_bytes: int = 100,
     bundle_max_bytes: int = 256,
     bundle_retained: int = 2,
+    segment_max_bytes: int = 1,
+    segment_retained: int = 1,
 ) -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=max_total_bytes,
@@ -71,6 +77,10 @@ def direct_policy(
                 "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(
                     bundle_max_bytes,
                     bundle_retained,
+                ),
+                "diagnostic_segments": soak_storage.ArtifactStreamPolicy(
+                    segment_max_bytes,
+                    segment_retained,
                 ),
             }
         ),
@@ -134,7 +144,9 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
 
     assert payload == policy_payload()
     assert soak_storage.parse_soak_storage_policy(payload) == policy
-    assert soak_storage.storage_policy_sha256(policy) == soak_storage.storage_policy_sha256(
+    assert soak_storage.storage_policy_sha256(
+        policy
+    ) == soak_storage.storage_policy_sha256(
         soak_storage.parse_soak_storage_policy(
             {
                 **payload,
@@ -142,6 +154,7 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "daemon_output": payload["streams"]["daemon_output"],
                     "controller_output": payload["streams"]["controller_output"],
                     "diagnostic_bundles": payload["streams"]["diagnostic_bundles"],
+                    "diagnostic_segments": payload["streams"]["diagnostic_segments"],
                 },
             }
         )
@@ -174,10 +187,16 @@ def test_parse_soak_storage_policy_rejects_invalid_top_level_contract(
     ("mutate", "message"),
     [
         (lambda policy: policy.update(extra=True), "unknown fields"),
-        (lambda policy: policy.update(max_segment_bytes=1_048_575), "max_segment_bytes"),
+        (
+            lambda policy: policy.update(max_segment_bytes=1_048_575),
+            "max_segment_bytes",
+        ),
         (lambda policy: policy.update(max_segment_seconds=59), "max_segment_seconds"),
         (lambda policy: policy.update(retained_segments=1), "retained_segments"),
-        (lambda policy: policy.update(max_retained_seconds=True), "max_retained_seconds"),
+        (
+            lambda policy: policy.update(max_retained_seconds=True),
+            "max_retained_seconds",
+        ),
         (lambda policy: policy.update(minimum_free_bytes=0), "minimum_free_bytes"),
         (
             lambda policy: policy.update(
@@ -225,7 +244,7 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 3_800
+    assert soak_storage.required_stream_capacity_bytes(policy) == 4_000
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
@@ -733,3 +752,130 @@ def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
         )
 
     assert not list(directory.glob("*.json"))
+
+
+def test_persist_bounded_file_artifact_copies_exact_bytes_and_preserves_source(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "archive" / "diagnostic-segments" / "rust"
+    source = tmp_path / "profile" / "diag-event-p1-r1-s000001.jsonl"
+    source.parent.mkdir()
+    source.write_bytes(b'{"schema":"diag_event_v2"}\n\x00raw')
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            segment_max_bytes=1_024,
+            segment_retained=2,
+        ),
+    )
+
+    persisted = soak_storage.persist_bounded_file_artifact(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_segments",
+        source=source,
+        artifact_name=source.name,
+        now_ns=1,
+    )
+
+    assert source.read_bytes() == persisted.path.read_bytes()
+    assert persisted.byte_count == source.stat().st_size
+    assert persisted.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert persisted.retained_count == 1
+    assert persisted.retained_bytes == persisted.byte_count
+    assert not list(directory.glob("*.tmp"))
+
+
+def test_persist_bounded_file_artifact_rotates_whole_files(tmp_path: Path) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "archive" / "diagnostic-segments" / "mfc"
+    source_dir = tmp_path / "profile"
+    source_dir.mkdir()
+    sources = [
+        source_dir / f"diag-event-p1-r1-s{index:06d}.jsonl" for index in range(3)
+    ]
+    for index, source in enumerate(sources):
+        source.write_bytes(bytes([index]) * 8)
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            segment_max_bytes=1_024,
+            segment_retained=2,
+        ),
+    )
+
+    persisted = [
+        soak_storage.persist_bounded_file_artifact(
+            store=store,
+            active_campaign=campaign,
+            directory=directory,
+            stream_name="diagnostic_segments",
+            source=source,
+            artifact_name=source.name,
+            now_ns=index,
+        )
+        for index, source in enumerate(sources)
+    ]
+
+    assert persisted[0].path in persisted[2].deleted_paths
+    assert not persisted[0].path.exists()
+    assert persisted[1].path.read_bytes() == sources[1].read_bytes()
+    assert persisted[2].path.read_bytes() == sources[2].read_bytes()
+    assert persisted[2].retained_count == 2
+    assert all(source.is_file() for source in sources)
+
+
+def test_persist_bounded_file_artifact_rejects_oversized_source_before_write(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "archive" / "diagnostic-segments" / "rust"
+    source = tmp_path / "profile" / "diag-event-p1-r1-s000001.jsonl"
+    source.parent.mkdir()
+    source.write_bytes(b"x" * 33)
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            segment_max_bytes=32,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="exceeding its 32-byte limit"):
+        soak_storage.persist_bounded_file_artifact(
+            store=store,
+            active_campaign=campaign,
+            directory=directory,
+            stream_name="diagnostic_segments",
+            source=source,
+            artifact_name=source.name,
+            now_ns=1,
+        )
+
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize("artifact_name", ("../segment.jsonl", "segment:ads.jsonl", ""))
+def test_persist_bounded_file_artifact_rejects_unsafe_name(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    with pytest.raises(ValueError, match="safe ASCII filename"):
+        soak_storage.persist_bounded_file_artifact(
+            store=soak_storage.BoundedArtifactStore(tmp_path / "soak", direct_policy()),
+            active_campaign=tmp_path / "soak" / "campaigns" / "20261025T120000Z",
+            directory=tmp_path / "soak" / "campaigns" / "20261025T120000Z" / "archive",
+            stream_name="diagnostic_segments",
+            source=tmp_path / "source.jsonl",
+            artifact_name=artifact_name,
+            now_ns=1,
+        )
