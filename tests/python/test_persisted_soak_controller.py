@@ -468,6 +468,13 @@ def test_start_session_records_launcher_and_watcher_identities(
     assert any(Path(value).name == "launch-soak.py" for value in spawned[0])
     assert Path(spawned[1][1]).name == "run-bounded-process.py"
     assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[1])
+    assert result["watchTargetCommand"][result["watchTargetCommand"].index("--launcher-pid") + 1] == "101"
+    assert (
+        result["watchTargetCommand"][
+            result["watchTargetCommand"].index("--launcher-creation-date") + 1
+        ]
+        == "created-101"
+    )
     assert result["launcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[0])
     assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[1])
     assert result["logs"]["root"] == str(
@@ -812,7 +819,8 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -826,6 +834,63 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     assert result["samples"] == 1
     assert result["latest"]["storage"]["error"] == "minimum_free_bytes"
     assert controller.STORAGE_FAILURE_FINDING in result["latest"]["findings"]
+    assert result["latest"]["shutdown"]["launcherGraceful"] is True
+    assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["shutdown"] == {
+        "launcherGraceful": True
+    }
+    assert stop_requests == [manifest]
+
+
+@pytest.mark.parametrize(
+    ("failure_source", "phase"),
+    [("enforcement", "enforcement"), ("status", "watchStatus")],
+)
+def test_watch_session_fails_closed_on_raised_watch_loop_faults(
+    tmp_path: Path,
+    monkeypatch,
+    failure_source: str,
+    phase: str,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    if failure_source == "enforcement":
+        monkeypatch.setattr(
+            controller,
+            "enforce_session_storage_context",
+            lambda _context: (_ for _ in ()).throw(OSError("inventory failed")),
+        )
+        monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    else:
+        monkeypatch.setattr(
+            controller,
+            "enforce_session_storage_context",
+            lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+        )
+        monkeypatch.setattr(
+            controller,
+            "session_status",
+            lambda _paths: (_ for _ in ()).throw(OSError("WMI failed")),
+        )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["latest"]["storage"]["phase"] == phase
+    assert result["latest"]["shutdown"]["launcherGraceful"] is True
     assert stop_requests == [manifest]
 
 
@@ -847,7 +912,8 @@ def test_watch_session_fails_closed_on_invalid_storage_context(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -886,7 +952,8 @@ def test_watch_session_fails_closed_on_watch_evidence_write_failure(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -921,7 +988,8 @@ def test_watch_session_fails_closed_when_emit_fails(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed: stop_requests.append(observed) or {"launcherGraceful": True},
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -949,7 +1017,7 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
 
     def fake_stop(identity, *, markers, timeout_seconds):
         forced.append((identity, markers, timeout_seconds))
-        return {"forced": True, "alreadyStopped": False}
+        return {"forced": True, "alreadyStopped": False, "verifiedStopped": True}
 
     monkeypatch.setattr(controller, "stop_exact_process", fake_stop)
 
@@ -963,6 +1031,7 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
     assert paths.watch_stop_file.is_file()
     assert result["launcherGraceful"] is False
     assert result["launcherForce"]["forced"] is True
+    assert result["launcherStopped"] is True
     assert forced == [
         (
             manifest["launcher"],
@@ -970,3 +1039,73 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
             controller.WATCH_FAILURE_GRACE_SECONDS,
         )
     ]
+
+
+def test_watch_failure_stop_uses_fallback_when_manifest_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    fallback = {"pid": 10, "creationDate": "launcher"}
+    waited: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        controller,
+        "wait_exact_exit",
+        lambda identity, _timeout: waited.append(identity) or True,
+    )
+
+    result = controller.request_watch_failure_stop(
+        paths,
+        {},
+        launcher_fallback=fallback,
+        graceful_timeout_seconds=0.1,
+    )
+
+    assert waited == [fallback]
+    assert result["launcherIdentityAvailable"] is True
+    assert result["launcherStopped"] is True
+
+
+def test_watch_failure_stop_reports_unavailable_launcher_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    waited = False
+
+    def reject_wait(*_args, **_kwargs):
+        nonlocal waited
+        waited = True
+        raise AssertionError("wait must not run without an exact identity")
+
+    monkeypatch.setattr(controller, "wait_exact_exit", reject_wait)
+
+    result = controller.request_watch_failure_stop(paths, {}, graceful_timeout_seconds=0.1)
+
+    assert waited is False
+    assert result["launcherIdentityAvailable"] is False
+    assert result["launcherStopped"] is False
+    assert result["launcherForce"]["errorType"] == "LauncherIdentityUnavailable"
+
+
+def test_stop_exact_process_reports_surviving_exact_launcher(
+    monkeypatch,
+) -> None:
+    identity = {"pid": 10, "creationDate": "launcher"}
+    row = WindowsProcessInfo(10, 1, "python.exe", "python launch-soak.py", "launcher")
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [row])
+    monkeypatch.setattr(
+        controller.windows_processes,
+        "terminate_process_tree",
+        lambda *_args, **_kwargs: {"return_code": 1, "remaining_pids": [10]},
+    )
+
+    result = controller.stop_exact_process(
+        identity,
+        markers=("launch-soak.py",),
+        timeout_seconds=0.1,
+    )
+
+    assert result["forced"] is True
+    assert result["verifiedStopped"] is False
+    assert result["result"]["remaining_pids"] == [10]
