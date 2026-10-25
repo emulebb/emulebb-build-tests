@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,29 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
     assert '"status": "complete"' in manifest
     assert '"preflightCleanup"' in manifest
     assert '"summary": "ok"' in manifest
+
+
+def test_mark_run_running_publishes_readiness_without_dropping_preflight(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "soak" / "rust-profile"
+    soak_run_layout.prepare_clean_run(
+        paths=paths,
+        rust_profile_dir=rust_profile_dir,
+        rust_packet_dump_dir=rust_profile_dir / "packet-dump",
+        mfc_log_dir=None,
+        stop_process_cleanup=False,
+    )
+
+    soak_run_layout.mark_run_running(paths, extra={"readyEvidence": "captured"})
+
+    manifest = json.loads(paths.last_run_manifest.read_text(encoding="utf-8"))
+    assert manifest["campaignId"] == "20260706T073313Z"
+    assert manifest["status"] == "running"
+    assert manifest["readyUtc"].endswith("+00:00")
+    assert manifest["readyEvidence"] == "captured"
+    assert "preflightCleanup" in manifest
 
 
 def test_select_stale_soak_process_roots_is_command_line_scoped(tmp_path: Path) -> None:

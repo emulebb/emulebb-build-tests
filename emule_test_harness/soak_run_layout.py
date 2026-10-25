@@ -394,6 +394,26 @@ def write_latest_report_pointer(paths: SoakRunPaths) -> None:
     )
 
 
+def mark_run_running(
+    paths: SoakRunPaths, *, extra: dict[str, Any] | None = None
+) -> None:
+    """Publishes that both clients and ready diagnostics evidence are available."""
+
+    manifest: dict[str, Any] = {}
+    if paths.last_run_manifest.is_file():
+        manifest = json.loads(paths.last_run_manifest.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "campaignId": paths.campaign_id,
+            "status": "running",
+            "readyUtc": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    if extra:
+        manifest.update(extra)
+    write_last_run_manifest(paths, manifest)
+
+
 def mark_run_finished(
     paths: SoakRunPaths, *, status: str, extra: dict[str, Any] | None = None
 ) -> None:
