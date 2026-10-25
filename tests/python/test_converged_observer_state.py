@@ -11,6 +11,16 @@ from emule_test_harness import converged_observer_state as observer_state
 from emule_test_harness import soak_run_layout, soak_storage
 
 
+CONFIGURATION_DIGEST = "a" * 64
+
+
+def diagnostic_runs() -> dict[str, dict[str, object]]:
+    return {
+        "rust": {"processId": 4101, "runId": "rust-run"},
+        "mfc": {"processId": 4201, "runId": "mfc-run"},
+    }
+
+
 def storage_policy() -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=10 * 1024 * 1024,
@@ -95,6 +105,7 @@ def run_three_day_simulation(root: Path) -> tuple[bytes, dict[str, object]]:
     store = soak_storage.BoundedArtifactStore(paths.soak_root, storage_policy())
     state = observer_state.new_state(
         campaign_id,
+        configuration_digest=CONFIGURATION_DIGEST,
         recent_action_limit=5,
         recent_anomaly_limit=3,
     )
@@ -169,6 +180,7 @@ def run_three_day_simulation(root: Path) -> tuple[bytes, dict[str, object]]:
 def test_observer_state_rejects_discontinuous_action_sequence() -> None:
     state = observer_state.new_state(
         "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
         recent_action_limit=2,
         recent_anomaly_limit=1,
     )
@@ -185,6 +197,7 @@ def test_observer_state_rejects_discontinuous_action_sequence() -> None:
 def test_observer_state_reduces_driver_activity_without_history_growth() -> None:
     state = observer_state.new_state(
         "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
         recent_action_limit=2,
         recent_anomaly_limit=1,
     )
@@ -222,6 +235,7 @@ def test_observer_state_reduces_driver_activity_without_history_growth() -> None
 def test_observer_state_counts_structured_cycle_failure() -> None:
     state = observer_state.new_state(
         "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
         recent_action_limit=2,
         recent_anomaly_limit=1,
     )
@@ -245,6 +259,210 @@ def test_observer_state_counts_structured_cycle_failure() -> None:
     assert state["driver"]["cycles"] == 1
     assert state["driver"]["cycleErrors"] == 1
     assert state["driver"]["latestCycle"]["errors"][0]["message"] == "exact failure"
+
+
+def test_observer_state_rejects_configuration_digest_mismatch() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+
+    with pytest.raises(RuntimeError, match="configuration identity is invalid"):
+        observer_state.validate_state(state, configuration_digest="b" * 64)
+
+
+@pytest.mark.parametrize("cycle", (1, 3))
+def test_observer_state_rejects_duplicate_or_skipped_driver_cycle(cycle: int) -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.record_driver_cycle(state, {"cycle": 1})
+
+    with pytest.raises(RuntimeError, match="driver cycle is discontinuous"):
+        observer_state.record_driver_cycle(state, {"cycle": cycle})
+
+
+def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.set_next_action_deadline(state, "2026-10-01T00:05:00+00:00")
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="exact ünicode query",
+        method="global",
+        reserved_at_utc="2026-10-01T00:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    state = observer_state.record_search_create(
+        state,
+        client="rust",
+        issued_at_utc="2026-10-01T00:00:01+00:00",
+        search_id="rust-search-1",
+        error=None,
+    )
+    exact_error = {
+        "type": "RuntimeError",
+        "message": "MFC exact create failure: ünicode",
+    }
+    state = observer_state.record_search_create(
+        state,
+        client="mfc",
+        issued_at_utc="2026-10-01T00:00:02+00:00",
+        search_id=None,
+        error=exact_error,
+    )
+    state = observer_state.record_search_results(
+        state,
+        client="rust",
+        completed_at_utc="2026-10-01T00:02:00+00:00",
+        completed=False,
+        result_count=3,
+        error=None,
+    )
+    state = observer_state.record_driver_cycle(
+        state,
+        {
+            "cycle": 1,
+            "actionId": "20261001T000000Z-cycle-00000001",
+            "ok": False,
+            "errors": [exact_error],
+        },
+    )
+    state = observer_state.mark_evidence_pending(
+        state, window_end_utc="2026-10-01T00:03:00+00:00"
+    )
+
+    reloaded = observer_state.validate_state(
+        json.loads(observer_state.canonical_bytes(state)),
+        campaign_id="20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+    )
+
+    assert reloaded["scheduler"] == {
+        "nextCycle": 2,
+        "nextActionAtUtc": "2026-10-01T00:05:00+00:00",
+    }
+    assert reloaded["pendingAction"]["reportSeq"] == 1
+    assert reloaded["pendingAction"]["query"] == "exact ünicode query"
+    assert reloaded["pendingAction"]["clients"]["mfc"]["create"]["error"] == exact_error
+    assert reloaded["pendingAction"]["clients"]["rust"]["results"]["completed"] is False
+    assert reloaded["pendingAction"]["evidence"] == {
+        "status": "pending",
+        "windowEndUtc": "2026-10-01T00:03:00+00:00",
+    }
+
+
+def test_pending_action_rejects_duplicate_reservation_and_create() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-01T00:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+
+    with pytest.raises(RuntimeError, match="already has a pending action"):
+        observer_state.reserve_driver_cycle(
+            state,
+            query="debian",
+            method="server",
+            reserved_at_utc="2026-10-01T00:01:00+00:00",
+            diagnostic_runs=diagnostic_runs(),
+        )
+
+    state = observer_state.record_search_create(
+        state,
+        client="rust",
+        issued_at_utc="2026-10-01T00:00:01+00:00",
+        search_id="rust-search-1",
+        error=None,
+    )
+    with pytest.raises(RuntimeError, match="create is already recorded"):
+        observer_state.record_search_create(
+            state,
+            client="rust",
+            issued_at_utc="2026-10-01T00:00:02+00:00",
+            search_id="rust-search-2",
+            error=None,
+        )
+
+
+def test_matching_action_report_is_the_only_commit_that_clears_pending() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="linux",
+        method="kad",
+        reserved_at_utc="2026-10-01T00:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = observer_state.record_search_create(
+            state,
+            client=client,
+            issued_at_utc="2026-10-01T00:00:01+00:00",
+            search_id=f"{client}-search-1",
+            error=None,
+        )
+        state = observer_state.record_search_results(
+            state,
+            client=client,
+            completed_at_utc="2026-10-01T00:01:00+00:00",
+            completed=True,
+            result_count=2,
+            error=None,
+        )
+    state = observer_state.record_driver_cycle(
+        state,
+        {
+            "cycle": 1,
+            "actionId": "20261001T000000Z-cycle-00000001",
+            "ok": True,
+        },
+    )
+    state = observer_state.mark_evidence_pending(
+        state, window_end_utc="2026-10-01T00:02:00+00:00"
+    )
+    report = action_report(
+        "20261001T000000Z",
+        1,
+        "2026-10-01T00:02:00+00:00",
+    )
+    report.update({"actionId": "wrong", "cycle": 1})
+
+    with pytest.raises(RuntimeError, match="require commit_action_report"):
+        observer_state.record_action(state, report)
+    with pytest.raises(RuntimeError, match="report identity is invalid"):
+        observer_state.commit_action_report(state, report)
+
+    report["actionId"] = "20261001T000000Z-cycle-00000001"
+    committed = observer_state.commit_action_report(state, report)
+
+    assert committed["pendingAction"] is None
+    assert committed["nextActionSeq"] == 2
+    assert committed["totals"]["actions"] == 1
+    assert committed["driver"]["cycles"] == 1
+    assert committed["scheduler"]["nextCycle"] == 2
 
 
 def test_three_day_observer_simulation_is_restart_safe_and_bounded(

@@ -62,9 +62,12 @@ def runtime(tmp_path: Path) -> converged_observer.ObserverRuntime:
     )
 
 
-def new_state() -> dict[str, object]:
+def new_state(
+    config: converged_observer.ObserverActionConfig = converged_observer.ObserverActionConfig(),
+) -> dict[str, object]:
     return converged_observer_state.new_state(
         CAMPAIGN_ID,
+        configuration_digest=converged_observer.action_configuration_digest(config),
         recent_action_limit=4,
         recent_anomaly_limit=4,
     )
@@ -165,6 +168,33 @@ def test_parse_action_config_rejects_ambiguous_or_nonfinite_values(
         converged_observer.parse_action_config({"actionDriving": payload})
 
 
+def test_load_state_binds_the_exact_action_configuration(tmp_path: Path) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="explicit",
+        terms=("exact local term", "ünicode term"),
+        method="kad",
+        start_delay_seconds=30,
+        search_interval_seconds=900,
+        search_timeout_seconds=120,
+        max_cycles=4,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+
+    state = converged_observer.load_state(subject)
+    assert state[
+        "configurationDigest"
+    ] == converged_observer.action_configuration_digest(config)
+    converged_observer.persist_state(subject, state)
+
+    changed = replace(
+        subject,
+        action_config=replace(config, terms=("exact local term", "different")),
+    )
+    with pytest.raises(RuntimeError, match="configuration identity is invalid"):
+        converged_observer.load_state(changed)
+
+
 def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
     tmp_path: Path,
     monkeypatch,
@@ -204,10 +234,11 @@ def test_capture_action_cycle_persists_exact_query_and_cumulative_driver_state(
         search_interval_seconds=900,
         search_timeout_seconds=120,
     )
+    subject = replace(subject, action_config=config)
 
     updated = converged_observer.capture_action_cycle(
         subject,
-        new_state(),
+        new_state(config),
         config,
         now_utc=lambda: next(timestamps),
         now_ns=1_000_000_000,
@@ -251,10 +282,11 @@ def test_capture_action_cycle_records_rest_failure_without_stopping_soak(
         terms=("linux",),
         search_interval_seconds=900,
     )
+    subject = replace(subject, action_config=config)
 
     updated = converged_observer.capture_action_cycle(
         subject,
-        new_state(),
+        new_state(config),
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
     )

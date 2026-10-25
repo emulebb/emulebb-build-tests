@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -64,6 +65,29 @@ class ObserverRuntime:
     rust_base_url: str
     mfc_base_url: str
     action_config: ObserverActionConfig = ObserverActionConfig()
+
+
+def action_configuration_digest(config: ObserverActionConfig) -> str:
+    """Returns the stable identity of one validated action-driving schedule."""
+
+    payload = {
+        "enabled": config.enabled,
+        "sourceProfile": config.source_profile,
+        "terms": list(config.terms),
+        "method": config.method,
+        "startDelaySeconds": config.start_delay_seconds,
+        "searchIntervalSeconds": config.search_interval_seconds,
+        "searchTimeoutSeconds": config.search_timeout_seconds,
+        "maxCycles": config.max_cycles,
+    }
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig:
@@ -306,13 +330,19 @@ def load_state(runtime: ObserverRuntime) -> dict[str, Any]:
     """Loads the cumulative state or creates the first state for this campaign."""
 
     summary_path = runtime.run_paths.report_dir / "summary.json"
+    configuration_digest = action_configuration_digest(runtime.action_config)
     if not summary_path.is_file():
         return converged_observer_state.new_state(
             runtime.run_paths.campaign_id,
+            configuration_digest=configuration_digest,
             recent_action_limit=DEFAULT_RECENT_ACTION_LIMIT,
             recent_anomaly_limit=DEFAULT_RECENT_ANOMALY_LIMIT,
         )
-    return converged_observer_state.validate_state(load_json_object(summary_path))
+    return converged_observer_state.validate_state(
+        load_json_object(summary_path),
+        campaign_id=runtime.run_paths.campaign_id,
+        configuration_digest=configuration_digest,
+    )
 
 
 def capture_checkpoint(
@@ -347,9 +377,11 @@ def capture_checkpoint(
             "mfc": mfc_health,
         },
         "totals": {
-            "actions": converged_observer_state.validate_state(state)["totals"][
-                "actions"
-            ]
+            "actions": converged_observer_state.validate_state(
+                state,
+                campaign_id=runtime.run_paths.campaign_id,
+                configuration_digest=action_configuration_digest(runtime.action_config),
+            )["totals"]["actions"]
         },
     }
     persisted = soak_run_layout.persist_observer_checkpoint(
@@ -384,6 +416,7 @@ def persist_state(
     validated = converged_observer_state.validate_state(
         state,
         campaign_id=runtime.run_paths.campaign_id,
+        configuration_digest=action_configuration_digest(runtime.action_config),
     )
     soak_run_layout.persist_observer_summary(
         paths=runtime.run_paths,
@@ -411,6 +444,7 @@ def capture_action_cycle(
     validated = converged_observer_state.validate_state(
         state,
         campaign_id=runtime.run_paths.campaign_id,
+        configuration_digest=action_configuration_digest(runtime.action_config),
     )
     if not config.enabled or not config.terms:
         raise RuntimeError("Observer action driving is not enabled.")
