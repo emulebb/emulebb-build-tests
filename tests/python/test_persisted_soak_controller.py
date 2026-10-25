@@ -404,10 +404,17 @@ def test_session_status_reports_exact_dual_process_tree(
     )
     controller.write_json_atomic(paths.last_run_manifest, {"campaignId": "20261024T120000Z", "status": "starting"})
     processes = [
-        WindowsProcessInfo(10, 1, "python.exe", "python launch-soak.py", "launcher"),
-        WindowsProcessInfo(11, 10, "emulebb-rust-diagnostics.exe", "rust", "rust"),
-        WindowsProcessInfo(12, 10, "emule.exe", "mfc", "mfc"),
-        WindowsProcessInfo(20, 1, "python.exe", "python persisted-soak-control.py watch", "watcher"),
+        WindowsProcessInfo(10, 1, "python.exe", "python run-bounded-process.py -- launch-soak.py", "launcher"),
+        WindowsProcessInfo(13, 10, "python.exe", "python launch-soak.py", "launch-target"),
+        WindowsProcessInfo(11, 13, "emulebb-rust-diagnostics.exe", "rust", "rust"),
+        WindowsProcessInfo(12, 13, "emule.exe", "mfc", "mfc"),
+        WindowsProcessInfo(
+            20,
+            1,
+            "python.exe",
+            "python run-bounded-process.py -- persisted-soak-control.py watch",
+            "watcher",
+        ),
     ]
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
     monkeypatch.setattr(controller, "rest_health", lambda _url, _key: {"ok": True})
