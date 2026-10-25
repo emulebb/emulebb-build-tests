@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -15,8 +16,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import converged_live_wire as clw
-from . import hideme_vpn, soak_launch, windows_processes
-from .live_wire_inputs import load_live_wire_inputs
+from . import hideme_vpn, soak_launch, soak_run_layout, soak_storage, windows_processes
+from .live_wire_inputs import LiveWireInputs, load_live_wire_inputs
 from .paths import get_workspace_output_root, path_is_relative_to
 from .vm_guest_profiles import http_json
 
@@ -111,6 +112,135 @@ def load_json(path: Path) -> dict[str, Any]:
     return parsed
 
 
+def campaign_storage_root(output_root: Path) -> Path:
+    """Returns the only tree owned by aggregate soak artifact retention."""
+
+    return (output_root.resolve() / "soak" / "campaigns").resolve()
+
+
+def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStoragePolicy:
+    """Returns the mandatory persisted-soak storage policy."""
+
+    if inputs.soak_storage is None:
+        raise RuntimeError("Persisted full-tunnel soaks require soak_storage in the live-wire inputs.")
+    return inputs.soak_storage
+
+
+def storage_policy_summary(policy: soak_storage.SoakStoragePolicy) -> dict[str, Any]:
+    """Returns the complete non-secret storage policy for manifests."""
+
+    return {
+        "schema": soak_storage.SCHEMA,
+        "maxTotalBytes": policy.max_total_bytes,
+        "maxAgeSeconds": policy.max_age_seconds,
+        "minimumFreeBytes": policy.minimum_free_bytes,
+        "bundleIntervalSeconds": policy.bundle_interval_seconds,
+        "streams": {
+            name: {
+                "maxSegmentBytes": stream.max_segment_bytes,
+                "retainedSegments": stream.retained_segments,
+            }
+            for name, stream in policy.streams.items()
+        },
+    }
+
+
+def storage_plan_summary(root: Path, plan: soak_storage.StoragePrunePlan) -> dict[str, Any]:
+    """Returns bounded planning evidence without an unbounded deletion listing."""
+
+    reasons = Counter(deletion.reason for deletion in plan.deletions)
+    return {
+        "root": str(root),
+        "fileCount": len(plan.inventory.files),
+        "totalBytes": plan.inventory.total_bytes,
+        "freeBytes": plan.disk_space.free_bytes,
+        "protectedFileCount": len(plan.protected_files),
+        "deletionCount": len(plan.deletions),
+        "deletionBytes": sum(item.artifact.size_bytes for item in plan.deletions),
+        "deletionReasons": dict(sorted(reasons.items())),
+        "projectedTotalBytes": plan.projected_total_bytes,
+        "projectedFreeBytes": plan.projected_free_bytes,
+        "triggeredConstraints": list(plan.triggered_constraints),
+        "unresolvedConstraints": list(plan.unresolved_constraints),
+        "feasible": plan.within_limits,
+    }
+
+
+def storage_enforcement_summary(
+    root: Path,
+    result: soak_storage.StorageEnforcementResult,
+) -> dict[str, Any]:
+    """Returns bounded applied and verified storage evidence."""
+
+    return {
+        "root": str(root),
+        "planned": storage_plan_summary(root, result.plan),
+        "deletedCount": len(result.deleted_paths),
+        "deletedBytes": sum(
+            deletion.artifact.size_bytes
+            for deletion in result.plan.deletions
+            if deletion.artifact.path in result.deleted_paths
+        ),
+        "failures": list(result.failures[:32]),
+        "failureCount": len(result.failures),
+        "verification": storage_plan_summary(root, result.verification),
+        "withinLimits": result.within_limits,
+    }
+
+
+def latest_campaign_path(paths: ControlPaths, campaigns_root: Path) -> Path | None:
+    """Returns the last campaign path when its stable manifest names one."""
+
+    manifest = load_json(paths.last_run_manifest)
+    raw_path = manifest.get("campaignDir")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    campaign = Path(raw_path).resolve()
+    if not path_is_relative_to(campaign, campaigns_root):
+        raise RuntimeError(f"Last-run campaign escaped the owned campaign store: {campaign}")
+    return campaign
+
+
+def preflight_campaign_storage(
+    inputs: LiveWireInputs,
+    output_root: Path,
+    *,
+    protected_campaigns: tuple[Path, ...],
+) -> dict[str, Any]:
+    """Plans aggregate retention without mutating campaign evidence."""
+
+    policy = required_storage_policy(inputs)
+    root = campaign_storage_root(output_root)
+    plan = soak_storage.BoundedArtifactStore(root, policy).plan(pinned_paths=protected_campaigns)
+    if not plan.within_limits:
+        constraints = ", ".join(plan.unresolved_constraints) or "unknown"
+        raise RuntimeError(f"Persisted soak storage cannot satisfy required limits: {constraints}.")
+    return {
+        "policy": storage_policy_summary(policy),
+        "plan": storage_plan_summary(root, plan),
+    }
+
+
+def enforce_campaign_storage(
+    inputs_path: Path,
+    output_root: Path,
+    *,
+    protected_campaigns: tuple[Path, ...],
+) -> dict[str, Any]:
+    """Applies and verifies aggregate retention before any process launch."""
+
+    inputs = load_live_wire_inputs(inputs_path.resolve())
+    policy = required_storage_policy(inputs)
+    root = campaign_storage_root(output_root)
+    result = soak_storage.BoundedArtifactStore(root, policy).enforce(pinned_paths=protected_campaigns)
+    summary = storage_enforcement_summary(root, result)
+    if not result.within_limits:
+        constraints = ", ".join(result.verification.unresolved_constraints)
+        detail = constraints or (result.failures[0] if result.failures else "pending deletions remain")
+        raise RuntimeError(f"Persisted soak storage enforcement failed: {detail}.")
+    return summary
+
+
 def command_fingerprint(command: list[str]) -> str:
     """Returns a stable non-secret command identity fingerprint."""
 
@@ -163,7 +293,12 @@ def wait_process_identity(
     raise RuntimeError(f"Timed out recording exact process identity for pid {pid}: {last_row}")
 
 
-def preflight_session(config: SessionConfig, output_root: Path) -> dict[str, Any]:
+def preflight_session(
+    config: SessionConfig,
+    output_root: Path,
+    *,
+    protected_campaigns: tuple[Path, ...] = (),
+) -> dict[str, Any]:
     """Performs the read-only full-tunnel and persisted-profile preflight."""
 
     inputs_path = config.inputs.resolve()
@@ -179,6 +314,11 @@ def preflight_session(config: SessionConfig, output_root: Path) -> dict[str, Any
         raise RuntimeError(f"Rust profile path exists and is not a directory: {rust_profile_dir}")
     if not rust_profile_dir.parent.is_dir():
         raise RuntimeError(f"Rust profile parent does not exist: {rust_profile_dir.parent}")
+    storage = preflight_campaign_storage(
+        inputs,
+        output_root,
+        protected_campaigns=protected_campaigns,
+    )
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(
         config.lan_bind_addr,
@@ -221,10 +361,16 @@ def preflight_session(config: SessionConfig, output_root: Path) -> dict[str, Any
             "guardMode": guard["mode"],
             "guardConfig": guard["config_path"],
         },
+        "storage": storage,
     }
 
 
-def build_launch_command(config: SessionConfig, paths: ControlPaths) -> list[str]:
+def build_launch_command(
+    config: SessionConfig,
+    paths: ControlPaths,
+    *,
+    campaign_id: str,
+) -> list[str]:
     """Builds the canonical until-stopped dual diagnostics command."""
 
     return [
@@ -232,6 +378,8 @@ def build_launch_command(config: SessionConfig, paths: ControlPaths) -> list[str
         str(LAUNCH_SCRIPT),
         "--inputs",
         str(config.inputs.resolve()),
+        "--campaign-id",
+        soak_run_layout.validate_campaign_id(campaign_id),
         "--lan-bind-addr",
         config.lan_bind_addr,
         "--vpn-topology",
@@ -353,12 +501,34 @@ def start_session(
         raise RuntimeError(f"A persisted soak watcher is already active: {paths.manifest}")
 
     output_root = get_workspace_output_root()
-    preflight = preflight_session(config, output_root)
+    campaigns_root = campaign_storage_root(output_root)
+    campaign_id = soak_run_layout.utc_campaign_id()
+    campaign_dir = (campaigns_root / campaign_id).resolve()
+    if campaign_dir.exists():
+        raise RuntimeError(f"Persisted soak campaign path already exists: {campaign_dir}")
+    previous_campaign = latest_campaign_path(paths, campaigns_root)
+    protected_campaigns = tuple(
+        dict.fromkeys(
+            campaign
+            for campaign in (previous_campaign, campaign_dir)
+            if campaign is not None
+        )
+    )
+    preflight = preflight_session(
+        config,
+        output_root,
+        protected_campaigns=protected_campaigns,
+    )
+    storage_enforcement = enforce_campaign_storage(
+        config.inputs,
+        output_root,
+        protected_campaigns=protected_campaigns,
+    )
     paths.control_dir.mkdir(parents=True, exist_ok=True)
     paths.stop_file.unlink(missing_ok=True)
     paths.watch_stop_file.unlink(missing_ok=True)
 
-    launch_command = build_launch_command(config, paths)
+    launch_command = build_launch_command(config, paths, campaign_id=campaign_id)
     launcher_process = spawn_detached(
         launch_command,
         stdout_path=paths.launcher_stdout,
@@ -375,10 +545,13 @@ def start_session(
         "schema": MANIFEST_SCHEMA,
         "state": "running",
         "startedUtc": datetime.now(UTC).isoformat(),
+        "campaignId": campaign_id,
+        "campaignDir": str(campaign_dir),
         "launcher": process_identity(launcher_row, launch_command),
         "watcher": None,
         "command": launch_command,
         "preflight": preflight,
+        "storageEnforcement": storage_enforcement,
         "controlFiles": {
             "manifest": str(paths.manifest),
             "stop": str(paths.stop_file),

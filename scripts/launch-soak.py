@@ -85,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="live-wire-inputs.local.json (shared roots). Default: repo-root copy.",
     )
     parser.add_argument(
+        "--campaign-id",
+        help="Controller-assigned UTC YYYYMMDDTHHMMSSZ campaign identity; generated when omitted.",
+    )
+    parser.add_argument(
         "--lan-bind-addr",
         required=True,
         help="REST/control bind IP: X_LOCAL_IP for split-tunnel, 127.0.0.1 for full-tunnel.",
@@ -557,7 +561,11 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
 
     soak_root = output_root / "soak"
-    campaign_id = soak_run_layout.utc_campaign_id()
+    campaign_id = (
+        soak_run_layout.validate_campaign_id(args.campaign_id)
+        if args.campaign_id
+        else soak_run_layout.utc_campaign_id()
+    )
     mfc_artifacts = soak_root / "mfc-profile"
     mfc_log_dir = None if args.no_mfc else soak_run_layout.mfc_soak_log_dir(
         mfc_artifacts_dir=mfc_artifacts,
