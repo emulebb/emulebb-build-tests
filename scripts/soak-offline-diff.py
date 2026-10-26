@@ -112,8 +112,6 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
             other_diagnostic_paths.append(path)
 
         diag = diag_event_runs.load_latest_diag_records(diag_paths, client=client)
-        for record in diag:
-            record.setdefault("ts_utc", record.get("ts"))
 
         if client == "mfc" and diag_paths:
             health_paths = sorted(dumps_dir.rglob("emulebb-mfc-diag-health.json"))
@@ -345,10 +343,20 @@ def _diff_one_action(
                 "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
     r0, r1 = rust_span
     m0, m1 = mfc_span
-    rust_pkt = soak_action_diff.slice_trace(rust["packets"], r0, r1)
-    mfc_pkt = soak_action_diff.slice_trace(mfc["packets"], m0, m1)
-    rust_diag = soak_action_diff.slice_trace(rust["diag"], r0, r1)
-    mfc_diag = soak_action_diff.slice_trace(mfc["diag"], m0, m1)
+    rust_window = soak_action_diff.ActionWindow(start_utc=r0, end_utc=r1)
+    mfc_window = soak_action_diff.ActionWindow(start_utc=m0, end_utc=m1)
+    rust_pkt = soak_action_diff.slice_trace(
+        rust["packets"], rust_window, trace_name="rust packet trace"
+    )
+    mfc_pkt = soak_action_diff.slice_trace(
+        mfc["packets"], mfc_window, trace_name="mfc packet trace"
+    )
+    rust_diag = soak_action_diff.slice_trace(
+        rust["diag"], rust_window, trace_name="rust diagnostic trace"
+    )
+    mfc_diag = soak_action_diff.slice_trace(
+        mfc["diag"], mfc_window, trace_name="mfc diagnostic trace"
+    )
 
     diag_diff = diag_event_diff.diff_traces(rust_diag, mfc_diag)
     sched_rows = [
