@@ -424,7 +424,7 @@ def test_converged_runner_uses_selected_unified_runs_for_packet_diff(
     assert result.emule_packet_count == 1
     assert result.packet_diff["totals"]["matched"] == 1
     assert result.packet_diff["ok"] is True
-    assert result.diag_diff["schema"] == "diag_event_diff_v1"
+    assert result.diag_diff["schema"] == "diag_event_diff_v2"
     assert result.diag_diff["ok"] is True
 
 

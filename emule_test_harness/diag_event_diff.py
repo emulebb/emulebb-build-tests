@@ -44,6 +44,7 @@ from emule_test_harness.diag_event_schema import (
 PACKET_FAMILIES = ("ed2k_tcp", "ed2k_server_udp", "kad_udp")
 EVENT_FAMILIES = ("kad_event", "bad_peer")
 SCHED_FAMILY = "sched"
+DIFF_DETAIL_LIMIT = 32
 
 _PACKET_DIRECTIONS = ("send", "recv")
 
@@ -383,6 +384,7 @@ def _diff_packet_family(
         g_payload: list[dict[str, Any]] = []
         g_only_rust: list[dict[str, Any]] = []
         g_only_mfc: list[dict[str, Any]] = []
+        g_payload_count = g_only_rust_count = g_only_mfc_count = 0
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag == "equal":
                 g_matched += i2 - i1
@@ -394,31 +396,46 @@ def _diff_packet_family(
                 r_rec = r_part[offset]
                 m_rec = m_part[offset]
                 if _packet_opcode_key(r_rec) == _packet_opcode_key(m_rec):
-                    g_payload.append(
-                        {
-                            "opcode": (r_rec["body"]).get("opcode"),
-                            "opcodeName": (r_rec["body"]).get("opcodeName"),
-                            "rustPayloadLen": (r_rec["body"]).get("payloadLen"),
-                            "mfcPayloadLen": (m_rec["body"]).get("payloadLen"),
-                        }
-                    )
+                    g_payload_count += 1
+                    if len(g_payload) < DIFF_DETAIL_LIMIT:
+                        g_payload.append(
+                            {
+                                "opcode": (r_rec["body"]).get("opcode"),
+                                "opcodeName": (r_rec["body"]).get("opcodeName"),
+                                "rustPayloadLen": (r_rec["body"]).get("payloadLen"),
+                                "mfcPayloadLen": (m_rec["body"]).get("payloadLen"),
+                            }
+                        )
                 else:
-                    g_only_rust.append(_packet_describe(r_rec))
-                    g_only_mfc.append(_packet_describe(m_rec))
-            g_only_rust.extend(_packet_describe(r) for r in r_part[paired:])
-            g_only_mfc.extend(_packet_describe(m) for m in m_part[paired:])
+                    g_only_rust_count += 1
+                    g_only_mfc_count += 1
+                    if len(g_only_rust) < DIFF_DETAIL_LIMIT:
+                        g_only_rust.append(_packet_describe(r_rec))
+                    if len(g_only_mfc) < DIFF_DETAIL_LIMIT:
+                        g_only_mfc.append(_packet_describe(m_rec))
+            for record in r_part[paired:]:
+                g_only_rust_count += 1
+                if len(g_only_rust) < DIFF_DETAIL_LIMIT:
+                    g_only_rust.append(_packet_describe(record))
+            for record in m_part[paired:]:
+                g_only_mfc_count += 1
+                if len(g_only_mfc) < DIFF_DETAIL_LIMIT:
+                    g_only_mfc.append(_packet_describe(record))
         matched += g_matched
-        payload_mismatches += len(g_payload)
-        only_rust += len(g_only_rust)
-        only_mfc += len(g_only_mfc)
+        payload_mismatches += g_payload_count
+        only_rust += g_only_rust_count
+        only_mfc += g_only_mfc_count
         groups.append(
             {
                 "direction": direction,
                 "rustCount": len(rust_block),
                 "mfcCount": len(mfc_block),
                 "matched": g_matched,
+                "payloadMismatchCount": g_payload_count,
                 "payloadMismatches": g_payload,
+                "onlyRustCount": g_only_rust_count,
                 "onlyRust": g_only_rust,
+                "onlyMfcCount": g_only_mfc_count,
                 "onlyMfc": g_only_mfc,
             }
         )
@@ -497,6 +514,7 @@ def _diff_client_udp_packets(
         group_mismatches: list[dict[str, Any]] = []
         group_only_rust: list[dict[str, Any]] = []
         group_only_mfc: list[dict[str, Any]] = []
+        group_mismatch_count = group_only_rust_count = group_only_mfc_count = 0
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag == "equal":
                 group_matched += i2 - i1
@@ -505,31 +523,38 @@ def _diff_client_udp_packets(
             mfc_part = mfc_block[j1:j2]
             paired = min(len(rust_part), len(mfc_part))
             for offset in range(paired):
-                group_mismatches.append(
-                    {
-                        "rust": _client_udp_packet_description(rust_part[offset]),
-                        "mfc": _client_udp_packet_description(mfc_part[offset]),
-                    }
-                )
-            group_only_rust.extend(
-                _client_udp_packet_description(record) for record in rust_part[paired:]
-            )
-            group_only_mfc.extend(
-                _client_udp_packet_description(record) for record in mfc_part[paired:]
-            )
+                group_mismatch_count += 1
+                if len(group_mismatches) < DIFF_DETAIL_LIMIT:
+                    group_mismatches.append(
+                        {
+                            "rust": _client_udp_packet_description(rust_part[offset]),
+                            "mfc": _client_udp_packet_description(mfc_part[offset]),
+                        }
+                    )
+            for record in rust_part[paired:]:
+                group_only_rust_count += 1
+                if len(group_only_rust) < DIFF_DETAIL_LIMIT:
+                    group_only_rust.append(_client_udp_packet_description(record))
+            for record in mfc_part[paired:]:
+                group_only_mfc_count += 1
+                if len(group_only_mfc) < DIFF_DETAIL_LIMIT:
+                    group_only_mfc.append(_client_udp_packet_description(record))
 
         matched += group_matched
-        wire_mismatches += len(group_mismatches)
-        only_rust += len(group_only_rust)
-        only_mfc += len(group_only_mfc)
+        wire_mismatches += group_mismatch_count
+        only_rust += group_only_rust_count
+        only_mfc += group_only_mfc_count
         groups.append(
             {
                 "direction": direction,
                 "rustCount": len(rust_block),
                 "mfcCount": len(mfc_block),
                 "matched": group_matched,
+                "wireMismatchCount": group_mismatch_count,
                 "wireMismatches": group_mismatches,
+                "onlyRustCount": group_only_rust_count,
                 "onlyRust": group_only_rust,
+                "onlyMfcCount": group_only_mfc_count,
                 "onlyMfc": group_only_mfc,
             }
         )
@@ -556,6 +581,13 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
     attempts: dict[int, tuple[int, dict[str, Any]]] = {}
     terminals: dict[int, list[tuple[int, dict[str, Any]]]] = {}
     violations: list[dict[str, Any]] = []
+    violation_count = 0
+
+    def add_violation(violation: dict[str, Any]) -> None:
+        nonlocal violation_count
+        violation_count += 1
+        if len(violations) < DIFF_DETAIL_LIMIT:
+            violations.append(violation)
 
     for index, record in enumerate(records):
         event = record.get("event")
@@ -565,17 +597,17 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
         if event == "packet" and direction == "send":
             attempt_id = _send_attempt_id(record)
             if outcome != "attempted":
-                violations.append(
+                add_violation(
                     {"kind": "invalid_attempt_outcome", "index": index, "outcome": outcome}
                 )
                 continue
             if not isinstance(attempt_id, int) or isinstance(attempt_id, bool) or attempt_id <= 0:
-                violations.append(
+                add_violation(
                     {"kind": "invalid_attempt_id", "index": index, "sendAttemptId": attempt_id}
                 )
                 continue
             if attempt_id in attempts:
-                violations.append(
+                add_violation(
                     {"kind": "duplicate_attempt", "index": index, "sendAttemptId": attempt_id}
                 )
                 continue
@@ -583,18 +615,18 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
         elif event == "send_outcome":
             attempt_id = _send_attempt_id(record)
             if not isinstance(attempt_id, int) or isinstance(attempt_id, bool) or attempt_id <= 0:
-                violations.append(
+                add_violation(
                     {"kind": "invalid_terminal_id", "index": index, "sendAttemptId": attempt_id}
                 )
                 continue
             terminals.setdefault(attempt_id, []).append((index, record))
             if outcome not in _CLIENT_UDP_TERMINAL_OUTCOMES:
-                violations.append(
+                add_violation(
                     {"kind": "invalid_terminal_outcome", "index": index, "outcome": outcome}
                 )
             expected_delivery_known = outcome != "send_cancelled"
             if body.get("deliveryKnown") is not expected_delivery_known:
-                violations.append(
+                add_violation(
                     {
                         "kind": "invalid_delivery_known",
                         "index": index,
@@ -606,9 +638,9 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
     for attempt_id, (attempt_index, _record) in sorted(attempts.items()):
         matching = terminals.get(attempt_id, [])
         if not matching:
-            violations.append({"kind": "missing_terminal", "sendAttemptId": attempt_id})
+            add_violation({"kind": "missing_terminal", "sendAttemptId": attempt_id})
         elif len(matching) > 1:
-            violations.append(
+            add_violation(
                 {
                     "kind": "duplicate_terminal",
                     "sendAttemptId": attempt_id,
@@ -616,11 +648,11 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
                 }
             )
         elif matching[0][0] < attempt_index:
-            violations.append(
+            add_violation(
                 {"kind": "terminal_before_attempt", "sendAttemptId": attempt_id}
             )
     for attempt_id in sorted(set(terminals) - set(attempts)):
-        violations.append({"kind": "orphan_terminal", "sendAttemptId": attempt_id})
+        add_violation({"kind": "orphan_terminal", "sendAttemptId": attempt_id})
 
     coverage = sorted(
         {
@@ -641,9 +673,10 @@ def _client_udp_lifecycle_audit(records: list[dict[str, Any]]) -> dict[str, Any]
             if isinstance(outcome, str):
                 outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
     return {
-        "ok": not violations,
+        "ok": violation_count == 0,
         "attemptCount": len(attempts),
         "terminalCount": sum(len(matching) for matching in terminals.values()),
+        "violationCount": violation_count,
         "violations": violations,
         "outcomes": dict(sorted(outcome_counts.items())),
         "coverage": [
@@ -742,6 +775,7 @@ def _diff_event_family(
     mfc_used = [False] * len(mfc_recs)
     matched = 0
     only_rust: list[dict[str, Any]] = []
+    only_rust_count = 0
     for record in rust_pending:
         identity = _event_identity(family, record)
         for index, mfc_identity in enumerate(mfc_ids):
@@ -750,8 +784,17 @@ def _diff_event_family(
                 matched += 1
                 break
         else:
-            only_rust.append(_describe_event(record))
-    only_mfc = [_describe_event(mfc_recs[i]) for i, used in enumerate(mfc_used) if not used]
+            only_rust_count += 1
+            if len(only_rust) < DIFF_DETAIL_LIMIT:
+                only_rust.append(_describe_event(record))
+    only_mfc: list[dict[str, Any]] = []
+    only_mfc_count = 0
+    for index, used in enumerate(mfc_used):
+        if used:
+            continue
+        only_mfc_count += 1
+        if len(only_mfc) < DIFF_DETAIL_LIMIT:
+            only_mfc.append(_describe_event(mfc_recs[index]))
     return {
         "family": family,
         "strategy": "multiset",
@@ -759,11 +802,11 @@ def _diff_event_family(
         # only real failure is an oracle event rust LACKS (onlyMfc). onlyRust events
         # are allowed extras, reported for visibility but not a failure. (Matches the
         # rust-superset-of-oracle model already used by schema_audit.)
-        "ok": not only_mfc,
+        "ok": only_mfc_count == 0,
         "totals": {
             "matched": matched,
-            "onlyRust": len(only_rust),
-            "onlyMfc": len(only_mfc),
+            "onlyRust": only_rust_count,
+            "onlyMfc": only_mfc_count,
         },
         "onlyRust": only_rust,
         "onlyMfc": only_mfc,
@@ -837,6 +880,7 @@ def _diff_sched_family(
     mfc_event_types = {record.get("event") for record in mfc_recs}
     matched_keys = 0
     transition_divergences: list[dict[str, Any]] = []
+    transition_divergence_count = 0
     for key in shared:
         # The keyless "<global>|" bucket aggregates periodic snapshots (e.g.
         # capacity_snapshot); rust has no fixed upload-queue tick gate so its cadence
@@ -850,34 +894,45 @@ def _diff_sched_family(
         if rust_seq == mfc_seq:
             matched_keys += 1
         else:
-            transition_divergences.append(
-                {"key": key, "rust": rust_seq, "mfc": mfc_seq}
-            )
+            transition_divergence_count += 1
+            if len(transition_divergences) < DIFF_DETAIL_LIMIT:
+                transition_divergences.append(
+                    {
+                        "key": key,
+                        "rustCount": len(rust_seq),
+                        "mfcCount": len(mfc_seq),
+                        "rust": rust_seq[:DIFF_DETAIL_LIMIT],
+                        "mfc": mfc_seq[:DIFF_DETAIL_LIMIT],
+                    }
+                )
 
     invariant_violations: list[dict[str, Any]] = []
+    invariant_violation_count = 0
     for side, by_key in (("rust", rust_by_key), ("mfc", mfc_by_key)):
         for key, records in by_key.items():
             for violation in _sched_invariants(records):
-                invariant_violations.append({"side": side, "key": key, **violation})
+                invariant_violation_count += 1
+                if len(invariant_violations) < DIFF_DETAIL_LIMIT:
+                    invariant_violations.append({"side": side, "key": key, **violation})
 
     return {
         "family": SCHED_FAMILY,
         "strategy": "structural",
         # Keys present on only one side are informational (the two clients may
         # engage different peers), not a failure.
-        "ok": not transition_divergences and not invariant_violations,
+        "ok": transition_divergence_count == 0 and invariant_violation_count == 0,
         "totals": {
             "sharedKeys": len(shared),
             "matchedKeys": matched_keys,
-            "transitionDivergences": len(transition_divergences),
+            "transitionDivergences": transition_divergence_count,
             "onlyRustKeys": len(only_rust_keys),
             "onlyMfcKeys": len(only_mfc_keys),
-            "invariantViolations": len(invariant_violations),
+            "invariantViolations": invariant_violation_count,
         },
         "transitionDivergences": transition_divergences,
         "invariantViolations": invariant_violations,
-        "onlyRustKeys": only_rust_keys,
-        "onlyMfcKeys": only_mfc_keys,
+        "onlyRustKeys": only_rust_keys[:DIFF_DETAIL_LIMIT],
+        "onlyMfcKeys": only_mfc_keys[:DIFF_DETAIL_LIMIT],
     }
 
 
@@ -924,6 +979,7 @@ def diff_traces(
 
     return {
         "schema": DIAG_EVENT_DIFF_REPORT_SCHEMA,
+        "detailLimit": DIFF_DETAIL_LIMIT,
         "ok": bool(families) and all(f["ok"] for f in families),
         "families": families,
     }
