@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import diag_event_diff, diag_event_runs
 from emule_test_harness import packet_trace_diff as ptd
+from emule_test_harness.diag_event_schema import PERSISTED_SOAK_REQUIRED_PARITY_FAMILIES
 
 # eD2k opcodes that only appear when WE serve an upload (a peer downloads from
 # us). Their presence on the client/listener channel proves the upload path ran.
@@ -79,34 +80,71 @@ def _kad_direction(record: dict[str, Any]) -> str:
     return str(record.get("direction") or body.get("direction") or "any")
 
 
+def _kad_histogram(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    histogram = collections.Counter(
+        (_kad_direction(record), _kad_op_name(record)) for record in records
+    )
+    return [
+        {"direction": direction, "opcodeName": name, "count": count}
+        for (direction, name), count in sorted(
+            histogram.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+
+
 def build_summary(
-    rust: list[dict[str, Any]], mfc: list[dict[str, Any]], kad: list[dict[str, Any]]
+    rust_ed2k: list[dict[str, Any]],
+    mfc_ed2k: list[dict[str, Any]],
+    rust_diagnostics: list[dict[str, Any]],
+    mfc_diagnostics: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Builds a machine-readable packet-coverage summary."""
+    """Builds bilateral eD2K/Kad coverage and persisted-soak conformance."""
 
     serving = collections.Counter()
-    for record in rust:
+    for record in rust_ed2k:
         name = record.get("opcode_name")
         if name in UPLOAD_SERVING_OPCODES:
             serving[(record.get("flow"), record.get("direction"), name)] += 1
 
-    kad_hist = collections.Counter((_kad_direction(record), _kad_op_name(record)) for record in kad)
+    rust_kad = [
+        record
+        for record in ptd.kad_records(rust_diagnostics)
+        if record.get("event") == "packet"
+    ]
+    mfc_kad = [
+        record
+        for record in ptd.kad_records(mfc_diagnostics)
+        if record.get("event") == "packet"
+    ]
     return {
-        "schema": "packet_coverage_summary_v1",
+        "schema": "packet_coverage_summary_v2",
         "records": {
-            "rustEd2k": len(rust),
-            "mfcEd2k": len(mfc),
-            "rustKadUdp": len(kad),
+            "rustDiagnosticEvents": len(rust_diagnostics),
+            "mfcDiagnosticEvents": len(mfc_diagnostics),
+            "rustEd2k": len(rust_ed2k),
+            "mfcEd2k": len(mfc_ed2k),
+            "rustKadUdp": len(rust_kad),
+            "mfcKadUdp": len(mfc_kad),
         },
-        "ed2kOpcodeCoverage": ptd._opcode_coverage(rust, mfc),
+        "persistedSoakConformance": diag_event_diff.full_run_conformance(
+            rust_diagnostics,
+            mfc_diagnostics,
+            required_families=PERSISTED_SOAK_REQUIRED_PARITY_FAMILIES,
+        ),
+        "schemaAudit": diag_event_diff.schema_audit(
+            rust_diagnostics,
+            mfc_diagnostics,
+        ),
+        "ed2kOpcodeCoverage": ptd._opcode_coverage(rust_ed2k, mfc_ed2k),
+        "kadOpcodeCoverage": ptd.kad_opcode_coverage(rust_kad, mfc_kad),
         "rustUploadServing": [
             {"flow": flow, "direction": direction, "opcodeName": name, "count": count}
             for (flow, direction, name), count in sorted(serving.items())
         ],
-        "kadUdpHistogram": [
-            {"direction": direction, "opcodeName": name, "count": count}
-            for (direction, name), count in sorted(kad_hist.items(), key=lambda item: (-item[1], item[0]))
-        ],
+        "kadUdpHistogram": {
+            "rust": _kad_histogram(rust_kad),
+            "mfc": _kad_histogram(mfc_kad),
+        },
     }
 
 
@@ -133,12 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     mfc_diagnostics = _load_diagnostics(mfc_diagnostics_dir, client="mfc")
     rust = diag_event_diff.ed2k_tcp_packet_views(rust_diagnostics)
     mfc = diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics)
-    kad = [
-        record
-        for record in ptd.kad_records(rust_diagnostics)
-        if record.get("event") == "packet"
-    ]
-    summary = build_summary(rust, mfc, kad)
+    summary = build_summary(rust, mfc, rust_diagnostics, mfc_diagnostics)
     if args.json_output:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -147,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "rust ed2k records: "
         f"{records['rustEd2k']} | mfc ed2k records: {records['mfcEd2k']} | "
-        f"rust kad-udp records: {records['rustKadUdp']}"
+        f"rust kad-udp records: {records['rustKadUdp']} | "
+        f"mfc kad-udp records: {records['mfcKadUdp']}"
     )
 
     cov = summary["ed2kOpcodeCoverage"]
@@ -169,11 +203,25 @@ def main(argv: list[str] | None = None) -> int:
         print("  (none observed - no peer downloaded from us in this run)")
 
     # Kad opcode histogram (participation at a glance).
-    print("\n=== Kad UDP opcode histogram ===")
-    for row in summary["kadUdpHistogram"]:
-        print(f"  {row['count']:5d}  {row['direction']:4}  {row['opcodeName']}")
+    kad_coverage = summary["kadOpcodeCoverage"]
+    print(
+        "\n=== Kad UDP opcode coverage "
+        f"(strictOk={kad_coverage['ok']}, oracleOk={kad_coverage['oracleOk']}) ==="
+    )
+    for side in ("rust", "mfc"):
+        print(f"\n  [{side}]")
+        for row in summary["kadUdpHistogram"][side]:
+            print(f"    {row['count']:5d}  {row['direction']:4}  {row['opcodeName']}")
 
-    return 0
+    conformance = summary["persistedSoakConformance"]
+    print(f"\n=== persisted soak evidence complete: {conformance['ok']} ===")
+    for row in conformance["familyConformance"]["requiredFamilies"]:
+        print(
+            f"  {row['family']}: rust={row['rustPresent']} "
+            f"mfc={row['mfcPresent']} ok={row['ok']}"
+        )
+
+    return 0 if conformance["ok"] else 1
 
 
 if __name__ == "__main__":
