@@ -392,7 +392,7 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
 
     assert reloaded["scheduler"] == {
         "nextCycle": 2,
-        "nextActionAtUtc": "2026-10-01T00:05:00+00:00",
+        "nextActionAtUtc": None,
     }
     assert reloaded["pendingAction"]["reportSeq"] == 1
     assert reloaded["pendingAction"]["query"] == "exact ünicode query"
@@ -402,6 +402,54 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
         "status": "pending",
         "windowEndUtc": "2026-10-01T00:03:00+00:00",
     }
+
+
+@pytest.mark.parametrize(
+    "deadline",
+    (
+        "not-a-timestamp",
+        "2026-10-01T00:05:00",
+        "2026-10-01T01:05:00+01:00",
+    ),
+)
+def test_next_action_deadline_requires_explicit_utc(deadline: str) -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+
+    with pytest.raises(RuntimeError, match="must be an ISO-8601 UTC timestamp"):
+        observer_state.set_next_action_deadline(state, deadline)
+
+
+def test_pending_action_cannot_restore_a_consumed_deadline() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.set_next_action_deadline(
+        state,
+        "2026-10-01T00:05:00+00:00",
+    )
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-01T00:05:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+
+    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v5"
+    assert state["scheduler"]["nextActionAtUtc"] is None
+    with pytest.raises(RuntimeError, match="cannot set a scheduler deadline"):
+        observer_state.set_next_action_deadline(
+            state,
+            "2026-10-01T00:10:00+00:00",
+        )
 
 
 def test_pending_action_rejects_duplicate_reservation_and_create() -> None:
