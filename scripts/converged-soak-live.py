@@ -136,12 +136,12 @@ def action_clients(
     return (
         converged_action_driver.ClientEndpoint(
             name="rust",
-            base_url=rust_base_url,
+            api_root_url=f"{rust_base_url.rstrip('/')}/api/v1",
             api_key=RUST_API_KEY,
         ),
         converged_action_driver.ClientEndpoint(
             name="mfc",
-            base_url=mfc_base_url,
+            api_root_url=f"{mfc_base_url.rstrip('/')}/api/v1",
             api_key=MFC_API_KEY,
         ),
     )
@@ -1866,7 +1866,7 @@ def main(argv: list[str] | None = None) -> int:
             rust_searches=sad.normalize_search_items(
                 converged_action_driver.get_list(
                     rust_action_client,
-                    "/api/v1/searches",
+                    "/searches",
                     "searches",
                     timeout_seconds=args.poll_rest_timeout,
                 )
@@ -1874,7 +1874,7 @@ def main(argv: list[str] | None = None) -> int:
             rust_transfers=sad.normalize_transfer_items(
                 converged_action_driver.get_list(
                     rust_action_client,
-                    "/api/v1/transfers",
+                    "/transfers",
                     "transfers",
                     timeout_seconds=args.poll_rest_timeout,
                 )
@@ -1882,7 +1882,7 @@ def main(argv: list[str] | None = None) -> int:
             mfc_searches=sad.normalize_search_items(
                 converged_action_driver.get_list(
                     mfc_action_client,
-                    "/api/v1/searches",
+                    "/searches",
                     "searches",
                     timeout_seconds=args.poll_rest_timeout,
                 )
@@ -1890,7 +1890,7 @@ def main(argv: list[str] | None = None) -> int:
             mfc_transfers=sad.normalize_transfer_items(
                 converged_action_driver.get_list(
                     mfc_action_client,
-                    "/api/v1/transfers",
+                    "/transfers",
                     "transfers",
                     timeout_seconds=args.poll_rest_timeout,
                 )
@@ -2080,7 +2080,7 @@ def main(argv: list[str] | None = None) -> int:
                     rust_searches=sad.normalize_search_items(
                         converged_action_driver.get_list(
                             rust_action_client,
-                            "/api/v1/searches",
+                            "/searches",
                             "searches",
                             timeout_seconds=args.poll_rest_timeout,
                         )
@@ -2088,7 +2088,7 @@ def main(argv: list[str] | None = None) -> int:
                     rust_transfers=sad.normalize_transfer_items(
                         converged_action_driver.get_list(
                             rust_action_client,
-                            "/api/v1/transfers",
+                            "/transfers",
                             "transfers",
                             timeout_seconds=args.poll_rest_timeout,
                         )
@@ -2096,7 +2096,7 @@ def main(argv: list[str] | None = None) -> int:
                     mfc_searches=sad.normalize_search_items(
                         converged_action_driver.get_list(
                             mfc_action_client,
-                            "/api/v1/searches",
+                            "/searches",
                             "searches",
                             timeout_seconds=args.poll_rest_timeout,
                         )
@@ -2104,7 +2104,7 @@ def main(argv: list[str] | None = None) -> int:
                     mfc_transfers=sad.normalize_transfer_items(
                         converged_action_driver.get_list(
                             mfc_action_client,
-                            "/api/v1/transfers",
+                            "/transfers",
                             "transfers",
                             timeout_seconds=args.poll_rest_timeout,
                         )

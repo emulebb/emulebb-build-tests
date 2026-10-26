@@ -580,12 +580,12 @@ def action_clients(
     return {
         "rust": converged_action_driver.ClientEndpoint(
             name="rust",
-            base_url=runtime.rust_base_url,
+            api_root_url=runtime.rust_base_url,
             api_key=soak_launch.RUST_API_KEY,
         ),
         "mfc": converged_action_driver.ClientEndpoint(
             name="mfc",
-            base_url=runtime.mfc_base_url,
+            api_root_url=runtime.mfc_base_url,
             api_key=soak_launch.MFC_API_KEY,
         ),
     }
@@ -599,7 +599,7 @@ def action_diagnostic_runs(
     identities: dict[str, dict[str, Any]] = {}
     for name in ("rust", "mfc"):
         client = clients[name]
-        health = diagnostic_writer_health(client.base_url, client.api_key)
+        health = diagnostic_writer_health(client.api_root_url, client.api_key)
         process_id = health.get("processId")
         run_id = health.get("runId")
         if (

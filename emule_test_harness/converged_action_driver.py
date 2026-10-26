@@ -23,8 +23,12 @@ class ClientEndpoint:
     """One diagnostics client's immutable REST endpoint authority."""
 
     name: str
-    base_url: str
+    api_root_url: str
     api_key: str
+
+    def __post_init__(self) -> None:
+        if not self.api_root_url.endswith("/api/v1"):
+            raise ValueError("client API root URL must end with /api/v1")
 
 
 class SearchResults(list[dict[str, Any]]):
@@ -110,7 +114,7 @@ def get_list(
         payload = retry_http_json(
             f"poll {client.name} {path}",
             1,
-            client.base_url,
+            client.api_root_url,
             path,
             api_key=client.api_key,
             timeout_seconds=timeout_seconds,
@@ -142,8 +146,8 @@ def transfer_exists(
         payload = retry_http_json(
             f"probe {client.name} transfer",
             1,
-            client.base_url,
-            f"/api/v1/transfers/{file_hash}",
+            client.api_root_url,
+            f"/transfers/{file_hash}",
             api_key=client.api_key,
             timeout_seconds=timeout_seconds,
         )
@@ -259,8 +263,8 @@ def create_search(client: ClientEndpoint, *, query: str, method: str) -> str:
     created = retry_http_json(
         f"{client.name} soak search create",
         2,
-        client.base_url,
-        "/api/v1/searches",
+        client.api_root_url,
+        "/searches",
         api_key=client.api_key,
         method="POST",
         body={"query": query, "method": method, "type": ""},
@@ -284,8 +288,8 @@ def read_search_results(
     page = retry_http_json(
         f"{client.name} soak search poll",
         1,
-        client.base_url,
-        f"/api/v1/searches/{search_id}",
+        client.api_root_url,
+        f"/searches/{search_id}",
         api_key=client.api_key,
         timeout_seconds=timeout_seconds,
     )
@@ -431,8 +435,8 @@ def trigger_download(
     download = retry_http_json(
         f"{client.name} soak download",
         2,
-        client.base_url,
-        f"/api/v1/searches/{search_id}/results/{file_hash}/operations/download",
+        client.api_root_url,
+        f"/searches/{search_id}/results/{file_hash}/operations/download",
         api_key=client.api_key,
         method="POST",
         body={"paused": False, "categoryId": 0},
@@ -442,8 +446,8 @@ def trigger_download(
         retry_http_json(
             f"{client.name} soak download resume",
             1,
-            client.base_url,
-            f"/api/v1/transfers/{file_hash}/operations/resume",
+            client.api_root_url,
+            f"/transfers/{file_hash}/operations/resume",
             api_key=client.api_key,
             method="POST",
             body={},
@@ -536,10 +540,10 @@ def drive_automatic_cycle(
         return cycle
 
     rust_transfer_hashes = transfer_hashes(
-        get_list(rust, "/api/v1/transfers", "transfers", timeout_seconds=30.0)
+        get_list(rust, "/transfers", "transfers", timeout_seconds=30.0)
     )
     mfc_transfer_hashes = transfer_hashes(
-        get_list(mfc, "/api/v1/transfers", "transfers", timeout_seconds=30.0)
+        get_list(mfc, "/transfers", "transfers", timeout_seconds=30.0)
     )
     existing_hashes = rust_transfer_hashes | mfc_transfer_hashes
     cycle["downloadExistingHashCounts"] = {

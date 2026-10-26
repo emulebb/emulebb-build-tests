@@ -18,9 +18,22 @@ class AllowSafeDownloads:
 def endpoint(name: str) -> driver.ClientEndpoint:
     return driver.ClientEndpoint(
         name=name,
-        base_url=f"http://{name}",
+        api_root_url=f"http://{name}/api/v1",
         api_key=f"{name}-key",
     )
+
+
+@pytest.mark.parametrize(
+    "api_root_url",
+    ["http://client", "http://client/api/v1/"],
+)
+def test_client_endpoint_rejects_noncanonical_api_root(api_root_url: str) -> None:
+    with pytest.raises(ValueError, match="must end with /api/v1"):
+        driver.ClientEndpoint(
+            name="client",
+            api_root_url=api_root_url,
+            api_key="client-key",
+        )
 
 
 def test_search_create_phase_resumes_persisted_identifier_without_post(
@@ -78,8 +91,8 @@ def test_read_search_results_performs_one_bounded_read_without_sleep(
         (
             "rust soak search poll",
             1,
-            "http://rust",
-            "/api/v1/searches/rust-search-17",
+            "http://rust/api/v1",
+            "/searches/rust-search-17",
             {"api_key": "rust-key", "timeout_seconds": 30.0},
         )
     ]
@@ -147,8 +160,8 @@ def test_retry_http_json_never_sleeps_after_final_failure(
         vm_guest_profiles.retry_http_json(
             "bounded read",
             attempts,
-            "http://rust",
-            "/api/v1/searches/rust-search-17",
+            "http://rust/api/v1",
+            "/searches/rust-search-17",
             request_func=fail_request,
         )
 
