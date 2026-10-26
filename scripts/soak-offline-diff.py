@@ -381,7 +381,10 @@ def _diff_one_action(
 
     rust_total = len(rust_pkt) + len(rust_diag)
     mfc_total = len(mfc_pkt) + len(mfc_diag)
-    if rust_total == 0 and mfc_total == 0:
+    assessment_status = action_coverage.get("status")
+    if assessment_status in {"not-assessable", "evidence-incomplete"}:
+        verdict = str(assessment_status)
+    elif rust_total == 0 and mfc_total == 0:
         verdict = "no-traffic"
     elif rust_total == 0 or mfc_total == 0:
         verdict = "one-sided"
@@ -637,6 +640,10 @@ def _campaign_verdict(
         and not (external_inconclusive and completion_incomplete)
     ):
         findings.append("completion-evidence-failed")
+    action_inconclusive = any(
+        row.get("verdict") in {"not-assessable", "evidence-incomplete"}
+        for row in per_action
+    )
     if findings:
         verdict = "harness-failure"
     else:
@@ -647,13 +654,18 @@ def _campaign_verdict(
             or secident_dead
             or completion_content_divergence
             or any(
-                row.get("verdict") == "divergence" or row.get("coverageOk") is False
+                row.get("verdict") == "divergence"
+                or (
+                    row.get("coverageOk") is False
+                    and row.get("verdict")
+                    not in {"not-assessable", "evidence-incomplete"}
+                )
                 for row in per_action
             )
         )
         if divergence:
             verdict = "divergence"
-        elif external_inconclusive:
+        elif external_inconclusive or action_inconclusive:
             verdict = "inconclusive-external"
         else:
             verdict = "parity"

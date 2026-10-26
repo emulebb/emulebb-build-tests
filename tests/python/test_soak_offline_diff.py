@@ -452,9 +452,9 @@ def test_action_method_falls_back_to_action_id_for_old_recordings() -> None:
     assert mod._action_method("download-abcd1234", {}) is None
 
 
-def test_global_search_action_not_failed_by_missing_mfc_udp_hook() -> None:
-    # MFC's capture has no server-UDP hook, so a global search must not be
-    # structurally impossible: rust's OP_GLOBSEARCHREQ send carries the gate.
+def test_global_search_action_is_not_assessable_without_mfc_udp_evidence() -> None:
+    # MFC's capture has no aligned server-UDP evidence, so Rust's
+    # OP_GLOBSEARCHREQ send cannot establish parity by itself.
     mod = _load_offline_diff()
     rust_pkt = [_pkt("server", "send", 0x98, "aa11", 1.0)]
     mfc_pkt = [_pkt("server", "send", 0x14, "bb", 1.0)]
@@ -463,7 +463,8 @@ def test_global_search_action_not_failed_by_missing_mfc_udp_hook() -> None:
         "search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0, method="global"
     )
     assert result["method"] == "global"
-    assert result["coverageOk"] is True
+    assert result["coverageOk"] is False
+    assert result["verdict"] == "not-assessable"
 
 
 def test_kad_search_action_assessed_from_kad_stream() -> None:
@@ -648,6 +649,24 @@ def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> 
         ),
         ({"missing_action_count": 1}, "harness-failure", 2),
         ({"external_inconclusive": True}, "inconclusive-external", 3),
+        (
+            {
+                "per_action": [
+                    {"verdict": "not-assessable", "coverageOk": False}
+                ]
+            },
+            "inconclusive-external",
+            3,
+        ),
+        (
+            {
+                "per_action": [
+                    {"verdict": "evidence-incomplete", "coverageOk": False}
+                ]
+            },
+            "inconclusive-external",
+            3,
+        ),
     ],
 )
 def test_campaign_verdict_taxonomy_and_exit_codes(

@@ -514,12 +514,11 @@ def _build_search_coverage(
     """Method-aware search gate: each search method has its own live evidence.
 
     ``server`` keeps the original TCP OP_SEARCHREQUEST/OP_SEARCHRESULT gate.
-    ``global`` goes over server UDP: the MFC capture has NO server-UDP diagnostics
-    hook (the ServerSocket.cpp packet hooks are TCP-only), so the MFC side is
-    reported ``not-assessable`` and the gate holds on the rust evidence alone —
-    it must never be structurally impossible to pass. ``kad`` is assessed from
-    the kad stream (KADEMLIA2_SEARCH_KEY_REQ / KADEMLIA2_SEARCH_RES), never from
-    server TCP. ``automatic`` (or an unrecognized method) accepts server OR kad
+    ``global`` goes over server UDP. The MFC capture has no aligned server-UDP
+    diagnostics, so global search remains explicitly ``not-assessable`` and can
+    never become parity from Rust-only evidence. ``kad`` is assessed from the
+    Kad stream (KADEMLIA2_SEARCH_KEY_REQ / KADEMLIA2_SEARCH_RES), never from
+    server TCP. ``automatic`` (or an unrecognized method) accepts server OR Kad
     evidence since the client picks the network itself.
     """
 
@@ -540,7 +539,8 @@ def _build_search_coverage(
     if normalized == SEARCH_METHOD_GLOBAL:
         rust_sent = _rust_any_opcode_present(packet_diff, _GLOBAL_SEARCH_SEND_ALTERNATIVES)
         return {
-            "ok": rust_sent,
+            "ok": False,
+            "status": "not-assessable",
             "mode": "search-global-server-udp",
             "method": SEARCH_METHOD_GLOBAL,
             "required": [
@@ -550,8 +550,8 @@ def _build_search_coverage(
                     "rustPresent": rust_sent,
                     "mfcAssessable": False,
                     "mfcStatus": "not-assessable",
-                    "note": "MFC has no server-UDP packet hook (ServerSocket.cpp is TCP-only); "
-                    "the MFC side of a global search cannot fail this gate.",
+                    "note": "MFC has no aligned server-UDP diagnostic evidence; "
+                    "global-search parity is not assessable.",
                 }
             ],
             "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
@@ -763,11 +763,15 @@ def _classify(
 ) -> str:
     """Maps the two engine outputs onto a per-action verdict.
 
-    ``no-traffic`` when neither side produced packets in the window; ``one-sided``
-    when only one did; ``coverage-parity`` when the opcode/family coverage agrees;
-    otherwise ``divergence``. The strict byte ``ok`` is informational only.
+    Explicit ``not-assessable`` and ``evidence-incomplete`` coverage states take
+    precedence. Otherwise ``no-traffic`` means neither side produced packets,
+    ``one-sided`` means only one did, and ``coverage-parity`` means opcode/family
+    coverage agrees. The strict byte ``ok`` is informational only.
     """
 
+    assessment_status = action_coverage.get("status")
+    if assessment_status in {"not-assessable", "evidence-incomplete"}:
+        return str(assessment_status)
     if rust_count == 0 and mfc_count == 0:
         return "no-traffic"
     if rust_count == 0 or mfc_count == 0:
@@ -919,6 +923,8 @@ def empty_summary(campaign_id: str) -> dict[str, Any]:
             "oneSided": 0,
             "noTraffic": 0,
             "unpaired": 0,
+            "notAssessable": 0,
+            "evidenceIncomplete": 0,
         },
         "actions": [],
     }
@@ -930,6 +936,8 @@ _VERDICT_TOTAL = {
     "one-sided": "oneSided",
     "no-traffic": "noTraffic",
     "unpaired": "unpaired",
+    "not-assessable": "notAssessable",
+    "evidence-incomplete": "evidenceIncomplete",
 }
 
 
