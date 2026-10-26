@@ -825,6 +825,29 @@ def wait_for_mfc_core_rest_ready(base_url: str, api_key: str, timeout_seconds: f
     return wait_until("MFC core REST readiness", timeout_seconds, core_ready)
 
 
+def wait_for_mfc_kad_running(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, Any]:
+    """Waits for profile-driven MFC Kad startup without issuing a duplicate action."""
+
+    def kad_running() -> dict[str, Any] | None:
+        payload = retry_http_json(
+            "MFC Kad readiness",
+            1,
+            base_url,
+            "/api/v1/kad",
+            api_key=api_key,
+            timeout_seconds=20.0,
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise RuntimeError("MFC Kad readiness response is missing the current data envelope.")
+        kad = payload["data"]
+        running = kad.get("running")
+        if not isinstance(running, bool):
+            raise RuntimeError("MFC Kad readiness response is missing boolean running state.")
+        return kad if running else None
+
+    return wait_until("MFC Kad running", timeout_seconds, kad_running)
+
+
 def apply_mfc_soak_preferences(
     *,
     live_common: ModuleType,
@@ -837,6 +860,8 @@ def apply_mfc_soak_preferences(
     live_common.apply_emule_preferences(
         config_dir,
         (
+            ("NetworkED2K", "1"),
+            ("NetworkKademlia", "1"),
             ("MaxUpload", str(upload_limit_kibps)),
             ("SaveLogToDisk", "1"),
             ("SaveDebugToDisk", "1"),
@@ -1290,9 +1315,7 @@ def bring_up_mfc(
             endpoint=server_endpoint,
         )
         rest_smoke.observe_server_connect_attempt(base_url, MFC_API_KEY, min(timeouts["connect"], 120.0))
-        rest_smoke.http_request(
-            base_url, "/api/v1/kad/operations/start", method="POST", api_key=MFC_API_KEY, json_body={}
-        )
+        wait_for_mfc_kad_running(base_url, MFC_API_KEY, timeouts["rest"])
         if replace_shared_roots:
             roots_payload = {
                 "confirmReplaceRoots": True,

@@ -202,6 +202,64 @@ def test_soak_endpoint_ports_are_distinct_by_default() -> None:
     }
 
 
+def test_wait_for_mfc_kad_running_observes_profile_driven_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            {"data": {"running": False, "connected": False}},
+            {"data": {"running": True, "connected": False}},
+        ]
+    )
+    calls: list[tuple[str, str, float]] = []
+
+    def fake_retry(
+        description: str,
+        attempts: int,
+        _base_url: str,
+        path: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        assert attempts == 1
+        calls.append((description, path, float(kwargs["timeout_seconds"])))
+        return next(responses)
+
+    def fake_wait(description: str, timeout_seconds: float, callback):
+        assert description == "MFC Kad running"
+        assert timeout_seconds == 300.0
+        assert callback() is None
+        return callback()
+
+    monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
+    monkeypatch.setattr(soak_launch, "wait_until", fake_wait)
+
+    result = soak_launch.wait_for_mfc_kad_running("http://mfc", "key", 300.0)
+
+    assert result == {"running": True, "connected": False}
+    assert calls == [
+        ("MFC Kad readiness", "/api/v1/kad", 20.0),
+        ("MFC Kad readiness", "/api/v1/kad", 20.0),
+    ]
+
+
+def test_wait_for_mfc_kad_running_rejects_unwrapped_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        soak_launch,
+        "retry_http_json",
+        lambda *_args, **_kwargs: {"running": True},
+    )
+    monkeypatch.setattr(
+        soak_launch,
+        "wait_until",
+        lambda _description, _timeout_seconds, callback: callback(),
+    )
+
+    with pytest.raises(RuntimeError, match="current data envelope"):
+        soak_launch.wait_for_mfc_kad_running("http://mfc", "key", 300.0)
+
+
 def test_soak_endpoint_ports_reject_duplicates() -> None:
     with pytest.raises(ValueError, match="must be distinct"):
         soak_launch.require_distinct_endpoint_ports(
@@ -427,9 +485,12 @@ def test_bring_up_mfc_enables_diagnostic_rest_for_direct_profile(tmp_path: Path,
             api_key: str,
             json_body: dict[str, object],
         ) -> dict[str, object]:
-            return {"method": method, "api_key": api_key, "json_body": json_body}
+            raise AssertionError(
+                f"MFC bring-up must not issue a duplicate {method} {_path} action"
+            )
 
     monkeypatch.setattr(soak_launch, "wait_for_mfc_core_rest_ready", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(soak_launch, "wait_for_mfc_kad_running", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
 
@@ -1305,6 +1366,7 @@ def _bring_up_mfc_pref_calls(
             return {}
 
     monkeypatch.setattr(soak_launch, "wait_for_mfc_core_rest_ready", lambda *_a, **_k: {})
+    monkeypatch.setattr(soak_launch, "wait_for_mfc_kad_running", lambda *_a, **_k: {})
     monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_a, **_k: {})
     monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_a, **_k: {})
 
@@ -1335,6 +1397,8 @@ def test_bring_up_mfc_pins_secure_ident_on_by_default(
     # surface in the 2026-07-04 capture.
     pref_calls = _bring_up_mfc_pref_calls(tmp_path, monkeypatch)
     flattened = [pair for _dir, values in pref_calls for pair in values]
+    assert ("NetworkED2K", "1") in flattened
+    assert ("NetworkKademlia", "1") in flattened
     assert ("SecureIdent", "1") in flattened
 
 
