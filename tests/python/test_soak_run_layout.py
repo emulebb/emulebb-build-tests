@@ -15,6 +15,8 @@ def artifact_store(
     paths: soak_run_layout.SoakRunPaths,
     *,
     segment_retained: int = 2,
+    preflight_mfc_retained: int = 16,
+    preflight_max_bytes: int = 1_048_576,
 ) -> soak_storage.BoundedArtifactStore:
     policy = soak_storage.SoakStoragePolicy(
         max_total_bytes=10 * 1024 * 1024,
@@ -42,15 +44,21 @@ def artifact_store(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(1_024, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1_024, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
-                "preflight_archive_manifest": soak_storage.ArtifactStreamPolicy(1, 1),
-                "preflight_mfc_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
-                "preflight_rust_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_archive_manifest": soak_storage.ArtifactStreamPolicy(
+                    65_536, 1
+                ),
+                "preflight_mfc_outputs": soak_storage.ArtifactStreamPolicy(
+                    preflight_max_bytes, preflight_mfc_retained
+                ),
+                "preflight_rust_outputs": soak_storage.ArtifactStreamPolicy(
+                    preflight_max_bytes, 1
+                ),
                 "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
     )
-    return soak_storage.BoundedArtifactStore(paths.soak_root, policy)
+    return soak_storage.BoundedArtifactStore(paths.campaigns_root, policy)
 
 
 def write_diag_segment(
@@ -227,7 +235,9 @@ def test_load_observer_action_report_candidate_reads_prepared_payload(
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.parent.mkdir(parents=True)
     temporary.write_text(
-        json.dumps(report, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True)
+        json.dumps(
+            report, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -524,6 +534,176 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
     assert (
         paths.preflight_archive_dir / "mfc-logs" / "emulebb-performance.csv"
     ).is_file()
+    archive_manifest = json.loads(
+        Path(manifest["preflightCleanup"]["archiveManifest"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert archive_manifest["schema"] == (
+        soak_run_layout.PREFLIGHT_ARCHIVE_MANIFEST_SCHEMA
+    )
+    assert archive_manifest["state"] == "complete"
+    assert [row["relativePath"] for row in archive_manifest["entries"]] == [
+        "emulebb-diagnostics-diag.log",
+        "emulebb-diagnostics-packet-20260706-090000.log",
+        "emulebb-performance.csv",
+    ]
+
+
+def test_prepare_clean_run_recovers_after_source_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "mfc-logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir()
+    first = mfc_logs / "emulebb-a.log"
+    second = mfc_logs / "emulebb-b.log"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    original_remove = soak_run_layout._remove_preflight_source
+
+    def fail_second_removal(path: Path) -> None:
+        if path.name == second.name:
+            raise OSError("injected removal failure")
+        original_remove(path)
+
+    monkeypatch.setattr(
+        soak_run_layout, "_remove_preflight_source", fail_second_removal
+    )
+    with pytest.raises(OSError, match="injected removal failure"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths),
+            stop_process_cleanup=False,
+        )
+
+    archive_manifest_path = (
+        paths.preflight_archive_dir / "manifest" / "preflight-archives.json"
+    )
+    interrupted = json.loads(archive_manifest_path.read_text(encoding="utf-8"))
+    assert interrupted["state"] == "copied"
+    assert not first.exists()
+    assert second.read_text(encoding="utf-8") == "second"
+    assert (paths.preflight_archive_dir / "mfc-logs" / first.name).read_text(
+        encoding="utf-8"
+    ) == "first"
+    assert (paths.preflight_archive_dir / "mfc-logs" / second.name).read_text(
+        encoding="utf-8"
+    ) == "second"
+
+    monkeypatch.setattr(soak_run_layout, "_remove_preflight_source", original_remove)
+    recovered = soak_run_layout.prepare_clean_run(
+        paths=paths,
+        rust_profile_dir=rust_profile_dir,
+        rust_packet_dump_dir=rust_packet_dump,
+        mfc_log_dir=mfc_logs,
+        artifact_store=artifact_store(paths),
+        stop_process_cleanup=False,
+    )
+
+    assert recovered["preflightCleanup"]["archiveState"] == "complete"
+    assert not second.exists()
+    assert (
+        json.loads(archive_manifest_path.read_text(encoding="utf-8"))["state"]
+        == "complete"
+    )
+    assert sorted(
+        path.name for path in (paths.preflight_archive_dir / "mfc-logs").iterdir()
+    ) == [first.name, second.name]
+
+
+def test_prepare_clean_run_keeps_sources_when_copy_phase_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "mfc-logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir()
+    sources = [mfc_logs / "emulebb-a.log", mfc_logs / "emulebb-b.log"]
+    for index, source in enumerate(sources):
+        source.write_text(f"source-{index}", encoding="utf-8")
+    original_persist = soak_storage.persist_bounded_file_artifact
+    calls = 0
+
+    def fail_second_copy(**kwargs: object) -> soak_storage.PersistedArtifact:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected copy failure")
+        return original_persist(**kwargs)
+
+    monkeypatch.setattr(soak_storage, "persist_bounded_file_artifact", fail_second_copy)
+    with pytest.raises(OSError, match="injected copy failure"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths),
+            stop_process_cleanup=False,
+        )
+
+    assert [source.read_text(encoding="utf-8") for source in sources] == [
+        "source-0",
+        "source-1",
+    ]
+    archive_manifest_path = (
+        paths.preflight_archive_dir / "manifest" / "preflight-archives.json"
+    )
+    assert (
+        json.loads(archive_manifest_path.read_text(encoding="utf-8"))["state"]
+        == "prepared"
+    )
+
+    monkeypatch.setattr(soak_storage, "persist_bounded_file_artifact", original_persist)
+    recovered = soak_run_layout.prepare_clean_run(
+        paths=paths,
+        rust_profile_dir=rust_profile_dir,
+        rust_packet_dump_dir=rust_packet_dump,
+        mfc_log_dir=mfc_logs,
+        artifact_store=artifact_store(paths),
+        stop_process_cleanup=False,
+    )
+    assert recovered["preflightCleanup"]["archiveState"] == "complete"
+    assert all(not source.exists() for source in sources)
+
+
+def test_prepare_clean_run_rejects_archive_count_before_mutation(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "mfc-logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir()
+    sources = [mfc_logs / f"emulebb-{index}.log" for index in range(3)]
+    for source in sources:
+        source.write_text(source.name, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="exceeding its 2-file limit"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths, preflight_mfc_retained=2),
+            stop_process_cleanup=False,
+        )
+
+    assert all(source.is_file() for source in sources)
+    assert not (
+        paths.preflight_archive_dir / "manifest" / "preflight-archives.json"
+    ).exists()
+    assert not (paths.preflight_archive_dir / "mfc-logs").exists()
 
 
 def test_promote_latest_diagnostic_segments_copies_bounded_validated_suffixes(
