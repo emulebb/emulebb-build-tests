@@ -302,6 +302,112 @@ def test_segment_snapshot_distinguishes_complete_unterminated_json(
     assert [record["seq"] for record in snapshot.records] == [1]
 
 
+class _MutatingSegmentReader:
+    def __init__(self, raw, mutate) -> None:
+        self._raw = raw
+        self._mutate = mutate
+
+    def __enter__(self):
+        self._raw.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return self._raw.__exit__(exc_type, exc_value, traceback)
+
+    def fileno(self) -> int:
+        return self._raw.fileno()
+
+    def read(self, size: int = -1) -> bytes:
+        payload = self._raw.read(size)
+        self._mutate()
+        return payload
+
+
+def test_active_segment_snapshot_accepts_append_only_growth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    first_payload = (_record("active", 42, 0, 1) + "\n").encode()
+    second_payload = (_record("active", 42, 0, 2) + "\n").encode()
+    segment.write_bytes(first_payload)
+    original_open = Path.open
+
+    def open_with_append(path: Path, mode: str = "r", *args, **kwargs):
+        raw = original_open(path, mode, *args, **kwargs)
+        if path != segment or mode != "rb":
+            return raw
+
+        def append_record() -> None:
+            with original_open(segment, "ab") as writer:
+                writer.write(second_payload)
+
+        return _MutatingSegmentReader(raw, append_record)
+
+    monkeypatch.setattr(Path, "open", open_with_append)
+
+    snapshot = load_diag_event_segment_snapshot(
+        segment,
+        allow_incomplete_tail=True,
+    )
+
+    assert snapshot.byte_count == len(first_payload)
+    assert snapshot.sha256 == hashlib.sha256(first_payload).hexdigest()
+    assert [record["seq"] for record in snapshot.records] == [1]
+    with original_open(segment, "rb") as reader:
+        assert reader.read() == first_payload + second_payload
+
+
+def test_closed_segment_snapshot_rejects_append_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "closed", 0)
+    segment.write_text(_record("closed", 42, 0, 1) + "\n", encoding="utf-8")
+    original_open = Path.open
+
+    def open_with_append(path: Path, mode: str = "r", *args, **kwargs):
+        raw = original_open(path, mode, *args, **kwargs)
+        if path != segment or mode != "rb":
+            return raw
+
+        def append_record() -> None:
+            with original_open(segment, "ab") as writer:
+                writer.write((_record("closed", 42, 0, 2) + "\n").encode())
+
+        return _MutatingSegmentReader(raw, append_record)
+
+    monkeypatch.setattr(Path, "open", open_with_append)
+
+    with pytest.raises(DiagnosticTraceError, match="changed while being read"):
+        load_diag_event_segment_snapshot(segment)
+
+
+def test_active_segment_snapshot_rejects_truncation_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    segment.write_text(_record("active", 42, 0, 1) + "\n", encoding="utf-8")
+    original_open = Path.open
+
+    def open_with_truncation(path: Path, mode: str = "r", *args, **kwargs):
+        raw = original_open(path, mode, *args, **kwargs)
+        if path != segment or mode != "rb":
+            return raw
+
+        def truncate_segment() -> None:
+            with original_open(segment, "r+b") as writer:
+                writer.truncate(0)
+
+        return _MutatingSegmentReader(raw, truncate_segment)
+
+    monkeypatch.setattr(Path, "open", open_with_truncation)
+
+    with pytest.raises(DiagnosticTraceError, match="changed while being read"):
+        load_diag_event_segment_snapshot(segment, allow_incomplete_tail=True)
+
+
 def test_segment_snapshot_rejects_symlinks(tmp_path: Path) -> None:
     target = tmp_path / _segment_name("rust", 42, "active", 0)
     target.write_text(_record("active", 42, 0, 1) + "\n", encoding="utf-8")
