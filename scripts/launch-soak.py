@@ -119,6 +119,18 @@ def required_rust_diagnostic_writer_policy(
     return required_storage_policy(inputs).rust_diagnostics
 
 
+def campaign_artifact_store(
+    run_paths: soak_run_layout.SoakRunPaths,
+    storage_policy: soak_storage.SoakStoragePolicy,
+) -> soak_storage.BoundedArtifactStore:
+    """Returns the store whose exclusive deletion authority is campaigns/."""
+
+    return soak_storage.BoundedArtifactStore(
+        run_paths.campaigns_root,
+        storage_policy,
+    )
+
+
 def capture_rust_diagnostic_bundle(
     *,
     base_url: str,
@@ -151,7 +163,7 @@ def capture_rust_diagnostic_bundle(
         raise RuntimeError("Rust diagnostic bundle response is missing its summary.")
 
     persisted = soak_storage.persist_bounded_json_artifact(
-        store=soak_storage.BoundedArtifactStore(run_paths.soak_root, storage_policy),
+        store=campaign_artifact_store(run_paths, storage_policy),
         active_campaign=run_paths.campaign_dir,
         directory=run_paths.diagnostic_bundles_dir,
         stream_name="diagnostic_bundles",
@@ -879,7 +891,7 @@ def main(argv: list[str] | None = None) -> int:
         direct_profile_dir=direct_mfc_profile,
     )
     run_paths = soak_run_layout.build_run_paths(soak_root, campaign_id)
-    artifact_store = soak_storage.BoundedArtifactStore(soak_root, storage_policy)
+    artifact_store = campaign_artifact_store(run_paths, storage_policy)
     preflight_manifest = soak_run_layout.prepare_clean_run(
         paths=run_paths,
         rust_profile_dir=rust_profile_dir,
