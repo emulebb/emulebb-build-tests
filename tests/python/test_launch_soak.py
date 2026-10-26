@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import cpu_profile, soak_storage, vpn_guard_live
-from emule_test_harness.live_wire_inputs import LiveWireInputs
+from emule_test_harness.live_wire_inputs import LiveWireInputs, ProfileGrowthGuardPolicy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +38,43 @@ def inputs_with_profiles(profile_dir: Path | None, rust_profile_dir: Path | None
         direct_bootstrap_transfers=(),
         mfc_profile_dir=profile_dir,
         rust_profile_dir=rust_profile_dir,
+    )
+
+
+def persisted_profile_storage_policy() -> soak_storage.SoakStoragePolicy:
+    return soak_storage.SoakStoragePolicy(
+        max_total_bytes=1_000,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1,
+            max_segment_seconds=60,
+            retained_segments=1,
+            max_total_bytes=5,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams={},
+    )
+
+
+def persisted_profile_inputs(profile_dir: Path) -> LiveWireInputs:
+    return LiveWireInputs(
+        path=REPO_ROOT / "live-wire-inputs.local.json",
+        generic_open_terms=(),
+        document_terms=(),
+        radarr_movie_terms=(),
+        sonarr_series_terms=(),
+        video_roots=(),
+        bootstrap_transfer_hashes=(),
+        direct_bootstrap_transfers=(),
+        rust_profile_dir=profile_dir,
+        rust_profile_storage_guard=ProfileGrowthGuardPolicy(
+            max_growth_bytes=5,
+            minimum_free_bytes=1,
+        ),
+        soak_storage=persisted_profile_storage_policy(),
     )
 
 
@@ -139,6 +176,75 @@ def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
     assert args.vpn_guard_scenario == "success"
     assert args.vpn_topology == "full-tunnel"
     assert args.lan_bind_addr == "127.0.0.1"
+
+
+def test_post_import_profile_guard_accepts_exact_growth_boundary(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    state = profile / "state.bin"
+    state.write_bytes(b"123456789")
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "127.0.0.1",
+            "--rust-profile-storage-baseline-file-count",
+            "1",
+            "--rust-profile-storage-baseline-bytes",
+            "4",
+            "--rust-profile-storage-baseline-free-bytes",
+            "1000000",
+            "--rust-profile-storage-baseline-measured-path",
+            str(tmp_path),
+            "--rust-profile-storage-volume-identity",
+            soak_storage.storage_volume_identity(profile),
+        ]
+    )
+
+    result = module.enforce_post_import_profile_storage_guard(
+        args=args,
+        inputs=persisted_profile_inputs(profile),
+        profile_dir=profile,
+        storage_policy=persisted_profile_storage_policy(),
+    )
+
+    assert result["ok"] is True
+    assert result["netGrowthBytes"] == 5
+    assert state.read_bytes() == b"123456789"
+
+
+def test_post_import_profile_guard_preserves_oversized_import(tmp_path: Path) -> None:
+    module = load_launch_soak_module()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    state = profile / "state.bin"
+    state.write_bytes(b"1234567890")
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "127.0.0.1",
+            "--rust-profile-storage-baseline-file-count",
+            "0",
+            "--rust-profile-storage-baseline-bytes",
+            "4",
+            "--rust-profile-storage-baseline-free-bytes",
+            "1000000",
+            "--rust-profile-storage-baseline-measured-path",
+            str(tmp_path),
+            "--rust-profile-storage-volume-identity",
+            soak_storage.storage_volume_identity(profile),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="Imported profile state was preserved"):
+        module.enforce_post_import_profile_storage_guard(
+            args=args,
+            inputs=persisted_profile_inputs(profile),
+            profile_dir=profile,
+            storage_policy=persisted_profile_storage_policy(),
+        )
+
+    assert state.read_bytes() == b"1234567890"
 
 
 def test_graceful_teardown_can_use_ctrl_c(monkeypatch) -> None:
@@ -793,6 +899,9 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
         "mfc_profile_import.ensure_persisted_rust_profile("
     )
     assert source.index("mfc_profile_import.ensure_persisted_rust_profile(") < source.index(
+        "enforce_post_import_profile_storage_guard("
+    )
+    assert source.index("enforce_post_import_profile_storage_guard(") < source.index(
         "soak_run_layout.prepare_clean_run("
     )
     assert source.index("soak_run_layout.prepare_clean_run(") < source.index(

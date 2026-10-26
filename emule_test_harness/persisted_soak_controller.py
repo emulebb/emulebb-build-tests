@@ -27,7 +27,12 @@ from . import (
     soak_storage,
     windows_processes,
 )
-from .live_wire_inputs import LiveWireInputs, load_live_wire_inputs
+from .live_wire_inputs import (
+    LiveWireInputs,
+    ProfileGrowthGuardPolicy,
+    load_live_wire_inputs,
+    parse_profile_growth_guard,
+)
 from .paths import get_workspace_output_root, path_is_relative_to
 from .vm_guest_profiles import api_data, http_json
 
@@ -36,15 +41,16 @@ CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
-MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v3"
-STATUS_SCHEMA = "emulebb.persisted-soak-status.v2"
-WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
+MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v4"
+STATUS_SCHEMA = "emulebb.persisted-soak-status.v3"
+WATCH_SCHEMA = "emulebb.persisted-soak-watch.v2"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
 DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
 WATCH_FAILURE_GRACE_SECONDS = 15.0
 STORAGE_FAILURE_FINDING = "campaign-storage-enforcement-failed"
+PROFILE_STORAGE_FAILURE_FINDING = "rust-profile-storage-guard-failed"
 DIAGNOSTIC_WRITER_FAILURE_FINDINGS = frozenset(
     {
         "rust-diagnostic-writer-unhealthy",
@@ -137,6 +143,21 @@ class SessionStorageContext:
     policy_sha256: str
     active_campaign: Path
     previous_campaign: Path | None
+    rust_profile_guard: RustProfileGuardContext | None = None
+    rust_profile_guard_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class RustProfileGuardContext:
+    """Immutable baseline and limits for one operator-owned Rust profile."""
+
+    profile_dir: Path
+    policy: ProfileGrowthGuardPolicy
+    baseline_file_count: int
+    baseline_total_bytes: int
+    baseline_free_bytes: int
+    baseline_measured_path: Path
+    volume_identity: str
 
 
 def utc_timestamp() -> str:
@@ -210,6 +231,152 @@ def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStorageP
     if inputs.soak_storage is None:
         raise RuntimeError("Persisted full-tunnel soaks require soak_storage in the live-wire inputs.")
     return inputs.soak_storage
+
+
+def required_rust_profile_guard(inputs: LiveWireInputs) -> ProfileGrowthGuardPolicy:
+    """Returns the mandatory persisted Rust-profile growth guard."""
+
+    if inputs.rust_profile_storage_guard is None:
+        raise RuntimeError(
+            "Persisted full-tunnel soaks require rust_profile.storage_guard in "
+            "the live-wire inputs."
+        )
+    return inputs.rust_profile_storage_guard
+
+
+def profile_growth_guard_payload(
+    policy: ProfileGrowthGuardPolicy,
+) -> dict[str, int]:
+    """Returns the strict ignored-input representation for one profile guard."""
+
+    return {
+        "max_growth_bytes": policy.max_growth_bytes,
+        "minimum_free_bytes": policy.minimum_free_bytes,
+    }
+
+
+def profile_guard_sha256(payload: dict[str, Any]) -> str:
+    """Returns the immutable authority hash for one profile guard baseline."""
+
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def observe_rust_profile_storage(profile_dir: Path) -> dict[str, Any]:
+    """Measures one external Rust profile without deleting or rewriting it."""
+
+    resolved_profile = profile_dir.resolve()
+    inventory = soak_storage.inventory_artifacts(profile_dir)
+    disk = soak_storage.disk_space_snapshot(profile_dir)
+    return {
+        "profileDir": str(resolved_profile),
+        "fileCount": len(inventory.files),
+        "totalBytes": inventory.total_bytes,
+        "freeBytes": disk.free_bytes,
+        "measuredPath": str(disk.measured_path),
+        "volumeIdentity": soak_storage.storage_volume_identity(profile_dir),
+        "timestampUtc": utc_timestamp(),
+    }
+
+
+def preflight_rust_profile_storage(
+    profile_dir: Path,
+    policy: ProfileGrowthGuardPolicy,
+) -> dict[str, Any]:
+    """Captures the immutable baseline and rejects low free space before launch."""
+
+    observed = observe_rust_profile_storage(profile_dir)
+    projected_free_bytes = observed["freeBytes"] - policy.max_growth_bytes
+    if projected_free_bytes < policy.minimum_free_bytes:
+        raise RuntimeError(
+            "Persisted Rust profile cannot reserve storage_guard.max_growth_bytes while "
+            "preserving storage_guard.minimum_free_bytes: "
+            f"free={observed['freeBytes']} growth={policy.max_growth_bytes} "
+            f"projected={projected_free_bytes} required={policy.minimum_free_bytes}."
+        )
+    return {
+        "policy": profile_growth_guard_payload(policy),
+        "baseline": observed,
+        "projectedFreeBytes": projected_free_bytes,
+    }
+
+
+def enforce_rust_profile_guard(context: RustProfileGuardContext) -> dict[str, Any]:
+    """Reports profile growth violations without mutating operator-owned state."""
+
+    observed = observe_rust_profile_storage(context.profile_dir)
+    net_growth_bytes = observed["totalBytes"] - context.baseline_total_bytes
+    permitted_ceiling_bytes = context.baseline_total_bytes + context.policy.max_growth_bytes
+    remaining_growth_bytes = max(0, permitted_ceiling_bytes - observed["totalBytes"])
+    projected_free_bytes = observed["freeBytes"] - remaining_growth_bytes
+    violations: list[str] = []
+    if observed["volumeIdentity"] != context.volume_identity:
+        violations.append("volume_identity")
+    if observed["totalBytes"] > permitted_ceiling_bytes:
+        violations.append("max_growth_bytes")
+    if projected_free_bytes < context.policy.minimum_free_bytes:
+        violations.append("minimum_free_bytes")
+    return {
+        "ok": not violations,
+        "profileDir": str(context.profile_dir),
+        "policy": profile_growth_guard_payload(context.policy),
+        "baseline": {
+            "fileCount": context.baseline_file_count,
+            "totalBytes": context.baseline_total_bytes,
+            "freeBytes": context.baseline_free_bytes,
+            "measuredPath": str(context.baseline_measured_path),
+            "volumeIdentity": context.volume_identity,
+        },
+        "observed": observed,
+        "netGrowthBytes": net_growth_bytes,
+        "permittedCeilingBytes": permitted_ceiling_bytes,
+        "remainingGrowthBytes": remaining_growth_bytes,
+        "projectedFreeBytes": projected_free_bytes,
+        "violations": violations,
+    }
+
+
+def validate_rust_profile_guard_capacity(
+    profile_policy: ProfileGrowthGuardPolicy,
+    storage_policy: soak_storage.SoakStoragePolicy,
+) -> None:
+    """Rejects a profile guard weaker than the profile-resident writer policy."""
+
+    diagnostics = storage_policy.rust_diagnostics
+    if profile_policy.max_growth_bytes < diagnostics.max_total_bytes:
+        raise RuntimeError(
+            "rust_profile.storage_guard.max_growth_bytes must cover "
+            "soak_storage.rust_diagnostics.max_total_bytes."
+        )
+    if profile_policy.minimum_free_bytes < diagnostics.minimum_free_bytes:
+        raise RuntimeError(
+            "rust_profile.storage_guard.minimum_free_bytes must be at least "
+            "soak_storage.rust_diagnostics.minimum_free_bytes."
+        )
+
+
+def campaign_profile_storage_coupling(
+    output_root: Path,
+    profile_dir: Path,
+    profile_policy: ProfileGrowthGuardPolicy,
+    storage_policy: soak_storage.SoakStoragePolicy,
+) -> dict[str, Any]:
+    """Returns combined reservation parameters when both stores share a volume."""
+
+    campaign_volume = soak_storage.storage_volume_identity(campaign_storage_root(output_root))
+    profile_volume = soak_storage.storage_volume_identity(profile_dir)
+    shared_volume = campaign_volume == profile_volume
+    return {
+        "sharedVolume": shared_volume,
+        "campaignVolumeIdentity": campaign_volume,
+        "profileVolumeIdentity": profile_volume,
+        "externalTemporaryBytes": profile_policy.max_growth_bytes if shared_volume else 0,
+        "minimumFreeBytes": (
+            max(storage_policy.minimum_free_bytes, profile_policy.minimum_free_bytes)
+            if shared_volume
+            else storage_policy.minimum_free_bytes
+        ),
+    }
 
 
 def storage_plan_summary(root: Path, plan: soak_storage.StoragePrunePlan) -> dict[str, Any]:
@@ -300,9 +467,11 @@ def session_storage_manifest(
     previous_campaign: Path | None,
     preflight_plan: dict[str, Any],
     launch_enforcement: dict[str, Any],
+    rust_profile_storage: dict[str, Any],
 ) -> dict[str, Any]:
     """Builds the canonical immutable storage context for one session."""
 
+    rust_profile_guard_sha256 = profile_guard_sha256(rust_profile_storage)
     return {
         "root": str(root),
         "policy": soak_storage.storage_policy_payload(policy),
@@ -311,6 +480,8 @@ def session_storage_manifest(
         "previousCampaignDir": str(previous_campaign) if previous_campaign is not None else None,
         "preflightPlan": preflight_plan,
         "launchEnforcement": launch_enforcement,
+        "rustProfileGuard": rust_profile_storage,
+        "rustProfileGuardSha256": rust_profile_guard_sha256,
     }
 
 
@@ -331,6 +502,8 @@ def parse_session_storage_context(
         "previousCampaignDir",
         "preflightPlan",
         "launchEnforcement",
+        "rustProfileGuard",
+        "rustProfileGuardSha256",
     }
     actual_keys = set(storage)
     if actual_keys != expected_keys:
@@ -355,6 +528,74 @@ def parse_session_storage_context(
         raise RuntimeError("Persisted soak storage preflight plan is invalid.")
     if not isinstance(storage.get("launchEnforcement"), dict):
         raise RuntimeError("Persisted soak storage launch enforcement is invalid.")
+
+    rust_profile_guard = storage.get("rustProfileGuard")
+    if not isinstance(rust_profile_guard, dict) or set(rust_profile_guard) != {
+        "policy",
+        "baseline",
+        "projectedFreeBytes",
+    }:
+        raise RuntimeError("Persisted soak Rust profile guard is invalid.")
+    rust_profile_guard_sha256 = storage.get("rustProfileGuardSha256")
+    if (
+        not isinstance(rust_profile_guard_sha256, str)
+        or rust_profile_guard_sha256 != profile_guard_sha256(rust_profile_guard)
+    ):
+        raise RuntimeError("Persisted soak Rust profile guard SHA-256 mismatch.")
+    profile_policy = parse_profile_growth_guard(rust_profile_guard.get("policy"))
+    if profile_policy is None:
+        raise RuntimeError("Persisted soak Rust profile guard policy is invalid.")
+    profile_baseline = rust_profile_guard.get("baseline")
+    if not isinstance(profile_baseline, dict) or set(profile_baseline) != {
+        "profileDir",
+        "fileCount",
+        "totalBytes",
+        "freeBytes",
+        "measuredPath",
+        "volumeIdentity",
+        "timestampUtc",
+    }:
+        raise RuntimeError("Persisted soak Rust profile guard baseline is invalid.")
+    profile_dir_value = profile_baseline.get("profileDir")
+    file_count = profile_baseline.get("fileCount")
+    total_bytes = profile_baseline.get("totalBytes")
+    free_bytes = profile_baseline.get("freeBytes")
+    measured_path = profile_baseline.get("measuredPath")
+    volume_identity = profile_baseline.get("volumeIdentity")
+    timestamp_utc = profile_baseline.get("timestampUtc")
+    if not isinstance(profile_dir_value, str) or not profile_dir_value.strip():
+        raise RuntimeError("Persisted soak Rust profile guard path is invalid.")
+    if isinstance(file_count, bool) or not isinstance(file_count, int) or file_count < 0:
+        raise RuntimeError("Persisted soak Rust profile guard file count is invalid.")
+    if isinstance(total_bytes, bool) or not isinstance(total_bytes, int) or total_bytes < 0:
+        raise RuntimeError("Persisted soak Rust profile guard byte count is invalid.")
+    if isinstance(free_bytes, bool) or not isinstance(free_bytes, int) or free_bytes < 0:
+        raise RuntimeError("Persisted soak Rust profile guard free space is invalid.")
+    if not isinstance(measured_path, str) or not measured_path.strip():
+        raise RuntimeError("Persisted soak Rust profile guard measured path is invalid.")
+    if not isinstance(volume_identity, str) or not volume_identity.strip():
+        raise RuntimeError("Persisted soak Rust profile guard volume identity is invalid.")
+    if parse_aware_timestamp(timestamp_utc) is None:
+        raise RuntimeError("Persisted soak Rust profile guard timestamp is invalid.")
+    projected_free_bytes = rust_profile_guard.get("projectedFreeBytes")
+    if (
+        isinstance(projected_free_bytes, bool)
+        or not isinstance(projected_free_bytes, int)
+        or projected_free_bytes < 0
+    ):
+        raise RuntimeError("Persisted soak Rust profile guard projection is invalid.")
+    if projected_free_bytes != free_bytes - profile_policy.max_growth_bytes:
+        raise RuntimeError("Persisted soak Rust profile guard projection mismatches its baseline.")
+    profile_dir = Path(profile_dir_value).resolve()
+    if soak_storage.storage_volume_identity(profile_dir) != volume_identity:
+        raise RuntimeError("Persisted soak Rust profile guard volume identity changed.")
+    preflight = manifest.get("preflight")
+    profiles = preflight.get("profiles") if isinstance(preflight, dict) else None
+    preflight_profile = profiles.get("rust") if isinstance(profiles, dict) else None
+    if not isinstance(preflight_profile, str) or Path(preflight_profile).resolve() != profile_dir:
+        raise RuntimeError(
+            "Persisted soak Rust profile guard path mismatches preflight evidence."
+        )
 
     campaign_id = manifest.get("campaignId")
     if not isinstance(campaign_id, str):
@@ -385,6 +626,16 @@ def parse_session_storage_context(
         policy_sha256=policy_sha256,
         active_campaign=active_campaign,
         previous_campaign=previous_campaign,
+        rust_profile_guard=RustProfileGuardContext(
+            profile_dir=profile_dir,
+            policy=profile_policy,
+            baseline_file_count=file_count,
+            baseline_total_bytes=total_bytes,
+            baseline_free_bytes=free_bytes,
+            baseline_measured_path=Path(measured_path).resolve(),
+            volume_identity=volume_identity,
+        ),
+        rust_profile_guard_sha256=rust_profile_guard_sha256,
     )
 
 
@@ -394,11 +645,51 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
     pinned_paths = (context.previous_campaign,) if context.previous_campaign is not None else ()
     identity = {
         "policySha256": context.policy_sha256,
+        "rustProfileGuardSha256": context.rust_profile_guard_sha256,
         "activeCampaignDir": str(context.active_campaign),
         "previousCampaignDir": (
             str(context.previous_campaign) if context.previous_campaign is not None else None
         ),
     }
+    try:
+        profile_guard = (
+            enforce_rust_profile_guard(context.rust_profile_guard)
+            if context.rust_profile_guard is not None
+            else None
+        )
+    except Exception as error:  # noqa: BLE001 - profile guard faults are terminal
+        return {
+            **identity,
+            "ok": False,
+            "rustProfileGuard": {
+                "ok": False,
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            },
+            "errorType": type(error).__name__,
+            "error": str(error)[:1024],
+        }
+    if profile_guard is not None and profile_guard["ok"] is not True:
+        return {
+            **identity,
+            "ok": False,
+            "rustProfileGuard": profile_guard,
+            "errorType": "RustProfileStorageGuardUnsatisfied",
+            "error": ", ".join(profile_guard["violations"])[:1024],
+        }
+
+    external_temporary_bytes = 0
+    minimum_free_bytes = context.policy.minimum_free_bytes
+    shared_volume = False
+    if profile_guard is not None and context.rust_profile_guard is not None:
+        campaign_volume = soak_storage.storage_volume_identity(context.root)
+        shared_volume = campaign_volume == context.rust_profile_guard.volume_identity
+        if shared_volume:
+            external_temporary_bytes = profile_guard["remainingGrowthBytes"]
+            minimum_free_bytes = max(
+                context.policy.minimum_free_bytes,
+                context.rust_profile_guard.policy.minimum_free_bytes,
+            )
     try:
         result = soak_storage.BoundedArtifactStore(
             context.root,
@@ -406,19 +697,48 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
         ).enforce(
             active_campaign=context.active_campaign,
             pinned_paths=pinned_paths,
+            temporary_bytes=external_temporary_bytes,
+            minimum_free_bytes=minimum_free_bytes,
         )
     except Exception as error:  # noqa: BLE001 - storage faults must become terminal evidence
         return {
             **identity,
             "ok": False,
+            "rustProfileGuard": profile_guard,
             "errorType": type(error).__name__,
             "error": str(error)[:1024],
         }
     summary = storage_enforcement_summary(context.root, result)
+    summary["profileCoupling"] = {
+        "sharedVolume": shared_volume,
+        "externalTemporaryBytes": external_temporary_bytes,
+        "minimumFreeBytes": minimum_free_bytes,
+    }
+    try:
+        profile_guard = (
+            enforce_rust_profile_guard(context.rust_profile_guard)
+            if context.rust_profile_guard is not None
+            else None
+        )
+    except Exception as error:  # noqa: BLE001 - profile guard faults are terminal
+        return {
+            **identity,
+            "ok": False,
+            "enforcement": summary,
+            "rustProfileGuard": {
+                "ok": False,
+                "errorType": type(error).__name__,
+                "error": str(error)[:1024],
+            },
+            "errorType": type(error).__name__,
+            "error": str(error)[:1024],
+        }
+    profile_ok = profile_guard is None or profile_guard["ok"] is True
     response = {
         **identity,
-        "ok": result.within_limits,
+        "ok": result.within_limits and profile_ok,
         "enforcement": summary,
+        "rustProfileGuard": profile_guard,
     }
     if not result.within_limits:
         constraints = ", ".join(result.verification.unresolved_constraints)
@@ -427,6 +747,10 @@ def enforce_session_storage_context(context: SessionStorageContext) -> dict[str,
             constraints
             or (result.failures[0] if result.failures else "pending deletions remain")
         )[:1024]
+    elif not profile_ok:
+        assert profile_guard is not None
+        response["errorType"] = "RustProfileStorageGuardUnsatisfied"
+        response["error"] = ", ".join(profile_guard["violations"])[:1024]
     return response
 
 
@@ -934,6 +1258,8 @@ def preflight_campaign_storage(
     output_root: Path,
     *,
     protected_campaigns: tuple[Path, ...],
+    external_temporary_bytes: int = 0,
+    minimum_free_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Plans aggregate retention without mutating campaign evidence."""
 
@@ -943,14 +1269,19 @@ def preflight_campaign_storage(
     plan = soak_storage.BoundedArtifactStore(root, policy).plan(
         pinned_paths=protected_campaigns,
         reserved_bytes=reservation["totalBytes"],
+        temporary_bytes=reservation["totalBytes"] + external_temporary_bytes,
+        minimum_free_bytes=minimum_free_bytes,
     )
     if not plan.within_limits:
         constraints = ", ".join(plan.unresolved_constraints) or "unknown"
         raise RuntimeError(f"Persisted soak storage cannot satisfy required limits: {constraints}.")
-    return {
+    summary = {
         **storage_plan_summary(root, plan),
         "reservation": reservation,
+        "externalTemporaryBytes": external_temporary_bytes,
+        "minimumFreeBytes": minimum_free_bytes or policy.minimum_free_bytes,
     }
+    return summary
 
 
 def enforce_campaign_storage(
@@ -958,6 +1289,8 @@ def enforce_campaign_storage(
     output_root: Path,
     *,
     protected_campaigns: tuple[Path, ...],
+    external_temporary_bytes: int = 0,
+    minimum_free_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Applies and verifies aggregate retention before any process launch."""
 
@@ -967,9 +1300,13 @@ def enforce_campaign_storage(
     result = soak_storage.BoundedArtifactStore(root, policy).enforce(
         pinned_paths=protected_campaigns,
         reserved_bytes=reservation["totalBytes"],
+        temporary_bytes=reservation["totalBytes"] + external_temporary_bytes,
+        minimum_free_bytes=minimum_free_bytes,
     )
     summary = storage_enforcement_summary(root, result)
     summary["reservation"] = reservation
+    summary["externalTemporaryBytes"] = external_temporary_bytes
+    summary["minimumFreeBytes"] = minimum_free_bytes or policy.minimum_free_bytes
     if not result.within_limits:
         constraints = ", ".join(result.verification.unresolved_constraints)
         detail = constraints or (result.failures[0] if result.failures else "pending deletions remain")
@@ -1082,11 +1419,27 @@ def preflight_session(
         raise RuntimeError(f"Rust profile path exists and is not a directory: {rust_profile_dir}")
     if not rust_profile_dir.parent.is_dir():
         raise RuntimeError(f"Rust profile parent does not exist: {rust_profile_dir.parent}")
+    storage_policy = required_storage_policy(inputs)
+    profile_guard_policy = required_rust_profile_guard(inputs)
+    validate_rust_profile_guard_capacity(profile_guard_policy, storage_policy)
+    rust_profile_storage = preflight_rust_profile_storage(
+        rust_profile_dir,
+        profile_guard_policy,
+    )
+    storage_coupling = campaign_profile_storage_coupling(
+        output_root,
+        rust_profile_dir,
+        profile_guard_policy,
+        storage_policy,
+    )
     storage = preflight_campaign_storage(
         inputs,
         output_root,
         protected_campaigns=protected_campaigns,
+        external_temporary_bytes=storage_coupling["externalTemporaryBytes"],
+        minimum_free_bytes=storage_coupling["minimumFreeBytes"],
     )
+    storage["profileCoupling"] = storage_coupling
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(
         config.lan_bind_addr,
@@ -1130,6 +1483,7 @@ def preflight_session(
             "guardConfig": guard["config_path"],
         },
         "storage": storage,
+        "rustProfileStorage": rust_profile_storage,
     }
 
 
@@ -1138,9 +1492,34 @@ def build_launch_command(
     paths: ControlPaths,
     *,
     campaign_id: str,
+    rust_profile_storage: dict[str, Any],
 ) -> list[str]:
     """Builds the canonical until-stopped dual diagnostics command."""
 
+    baseline = rust_profile_storage.get("baseline")
+    if not isinstance(baseline, dict):
+        raise RuntimeError("Rust profile storage baseline is missing from launch authority.")
+    baseline_file_count = baseline.get("fileCount")
+    baseline_total_bytes = baseline.get("totalBytes")
+    baseline_free_bytes = baseline.get("freeBytes")
+    baseline_measured_path = baseline.get("measuredPath")
+    baseline_volume_identity = baseline.get("volumeIdentity")
+    if (
+        isinstance(baseline_file_count, bool)
+        or not isinstance(baseline_file_count, int)
+        or baseline_file_count < 0
+        or isinstance(baseline_total_bytes, bool)
+        or not isinstance(baseline_total_bytes, int)
+        or baseline_total_bytes < 0
+        or isinstance(baseline_free_bytes, bool)
+        or not isinstance(baseline_free_bytes, int)
+        or baseline_free_bytes < 0
+        or not isinstance(baseline_measured_path, str)
+        or not baseline_measured_path
+        or not isinstance(baseline_volume_identity, str)
+        or not baseline_volume_identity
+    ):
+        raise RuntimeError("Rust profile storage baseline values are invalid.")
     return [
         sys.executable,
         str(LAUNCH_SCRIPT),
@@ -1164,6 +1543,16 @@ def build_launch_command(
         "rest",
         "--reuse-rust-shared-profile",
         "--reuse-kad-bootstrap",
+        "--rust-profile-storage-baseline-file-count",
+        str(baseline_file_count),
+        "--rust-profile-storage-baseline-bytes",
+        str(baseline_total_bytes),
+        "--rust-profile-storage-baseline-free-bytes",
+        str(baseline_free_bytes),
+        "--rust-profile-storage-baseline-measured-path",
+        baseline_measured_path,
+        "--rust-profile-storage-volume-identity",
+        baseline_volume_identity,
         "--rest-timeout-seconds",
         str(config.rest_timeout_seconds),
         "--connect-timeout-seconds",
@@ -1470,16 +1859,24 @@ def start_session(
         inputs=inputs,
         protected_campaigns=protected_campaigns,
     )
+    storage_coupling = preflight["storage"]["profileCoupling"]
     storage_enforcement = enforce_campaign_storage(
         inputs,
         output_root,
         protected_campaigns=protected_campaigns,
+        external_temporary_bytes=storage_coupling["externalTemporaryBytes"],
+        minimum_free_bytes=storage_coupling["minimumFreeBytes"],
     )
     paths.control_dir.mkdir(parents=True, exist_ok=True)
     paths.stop_file.unlink(missing_ok=True)
     paths.watch_stop_file.unlink(missing_ok=True)
 
-    launch_target_command = build_launch_command(config, paths, campaign_id=campaign_id)
+    launch_target_command = build_launch_command(
+        config,
+        paths,
+        campaign_id=campaign_id,
+        rust_profile_storage=preflight["rustProfileStorage"],
+    )
     launch_command = build_bounded_process_command(
         launch_target_command,
         stdout_path=campaign_output.launcher_stdout,
@@ -1540,6 +1937,7 @@ def start_session(
             previous_campaign=previous_campaign,
             preflight_plan=preflight["storage"],
             launch_enforcement=storage_enforcement,
+            rust_profile_storage=preflight["rustProfileStorage"],
         ),
         "controlFiles": {
             "manifest": str(paths.manifest),
@@ -1839,6 +2237,14 @@ def watch_heartbeat_health(
         return {"state": "invalid", "accepted": False, "reason": "storage"}
     if heartbeat_storage.get("policySha256") != manifest_storage.get("policySha256"):
         return {"state": "invalid", "accepted": False, "reason": "policy-sha256"}
+    if heartbeat_storage.get("rustProfileGuardSha256") != manifest_storage.get(
+        "rustProfileGuardSha256"
+    ):
+        return {
+            "state": "invalid",
+            "accepted": False,
+            "reason": "rust-profile-guard-sha256",
+        }
     if heartbeat_storage.get("activeCampaignDir") != manifest_storage.get("activeCampaignDir"):
         return {"state": "invalid", "accepted": False, "reason": "active-campaign"}
     if heartbeat_storage.get("previousCampaignDir") != manifest_storage.get("previousCampaignDir"):
@@ -1929,8 +2335,19 @@ def status_findings(status: dict[str, Any]) -> list[str]:
         findings.append("launcher-reported-failure")
     storage = status.get("storage")
     if isinstance(storage, dict) and storage.get("ok") is False:
-        findings.append(STORAGE_FAILURE_FINDING)
+        findings.append(storage_failure_finding(storage))
     return findings
+
+
+def storage_failure_finding(storage: dict[str, Any]) -> str:
+    """Classifies campaign and external-profile storage failures distinctly."""
+
+    profile_guard = storage.get("rustProfileGuard")
+    if isinstance(profile_guard, dict) and profile_guard.get("ok") is False:
+        return PROFILE_STORAGE_FAILURE_FINDING
+    if storage.get("errorType") == "RustProfileStorageGuardUnsatisfied":
+        return PROFILE_STORAGE_FAILURE_FINDING
+    return STORAGE_FAILURE_FINDING
 
 
 def bounded_error(value: object) -> dict[str, str] | None:
@@ -2134,8 +2551,10 @@ def build_watch_sample(
     """Builds one bounded health and storage enforcement record."""
 
     findings = list(status.get("findings", [])) if status is not None else ["watch-status-unavailable"]
-    if not storage.get("ok") and STORAGE_FAILURE_FINDING not in findings:
-        findings.append(STORAGE_FAILURE_FINDING)
+    if not storage.get("ok"):
+        finding = storage_failure_finding(storage)
+        if finding not in findings:
+            findings.append(finding)
     sample = {
         "schema": WATCH_SCHEMA,
         "campaignId": status.get("manifest", {}).get("campaignId") if status is not None else None,

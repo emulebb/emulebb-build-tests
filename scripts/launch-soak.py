@@ -40,6 +40,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import bounded_process_output, cpu_profile, live_process_monitor
 from emule_test_harness import mfc_profile_import, profile_overlay
+from emule_test_harness import persisted_soak_controller
 from emule_test_harness import soak_launch, soak_run_layout, soak_storage
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
@@ -254,6 +255,54 @@ def resolve_direct_rust_profile(inputs: LiveWireInputs) -> Path:
     return inputs.rust_profile_dir.resolve()
 
 
+def enforce_post_import_profile_storage_guard(
+    *,
+    args: argparse.Namespace,
+    inputs: LiveWireInputs,
+    profile_dir: Path,
+    storage_policy: soak_storage.SoakStoragePolicy,
+) -> dict[str, object] | None:
+    """Checks persisted profile authority after import and before either client starts."""
+
+    authority_values = (
+        args.rust_profile_storage_baseline_file_count,
+        args.rust_profile_storage_baseline_bytes,
+        args.rust_profile_storage_baseline_free_bytes,
+        args.rust_profile_storage_baseline_measured_path,
+        args.rust_profile_storage_volume_identity,
+    )
+    if all(value is None for value in authority_values):
+        return None
+    if any(value is None for value in authority_values):
+        raise RuntimeError("Persisted Rust profile storage authority is incomplete.")
+    integer_values = authority_values[:3]
+    if any(not isinstance(value, int) or value < 0 for value in integer_values):
+        raise RuntimeError("Persisted Rust profile storage authority values are invalid.")
+    if not isinstance(args.rust_profile_storage_baseline_measured_path, Path):
+        raise RuntimeError("Persisted Rust profile storage measured path is invalid.")
+    if not isinstance(args.rust_profile_storage_volume_identity, str) or not args.rust_profile_storage_volume_identity:
+        raise RuntimeError("Persisted Rust profile storage volume identity is invalid.")
+    policy = persisted_soak_controller.required_rust_profile_guard(inputs)
+    persisted_soak_controller.validate_rust_profile_guard_capacity(policy, storage_policy)
+    context = persisted_soak_controller.RustProfileGuardContext(
+        profile_dir=profile_dir.resolve(),
+        policy=policy,
+        baseline_file_count=args.rust_profile_storage_baseline_file_count,
+        baseline_total_bytes=args.rust_profile_storage_baseline_bytes,
+        baseline_free_bytes=args.rust_profile_storage_baseline_free_bytes,
+        baseline_measured_path=args.rust_profile_storage_baseline_measured_path.resolve(),
+        volume_identity=args.rust_profile_storage_volume_identity,
+    )
+    result = persisted_soak_controller.enforce_rust_profile_guard(context)
+    if result["ok"] is not True:
+        violations = ", ".join(result["violations"])
+        raise RuntimeError(
+            "Persisted Rust profile storage guard failed after profile import: "
+            f"{violations}. Imported profile state was preserved."
+        )
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -326,6 +375,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not PATCH Rust shared directories; reuse the existing persistent Rust profile state.",
     )
+    parser.add_argument("--rust-profile-storage-baseline-file-count", type=int)
+    parser.add_argument("--rust-profile-storage-baseline-bytes", type=int)
+    parser.add_argument("--rust-profile-storage-baseline-free-bytes", type=int)
+    parser.add_argument("--rust-profile-storage-baseline-measured-path", type=Path)
+    parser.add_argument("--rust-profile-storage-volume-identity")
     parser.add_argument(
         "--vpn-guard-live-config",
         help="Ignored local VPN Guard config; required when --vpn-guard-scenario is not off.",
@@ -875,6 +929,12 @@ def main(argv: list[str] | None = None) -> int:
         ed2k_port=args.rust_ed2k_port,
         kad_port=args.rust_kad_port,
     )
+    post_import_profile_guard = enforce_post_import_profile_storage_guard(
+        args=args,
+        inputs=inputs,
+        profile_dir=rust_profile_dir,
+        storage_policy=storage_policy,
+    )
     shared_roots = rust_mod.load_shared_roots(inputs_path)
     if not shared_roots:
         raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to share.")
@@ -920,6 +980,7 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     }
+    preflight_manifest["rustProfileStorageGuard"] = post_import_profile_guard
     soak_run_layout.write_last_run_manifest(run_paths, preflight_manifest)
     mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
     mfc_preferences_path = (
@@ -1208,6 +1269,7 @@ def main(argv: list[str] | None = None) -> int:
             "rustProfileDir": str(rust_profile_dir),
             "rustProfileLocation": rust_profile_location,
             "rustProfileSetup": rust_profile_setup,
+            "rustProfileStorageGuard": post_import_profile_guard,
             "mfcProfileOverlay": {
                 "enabled": mfc_preferences_path is not None,
                 "target": str(mfc_preferences_path) if mfc_preferences_path is not None else None,

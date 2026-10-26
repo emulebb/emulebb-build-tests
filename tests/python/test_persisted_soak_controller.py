@@ -11,7 +11,7 @@ import pytest
 
 from emule_test_harness import persisted_soak_controller as controller
 from emule_test_harness import soak_storage
-from emule_test_harness.live_wire_inputs import LiveWireInputs
+from emule_test_harness.live_wire_inputs import LiveWireInputs, ProfileGrowthGuardPolicy
 from emule_test_harness.windows_processes import WindowsProcessInfo
 
 
@@ -82,8 +82,34 @@ def live_inputs(
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        mfc_profile_dir=tmp_path / "EMULE_BIN",
+        rust_profile_dir=tmp_path / "EMULE_RUST_PROFILE_PERSISTED",
+        rust_profile_storage_guard=ProfileGrowthGuardPolicy(
+            max_growth_bytes=3_000_000,
+            minimum_free_bytes=1,
+        ),
         soak_storage=policy,
     )
+
+
+def rust_profile_storage_payload(tmp_path: Path) -> dict[str, object]:
+    profile_dir = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    return {
+        "policy": {
+            "max_growth_bytes": 3_000_000,
+            "minimum_free_bytes": 1,
+        },
+        "baseline": {
+            "profileDir": str(profile_dir.resolve()),
+            "fileCount": 0,
+            "totalBytes": 0,
+            "freeBytes": 10_000_000,
+            "measuredPath": str(tmp_path.resolve()),
+            "volumeIdentity": soak_storage.storage_volume_identity(profile_dir),
+            "timestampUtc": "2026-10-26T12:00:00+00:00",
+        },
+        "projectedFreeBytes": 7_000_000,
+    }
 
 
 def test_control_paths_must_stay_under_output_root(tmp_path: Path) -> None:
@@ -94,6 +120,119 @@ def test_control_paths_must_stay_under_output_root(tmp_path: Path) -> None:
 def test_persisted_storage_policy_is_mandatory(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="require soak_storage"):
         controller.required_storage_policy(live_inputs(tmp_path, policy=None))
+
+
+def test_persisted_rust_profile_growth_guard_is_mandatory(tmp_path: Path) -> None:
+    inputs = live_inputs(tmp_path, policy=storage_policy())
+    inputs = LiveWireInputs(
+        **{
+            **inputs.__dict__,
+            "rust_profile_storage_guard": None,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="rust_profile.storage_guard"):
+        controller.required_rust_profile_guard(inputs)
+
+
+def test_rust_profile_storage_preflight_captures_read_only_baseline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    artifact = profile / "config" / "state.bin"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"persisted")
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "disk_space_snapshot",
+        lambda _path: soak_storage.DiskSpaceSnapshot(
+            measured_path=tmp_path.resolve(),
+            total_bytes=1_000,
+            used_bytes=100,
+            free_bytes=900,
+        ),
+    )
+
+    result = controller.preflight_rust_profile_storage(
+        profile,
+        ProfileGrowthGuardPolicy(max_growth_bytes=100, minimum_free_bytes=800),
+    )
+
+    baseline = result["baseline"]
+    assert baseline["profileDir"] == str(profile.resolve())
+    assert baseline["fileCount"] == 1
+    assert baseline["totalBytes"] == len(b"persisted")
+    assert baseline["freeBytes"] == 900
+    assert baseline["measuredPath"] == str(tmp_path.resolve())
+    assert baseline["volumeIdentity"] == soak_storage.storage_volume_identity(profile)
+    assert controller.parse_aware_timestamp(baseline["timestampUtc"]) is not None
+    assert result["projectedFreeBytes"] == 800
+    assert artifact.read_bytes() == b"persisted"
+
+
+def test_rust_profile_storage_preflight_rejects_low_free_space(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "disk_space_snapshot",
+        lambda _path: soak_storage.DiskSpaceSnapshot(
+            measured_path=tmp_path.resolve(),
+            total_bytes=1_000,
+            used_bytes=901,
+            free_bytes=99,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="minimum_free_bytes"):
+        controller.preflight_rust_profile_storage(
+            tmp_path / "EMULE_RUST_PROFILE_PERSISTED",
+            ProfileGrowthGuardPolicy(max_growth_bytes=100, minimum_free_bytes=100),
+        )
+
+
+def test_rust_profile_guard_must_cover_diagnostic_writer_policy() -> None:
+    policy = storage_policy()
+
+    with pytest.raises(RuntimeError, match="max_growth_bytes"):
+        controller.validate_rust_profile_guard_capacity(
+            ProfileGrowthGuardPolicy(
+                max_growth_bytes=policy.rust_diagnostics.max_total_bytes - 1,
+                minimum_free_bytes=policy.rust_diagnostics.minimum_free_bytes,
+            ),
+            policy,
+        )
+    with pytest.raises(RuntimeError, match="minimum_free_bytes"):
+        controller.validate_rust_profile_guard_capacity(
+            ProfileGrowthGuardPolicy(
+                max_growth_bytes=policy.rust_diagnostics.max_total_bytes,
+                minimum_free_bytes=policy.rust_diagnostics.minimum_free_bytes - 1,
+            ),
+            policy,
+        )
+
+
+def test_campaign_profile_storage_coupling_reserves_shared_volume(
+    tmp_path: Path,
+) -> None:
+    policy = storage_policy()
+    profile_policy = ProfileGrowthGuardPolicy(
+        max_growth_bytes=3_000_000,
+        minimum_free_bytes=2,
+    )
+
+    result = controller.campaign_profile_storage_coupling(
+        tmp_path / "output",
+        tmp_path / "profile",
+        profile_policy,
+        policy,
+    )
+
+    assert result["sharedVolume"] is True
+    assert result["externalTemporaryBytes"] == 3_000_000
+    assert result["minimumFreeBytes"] == 2
 
 
 def test_campaign_storage_preflight_is_read_only_and_protects_latest(
@@ -329,7 +468,19 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "deletionCount": 0,
             "deletionBytes": 0,
             "protectedFileCount": 0,
+            "profileCoupling": {
+                "sharedVolume": True,
+                "campaignVolumeIdentity": soak_storage.storage_volume_identity(
+                    tmp_path / "output" / "soak" / "campaigns"
+                ),
+                "profileVolumeIdentity": soak_storage.storage_volume_identity(
+                    tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+                ),
+                "externalTemporaryBytes": 3_000_000,
+                "minimumFreeBytes": 1,
+            },
         },
+        "rustProfileStorage": rust_profile_storage_payload(tmp_path),
     }
 
 
@@ -442,6 +593,7 @@ def storage_context_manifest(
     policy = storage_policy()
     return output_root, {
         "campaignId": active_campaign.name,
+        "preflight": preflight_payload(tmp_path),
         "storage": controller.session_storage_manifest(
             root=root,
             policy=policy,
@@ -449,6 +601,7 @@ def storage_context_manifest(
             previous_campaign=previous_campaign,
             preflight_plan={"feasible": True},
             launch_enforcement={"withinLimits": True},
+            rust_profile_storage=rust_profile_storage_payload(tmp_path),
         ),
     }
 
@@ -468,6 +621,20 @@ def test_session_storage_context_round_trips_previous_campaign(tmp_path: Path) -
     assert context.active_campaign.name == "20261025T120000Z"
     assert context.previous_campaign == previous_campaign
     assert context.policy_sha256 == soak_storage.storage_policy_sha256(context.policy)
+    assert context.rust_profile_guard == controller.RustProfileGuardContext(
+        profile_dir=(tmp_path / "EMULE_RUST_PROFILE_PERSISTED").resolve(),
+        policy=ProfileGrowthGuardPolicy(
+            max_growth_bytes=3_000_000,
+            minimum_free_bytes=1,
+        ),
+        baseline_file_count=0,
+        baseline_total_bytes=0,
+        baseline_free_bytes=10_000_000,
+        baseline_measured_path=tmp_path.resolve(),
+        volume_identity=soak_storage.storage_volume_identity(
+            tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+        ),
+    )
 
 
 def test_session_storage_context_rejects_policy_tampering(tmp_path: Path) -> None:
@@ -514,6 +681,23 @@ def test_session_storage_context_rejects_missing_or_unknown_fields(tmp_path: Pat
     storage["unexpected"] = True
 
     with pytest.raises(RuntimeError, match=r"missing=launchEnforcement unknown=unexpected"):
+        controller.parse_session_storage_context(manifest, output_root)
+
+
+def test_session_storage_context_rejects_profile_guard_path_tampering(
+    tmp_path: Path,
+) -> None:
+    output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    guard = storage["rustProfileGuard"]
+    assert isinstance(guard, dict)
+    baseline = guard["baseline"]
+    assert isinstance(baseline, dict)
+    baseline["profileDir"] = str((tmp_path / "other-profile").resolve())
+    storage["rustProfileGuardSha256"] = controller.profile_guard_sha256(guard)
+
+    with pytest.raises(RuntimeError, match="mismatches preflight evidence"):
         controller.parse_session_storage_context(manifest, output_root)
 
 
@@ -573,6 +757,104 @@ def test_session_storage_enforcement_reports_unprunable_active_growth(tmp_path: 
     assert result["errorType"] == "StoragePolicyUnsatisfied"
     assert result["error"] == "max_total_bytes"
     assert active_file.is_file()
+
+
+def test_session_storage_enforcement_stops_on_profile_growth_without_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    active_campaign = root / "20261025T120000Z"
+    profile = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    state = profile / "state.bin"
+    state.parent.mkdir(parents=True)
+    state.write_bytes(b"baseline-plus-growth")
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "disk_space_snapshot",
+        lambda _path: soak_storage.DiskSpaceSnapshot(
+            measured_path=tmp_path.resolve(),
+            total_bytes=1_000,
+            used_bytes=100,
+            free_bytes=900,
+        ),
+    )
+    policy = storage_policy(max_total_bytes=1_000_000)
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=active_campaign,
+        previous_campaign=None,
+        rust_profile_guard=controller.RustProfileGuardContext(
+            profile_dir=profile.resolve(),
+            policy=ProfileGrowthGuardPolicy(
+                max_growth_bytes=5,
+                minimum_free_bytes=100,
+            ),
+            baseline_file_count=1,
+            baseline_total_bytes=len(b"baseline"),
+            baseline_free_bytes=900,
+            baseline_measured_path=tmp_path.resolve(),
+            volume_identity=soak_storage.storage_volume_identity(profile),
+        ),
+    )
+
+    result = controller.enforce_session_storage_context(context)
+
+    assert result["ok"] is False
+    assert result["errorType"] == "RustProfileStorageGuardUnsatisfied"
+    assert result["error"] == "max_growth_bytes"
+    assert result["rustProfileGuard"]["netGrowthBytes"] == len(b"-plus-growth")
+    assert state.read_bytes() == b"baseline-plus-growth"
+
+
+def test_session_storage_enforcement_stops_on_profile_free_space_without_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = controller.campaign_storage_root(tmp_path / "output")
+    active_campaign = root / "20261025T120000Z"
+    profile = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    state = profile / "state.bin"
+    state.parent.mkdir(parents=True)
+    state.write_bytes(b"persisted")
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "disk_space_snapshot",
+        lambda _path: soak_storage.DiskSpaceSnapshot(
+            measured_path=tmp_path.resolve(),
+            total_bytes=1_000,
+            used_bytes=901,
+            free_bytes=99,
+        ),
+    )
+    policy = storage_policy(max_total_bytes=1_000_000)
+    context = controller.SessionStorageContext(
+        root=root,
+        policy=policy,
+        policy_sha256=soak_storage.storage_policy_sha256(policy),
+        active_campaign=active_campaign,
+        previous_campaign=None,
+        rust_profile_guard=controller.RustProfileGuardContext(
+            profile_dir=profile.resolve(),
+            policy=ProfileGrowthGuardPolicy(
+                max_growth_bytes=100,
+                minimum_free_bytes=100,
+            ),
+            baseline_file_count=1,
+            baseline_total_bytes=len(b"persisted"),
+            baseline_free_bytes=199,
+            baseline_measured_path=tmp_path.resolve(),
+            volume_identity=soak_storage.storage_volume_identity(profile),
+        ),
+    )
+
+    result = controller.enforce_session_storage_context(context)
+
+    assert result["ok"] is False
+    assert result["error"] == "minimum_free_bytes"
+    assert state.read_bytes() == b"persisted"
 
 
 def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
@@ -878,6 +1160,7 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
         config,
         paths,
         campaign_id="20261025T120000Z",
+        rust_profile_storage=rust_profile_storage_payload(tmp_path),
     )
 
     assert command[1].endswith("scripts\\launch-soak.py")
@@ -890,6 +1173,7 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert "success" in command
     assert "--reuse-rust-shared-profile" in command
     assert "--reuse-kad-bootstrap" in command
+    assert command[command.index("--rust-profile-storage-baseline-bytes") + 1] == "0"
     assert "--no-mfc" not in command
     assert "--rust-regular" not in command
     assert "--cpu-profile" not in command
@@ -1450,7 +1734,7 @@ def test_session_status_reports_exact_dual_process_tree(
 
     result = controller.session_status(paths)
 
-    assert result["schema"] == "emulebb.persisted-soak-status.v2"
+    assert result["schema"] == controller.STATUS_SCHEMA
     assert result["observerReport"] is exact_observer_report
     assert result["ok"] is True
     assert result["launcher"]["alive"] is True
@@ -1819,6 +2103,7 @@ def test_session_status_reports_current_storage_failure_and_dead_watcher(
                 "ok": False,
                 "error": "minimum_free_bytes",
                 "policySha256": storage["policySha256"],
+                "rustProfileGuardSha256": storage["rustProfileGuardSha256"],
                 "activeCampaignDir": storage["activeCampaignDir"],
                 "previousCampaignDir": storage["previousCampaignDir"],
             },
@@ -1905,6 +2190,7 @@ def test_watch_heartbeat_health_requires_fresh_manifest_authority(
             "policySha256": (
                 storage["policySha256"] if policy_sha256 == "expected" else policy_sha256
             ),
+            "rustProfileGuardSha256": storage["rustProfileGuardSha256"],
             "activeCampaignDir": storage["activeCampaignDir"],
             "previousCampaignDir": storage["previousCampaignDir"],
         },
@@ -1941,6 +2227,7 @@ def test_watch_heartbeat_health_rejects_previous_campaign_pin_mismatch(
         "storage": {
             "ok": True,
             "policySha256": storage["policySha256"],
+            "rustProfileGuardSha256": storage["rustProfileGuardSha256"],
             "activeCampaignDir": storage["activeCampaignDir"],
             "previousCampaignDir": None,
         },
@@ -1949,6 +2236,45 @@ def test_watch_heartbeat_health_rejects_previous_campaign_pin_mismatch(
     result = controller.watch_heartbeat_health(manifest, heartbeat, now=now)
 
     assert result == {"state": "invalid", "accepted": False, "reason": "previous-campaign"}
+
+
+def test_watch_heartbeat_health_rejects_profile_guard_authority_mismatch(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    _output_root, manifest = storage_context_manifest(tmp_path)
+    storage = manifest["storage"]
+    assert isinstance(storage, dict)
+    manifest.update(
+        {
+            "startedUtc": (now - timedelta(minutes=10)).isoformat(),
+            "watchConfig": {
+                "enabled": True,
+                "intervalSeconds": 60.0,
+                "heartbeatStaleSeconds": 180.0,
+            },
+        }
+    )
+    heartbeat = {
+        "schema": controller.WATCH_SCHEMA,
+        "campaignId": manifest["campaignId"],
+        "timestampUtc": now.isoformat(),
+        "storage": {
+            "ok": True,
+            "policySha256": storage["policySha256"],
+            "rustProfileGuardSha256": "tampered",
+            "activeCampaignDir": storage["activeCampaignDir"],
+            "previousCampaignDir": storage["previousCampaignDir"],
+        },
+    }
+
+    result = controller.watch_heartbeat_health(manifest, heartbeat, now=now)
+
+    assert result == {
+        "state": "invalid",
+        "accepted": False,
+        "reason": "rust-profile-guard-sha256",
+    }
 
 
 def test_stop_session_requests_graceful_teardown_without_force(
@@ -2227,6 +2553,57 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["shutdown"] == {
         "launcherGraceful": True
     }
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_stops_before_indexing_on_profile_storage_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {
+            "ok": False,
+            "policySha256": "abc",
+            "rustProfileGuard": {
+                "ok": False,
+                "violations": ["max_growth_bytes"],
+            },
+            "errorType": "RustProfileStorageGuardUnsatisfied",
+            "error": "max_growth_bytes",
+        },
+    )
+    monkeypatch.setattr(
+        controller,
+        "advance_diagnostic_indexes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("profile failure must skip diagnostic indexing")
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert controller.PROFILE_STORAGE_FAILURE_FINDING in result["latest"]["findings"]
+    assert result["latest"]["diagnosticIndexes"] is None
     assert stop_requests == [manifest]
 
 
