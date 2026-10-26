@@ -372,18 +372,36 @@ def _diff_one_action(
         kind,
         packet_diff or {},
         method=method,
-        rust_kad_records=packet_trace_diff.kad_records(rust_diag),
-        mfc_kad_records=packet_trace_diff.kad_records(mfc_diag),
+        rust_kad_records=soak_action_diff.diagnostic_family_records(
+            rust_diag, soak_action_diff.KAD_UDP_FAMILY
+        ),
+        mfc_kad_records=soak_action_diff.diagnostic_family_records(
+            mfc_diag, soak_action_diff.KAD_UDP_FAMILY
+        ),
+        rust_server_udp_records=soak_action_diff.diagnostic_family_records(
+            rust_diag, soak_action_diff.ED2K_SERVER_UDP_FAMILY
+        ),
+        mfc_server_udp_records=soak_action_diff.diagnostic_family_records(
+            mfc_diag, soak_action_diff.ED2K_SERVER_UDP_FAMILY
+        ),
     )
     audit = diag_event_diff.schema_audit(rust_diag, mfc_diag)
     conf = audit["conformance"]
-    family_gate = diag_event_diff.family_conformance(rust_diag, mfc_diag)
+    family_gate = diag_event_diff.family_conformance(
+        rust_diag,
+        mfc_diag,
+        required_families=soak_action_diff.action_required_diagnostic_families(
+            kind, method
+        ),
+    )
 
     rust_total = len(rust_pkt) + len(rust_diag)
     mfc_total = len(mfc_pkt) + len(mfc_diag)
     assessment_status = action_coverage.get("status")
     if assessment_status in {"not-assessable", "evidence-incomplete"}:
         verdict = str(assessment_status)
+    elif not family_gate.get("requiredFamiliesOk", True):
+        verdict = "evidence-incomplete"
     elif rust_total == 0 and mfc_total == 0:
         verdict = "no-traffic"
     elif rust_total == 0 or mfc_total == 0:

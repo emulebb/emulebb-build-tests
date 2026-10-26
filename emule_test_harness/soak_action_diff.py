@@ -492,6 +492,9 @@ _GLOBAL_SEARCH_SEND_ALTERNATIVES: list[dict[str, Any]] = [
 # Kad keyword-search opcodes (assessed from the kad diag stream, not server TCP).
 KAD2_SEARCH_KEY_REQ = 0x33  # KADEMLIA2_SEARCH_KEY_REQ
 KAD2_SEARCH_RES = 0x3B  # KADEMLIA2_SEARCH_RES
+ED2K_TCP_FAMILY = "ed2k_tcp"
+ED2K_SERVER_UDP_FAMILY = "ed2k_server_udp"
+KAD_UDP_FAMILY = "kad_udp"
 
 
 def _kad_record_opcode(record: dict[str, Any]) -> int | str | None:
@@ -504,12 +507,62 @@ def _kad_opcode_exercised(records: list[dict[str, Any]] | None, opcode: int) -> 
     return any(_kad_record_opcode(record) == opcode for record in records or [])
 
 
+def diagnostic_family_records(
+    records: list[dict[str, Any]] | None,
+    family: str,
+) -> list[dict[str, Any]]:
+    """Returns one diagnostic family's records without adapting their evidence."""
+
+    return [record for record in records or [] if record.get("family") == family]
+
+
+def action_required_diagnostic_families(
+    kind: str,
+    method: str | None,
+) -> tuple[str, ...]:
+    """Returns the exact diagnostic families required by one action lane."""
+
+    if kind == DOWNLOAD:
+        return (ED2K_TCP_FAMILY,)
+    if kind != SEARCH or method is None or not str(method).strip():
+        return ()
+    normalized = str(method).strip().lower()
+    if normalized == SEARCH_METHOD_SERVER:
+        return (ED2K_TCP_FAMILY,)
+    if normalized == SEARCH_METHOD_GLOBAL:
+        return (ED2K_SERVER_UDP_FAMILY,)
+    if normalized == SEARCH_METHOD_KAD:
+        return (KAD_UDP_FAMILY,)
+    return ()
+
+
+def _diag_wire_opcode_exercised(
+    records: list[dict[str, Any]] | None,
+    alternatives: list[dict[str, Any]],
+) -> bool:
+    for record in records or []:
+        if record.get("event") != "packet":
+            continue
+        body = record.get("body")
+        if not isinstance(body, dict) or body.get("direction") != "send":
+            continue
+        if any(
+            body.get("protocolMarker") == alternative["protocolMarker"]
+            and body.get("opcode") == alternative["opcode"]
+            for alternative in alternatives
+        ):
+            return True
+    return False
+
+
 def _build_search_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None,
     rust_kad_records: list[dict[str, Any]] | None,
     mfc_kad_records: list[dict[str, Any]] | None,
+    rust_server_udp_records: list[dict[str, Any]] | None,
+    mfc_server_udp_records: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     """Method-aware search gate: each search method has its own live evidence.
 
@@ -537,10 +590,21 @@ def _build_search_coverage(
         }
 
     if normalized == SEARCH_METHOD_GLOBAL:
-        rust_sent = _rust_any_opcode_present(packet_diff, _GLOBAL_SEARCH_SEND_ALTERNATIVES)
-        return {
-            "ok": False,
-            "status": "not-assessable",
+        rust_records = rust_server_udp_records or []
+        mfc_records = mfc_server_udp_records or []
+        rust_sent = _diag_wire_opcode_exercised(
+            rust_records, _GLOBAL_SEARCH_SEND_ALTERNATIVES
+        )
+        mfc_sent = _diag_wire_opcode_exercised(
+            mfc_records, _GLOBAL_SEARCH_SEND_ALTERNATIVES
+        )
+        status = None
+        if not mfc_records:
+            status = "not-assessable"
+        elif not rust_records:
+            status = "evidence-incomplete"
+        coverage = {
+            "ok": status is None and rust_sent and mfc_sent,
             "mode": "search-global-server-udp",
             "method": SEARCH_METHOD_GLOBAL,
             "required": [
@@ -548,14 +612,17 @@ def _build_search_coverage(
                     "label": "server-udp-global-search-request",
                     "alternatives": _GLOBAL_SEARCH_SEND_ALTERNATIVES,
                     "rustPresent": rust_sent,
-                    "mfcAssessable": False,
-                    "mfcStatus": "not-assessable",
-                    "note": "MFC has no aligned server-UDP diagnostic evidence; "
-                    "global-search parity is not assessable.",
+                    "mfcPresent": mfc_sent,
+                    "rustAssessable": bool(rust_records),
+                    "mfcAssessable": bool(mfc_records),
+                    "presentOnBoth": rust_sent and mfc_sent,
                 }
             ],
             "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
         }
+        if status is not None:
+            coverage["status"] = status
+        return coverage
 
     kad_req_rust = _kad_opcode_exercised(rust_kad_records, KAD2_SEARCH_KEY_REQ)
     kad_req_mfc = _kad_opcode_exercised(mfc_kad_records, KAD2_SEARCH_KEY_REQ)
@@ -614,12 +681,14 @@ def build_action_coverage(
     method: str | None = None,
     rust_kad_records: list[dict[str, Any]] | None = None,
     mfc_kad_records: list[dict[str, Any]] | None = None,
+    rust_server_udp_records: list[dict[str, Any]] | None = None,
+    mfc_server_udp_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Builds the action-specific live coverage gate for one soak action.
 
     ``method`` selects the search-method gate (server/global/kad/automatic);
-    ``rust_kad_records`` / ``mfc_kad_records`` supply the kad stream slices the
-    kad-method gate is assessed from (kad packets never appear on server TCP).
+    The method-specific diagnostic arguments supply Kad or server-UDP evidence
+    directly; neither family is inferred from the server-TCP packet view.
     """
 
     if kind == SEARCH:
@@ -628,6 +697,8 @@ def build_action_coverage(
             method=method,
             rust_kad_records=rust_kad_records,
             mfc_kad_records=mfc_kad_records,
+            rust_server_udp_records=rust_server_udp_records,
+            mfc_server_udp_records=mfc_server_udp_records,
         )
     if kind == DOWNLOAD:
         required = [
@@ -772,6 +843,10 @@ def _classify(
     assessment_status = action_coverage.get("status")
     if assessment_status in {"not-assessable", "evidence-incomplete"}:
         return str(assessment_status)
+    if diag_conformance is not None and not diag_conformance.get(
+        "requiredFamiliesOk", True
+    ):
+        return "evidence-incomplete"
     if rust_count == 0 and mfc_count == 0:
         return "no-traffic"
     if rust_count == 0 or mfc_count == 0:
@@ -828,24 +903,56 @@ def diff_action(
         raise ValueError(
             "required current diagnostics are missing from one or both action windows"
         )
+    method = pair_method(pair)
+    rust_kad_records = diagnostic_family_records(rust_diag_slice, KAD_UDP_FAMILY)
+    mfc_kad_records = diagnostic_family_records(mfc_diag_slice, KAD_UDP_FAMILY)
+    rust_server_udp_records = diagnostic_family_records(
+        rust_diag_slice, ED2K_SERVER_UDP_FAMILY
+    )
+    mfc_server_udp_records = diagnostic_family_records(
+        mfc_diag_slice, ED2K_SERVER_UDP_FAMILY
+    )
     diag_diff: dict[str, Any] | None = None
     diag_conformance: dict[str, Any] | None = None
     if rust_diag or mfc_diag:
         diag_diff = diag_event_diff.diff_traces(rust_diag_slice, mfc_diag_slice)
-        diag_conformance = diag_event_diff.family_conformance(rust_diag_slice, mfc_diag_slice)
+        diag_conformance = diag_event_diff.family_conformance(
+            rust_diag_slice,
+            mfc_diag_slice,
+            required_families=action_required_diagnostic_families(pair.kind, method),
+        )
 
     action_coverage = build_action_coverage(
         pair.kind,
         packet_diff,
-        method=pair_method(pair),
-        rust_kad_records=packet_trace_diff.kad_records(rust_diag_slice),
-        mfc_kad_records=packet_trace_diff.kad_records(mfc_diag_slice),
+        method=method,
+        rust_kad_records=rust_kad_records,
+        mfc_kad_records=mfc_kad_records,
+        rust_server_udp_records=rust_server_udp_records,
+        mfc_server_udp_records=mfc_server_udp_records,
     )
-    verdict = _classify(action_coverage, diag_conformance, len(rust_slice), len(mfc_slice))
+    if method == SEARCH_METHOD_KAD:
+        rust_assessment_count = len(rust_kad_records)
+        mfc_assessment_count = len(mfc_kad_records)
+    elif method == SEARCH_METHOD_GLOBAL:
+        rust_assessment_count = len(rust_server_udp_records)
+        mfc_assessment_count = len(mfc_server_udp_records)
+    elif method == "automatic":
+        rust_assessment_count = len(rust_slice) + len(rust_kad_records)
+        mfc_assessment_count = len(mfc_slice) + len(mfc_kad_records)
+    else:
+        rust_assessment_count = len(rust_slice)
+        mfc_assessment_count = len(mfc_slice)
+    verdict = _classify(
+        action_coverage,
+        diag_conformance,
+        rust_assessment_count,
+        mfc_assessment_count,
+    )
     return {
         "kind": pair.kind,
         "key": pair.key,
-        "method": pair_method(pair),
+        "method": method,
         "label": pair.rust.label,
         "window": window.report_payload(),
         "observed": {
@@ -853,6 +960,13 @@ def diff_action(
             "mfc": pair.mfc.observed_at.isoformat(),
         },
         "packets": {"rust": len(rust_slice), "mfc": len(mfc_slice)},
+        "assessmentRecords": {
+            "requiredFamilies": list(
+                action_required_diagnostic_families(pair.kind, method)
+            ),
+            "rust": rust_assessment_count,
+            "mfc": mfc_assessment_count,
+        },
         "verdict": verdict,
         "coverageOk": bool(action_coverage.get("ok")),
         "fullCoverageOk": bool(packet_diff.get("coverageOk")),

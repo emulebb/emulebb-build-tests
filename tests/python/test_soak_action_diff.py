@@ -578,6 +578,21 @@ def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
     }
 
 
+def _server_udp_diag(opcode: int, direction: str, ts: datetime) -> dict:
+    return {
+        "schema": "diag_event_v2",
+        "ts": ts.isoformat().replace("+00:00", "Z"),
+        "family": "ed2k_server_udp",
+        "event": "packet",
+        "keys": {"protocolMarker": 0xE3, "opcode": opcode},
+        "body": {
+            "direction": direction,
+            "protocolMarker": 0xE3,
+            "opcode": opcode,
+        },
+    }
+
+
 def _search_pair(method: str | None) -> sad.ActionPair:
     rust = sad.Action(
         client="rust", kind=sad.SEARCH, action_id="r-1", key="ubuntu", label="ubuntu",
@@ -598,14 +613,20 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
     mfc_kad = [_kad_diag(0x33, "send", _ts(2)), _kad_diag(0x3B, "recv", _ts(4))]
     report = sad.diff_action(
         pair,
-        rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
-        mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
+        rust_packets=[],
+        mfc_packets=[],
         rust_diag=rust_kad,
         mfc_diag=mfc_kad,
     )
     assert report["method"] == "kad"
     assert report["actionCoverage"]["mode"] == "search-kad-stream"
     assert report["coverageOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["assessmentRecords"] == {
+        "requiredFamilies": ["kad_udp"],
+        "rust": 2,
+        "mfc": 2,
+    }
     assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is True
 
 
@@ -630,25 +651,65 @@ def test_search_gate_global_method_is_not_assessable_from_rust_only_evidence() -
         pair,
         rust_packets=[_pkt("server", "send", 0x98, "aa", _ts(1), marker=0xE3)],
         mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
+        rust_diag=[_server_udp_diag(0x98, "send", _ts(1))],
     )
     assert report["actionCoverage"]["mode"] == "search-global-server-udp"
     assert report["actionCoverage"]["status"] == "not-assessable"
     assert report["coverageOk"] is False
     assert report["verdict"] == "not-assessable"
     row = report["actionCoverage"]["required"][0]
+    assert row["rustAssessable"] is True
     assert row["mfcAssessable"] is False
-    assert row["mfcStatus"] == "not-assessable"
 
 
-def test_search_gate_global_method_fails_without_rust_send() -> None:
+def test_search_gate_global_method_marks_missing_rust_family_incomplete() -> None:
     pair = _search_pair("global")
     report = sad.diff_action(
         pair,
         rust_packets=[_pkt("server", "send", 0x14, "aa", _ts(1), marker=0xE3)],
         mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
+        mfc_diag=[_server_udp_diag(0x98, "send", _ts(2))],
     )
     assert report["coverageOk"] is False
-    assert report["verdict"] == "not-assessable"
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_global_method_uses_direct_server_udp_diagnostics() -> None:
+    pair = _search_pair("global")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[_server_udp_diag(0x98, "send", _ts(1))],
+        mfc_diag=[_server_udp_diag(0x98, "send", _ts(2))],
+    )
+
+    assert report["coverageOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["assessmentRecords"] == {
+        "requiredFamilies": ["ed2k_server_udp"],
+        "rust": 1,
+        "mfc": 1,
+    }
+
+
+def test_search_gate_server_requires_ed2k_tcp_diagnostic_family() -> None:
+    pair = _search_pair("server")
+    packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "recv", 0x33, "bb", _ts(2), marker=0xE3),
+    ]
+    report = sad.diff_action(
+        pair,
+        rust_packets=packets,
+        mfc_packets=packets,
+        rust_diag=[_diag("sched", "tick", _ts(1))],
+        mfc_diag=[_diag("sched", "tick", _ts(2))],
+    )
+
+    assert report["coverageOk"] is True
+    assert report["diagOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
 
 
 def test_search_gate_automatic_method_accepts_kad_evidence() -> None:
