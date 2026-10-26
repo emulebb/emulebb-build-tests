@@ -20,7 +20,15 @@ def load_script_module():
     return module
 
 
-def _ed2k(flow: str, direction: str, opcode: int, name: str) -> dict[str, object]:
+def _ed2k(
+    flow: str,
+    direction: str,
+    opcode: int,
+    name: str,
+    *,
+    peer_hash: str | None = "00112233445566778899aabbccddeeff",
+    file_hash: str | None = None,
+) -> dict[str, object]:
     return {
         "schema": "ed2k_packet_v1",
         "flow": flow,
@@ -30,6 +38,8 @@ def _ed2k(flow: str, direction: str, opcode: int, name: str) -> dict[str, object
         "opcode_name": name,
         "payload_len": 0,
         "payload_hex": "",
+        "peer_hash": peer_hash,
+        "file_hash": file_hash,
     }
 
 
@@ -73,6 +83,12 @@ def _ed2k_diag(*, client: str, sequence: int, flow: str, direction: str) -> dict
         client=client,
         sequence=sequence,
         family="ed2k_tcp",
+        keys={
+            "peer": "198.51.100.1:4662",
+            "peerHash": "00112233445566778899aabbccddeeff",
+            "protocolMarker": 0xE3,
+            "opcode": 0x01,
+        },
         body={
             "direction": direction,
             "flow": flow,
@@ -190,7 +206,13 @@ def test_build_summary_reports_opcode_and_upload_coverage() -> None:
     module = load_script_module()
     rust = [
         _ed2k("client", "send", 0x01, "OP_HELLO"),
-        _ed2k("listener", "send", 0x54, "OP_STARTUPLOADREQ"),
+        _ed2k(
+            "listener",
+            "send",
+            0x54,
+            "OP_STARTUPLOADREQ",
+            file_hash="ffeeddccbbaa99887766554433221100",
+        ),
     ]
     mfc = [_ed2k("client", "send", 0x01, "OP_HELLO")]
     rust_diagnostics = _complete_diagnostics("rust")
@@ -210,6 +232,25 @@ def test_build_summary_reports_opcode_and_upload_coverage() -> None:
         "mfcServerUdp": 1,
     }
     assert summary["ed2kOpcodeCoverage"]["ok"] is False
+    assert summary["ed2kJoinKeyCoverage"] == {
+        "ok": True,
+        "rust": {
+            "ok": True,
+            "packetCount": 2,
+            "peerHashPackets": 2,
+            "filePacketCount": 1,
+            "fileHashPackets": 1,
+            "missingFileHashByOpcode": [],
+        },
+        "mfc": {
+            "ok": True,
+            "packetCount": 1,
+            "peerHashPackets": 1,
+            "filePacketCount": 0,
+            "fileHashPackets": 0,
+            "missingFileHashByOpcode": [],
+        },
+    }
     assert summary["kadOpcodeCoverage"]["oracleOk"] is True
     assert summary["serverUdpOpcodeCoverage"]["oracleOk"] is True
     assert summary["persistedSoakConformance"]["ok"] is True
@@ -262,6 +303,32 @@ def test_build_summary_rejects_missing_mfc_kad_evidence() -> None:
         "ok": False,
     }
     assert required["kad_event"]["ok"] is False
+
+
+def test_build_summary_rejects_missing_file_join_key() -> None:
+    module = load_script_module()
+    rust = [_ed2k("listener", "send", 0x46, "OP_SENDINGPART")]
+    mfc = [
+        _ed2k(
+            "listener",
+            "send",
+            0x46,
+            "OP_SENDINGPART",
+            file_hash="ffeeddccbbaa99887766554433221100",
+        )
+    ]
+
+    summary = module.build_summary(
+        rust,
+        mfc,
+        _complete_diagnostics("rust"),
+        _complete_diagnostics("mfc"),
+    )
+
+    assert summary["ed2kJoinKeyCoverage"]["ok"] is False
+    assert summary["ed2kJoinKeyCoverage"]["rust"]["missingFileHashByOpcode"] == [
+        {"opcodeName": "OP_SENDINGPART", "count": 1}
+    ]
 
 
 def test_build_summary_rejects_missing_mfc_server_udp_evidence() -> None:
