@@ -7,6 +7,7 @@ import struct
 import pytest
 
 from emule_test_harness import secident_audit as sia
+from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +37,7 @@ def _hello_payload(miscoptions1: int | None, *, answer: bool = False, long_name:
 
 def _pkt(direction: str, marker: int, opcode: int, payload_hex: str = "") -> dict:
     return {
-        "schema": "ed2k_packet_v1",
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "flow": "client",
         "direction": direction,
         "protocol_marker": marker,
@@ -131,9 +132,8 @@ def test_audit_ignores_server_channel_and_incomplete_packet_views() -> None:
     assert audit["verdict"] == "not-assessable"
 
 
-def test_audit_accepts_normalized_packet_view_without_persisted_schema() -> None:
+def test_audit_accepts_canonical_packet_view() -> None:
     packet = _pkt("send", 0xC5, 0x85)
-    packet.pop("schema")
 
     audit = sia.audit_client_secident([packet], declared_enabled=True, min_peer_packets=1)
 

@@ -11,6 +11,7 @@ from types import ModuleType
 
 import pytest
 
+from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
 
 pytestmark = pytest.mark.unit
@@ -35,7 +36,7 @@ def _ts(seconds: float) -> str:
 
 def _pkt(flow: str, direction: str, opcode: int, payload_hex: str, at: float, *, marker: int = 0xE3) -> dict:
     return {
-        "schema": "ed2k_packet_v1",
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "ts_utc": _ts(at),
         "flow": flow,
         "direction": direction,

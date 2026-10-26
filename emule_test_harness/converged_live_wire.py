@@ -137,8 +137,8 @@ def resolve_rust_diagnostics_exe(output_root: Path, *, require_exists: bool = Tr
     )
 
 
-# The plain release binary (no `packet-diagnostics` feature, no ed2k_packet_v1 /
-# diag_event_v2 dumps) is staged into the same canonical bin dir under its own
+# The plain release binary (no `packet-diagnostics` feature, no diag_event_v2
+# dumps) is staged into the same canonical bin dir under its own
 # name. Staging clears the dir, so exactly ONE flavor is staged at a time — the
 # resolver errors name the build command for the flavor you asked for.
 RUST_REGULAR_EXE_NAME = "emulebb-rust.exe"

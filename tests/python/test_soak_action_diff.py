@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from emule_test_harness import soak_action_diff as sad
+from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 
 pytestmark = pytest.mark.unit
 
@@ -17,7 +18,7 @@ def _pkt(
     flow: str, direction: str, opcode: int, payload_hex: str, ts: datetime, *, marker: int = 229
 ) -> dict:
     return {
-        "schema": "ed2k_packet_v1",
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "ts_utc": ts.isoformat().replace("+00:00", "Z"),
         "flow": flow,
         "direction": direction,
@@ -281,9 +282,20 @@ def test_slice_trace_keeps_diag_event_records_with_ts_field() -> None:
 
 
 def test_slice_trace_rejects_records_without_timestamp() -> None:
-    records = [{"schema": "ed2k_packet_v1", "opcode": 1, "direction": "send"}]
+    records = [{"schema": ED2K_TCP_PACKET_VIEW_SCHEMA, "opcode": 1, "direction": "send"}]
 
     with pytest.raises(sad.ActionTraceError, match="record 0 field ts_utc"):
+        sad.slice_trace(
+            records,
+            sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+            trace_name="test packets",
+        )
+
+
+def test_slice_trace_rejects_retired_packet_schema() -> None:
+    records = [{"schema": "ed2k_packet_v1", "ts_utc": _ts(1).isoformat()}]
+
+    with pytest.raises(sad.ActionTraceError, match="unsupported schema 'ed2k_packet_v1'"):
         sad.slice_trace(
             records,
             sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),

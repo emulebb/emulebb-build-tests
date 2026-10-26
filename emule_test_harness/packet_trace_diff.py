@@ -1,11 +1,10 @@
-"""Diff two ``ed2k_packet_v1`` packet traces (emulebb-rust vs eMuleBB).
+"""Diff two canonical eD2K TCP packet-view traces (emulebb-rust vs eMuleBB).
 
-Both clients emit the converged ``ed2k_packet_v1`` JSONL packet dump
-(emulebb-rust via ``EMULEBB_RUST_LOG_DIR``; eMuleBB via the
-``EMULEBB_ENABLE_PACKET_DIAGNOSTICS`` build). This module aligns the two traces
-per ``(flow, direction)`` and reports where the wire packets match, where the
-payload differs for the same opcode, and where a packet is present on only one
-side — so a rust↔eMuleBB exchange can be checked for wire-faithfulness.
+Both clients emit canonical ``diag_event_v2`` packet events. The harness derives
+``ed2k_tcp_packet_view_v2`` records from those events before this module aligns
+the traces per ``(flow, direction)`` and reports where the wire packets match,
+where the payload differs for the same opcode, and where a packet is present on
+only one side — so a rust↔eMuleBB exchange can be checked for wire-faithfulness.
 
 The comparison key is the wire identity ``(protocol_marker, opcode, payload_hex)``
 — deliberately NOT ``opcode_name`` (each client keeps its own name table) nor
@@ -22,7 +21,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-PACKET_SCHEMA = "ed2k_packet_v1"
+from emule_test_harness.diag_event_schema import (
+    ED2K_PACKET_DIFF_REPORT_SCHEMA,
+    ED2K_TCP_PACKET_VIEW_SCHEMA,
+)
+
 _PACKET_DIRECTIONS = ("send", "recv")
 _OFFERFILES_OPCODE = 0x15
 _SOURCE_REQUEST_OPCODES = {0x19, 0x23}
@@ -54,7 +57,7 @@ def canonical_channel(flow: str | None) -> str:
 
 
 def load_trace(path: Path) -> list[dict[str, Any]]:
-    """Loads ed2k_packet_v1 packet records (send/recv) from a JSONL dump."""
+    """Loads canonical eD2K TCP packet views (send/recv) from JSONL."""
 
     records: list[dict[str, Any]] = []
     for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
@@ -65,7 +68,7 @@ def load_trace(path: Path) -> list[dict[str, Any]]:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("schema") != PACKET_SCHEMA:
+        if record.get("schema") != ED2K_TCP_PACKET_VIEW_SCHEMA:
             continue
         if record.get("direction") not in _PACKET_DIRECTIONS:
             continue
@@ -95,7 +98,7 @@ def _packet_payload(record: dict[str, Any]) -> bytes:
 
 def _is_server_packet(record: dict[str, Any], *, direction: str, opcodes: set[int]) -> bool:
     return (
-        record.get("schema") == PACKET_SCHEMA
+        record.get("schema") == ED2K_TCP_PACKET_VIEW_SCHEMA
         and canonical_channel(record.get("flow")) == "server"
         and record.get("direction") == direction
         and record.get("opcode") in opcodes
@@ -291,7 +294,7 @@ def diff_traces(
     rust_trace: list[dict[str, Any]],
     emule_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compares two ed2k_packet_v1 traces grouped by (canonical channel, direction).
+    """Compares canonical packet-view traces by (canonical channel, direction).
 
     Flows are collapsed to the shared channel taxonomy (see ``canonical_channel``)
     so peer (client-to-client) traffic aligns across rust and eMuleBB. The
@@ -319,7 +322,7 @@ def diff_traces(
     total_only_emule = sum(len(d.only_emule) for d in flow_diffs)
     coverage = _opcode_coverage(rust_trace, emule_trace)
     return {
-        "schema": PACKET_SCHEMA,
+        "schema": ED2K_PACKET_DIFF_REPORT_SCHEMA,
         "ok": total_mismatches == 0 and total_only_rust == 0 and total_only_emule == 0,
         "coverageOk": coverage["ok"],
         "oracleCoverageOk": coverage["oracleOk"],
@@ -678,9 +681,9 @@ def kad_opcode_coverage(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Diff two ed2k_packet_v1 packet traces.")
-    parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust ed2k_packet_v1 JSONL dump.")
-    parser.add_argument("--emule", required=True, type=Path, help="eMuleBB ed2k_packet_v1 JSONL dump.")
+    parser = argparse.ArgumentParser(description="Diff two canonical eD2K TCP packet-view traces.")
+    parser.add_argument("--rust", required=True, type=Path, help="emulebb-rust packet-view JSONL trace.")
+    parser.add_argument("--emule", required=True, type=Path, help="eMuleBB packet-view JSONL trace.")
     args = parser.parse_args(argv)
 
     report = diff_traces(load_trace(args.rust), load_trace(args.emule))
