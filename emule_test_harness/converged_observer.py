@@ -17,6 +17,9 @@ from . import (
     converged_action_driver,
     converged_observer_state,
     diag_event_runs,
+    observer_action_evidence,
+    observer_action_report,
+    soak_action_diff,
     soak_launch,
     soak_run_layout,
     soak_storage,
@@ -465,6 +468,89 @@ def persist_state(
         now_ns=now_ns,
     )
     return validated
+
+
+def capture_pending_action_evidence(
+    runtime: ObserverRuntime,
+    pending_action: dict[str, Any],
+) -> observer_action_evidence.ActionDiagnosticEvidence:
+    """Captures one pending action from only its persisted run and window authority."""
+
+    pending_evidence = pending_action.get("evidence")
+    if not isinstance(pending_evidence, dict):
+        raise RuntimeError("Observer pending action has no evidence window.")
+    diagnostic_runs = pending_action.get("diagnosticRuns")
+    if not isinstance(diagnostic_runs, dict):
+        raise RuntimeError("Observer pending action has no diagnostic run authority.")
+    window = soak_action_diff.ActionWindow.from_utc_strings(
+        pending_action.get("reservedAtUtc"),
+        pending_evidence.get("windowEndUtc"),
+    )
+
+    sources = {}
+    for client in ("rust", "mfc"):
+        identity = diagnostic_runs.get(client)
+        if not isinstance(identity, dict):
+            raise RuntimeError(
+                f"Observer pending action {client} diagnostic identity is invalid."
+            )
+        sources[client] = observer_action_evidence.PinnedDiagnosticRun(
+            client=client,
+            directory=getattr(runtime.diagnostic_directories, client),
+            process_id=identity.get("processId"),
+            run_id=identity.get("runId"),
+        )
+    return observer_action_evidence.capture_action_diagnostic_evidence(
+        window=window,
+        rust=sources["rust"],
+        mfc=sources["mfc"],
+    )
+
+
+def finalize_pending_action(
+    runtime: ObserverRuntime,
+    state: dict[str, Any],
+    *,
+    now_ns: int | None = None,
+) -> dict[str, Any]:
+    """Persists one pending report before committing its cumulative state."""
+
+    validated = converged_observer_state.validate_state(
+        state,
+        campaign_id=runtime.run_paths.campaign_id,
+        configuration_digest=action_configuration_digest(runtime.action_config),
+    )
+    pending_action = validated["pendingAction"]
+    if not isinstance(pending_action, dict):
+        raise RuntimeError("Observer has no pending action to finalize.")
+    if pending_action["driverOutcome"] is None or pending_action["evidence"] is None:
+        raise RuntimeError("Observer pending action is not ready for finalization.")
+
+    evidence = capture_pending_action_evidence(runtime, pending_action)
+    report = observer_action_report.build_observer_action_report(
+        campaign_id=runtime.run_paths.campaign_id,
+        pending_action=pending_action,
+        evidence=evidence,
+    )
+    persisted = soak_run_layout.persist_observer_action_report(
+        paths=runtime.run_paths,
+        store=runtime.store,
+        report=report,
+        now_ns=now_ns,
+    )
+    updated = converged_observer_state.commit_action_report(validated, report)
+    updated = converged_observer_state.record_stream_retention(
+        updated,
+        stream="actions",
+        persisted=persisted,
+    )
+    soak_run_layout.persist_observer_summary(
+        paths=runtime.run_paths,
+        store=runtime.store,
+        summary=updated,
+        now_ns=now_ns,
+    )
+    return updated
 
 
 def utc_now() -> datetime:
