@@ -493,6 +493,207 @@ def persist_bounded_json_artifact(
     )
 
 
+def persist_bounded_json_identity_artifact(
+    *,
+    store: BoundedArtifactStore,
+    active_campaign: Path,
+    directory: Path,
+    stream_name: str,
+    stem: str,
+    artifact_name: str,
+    payload: object,
+    now_ns: int | None = None,
+) -> PersistedArtifact:
+    """Persists one deterministic immutable JSON artifact or accepts exact replay."""
+
+    if not stem or any(
+        not (character.isalnum() or character == "-") for character in stem
+    ):
+        raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
+    if not stem.isascii():
+        raise ValueError("stem must contain only ASCII letters, digits, and hyphens.")
+    if (
+        not artifact_name
+        or Path(artifact_name).name != artifact_name
+        or artifact_name in {".", ".."}
+        or not artifact_name.isascii()
+        or any(
+            not (character.isalnum() or character in {".", "_", "-"})
+            for character in artifact_name
+        )
+        or not artifact_name.startswith(f"{stem}-")
+        or not artifact_name.endswith(".json")
+    ):
+        raise ValueError(
+            "artifact_name must be one safe ASCII .json filename beginning with "
+            f"{stem!r}."
+        )
+    timestamp_ns = time.time_ns() if now_ns is None else now_ns
+    if (
+        isinstance(timestamp_ns, bool)
+        or not isinstance(timestamp_ns, int)
+        or timestamp_ns < 0
+    ):
+        raise ValueError("now_ns must be a non-negative integer.")
+
+    resolved_campaign = active_campaign.resolve()
+    resolved_directory = directory.resolve()
+    if not _path_is_relative_to(resolved_campaign, store.root):
+        raise RuntimeError(
+            f"Active campaign escaped its soak artifact store: {resolved_campaign}"
+        )
+    if not _path_is_relative_to(resolved_directory, resolved_campaign):
+        raise RuntimeError(
+            "Bounded JSON identity artifact directory escaped its active campaign: "
+            f"{resolved_directory}"
+        )
+
+    policy = store.policy.stream(stream_name)
+    encoded = (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(encoded) > policy.max_segment_bytes:
+        raise RuntimeError(
+            f"{stream_name} artifact requires {len(encoded)} bytes, exceeding its "
+            f"{policy.max_segment_bytes}-byte limit."
+        )
+    digest = hashlib.sha256(encoded).hexdigest()
+
+    resolved_directory.mkdir(parents=True, exist_ok=True)
+    path = resolved_directory / artifact_name
+    temporary = path.with_name(f".{path.name}.tmp")
+    for candidate in (path, temporary):
+        if candidate.is_symlink():
+            raise RuntimeError(
+                f"Bounded JSON identity artifact path must not be a symlink: {candidate}"
+            )
+        if candidate.exists() and not candidate.is_file():
+            raise RuntimeError(
+                f"Bounded JSON identity artifact path must be a file: {candidate}"
+            )
+
+    if path.exists():
+        if temporary.exists():
+            raise RuntimeError(
+                f"Bounded JSON identity artifact has ambiguous temporary state: {path.name}"
+            )
+        existing = _read_stable_bytes(
+            path,
+            label="bounded JSON identity artifact",
+        )
+        if existing != encoded:
+            raise RuntimeError(
+                f"Bounded JSON identity artifact payload conflicts with {path.name}"
+            )
+        verification = store.enforce(
+            active_campaign=resolved_campaign,
+            now_ns=timestamp_ns,
+        )
+        if not verification.within_limits:
+            raise RuntimeError(
+                "Bounded JSON identity artifact replay violated the aggregate policy: "
+                f"failures={verification.failures!r}, "
+                f"constraints={verification.verification.unresolved_constraints!r}."
+            )
+        retained = _json_stream_artifacts(resolved_directory, stem)
+        if path.resolve() not in retained or len(retained) > policy.retained_segments:
+            raise RuntimeError(
+                f"{stream_name} identity artifact retention is inconsistent."
+            )
+        return PersistedArtifact(
+            path=path,
+            byte_count=len(encoded),
+            sha256=digest,
+            deleted_paths=(),
+            retained_count=len(retained),
+            retained_bytes=sum(item.stat().st_size for item in retained),
+        )
+
+    if temporary.exists():
+        if (
+            _read_stable_bytes(
+                temporary,
+                label="bounded JSON identity artifact temporary file",
+            )
+            != encoded
+        ):
+            raise RuntimeError(
+                f"Bounded JSON identity artifact temporary payload conflicts with {path.name}"
+            )
+        temporary.unlink()
+
+    reservation = store.enforce(
+        active_campaign=resolved_campaign,
+        reserved_bytes=len(encoded),
+        now_ns=timestamp_ns,
+    )
+    if not reservation.within_limits:
+        raise RuntimeError(
+            "Bounded JSON identity artifact reservation failed: "
+            f"failures={reservation.failures!r}, "
+            f"constraints={reservation.verification.unresolved_constraints!r}."
+        )
+
+    artifacts = _json_stream_artifacts(resolved_directory, stem)
+    deleted_paths: list[Path] = []
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if (
+            temporary.stat().st_size != len(encoded)
+            or _sha256_file(temporary) != digest
+        ):
+            raise RuntimeError(
+                f"Bounded JSON identity artifact temporary verification failed: {temporary}"
+            )
+        while len(artifacts) >= policy.retained_segments:
+            oldest = artifacts.pop(0)
+            oldest.unlink()
+            deleted_paths.append(oldest)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    if path.stat().st_size != len(encoded) or _sha256_file(path) != digest:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Bounded JSON identity artifact verification failed: {path}"
+        )
+
+    verification = store.enforce(
+        active_campaign=resolved_campaign,
+        now_ns=timestamp_ns,
+    )
+    if not verification.within_limits:
+        raise RuntimeError(
+            "Bounded JSON identity artifact persistence violated the aggregate policy: "
+            f"failures={verification.failures!r}, "
+            f"constraints={verification.verification.unresolved_constraints!r}."
+        )
+    retained = _json_stream_artifacts(resolved_directory, stem)
+    if path.resolve() not in retained or len(retained) > policy.retained_segments:
+        raise RuntimeError(
+            f"{stream_name} identity artifact retention is inconsistent."
+        )
+    return PersistedArtifact(
+        path=path,
+        byte_count=len(encoded),
+        sha256=digest,
+        deleted_paths=tuple(deleted_paths),
+        retained_count=len(retained),
+        retained_bytes=sum(item.stat().st_size for item in retained),
+    )
+
+
 def persist_bounded_file_artifact(
     *,
     store: BoundedArtifactStore,
@@ -833,6 +1034,32 @@ def _sha256_file(path: Path) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _read_stable_bytes(path: Path, *, label: str) -> bytes:
+    try:
+        before = path.stat()
+        payload = path.read_bytes()
+        after = path.stat()
+    except OSError as error:
+        raise RuntimeError(f"Unable to read {label} {path}: {error}") from error
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity or len(payload) != after.st_size:
+        raise RuntimeError(f"{label.capitalize()} changed while being read: {path}")
+    return payload
 
 
 def storage_policy_payload(policy: SoakStoragePolicy) -> dict[str, Any]:

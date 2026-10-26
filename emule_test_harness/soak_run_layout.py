@@ -108,12 +108,28 @@ def persist_observer_action_report(
 ) -> soak_storage.PersistedArtifact:
     """Persists one immutable observer action report under its stream budget."""
 
-    return soak_storage.persist_bounded_json_artifact(
+    campaign_id = report.get("campaignId")
+    sequence = report.get("seq")
+    action_id = report.get("actionId")
+    if campaign_id != paths.campaign_id:
+        raise RuntimeError("Observer action report campaign identity is invalid.")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
+        raise RuntimeError("Observer action report sequence is invalid.")
+    if (
+        not isinstance(action_id, str)
+        or not action_id
+        or not action_id.isascii()
+        or any(not (character.isalnum() or character == "-") for character in action_id)
+    ):
+        raise RuntimeError("Observer action report action identity is invalid.")
+    artifact_name = f"action-{sequence:08d}-{action_id}.json"
+    return soak_storage.persist_bounded_json_identity_artifact(
         store=store,
         active_campaign=paths.campaign_dir,
         directory=paths.actions_dir,
         stream_name="observer_actions",
         stem="action",
+        artifact_name=artifact_name,
         payload=report,
         now_ns=now_ns,
     )

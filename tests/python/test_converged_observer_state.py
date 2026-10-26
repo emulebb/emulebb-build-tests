@@ -59,6 +59,8 @@ def action_report(
         "schema": "soak_action_diff_v1",
         "campaignId": campaign_id,
         "seq": sequence,
+        "actionId": f"{campaign_id}-cycle-{sequence:08d}",
+        "cycle": sequence,
         "kind": "search" if sequence % 2 else "download",
         "method": "server",
         "key": f"exact-local-key-{sequence}",
@@ -564,7 +566,7 @@ def test_three_day_observer_simulation_is_restart_safe_and_bounded(
         "retained": 7,
         "omitted": 137,
         "retainedBytes": state["retention"]["actions"]["retainedBytes"],
-        "latestFile": "action-00000000000000008582.json",
+        "latestFile": "action-00000144-20261001T000000Z-cycle-00000144.json",
     }
     assert state["retention"]["checkpoints"] == {
         "seen": 864,

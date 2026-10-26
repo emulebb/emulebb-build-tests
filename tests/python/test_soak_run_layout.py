@@ -87,7 +87,12 @@ def test_persist_observer_artifacts_enforces_each_stream_budget(tmp_path: Path) 
         soak_run_layout.persist_observer_action_report(
             paths=paths,
             store=store,
-            report={"schema": "action", "seq": sequence},
+            report={
+                "schema": "action",
+                "campaignId": paths.campaign_id,
+                "seq": sequence,
+                "actionId": f"{paths.campaign_id}-cycle-{sequence:08d}",
+            },
             now_ns=sequence,
         )
         for sequence in range(1, 4)
@@ -115,11 +120,12 @@ def test_persist_observer_artifacts_enforces_each_stream_budget(tmp_path: Path) 
     )
 
     assert [path.name for path in sorted(paths.actions_dir.glob("*.json"))] == [
-        "action-00000000000000000002.json",
-        "action-00000000000000000003.json",
+        "action-00000002-20261025T120000Z-cycle-00000002.json",
+        "action-00000003-20261025T120000Z-cycle-00000003.json",
     ]
     assert action_results[-1].deleted_paths == (
-        paths.actions_dir.resolve() / "action-00000000000000000001.json",
+        paths.actions_dir.resolve()
+        / "action-00000001-20261025T120000Z-cycle-00000001.json",
     )
     assert [path.name for path in sorted(paths.checkpoints_dir.glob("*.json"))] == [
         "checkpoint-00000000000000000002.json",
@@ -128,8 +134,142 @@ def test_persist_observer_artifacts_enforces_each_stream_budget(tmp_path: Path) 
     assert checkpoint_results[-1].deleted_paths == (
         paths.checkpoints_dir.resolve() / "checkpoint-00000000000000000001.json",
     )
-    assert first_summary.path == second_summary.path == paths.report_dir / "summary.json"
+    assert (
+        first_summary.path == second_summary.path == paths.report_dir / "summary.json"
+    )
     assert json.loads(second_summary.path.read_text(encoding="utf-8"))["actions"] == 2
+
+
+def test_persist_observer_action_report_reuses_exact_committed_identity(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+        "exact": "unredacted local evidence",
+    }
+
+    first = soak_run_layout.persist_observer_action_report(
+        paths=paths,
+        store=store,
+        report=report,
+        now_ns=1,
+    )
+    replay = soak_run_layout.persist_observer_action_report(
+        paths=paths,
+        store=store,
+        report=report,
+        now_ns=2,
+    )
+
+    assert replay.path == first.path
+    assert replay.sha256 == first.sha256
+    assert replay.deleted_paths == ()
+    assert list(paths.actions_dir.glob("*.json")) == [first.path]
+
+
+def test_persist_observer_action_report_rejects_conflicting_replay(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+        "exact": "first payload",
+    }
+    persisted = soak_run_layout.persist_observer_action_report(
+        paths=paths,
+        store=store,
+        report=report,
+        now_ns=1,
+    )
+    conflicting = {**report, "exact": "different payload"}
+
+    with pytest.raises(RuntimeError, match="payload conflicts"):
+        soak_run_layout.persist_observer_action_report(
+            paths=paths,
+            store=store,
+            report=conflicting,
+            now_ns=2,
+        )
+
+    assert json.loads(persisted.path.read_text(encoding="utf-8")) == report
+
+
+def test_persist_observer_action_report_recovers_exact_temporary_payload(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+        "exact": "prepared before an interrupted replace",
+    }
+    artifact_name = f"action-{report['seq']:08d}-{report['actionId']}.json"
+    expected_path = paths.actions_dir / artifact_name
+    temporary = expected_path.with_name(f".{artifact_name}.tmp")
+    encoded = (
+        json.dumps(
+            report,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    paths.actions_dir.mkdir(parents=True, exist_ok=True)
+    temporary.write_bytes(encoded)
+
+    persisted = soak_run_layout.persist_observer_action_report(
+        paths=paths,
+        store=store,
+        report=report,
+        now_ns=1,
+    )
+
+    assert persisted.path == expected_path
+    assert expected_path.read_bytes() == encoded
+    assert not temporary.exists()
+
+
+def test_persist_observer_action_report_rejects_conflicting_temporary_payload(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+    }
+    artifact_name = f"action-{report['seq']:08d}-{report['actionId']}.json"
+    expected_path = paths.actions_dir / artifact_name
+    temporary = expected_path.with_name(f".{artifact_name}.tmp")
+    paths.actions_dir.mkdir(parents=True, exist_ok=True)
+    temporary.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="temporary payload conflicts"):
+        soak_run_layout.persist_observer_action_report(
+            paths=paths,
+            store=store,
+            report=report,
+            now_ns=1,
+        )
+
+    assert not expected_path.exists()
+    assert temporary.read_text(encoding="utf-8") == "{}\n"
 
 
 def test_utc_campaign_id_uses_canonical_format() -> None:
