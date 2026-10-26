@@ -48,6 +48,10 @@ def storage_policy() -> soak_storage.SoakStoragePolicy:
 def runtime(tmp_path: Path) -> converged_observer.ObserverRuntime:
     soak_root = tmp_path / "soak"
     run_paths = soak_run_layout.build_run_paths(soak_root, CAMPAIGN_ID)
+    rust_profile = tmp_path / "rust-profile"
+    mfc_profile = tmp_path / "mfc-profile"
+    rust_profile.mkdir()
+    mfc_profile.mkdir()
     return converged_observer.ObserverRuntime(
         session_manifest=soak_root / "control" / "persisted-soak.latest.json",
         stop_file=soak_root / "control" / "persisted-soak.stop",
@@ -59,6 +63,10 @@ def runtime(tmp_path: Path) -> converged_observer.ObserverRuntime:
         launcher_identity={"pid": 100, "creationDate": "20261025120000.000000+000"},
         rust_base_url="http://127.0.0.1:4731/api/v1",
         mfc_base_url="http://127.0.0.1:4732/api/v1",
+        diagnostic_directories=converged_observer.DiagnosticDirectories(
+            rust=rust_profile / "packet-dump",
+            mfc=mfc_profile / "logs",
+        ),
     )
 
 
@@ -78,6 +86,62 @@ def diagnostic_runs() -> dict[str, dict[str, object]]:
         "rust": {"processId": 4101, "runId": "rust-run"},
         "mfc": {"processId": 4201, "runId": "mfc-run"},
     }
+
+
+def test_diagnostic_profile_directories_use_only_manifest_authority(
+    tmp_path: Path,
+) -> None:
+    rust_profile = tmp_path / "operator-rust-profile"
+    mfc_profile = tmp_path / "operator-mfc-profile"
+    rust_profile.mkdir()
+    mfc_profile.mkdir()
+
+    directories = converged_observer.diagnostic_profile_directories(
+        {
+            "profiles": {
+                "rust": str(rust_profile),
+                "mfc": str(mfc_profile),
+            }
+        }
+    )
+
+    assert directories == converged_observer.DiagnosticDirectories(
+        rust=(rust_profile / "packet-dump").resolve(),
+        mfc=(mfc_profile / "logs").resolve(),
+    )
+
+
+@pytest.mark.parametrize(
+    "profiles",
+    [
+        None,
+        {"rust": "missing-mfc"},
+        {"rust": "missing", "mfc": "missing", "other": "unexpected"},
+        {"rust": "", "mfc": "missing"},
+    ],
+)
+def test_diagnostic_profile_directories_reject_invalid_authority(
+    profiles: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="diagnostic profile"):
+        converged_observer.diagnostic_profile_directories({"profiles": profiles})
+
+
+def test_diagnostic_profile_directories_require_existing_profiles(
+    tmp_path: Path,
+) -> None:
+    rust_profile = tmp_path / "rust-profile"
+    rust_profile.mkdir()
+
+    with pytest.raises(RuntimeError, match="mfc diagnostic profile does not exist"):
+        converged_observer.diagnostic_profile_directories(
+            {
+                "profiles": {
+                    "rust": str(rust_profile),
+                    "mfc": str(tmp_path / "missing-mfc-profile"),
+                }
+            }
+        )
 
 
 def test_capture_checkpoint_persists_full_health_and_cumulative_state(

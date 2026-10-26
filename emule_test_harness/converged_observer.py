@@ -53,6 +53,14 @@ class ObserverActionConfig:
 
 
 @dataclass(frozen=True)
+class DiagnosticDirectories:
+    """Manifest-authoritative profile directories containing live diagnostics."""
+
+    rust: Path
+    mfc: Path
+
+
+@dataclass(frozen=True)
 class ObserverRuntime:
     """Validated immutable authority for one attach-only observer process."""
 
@@ -64,6 +72,7 @@ class ObserverRuntime:
     launcher_identity: dict[str, Any]
     rust_base_url: str
     mfc_base_url: str
+    diagnostic_directories: DiagnosticDirectories
     action_config: ObserverActionConfig = ObserverActionConfig()
 
 
@@ -259,6 +268,7 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
         raise RuntimeError("Persisted soak observer Rust REST authority is invalid.")
     if not isinstance(mfc_base_url, str) or not mfc_base_url.strip():
         raise RuntimeError("Persisted soak observer MFC REST authority is invalid.")
+    diagnostic_dirs = diagnostic_profile_directories(preflight)
 
     return ObserverRuntime(
         session_manifest=resolved_manifest,
@@ -269,7 +279,37 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
         launcher_identity=launcher_identity,
         rust_base_url=rust_base_url,
         mfc_base_url=mfc_base_url,
+        diagnostic_directories=diagnostic_dirs,
         action_config=parse_action_config(observer_config),
+    )
+
+
+def diagnostic_profile_directories(preflight: object) -> DiagnosticDirectories:
+    """Returns live diagnostic directories from the persisted profile authority."""
+
+    if not isinstance(preflight, dict):
+        raise RuntimeError("Persisted soak observer preflight authority is invalid.")
+    profiles = preflight.get("profiles")
+    if not isinstance(profiles, dict) or set(profiles) != {"rust", "mfc"}:
+        raise RuntimeError("Persisted soak observer diagnostic profiles are invalid.")
+
+    resolved: dict[str, Path] = {}
+    for client in ("rust", "mfc"):
+        value = profiles[client]
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(
+                f"Persisted soak observer {client} diagnostic profile is invalid."
+            )
+        profile = Path(value).resolve()
+        if not profile.is_dir():
+            raise RuntimeError(
+                f"Persisted soak observer {client} diagnostic profile does not exist: "
+                f"{profile}"
+            )
+        resolved[client] = profile
+    return DiagnosticDirectories(
+        rust=(resolved["rust"] / "packet-dump").resolve(),
+        mfc=(resolved["mfc"] / "logs").resolve(),
     )
 
 
