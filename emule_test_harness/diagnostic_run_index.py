@@ -12,12 +12,13 @@ from .diag_event_runs import (
 )
 from .diag_event_schema import DIAG_EVENT_SCHEMA
 
-SCHEMA = "emulebb-build-tests.diagnostic-run-index.v1"
+SCHEMA = "emulebb-build-tests.diagnostic-run-index.v2"
 MAX_FAMILIES = 128
 MAX_EVENTS_PER_FAMILY = 256
 MAX_OUTCOMES_PER_FAMILY = 256
 MAX_OPCODES_PER_FAMILY = 2_048
 MAX_OPCODE_NAMES = 8
+MAX_KEYS_PER_FAMILY = 256
 
 _WRITER_MONOTONIC_FIELDS = (
     "activeSegmentId",
@@ -228,6 +229,13 @@ def _advance_record(
     _advance_segment(index["segments"], segment_id)
     family_index = _family_index(index, family, stream_sequence)
     family_index["records"] += 1
+    for key_name in keys:
+        _increment_bounded(
+            family_index["keyPresence"],
+            _nonempty_string(key_name, "keys field name"),
+            maximum=MAX_KEYS_PER_FAMILY,
+            label=f"{family} key names",
+        )
     _increment_bounded(
         family_index["events"],
         event,
@@ -268,6 +276,7 @@ def _advance_record(
             direction=body.get("direction"),
             event=event,
             outcome=outcome,
+            key_names=keys.keys(),
         )
 
     index["recordCount"] += 1
@@ -295,6 +304,7 @@ def _family_index(
             "events": {},
             "outcomes": {},
             "severities": {},
+            "keyPresence": {},
             "opcodes": {},
         }
     family_index = families[family]
@@ -339,6 +349,7 @@ def _advance_opcode(
     direction: object,
     event: str,
     outcome: str | None,
+    key_names: Iterable[str],
 ) -> None:
     opcodes = family_index["opcodes"]
     key = f"{'null' if marker is None else marker}:{opcode}"
@@ -355,6 +366,7 @@ def _advance_opcode(
             "directions": {},
             "events": {},
             "outcomes": {},
+            "keyPresence": {},
         }
     entry = opcodes[key]
     entry["records"] += 1
@@ -383,6 +395,13 @@ def _advance_opcode(
             outcome,
             maximum=MAX_OUTCOMES_PER_FAMILY,
             label="opcode outcomes",
+        )
+    for key_name in key_names:
+        _increment_bounded(
+            entry["keyPresence"],
+            _nonempty_string(key_name, "keys field name"),
+            maximum=MAX_KEYS_PER_FAMILY,
+            label=f"opcode {key} key names",
         )
 
 
