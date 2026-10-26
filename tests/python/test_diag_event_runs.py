@@ -503,6 +503,29 @@ def test_writer_health_integrity_requires_exact_current_contract() -> None:
     assert "unexpectedFields=['legacyField']" in violations
 
 
+def test_writer_health_accepts_normal_rolling_retention_headroom() -> None:
+    health = _writer_health(segment_name="emulebb-mfc-diag-42-active-000007.jsonl")
+    health.update(
+        {
+            "activeSegmentBytes": 50,
+            "retainedSegmentCount": 2,
+            "retainedBytes": 150,
+            "maximumGrowthBytes": 50,
+        }
+    )
+
+    assert diagnostic_writer_health_violations(health) == ()
+
+
+def test_writer_health_rejects_active_segment_over_configured_bound() -> None:
+    health = _writer_health(segment_name="emulebb-mfc-diag-42-active-000007.jsonl")
+    health["activeSegmentBytes"] = health["maxSegmentBytes"] + 1
+
+    assert "activeSegmentBytes=101 exceeds maxSegmentBytes=100" in (
+        diagnostic_writer_health_violations(health)
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

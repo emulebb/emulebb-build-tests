@@ -208,10 +208,10 @@ def diagnostic_writer_health_violations(health: object) -> tuple[str, ...]:
             violations.append(f"{name}={health.get(name)!r} expected 0")
 
     bounds = (
+        ("activeSegmentBytes", "maxSegmentBytes"),
         ("retainedSegmentCount", "retainedSegments"),
         ("retainedBytes", "maxTotalBytes"),
         ("minimumFreeBytes", "availableBytes"),
-        ("maxSegmentBytes", "maximumGrowthBytes"),
     )
     for lower_name, upper_name in bounds:
         lower = health.get(lower_name)
