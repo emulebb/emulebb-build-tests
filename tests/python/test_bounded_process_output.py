@@ -47,6 +47,38 @@ def test_rotating_binary_log_starts_a_new_run_and_prunes_invalid_generations(tmp
     assert not output.rotated_path(path, 3).exists()
 
 
+def test_rotating_binary_log_rotates_only_between_complete_records(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "metrics.jsonl"
+
+    with output.RotatingBinaryLog(
+        path,
+        max_segment_bytes=10,
+        retained_segments=2,
+    ) as log:
+        log.write_record(b'{"a":1}\n')
+        log.write_record(b'{"b":2}\n')
+        log.write_record(b'{"c":3}\n')
+
+    assert output.rotated_path(path, 1).read_bytes() == b'{"b":2}\n'
+    assert path.read_bytes() == b'{"c":3}\n'
+
+
+def test_rotating_binary_log_rejects_oversized_record(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+
+    with output.RotatingBinaryLog(
+        path,
+        max_segment_bytes=4,
+        retained_segments=2,
+    ) as log:
+        with pytest.raises(RuntimeError, match="Record requires 5 bytes"):
+            log.write_record(b"12345")
+
+    assert not path.exists()
+
+
 def test_run_bounded_process_captures_both_streams_and_exit_code(tmp_path: Path) -> None:
     stdout_path = tmp_path / "stdout.log"
     stderr_path = tmp_path / "stderr.log"
