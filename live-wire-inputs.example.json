@@ -62,7 +62,7 @@
         "retained_segments": 1
       },
       "preflight_mfc_outputs": {
-        "max_segment_bytes": 67108864,
+        "max_segment_bytes": 67174400,
         "retained_segments": 16
       },
       "preflight_rust_outputs": {

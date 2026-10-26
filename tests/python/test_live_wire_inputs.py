@@ -175,6 +175,17 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
     assert soak_storage.required_stream_capacity_bytes(inputs.soak_storage) == 5_478
 
 
+def test_example_allows_one_mfc_log_line_rotation_overshoot() -> None:
+    example_path = Path(__file__).resolve().parents[2] / "live-wire-inputs.example.json"
+    inputs = live_wire_inputs.load_live_wire_inputs(example_path)
+
+    assert inputs.soak_storage is not None
+    assert (
+        inputs.soak_storage.stream("preflight_mfc_outputs").max_segment_bytes
+        == 64 * 1024 * 1024 + 64 * 1024
+    )
+
+
 def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> (
     None
 ):
