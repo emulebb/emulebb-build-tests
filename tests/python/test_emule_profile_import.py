@@ -160,7 +160,8 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
         manifests = conn.execute(
             """
             SELECT lower(hex(known_files.ed2k_hash)), known_files.display_name,
-                   known_files.size_bytes, local_paths.display_path
+                   known_files.size_bytes, local_paths.display_path,
+                   transfers.removed_at_ms IS NOT NULL
             FROM transfers
             JOIN known_files ON known_files.id = transfers.known_file_id
             LEFT JOIN local_paths ON local_paths.id = transfers.source_path_id
@@ -202,6 +203,7 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             payload.name,
             payload.stat().st_size,
             str(payload),
+            1,
         )
     ]
     assert profile == [(1, "emulebb-rust")]
