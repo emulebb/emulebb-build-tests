@@ -252,25 +252,18 @@ def test_kad_opcode_coverage_annotates_documented_intentional_divergences() -> N
     assert expected["0x20"]["opcodeName"] == "KADEMLIA_REQ_DEPRECATED"
 
 
-def test_kad_opcode_coverage_credits_rust_udp_dump_supplementary_source() -> None:
-    # rust diag emits opcode None for unknown/legacy inbound opcodes; the raw
-    # udp_packet_v1 dump credits those receives so rust is not falsely gapped.
+def test_kad_records_reject_legacy_udp_dump() -> None:
     from emule_test_harness import packet_trace_diff as ptd
 
-    rust_diag = [_kad(0x21, "send")]
-    rust_udp_dump = [
-        {"schema": "udp_packet_v1", "family": "kad", "direction": "recv", "opcode": "0x35"},
-    ]
-    mfc = [_kad(0x21, "send"), _kad(0x35, "send")]
-    without = ptd.kad_opcode_coverage(ptd.kad_records(rust_diag), ptd.kad_records(mfc))
-    assert without["oracleOk"] is False
-    cov = ptd.kad_opcode_coverage(
-        ptd.kad_records(rust_diag),
-        ptd.kad_records(mfc),
-        rust_supplementary_records=rust_udp_dump,
-    )
-    assert cov["oracleOk"] is True
-    assert cov["supplementaryCreditedOpcodes"] == ["0x35"]
+    legacy = {
+        "schema": "udp_packet_v1",
+        "family": "kad",
+        "direction": "recv",
+        "opcode": "0x35",
+    }
+
+    with pytest.raises(ValueError, match="Legacy Kad packet diagnostics"):
+        ptd.kad_records([legacy])
 
 
 def test_kad_opcode_coverage_entries_carry_hex_and_static_names() -> None:

@@ -815,8 +815,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "
         f"sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} "
-        f"expectedDivergences={kad_expected} "
-        f"udpDumpCredited={kad_cov['supplementaryCreditedOpcodes']}"
+        f"expectedDivergences={kad_expected}"
     )
     # SecIdent liveness: a profile claiming SecIdent on while the wire shows
     # zero 0x85/86/87 packets + HELLO secident bits 0 is a silenced parity
@@ -904,7 +903,6 @@ def main(argv: list[str] | None = None) -> int:
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,
         "kadExpectedOnlyEmule": kad_expected,
-        "kadUdpDumpCreditedOpcodes": kad_cov["supplementaryCreditedOpcodes"],
         "secident": secident_report,
         "secidentDead": [
             name for name, row in secident_report.items() if row["verdict"] == "secident-dead"
