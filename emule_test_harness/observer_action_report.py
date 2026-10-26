@@ -120,7 +120,7 @@ def build_observer_action_report(
         "diagnosticEvidence": evidence.report_payload(),
         "assessment": copy.deepcopy(assessment),
     }
-    return validate_observer_action_report(report)
+    return validate_observer_action_report_for_pending(report, pending_action)
 
 
 def validate_observer_action_report(report: object) -> dict[str, Any]:
@@ -234,6 +234,57 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
             "Observer action report is not deterministic JSON."
         ) from error
     return copy.deepcopy(report)
+
+
+def validate_observer_action_report_for_pending(
+    report: object,
+    pending_action: dict[str, Any],
+) -> dict[str, Any]:
+    """Validates one persisted report against its exact pending action."""
+
+    _validate_pending_action(pending_action)
+    validated = validate_observer_action_report(report)
+    if (
+        validated["actionId"] != pending_action["actionId"]
+        or validated["seq"] != pending_action["reportSeq"]
+        or validated["cycle"] != pending_action["cycle"]
+        or validated["method"] != pending_action["method"]
+        or validated["label"] != pending_action["query"]
+        or validated["key"] != pending_action["query"].strip().lower()
+        or validated["driverOutcome"] != pending_action["driverOutcome"]
+    ):
+        raise ObserverActionReportError(
+            "Observer action report does not match the pending action."
+        )
+    expected_window = {
+        "t0": _parse_utc(
+            pending_action["reservedAtUtc"], "pending_action.reservedAtUtc"
+        ).isoformat(),
+        "t1": _parse_utc(
+            pending_action["evidence"]["windowEndUtc"],
+            "pending_action.evidence.windowEndUtc",
+        ).isoformat(),
+    }
+    if validated["window"] != expected_window:
+        raise ObserverActionReportError(
+            "Observer action report window does not match the pending action."
+        )
+    expected_observed = {
+        client: _client_observed_at(pending_action, client).isoformat()
+        for client in _CLIENTS
+    }
+    if validated["observed"] != expected_observed:
+        raise ObserverActionReportError(
+            "Observer action report observations do not match the pending action."
+        )
+    clients = validated["diagnosticEvidence"]["clients"]
+    for client in _CLIENTS:
+        if clients[client]["identity"] != pending_action["diagnosticRuns"][client]:
+            raise ObserverActionReportError(
+                f"Observer action report {client} diagnostic identity does not match "
+                "the pending action."
+            )
+    return validated
 
 
 def _action_pair(pending_action: dict[str, Any]) -> soak_action_diff.ActionPair:

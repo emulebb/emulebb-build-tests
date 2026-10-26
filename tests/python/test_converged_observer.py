@@ -803,6 +803,92 @@ def test_finalize_pending_action_does_not_commit_if_report_persistence_fails(
     assert state["pendingAction"] == pending
 
 
+def test_finalize_pending_action_recovers_report_before_diagnostic_recapture(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = reportable_state(config)
+    pending = state["pendingAction"]
+    candidate = pending_action_report(pending)
+    events = []
+    persisted = soak_storage.PersistedArtifact(
+        path=subject.run_paths.actions_dir
+        / f"action-00000001-{pending['actionId']}.json",
+        byte_count=512,
+        sha256="a" * 64,
+        deleted_paths=(),
+        retained_count=1,
+        retained_bytes=512,
+    )
+
+    def load_candidate(**kwargs):
+        events.append("load")
+        assert kwargs["pending_action"] == pending
+        return candidate
+
+    def validate_candidate(report, pending_action):
+        events.append("validate")
+        assert report is candidate
+        assert pending_action == pending
+        return report
+
+    def persist_report(**kwargs):
+        events.append("report")
+        assert kwargs["report"] is candidate
+        return persisted
+
+    def persist_summary(**_kwargs):
+        events.append("summary")
+        return persisted
+
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "load_observer_action_report_candidate",
+        load_candidate,
+    )
+    monkeypatch.setattr(
+        converged_observer.observer_action_report,
+        "validate_observer_action_report_for_pending",
+        validate_candidate,
+    )
+    monkeypatch.setattr(
+        converged_observer,
+        "capture_pending_action_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovered report must prevent diagnostic recapture")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.observer_action_report,
+        "build_observer_action_report",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovered report must not be rebuilt")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_action_report",
+        persist_report,
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_summary",
+        persist_summary,
+    )
+
+    updated = converged_observer.finalize_pending_action(subject, state)
+
+    assert events == ["load", "validate", "report", "summary"]
+    assert updated["pendingAction"] is None
+    assert updated["retention"]["actions"]["latestFile"] == persisted.path.name
+
+
 def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
     tmp_path: Path,
 ) -> None:

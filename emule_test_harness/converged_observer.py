@@ -526,12 +526,22 @@ def finalize_pending_action(
     if pending_action["driverOutcome"] is None or pending_action["evidence"] is None:
         raise RuntimeError("Observer pending action is not ready for finalization.")
 
-    evidence = capture_pending_action_evidence(runtime, pending_action)
-    report = observer_action_report.build_observer_action_report(
-        campaign_id=runtime.run_paths.campaign_id,
+    report_candidate = soak_run_layout.load_observer_action_report_candidate(
+        paths=runtime.run_paths,
         pending_action=pending_action,
-        evidence=evidence,
     )
+    if report_candidate is None:
+        evidence = capture_pending_action_evidence(runtime, pending_action)
+        report = observer_action_report.build_observer_action_report(
+            campaign_id=runtime.run_paths.campaign_id,
+            pending_action=pending_action,
+            evidence=evidence,
+        )
+    else:
+        report = observer_action_report.validate_observer_action_report_for_pending(
+            report_candidate,
+            pending_action,
+        )
     persisted = soak_run_layout.persist_observer_action_report(
         paths=runtime.run_paths,
         store=runtime.store,

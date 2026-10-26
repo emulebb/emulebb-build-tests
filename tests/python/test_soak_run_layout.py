@@ -172,6 +172,97 @@ def test_persist_observer_action_report_reuses_exact_committed_identity(
     assert list(paths.actions_dir.glob("*.json")) == [first.path]
 
 
+def test_load_observer_action_report_candidate_reads_exact_final_payload(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    store = artifact_store(paths)
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+        "exact": "report-first payload",
+    }
+    soak_run_layout.persist_observer_action_report(
+        paths=paths,
+        store=store,
+        report=report,
+        now_ns=1,
+    )
+
+    loaded = soak_run_layout.load_observer_action_report_candidate(
+        paths=paths,
+        pending_action={
+            "reportSeq": 1,
+            "actionId": report["actionId"],
+        },
+    )
+
+    assert loaded == report
+
+
+def test_load_observer_action_report_candidate_reads_prepared_payload(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    report = {
+        "schema": "action",
+        "campaignId": paths.campaign_id,
+        "seq": 1,
+        "actionId": f"{paths.campaign_id}-cycle-00000001",
+        "exact": "prepared payload",
+    }
+    path = soak_run_layout.observer_action_report_path(
+        paths=paths,
+        campaign_id=report["campaignId"],
+        sequence=report["seq"],
+        action_id=report["actionId"],
+    )
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.parent.mkdir(parents=True)
+    temporary.write_text(
+        json.dumps(report, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = soak_run_layout.load_observer_action_report_candidate(
+        paths=paths,
+        pending_action={
+            "reportSeq": 1,
+            "actionId": report["actionId"],
+        },
+    )
+
+    assert loaded == report
+    assert temporary.exists()
+    assert not path.exists()
+
+
+def test_load_observer_action_report_candidate_rejects_ambiguous_files(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20261025T120000Z")
+    action_id = f"{paths.campaign_id}-cycle-00000001"
+    path = soak_run_layout.observer_action_report_path(
+        paths=paths,
+        campaign_id=paths.campaign_id,
+        sequence=1,
+        action_id=action_id,
+    )
+    temporary = path.with_name(f".{path.name}.tmp")
+    path.parent.mkdir(parents=True)
+    path.write_text("{}\n", encoding="utf-8")
+    temporary.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="ambiguous final and temporary state"):
+        soak_run_layout.load_observer_action_report_candidate(
+            paths=paths,
+            pending_action={"reportSeq": 1, "actionId": action_id},
+        )
+
+
 def test_persist_observer_action_report_rejects_conflicting_replay(
     tmp_path: Path,
 ) -> None:
