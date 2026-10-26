@@ -2230,6 +2230,26 @@ def _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_pac
     assert 'PacketDiagnosticsLogEd2kPacket(_T("listener")' in log_source
 
 
+def _check_packet_diagnostics_source__known_udp_opcodes_have_converged_names() -> None:
+    log_source = _h_packet_diagnostics_source__read_source("Log.cpp")
+
+    expected_cases = {
+        "KADEMLIA_REQ_DEPRECATED": "KADEMLIA_REQ_DEPRECATED",
+        "KADEMLIA_RES_DEPRECATED": "KADEMLIA_RES_DEPRECATED",
+        "KADEMLIA_SEARCH_REQ": "KADEMLIA_SEARCH_REQ",
+        "KADEMLIA_SEARCH_NOTES_REQ": "KADEMLIA_SEARCH_NOTES_REQ",
+        "KADEMLIA_SEARCH_RES": "KADEMLIA_SEARCH_RES",
+        "KADEMLIA_SEARCH_NOTES_RES": "KADEMLIA_SEARCH_NOTES_RES",
+        "KADEMLIA_PUBLISH_REQ": "KADEMLIA_PUBLISH_REQ",
+        "KADEMLIA_PUBLISH_RES": "KADEMLIA_PUBLISH_RES",
+        "OP_SERVER_DESC_REQ": "OP_SERVER_DESC_REQ",
+        "OP_SERVER_DESC_RES": "OP_SERVER_DESC_RES",
+    }
+    for opcode, diagnostic_name in expected_cases.items():
+        assert f'case {opcode}:' in log_source
+        assert f'return _T("{diagnostic_name}");' in log_source
+
+
 def _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_sites_are_guarded() -> None:
     # The client-to-client recv dispatch and send path both emit one ed2k_packet_v1
     # record per packet, compile-gated on EMULEBB_ENABLE_PACKET_DIAGNOSTICS.
@@ -4171,6 +4191,7 @@ _PARITY_CASES = [
     ("packet_diagnostics_source::test_rest_recent_log_ring_is_bounded_and_clearable", _check_packet_diagnostics_source__rest_recent_log_ring_is_bounded_and_clearable),
     ("packet_diagnostics_source::test_invalid_sub_opcode_diagnostics_call_sites_are_guarded", _check_packet_diagnostics_source__invalid_sub_opcode_diagnostics_call_sites_are_guarded),
     ("packet_diagnostics_source::test_packet_diagnostics_emit_converged_ed2k_packet_v1_schema", _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_packet_v1_schema),
+    ("packet_diagnostics_source::test_known_udp_opcodes_have_converged_names", _check_packet_diagnostics_source__known_udp_opcodes_have_converged_names),
     ("packet_diagnostics_source::test_packet_diagnostics_client_packet_call_sites_are_guarded", _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_sites_are_guarded),
     ("packet_diagnostics_source::test_packet_diagnostics_does_not_port_full_tracing_harness", _check_packet_diagnostics_source__packet_diagnostics_does_not_port_full_tracing_harness),
     ("part_file_source::test_part_file_buffer_errors_do_not_report_success_as_unknown_write_error", _check_part_file_source__part_file_buffer_errors_do_not_report_success_as_unknown_write_error),
