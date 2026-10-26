@@ -2867,15 +2867,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--control-dir", type=Path, help="Override the output-root soak control directory.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    preflight = subparsers.add_parser(
+        "preflight",
+        help="Validate profiles, diagnostics binaries, localhost control, and full-tunnel VPN state without launching.",
+    )
+    add_session_config_arguments(preflight)
+
     start = subparsers.add_parser("start", help="Start detached MFC and Rust diagnostics plus health watch.")
-    start.add_argument("--inputs", type=Path, default=REPO_ROOT / "live-wire-inputs.local.json")
-    start.add_argument("--vpn-guard-live-config", type=Path, default=REPO_ROOT / "vpn-guard-live.local.json")
-    start.add_argument("--lan-bind-addr", default=DEFAULT_CONTROL_BIND)
-    start.add_argument("--rest-timeout-seconds", type=float, default=60.0)
-    start.add_argument("--connect-timeout-seconds", type=float, default=240.0)
-    start.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
-    start.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
-    start.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
+    add_session_config_arguments(start)
     start.add_argument("--no-watch", action="store_true")
     start.add_argument("--no-observer", action="store_true")
     start.add_argument("--watch-interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS)
@@ -2942,23 +2941,48 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_session_config_arguments(parser: argparse.ArgumentParser) -> None:
+    """Adds the shared persisted-session selection arguments."""
+
+    parser.add_argument("--inputs", type=Path, default=REPO_ROOT / "live-wire-inputs.local.json")
+    parser.add_argument(
+        "--vpn-guard-live-config",
+        type=Path,
+        default=REPO_ROOT / "vpn-guard-live.local.json",
+    )
+    parser.add_argument("--lan-bind-addr", default=DEFAULT_CONTROL_BIND)
+    parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
+    parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
+    parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
+    parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
+
+
+def session_config_from_args(args: argparse.Namespace) -> SessionConfig:
+    """Builds one persisted-session configuration from shared CLI arguments."""
+
+    return SessionConfig(
+        inputs=args.inputs,
+        vpn_guard_config=args.vpn_guard_live_config,
+        lan_bind_addr=args.lan_bind_addr,
+        rest_timeout_seconds=args.rest_timeout_seconds,
+        connect_timeout_seconds=args.connect_timeout_seconds,
+        mfc_variant=args.mfc_variant,
+        mfc_arch=args.mfc_arch,
+        mfc_configuration=args.mfc_configuration,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the persisted dual-client soak controller."""
 
     args = build_parser().parse_args(argv)
     output_root = get_workspace_output_root()
     paths = build_control_paths(output_root, args.control_dir)
-    if args.command == "start":
-        config = SessionConfig(
-            inputs=args.inputs,
-            vpn_guard_config=args.vpn_guard_live_config,
-            lan_bind_addr=args.lan_bind_addr,
-            rest_timeout_seconds=args.rest_timeout_seconds,
-            connect_timeout_seconds=args.connect_timeout_seconds,
-            mfc_variant=args.mfc_variant,
-            mfc_arch=args.mfc_arch,
-            mfc_configuration=args.mfc_configuration,
-        )
+    if args.command == "preflight":
+        result = preflight_session(session_config_from_args(args), output_root)
+    elif args.command == "start":
+        config = session_config_from_args(args)
         result = start_session(
             config,
             paths,

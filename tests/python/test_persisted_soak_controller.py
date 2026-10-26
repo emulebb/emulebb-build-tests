@@ -1387,6 +1387,52 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
     assert args.observer_action_max_cycles == 12
 
 
+def test_preflight_parser_uses_shared_session_selection() -> None:
+    args = controller.build_parser().parse_args(
+        [
+            "preflight",
+            "--inputs",
+            "operator-inputs.json",
+            "--vpn-guard-live-config",
+            "operator-vpn.json",
+            "--lan-bind-addr",
+            "127.0.0.1",
+            "--mfc-variant",
+            "emulebb-main",
+        ]
+    )
+
+    config = controller.session_config_from_args(args)
+
+    assert config.inputs == Path("operator-inputs.json")
+    assert config.vpn_guard_config == Path("operator-vpn.json")
+    assert config.lan_bind_addr == controller.DEFAULT_CONTROL_BIND
+    assert config.mfc_variant == "emulebb-main"
+
+
+def test_preflight_command_reports_existing_preflight_without_launch(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    output_root = tmp_path / "output"
+    expected = preflight_payload(tmp_path)
+    launched = False
+
+    def reject_launch(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("preflight must not launch the soak")
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "preflight_session", lambda *_args, **_kwargs: expected)
+    monkeypatch.setattr(controller, "start_session", reject_launch)
+
+    assert controller.main(["preflight"]) == 0
+    assert json.loads(capsys.readouterr().out) == expected
+    assert launched is False
+
+
 def test_session_status_reports_exact_dual_process_tree(
     tmp_path: Path,
     monkeypatch,
