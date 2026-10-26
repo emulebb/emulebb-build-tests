@@ -89,6 +89,8 @@ def _peer_tcp_packet_event(event: str = "packet") -> dict:
             "peer": "198.51.100.2:4662",
             "protocolMarker": 0xE3,
             "opcode": 0x01,
+            "peerHash": "00112233445566778899aabbccddeeff",
+            "fileHash": "ffeeddccbbaa99887766554433221100",
             "sendAttemptId": 17,
         },
         body={
@@ -203,6 +205,8 @@ def test_ed2k_tcp_packets_extracts_complete_packet_shape() -> None:
             "direction": "send",
             "outcome": "attempted",
             "remote_addr": "198.51.100.2:4662",
+            "peer_hash": "00112233445566778899aabbccddeeff",
+            "file_hash": "ffeeddccbbaa99887766554433221100",
             "transport_mode": "obfuscated",
             "obfuscated": True,
             "protocol": "ed2k",
@@ -231,16 +235,11 @@ def test_ed2k_tcp_packets_accepts_mfc_packet_without_rust_only_context() -> None
     record = _peer_tcp_packet_event()
     record["client"] = "mfc"
     record["keys"].pop("sendAttemptId")
+    record["body"].pop("rawLen")
+    record["body"].pop("rawHex")
     for key in (
-        "clearFrameLen",
-        "clearFrameHex",
         "attemptedLen",
         "writtenLen",
-        "outcome",
-        "phase",
-        "traceKey",
-        "stateId",
-        "stateLabel",
         "sendAttemptId",
         "note",
     ):
@@ -251,8 +250,28 @@ def test_ed2k_tcp_packets_accepts_mfc_packet_without_rust_only_context() -> None
     assert packet is not None
     assert packet["source"] == "mfc"
     assert packet["payload_hex"] == "aabb"
-    assert packet["trace_key"] is None
+    assert packet["raw_hex"] is None
+    assert packet["clear_frame_hex"] == "e30200000001aabb"
+    assert packet["peer_hash"] == "00112233445566778899aabbccddeeff"
+    assert packet["file_hash"] == "ffeeddccbbaa99887766554433221100"
     assert "send_attempt_id" not in packet
+
+
+def test_ed2k_tcp_packets_require_wire_bytes_for_plaintext() -> None:
+    record = _peer_tcp_packet_event()
+    record["body"]["transportMode"] = "plaintext"
+    record["body"]["obfuscated"] = False
+    record["body"].pop("rawLen")
+    record["body"].pop("rawHex")
+
+    assert ed2k_tcp_packet_view(record) is None
+
+
+def test_ed2k_tcp_packets_reject_invalid_join_hashes() -> None:
+    record = _peer_tcp_packet_event()
+    record["keys"]["peerHash"] = "NOT-A-HASH"
+
+    assert ed2k_tcp_packet_view(record) is None
 
 
 @pytest.mark.parametrize("event", ["state", "send_outcome", "obfuscation_handshake"])

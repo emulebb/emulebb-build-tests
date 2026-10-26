@@ -221,6 +221,18 @@ def _optional_exact_hex(body: dict[str, Any], length_key: str, hex_key: str) -> 
     return _has_exact_hex(body, length_key, hex_key)
 
 
+def _optional_md4_hex(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str) or len(value) != 32 or value != value.lower():
+        return False
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return True
+
+
 def ed2k_tcp_packet_view(record: dict[str, Any]) -> dict[str, Any] | None:
     """Normalizes one complete unified eD2K TCP packet event for harness use."""
 
@@ -265,12 +277,17 @@ def ed2k_tcp_packet_view(record: dict[str, Any]) -> dict[str, Any] | None:
         or not _is_non_negative_int(protocol_marker, maximum=0xFF)
         or not _is_non_negative_int(opcode, maximum=0xFF)
         or not isinstance(obfuscated, bool)
+        or transport_mode not in {"plaintext", "obfuscated"}
+        or obfuscated != (transport_mode == "obfuscated")
         or keys.get("protocolMarker") != protocol_marker
         or keys.get("opcode") != opcode
-        or not _has_exact_hex(body, "rawLen", "rawHex")
-        or not _optional_exact_hex(body, "clearFrameLen", "clearFrameHex")
+        or not _has_exact_hex(body, "clearFrameLen", "clearFrameHex")
+        or not _optional_exact_hex(body, "rawLen", "rawHex")
+        or (not obfuscated and not _has_exact_hex(body, "rawLen", "rawHex"))
         or not _has_exact_hex(body, "payloadLen", "payloadHex")
         or body.get("payloadHexTruncated") is not False
+        or not _optional_md4_hex(keys.get("peerHash"))
+        or not _optional_md4_hex(keys.get("fileHash"))
     ):
         return None
 
@@ -297,6 +314,8 @@ def ed2k_tcp_packet_view(record: dict[str, Any]) -> dict[str, Any] | None:
         "direction": direction,
         "outcome": outcome,
         "remote_addr": peer,
+        "peer_hash": keys.get("peerHash"),
+        "file_hash": keys.get("fileHash"),
         "transport_mode": transport_mode,
         "obfuscated": obfuscated,
         "protocol": protocol_name,
