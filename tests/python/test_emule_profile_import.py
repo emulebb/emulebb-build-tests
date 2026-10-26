@@ -166,6 +166,18 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             LEFT JOIN local_paths ON local_paths.id = transfers.source_path_id
             """
         ).fetchall()
+        profile = conn.execute(
+            "SELECT id, created_by FROM profile"
+        ).fetchall()
+        transfer_name_states = conn.execute(
+            """
+            SELECT transfer_name_state.display_name_pinned,
+                   transfer_name_state.follow_majority_filename
+            FROM transfers
+            JOIN transfer_name_state
+              ON transfer_name_state.transfer_id = transfers.id
+            """
+        ).fetchall()
     assert roots == 1
     assert servers == [("45.82.80.155", 5687, "Local")]
     assert kad == [("1.2.3.4:4672",)]
@@ -192,6 +204,9 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             str(payload),
         )
     ]
+    assert profile == [(1, "emulebb-rust")]
+    assert transfer_name_states == [(0, 0)]
+    rust_metadata.require_current_profile_database(_rust_repo(), db_path)
 
 
 def test_import_stock_mfc_profile_requires_rest_lan_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,7 +257,10 @@ def test_ensure_persisted_rust_profile_imports_empty_target_transactionally(
         staged = Path(str(kwargs["rust_profile_dir"]))
         staged_targets.append(staged)
         (staged / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
-        (staged / rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"database")
+        rust_metadata.create_metadata_db(
+            _rust_repo(),
+            staged / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        )
         return {
             "schemaVersion": 1,
             "sharedRoots": 3,
@@ -254,7 +272,7 @@ def test_ensure_persisted_rust_profile_imports_empty_target_transactionally(
     monkeypatch.setattr(mfc_profile_import, "import_stock_mfc_profile", fake_import)
 
     result = mfc_profile_import.ensure_persisted_rust_profile(
-        rust_repo=tmp_path / "emulebb-rust",
+        rust_repo=_rust_repo(),
         mfc_profile_dir=mfc_profile,
         rust_profile_dir=target,
         rest_addr="127.0.0.1",
@@ -278,7 +296,10 @@ def test_ensure_persisted_rust_profile_reuses_valid_nonempty_target(
     target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
     target.mkdir()
     (target / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
-    (target / rust_metadata.RUST_PROFILE_METADATA_FILE).write_bytes(b"database")
+    rust_metadata.create_metadata_db(
+        _rust_repo(),
+        target / rust_metadata.RUST_PROFILE_METADATA_FILE,
+    )
     monkeypatch.setattr(
         mfc_profile_import,
         "import_stock_mfc_profile",
@@ -286,13 +307,39 @@ def test_ensure_persisted_rust_profile_reuses_valid_nonempty_target(
     )
 
     result = mfc_profile_import.ensure_persisted_rust_profile(
-        rust_repo=tmp_path / "emulebb-rust",
+        rust_repo=_rust_repo(),
         mfc_profile_dir=None,
         rust_profile_dir=target,
     )
 
     assert result["mode"] == "reused-persisted"
     assert result["imported"] is False
+
+
+def test_ensure_persisted_rust_profile_rejects_missing_transfer_name_state(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
+    target.mkdir()
+    (target / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
+    metadata_db = target / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
+    rust_metadata.seed_transfer_manifest(
+        metadata_db,
+        ed2k_hash="00112233445566778899aabbccddeeff",
+        name="missing-state.bin",
+        size_bytes=1,
+        piece_size=1,
+    )
+    with sqlite3.connect(metadata_db) as connection:
+        connection.execute("DELETE FROM transfer_name_state")
+
+    with pytest.raises(RuntimeError, match="without transfer_name_state"):
+        mfc_profile_import.ensure_persisted_rust_profile(
+            rust_repo=_rust_repo(),
+            mfc_profile_dir=None,
+            rust_profile_dir=target,
+        )
 
 
 def test_ensure_persisted_rust_profile_rejects_invalid_nonempty_target(tmp_path: Path) -> None:

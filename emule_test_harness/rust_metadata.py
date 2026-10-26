@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import time
 import unicodedata
+import uuid
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -68,13 +69,70 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     schema_id, schema_version = _schema_marker(rust_repo)
+    now = _now_ms()
     with closing(sqlite3.connect(db_path)) as conn:
         conn.executescript(_schema_sql(rust_repo))
         conn.execute(
             "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, ?, ?)",
-            (schema_id, schema_version, _now_ms()),
+            (schema_id, schema_version, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO profile(id, uuid, created_by, created_at_ms, updated_at_ms)
+            VALUES (1, ?, 'emulebb-rust', ?, ?)
+            """,
+            (str(uuid.uuid4()), now, now),
         )
         conn.commit()
+
+
+def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
+    """Require a complete database matching the current Rust profile schema."""
+
+    schema_id, schema_version = _schema_marker(rust_repo)
+    try:
+        with closing(sqlite3.connect(db_path)) as conn:
+            marker = conn.execute(
+                "SELECT schema_version FROM metadata_schema WHERE schema_id = ?",
+                (schema_id,),
+            ).fetchone()
+            if marker != (schema_version,):
+                raise RuntimeError(
+                    f"metadata schema marker must be {schema_id}@{schema_version}, got {marker!r}"
+                )
+            profile_count = conn.execute(
+                "SELECT count(*) FROM profile WHERE id = 1"
+            ).fetchone()[0]
+            if profile_count != 1:
+                raise RuntimeError("metadata profile singleton row is missing")
+            missing_name_state = conn.execute(
+                """
+                SELECT count(*)
+                FROM transfers
+                LEFT JOIN transfer_name_state
+                  ON transfer_name_state.transfer_id = transfers.id
+                WHERE transfer_name_state.transfer_id IS NULL
+                """
+            ).fetchone()[0]
+            if missing_name_state:
+                raise RuntimeError(
+                    f"metadata has {missing_name_state} transfer row(s) without transfer_name_state"
+                )
+    except sqlite3.DatabaseError as exc:
+        raise RuntimeError(f"invalid current Rust profile database {db_path}: {exc}") from exc
+
+
+def _replace_transfer_name_state(conn: sqlite3.Connection, transfer_id: int) -> None:
+    conn.execute("DELETE FROM transfer_name_state WHERE transfer_id = ?", (transfer_id,))
+    conn.execute(
+        """
+        INSERT INTO transfer_name_state(
+            transfer_id, display_name_pinned, follow_majority_filename
+        )
+        VALUES (?, 0, 0)
+        """,
+        (transfer_id,),
+    )
 
 
 def put_setting_json(db_path: Path, section: str, key: str, value: object) -> None:
@@ -426,6 +484,7 @@ def seed_transfer_manifest(
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
+        _replace_transfer_name_state(conn, transfer_id)
         if source_path_id is not None:
             conn.execute(
                 """
@@ -795,6 +854,11 @@ def _seed_share_in_place_manifests_fast_conn(
         """,
         transfer_rows,
     )
+    for known_file_id, *_rest in transfer_rows:
+        transfer_id = conn.execute(
+            "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
+        ).fetchone()[0]
+        _replace_transfer_name_state(conn, transfer_id)
     conn.executemany(
         """
         INSERT INTO shared_file_sources(
@@ -990,6 +1054,7 @@ def _seed_share_in_place_manifest_conn(
     transfer_id = conn.execute(
         "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
     ).fetchone()[0]
+    _replace_transfer_name_state(conn, transfer_id)
     conn.execute(
         """
         INSERT INTO shared_file_sources(
