@@ -91,6 +91,15 @@ def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) ->
               ON shared_file_sources.known_file_id = transfers.known_file_id
             """
         ).fetchone()
+        profile_row = connection.execute(
+            "SELECT id, created_by FROM profile"
+        ).fetchone()
+        transfer_name_state = connection.execute(
+            """
+            SELECT display_name_pinned, follow_majority_filename
+            FROM transfer_name_state
+            """
+        ).fetchone()
 
     expected_native_path = (
         str(source).encode("utf-16-le", errors="surrogatepass")
@@ -102,6 +111,9 @@ def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) ->
     assert row[2:5] == ("completed", "not_applicable", "none")
     assert row[5] > 0
     assert row[6] == row[5]
+    assert profile_row == (1, "emulebb-rust")
+    assert transfer_name_state == (0, 0)
+    rust_metadata.require_current_profile_database(rust_repo(), metadata_db)
 
     manifest = rust_metadata.read_transfer_manifest(
         metadata_db, "00112233445566778899aabbccddeeff"

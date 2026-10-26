@@ -45,7 +45,7 @@ def ensure_persisted_rust_profile(
     if rust_profile_dir.exists() and not rust_profile_dir.is_dir():
         raise ValueError(f"Rust profile target exists and is not a directory: {rust_profile_dir}")
     if rust_profile_dir.exists() and any(rust_profile_dir.iterdir()):
-        _require_persisted_rust_profile(rust_profile_dir)
+        _require_persisted_rust_profile(rust_repo, rust_profile_dir)
         return {
             "schemaVersion": 1,
             "mode": "reused-persisted",
@@ -79,7 +79,7 @@ def ensure_persisted_rust_profile(
             ed2k_port=ed2k_port,
             kad_port=kad_port,
         )
-        _require_persisted_rust_profile(staging_dir)
+        _require_persisted_rust_profile(rust_repo, staging_dir)
         marker = {
             "schema": "emulebb.persisted-rust-profile-import.v1",
             "importedAt": datetime.now(timezone.utc).isoformat(),
@@ -129,7 +129,7 @@ def resolve_mfc_config_dir(mfc_profile_dir: Path) -> Path:
     )
 
 
-def _require_persisted_rust_profile(path: Path) -> None:
+def _require_persisted_rust_profile(rust_repo: Path, path: Path) -> None:
     missing = [
         name
         for name in (
@@ -142,6 +142,13 @@ def _require_persisted_rust_profile(path: Path) -> None:
         raise RuntimeError(
             f"Persisted Rust profile is non-empty but invalid ({', '.join(missing)} missing): {path}"
         )
+    try:
+        rust_metadata.require_current_profile_database(
+            rust_repo,
+            path / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"Persisted Rust profile is non-empty but invalid: {path}: {exc}") from exc
 
 
 def import_stock_mfc_profile(
