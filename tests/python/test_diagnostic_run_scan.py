@@ -287,3 +287,95 @@ def test_scan_rejects_active_segment_regression(tmp_path: Path) -> None:
             observed_utc="2026-10-25T12:01:00+00:00",
             checkpoint=changed,
         )
+
+
+def test_finalize_indexes_the_former_active_segment_and_seals_checkpoint(
+    tmp_path: Path,
+) -> None:
+    _write_segment(tmp_path, 0, [_record(1, segment_id=0)])
+    initial = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(1, records_written=2),
+        observed_utc="2026-10-25T12:00:00+00:00",
+    )
+    _write_segment(tmp_path, 1, [_record(2, segment_id=1)])
+
+    finalized = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=tmp_path,
+        client="rust",
+        observed_utc="2026-10-25T12:01:00+00:00",
+        checkpoint=initial.checkpoint,
+    )
+
+    assert [item["segmentId"] for item in finalized.processed_segments] == [1]
+    assert finalized.checkpoint["source"]["activeSegmentId"] is None
+    assert finalized.checkpoint["source"]["finalized"] is True
+    assert (
+        finalized.checkpoint["source"]["finalizedUtc"]
+        == "2026-10-25T12:01:00+00:00"
+    )
+    assert finalized.checkpoint["source"]["closedSegmentCount"] == 2
+    assert finalized.checkpoint["index"]["recordCount"] == 2
+    assert finalized.checkpoint["index"]["writerHealth"]["samples"] == 1
+
+
+def test_finalize_bootstraps_from_writer_health_without_a_checkpoint(
+    tmp_path: Path,
+) -> None:
+    _write_segment(tmp_path, 0, [_record(1, segment_id=0)])
+
+    finalized = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=tmp_path,
+        client="rust",
+        observed_utc="2026-10-25T12:01:00+00:00",
+        writer_health=_health(0, records_written=1),
+    )
+
+    assert [item["segmentId"] for item in finalized.processed_segments] == [0]
+    assert finalized.checkpoint["source"]["coverage"] == "from-run-start"
+    assert finalized.checkpoint["source"]["finalized"] is True
+    assert finalized.checkpoint["index"]["writerHealth"]["samples"] == 1
+
+
+def test_finalize_rejects_a_gap_after_the_last_closed_segment(tmp_path: Path) -> None:
+    _write_segment(tmp_path, 0, [_record(1, segment_id=0)])
+    initial = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(1, records_written=1),
+        observed_utc="2026-10-25T12:00:00+00:00",
+    )
+    _write_segment(tmp_path, 2, [_record(2, segment_id=2)])
+
+    with pytest.raises(
+        diagnostic_run_scan.DiagnosticRunScanError,
+        match="stopped diagnostic segment suffix is incomplete",
+    ):
+        diagnostic_run_scan.finalize_stopped_run(
+            profile_dir=tmp_path,
+            client="rust",
+            observed_utc="2026-10-25T12:01:00+00:00",
+            checkpoint=initial.checkpoint,
+        )
+
+
+def test_scan_rejects_a_finalized_checkpoint(tmp_path: Path) -> None:
+    _write_segment(tmp_path, 0, [_record(1, segment_id=0)])
+    finalized = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=tmp_path,
+        client="rust",
+        observed_utc="2026-10-25T12:00:00+00:00",
+        writer_health=_health(0, records_written=1),
+    )
+
+    with pytest.raises(
+        diagnostic_run_scan.DiagnosticRunScanError, match="already finalized"
+    ):
+        diagnostic_run_scan.scan_closed_segments(
+            profile_dir=tmp_path,
+            client="rust",
+            writer_health=_health(1, records_written=1),
+            observed_utc="2026-10-25T12:01:00+00:00",
+            checkpoint=finalized.checkpoint,
+        )
