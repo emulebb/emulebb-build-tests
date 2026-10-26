@@ -1,18 +1,28 @@
-"""Sanitized reporting helpers for converged rust<->MFC soak campaigns."""
+"""Bounded reporting helpers for converged rust<->MFC soak campaigns."""
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from . import soak_action_diff
+from . import converged_observer_state, observer_action_report, soak_action_diff
+
+SCHEMA = "emulebb-build-tests.converged-soak-report.v2"
+CONSISTENCY_ATTEMPTS = 5
+CONSISTENCY_RETRY_SECONDS = 0.1
 
 CHECKPOINT_RE = re.compile(
     r"\[soak\] checkpoint: packets rust=(?P<rust>\d+) mfc=(?P<mfc>\d+) actions=(?P<actions>\d+)"
 )
+
+
+class SoakReportSummaryError(RuntimeError):
+    """Raised when cumulative state and its retained files disagree."""
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -25,23 +35,35 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def load_action_reports(report_dir: Path) -> list[dict[str, Any]]:
-    """Loads per-action reports from a converged soak report directory."""
+    """Loads and validates current per-action reports."""
 
     actions_dir = report_dir / "actions"
     if not actions_dir.is_dir():
         return []
-    reports = [read_json(path) for path in sorted(actions_dir.glob("*.json"))]
+    reports = [
+        observer_action_report.validate_observer_action_report(read_json(path))
+        for path in sorted(actions_dir.glob("*.json"))
+    ]
     return sorted(reports, key=lambda report: int(report.get("seq") or 0))
 
 
 def load_checkpoint_reports(report_dir: Path) -> list[dict[str, Any]]:
-    """Loads structured checkpoint reports from a converged soak report directory."""
+    """Loads current structured checkpoint reports."""
 
     checkpoints_dir = report_dir / "checkpoints"
     if not checkpoints_dir.is_dir():
         return []
     reports = [read_json(path) for path in sorted(checkpoints_dir.glob("*.json"))]
-    return sorted(reports, key=lambda report: str(report.get("ts_utc") or ""))
+    for report in reports:
+        if (
+            report.get("schema") != "soak_checkpoint_v1"
+            or not isinstance(report.get("campaignId"), str)
+            or not isinstance(report.get("ts_utc"), str)
+            or not isinstance(report.get("packetRecords"), dict)
+            or not isinstance(report.get("diagnosticWriters"), dict)
+        ):
+            raise SoakReportSummaryError("Retained observer checkpoint is invalid.")
+    return sorted(reports, key=lambda report: str(report["ts_utc"]))
 
 
 def parse_checkpoint_lines(log_path: Path | None) -> list[dict[str, int]]:
@@ -75,6 +97,11 @@ def log_finished(log_path: Path | None) -> bool:
 
 def _counter_dict(counter: Counter[str]) -> dict[str, int]:
     return {key: counter[key] for key in sorted(counter)}
+
+
+def _assessment(report: dict[str, Any]) -> dict[str, Any]:
+    value = report.get("assessment")
+    return value if isinstance(value, dict) else report
 
 
 def summarize_full_run_diagnostics(gate: dict[str, Any]) -> dict[str, Any]:
@@ -123,7 +150,7 @@ def summarize_full_run_diagnostics(gate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gap_counts(report: dict[str, Any]) -> list[dict[str, Any]]:
-    coverage = (report.get("packetDiff") or {}).get("opcodeCoverage")
+    coverage = (_assessment(report).get("packetDiff") or {}).get("opcodeCoverage")
     if not isinstance(coverage, dict):
         return []
     gaps: list[dict[str, Any]] = []
@@ -147,17 +174,19 @@ def _gap_counts(report: dict[str, Any]) -> list[dict[str, Any]]:
 def _action_coverage(report: dict[str, Any]) -> dict[str, Any]:
     if report.get("verdict") == "unpaired":
         return {"ok": None, "mode": "unpaired", "required": []}
-    coverage = report.get("actionCoverage")
+    coverage = _assessment(report).get("actionCoverage")
     if isinstance(coverage, dict):
         return coverage
-    packet_diff = report.get("packetDiff") if isinstance(report.get("packetDiff"), dict) else {}
+    packet_diff = _assessment(report).get("packetDiff")
+    packet_diff = packet_diff if isinstance(packet_diff, dict) else {}
     return soak_action_diff.build_action_coverage(str(report.get("kind") or ""), packet_diff)
 
 
 def _action_verdict(report: dict[str, Any], action_coverage: dict[str, Any]) -> str:
     if report.get("verdict") == "unpaired":
         return "unpaired"
-    packets = report.get("packets") if isinstance(report.get("packets"), dict) else {}
+    packets = _assessment(report).get("packets")
+    packets = packets if isinstance(packets, dict) else {}
     rust_count = int(packets.get("rust") or 0)
     mfc_count = int(packets.get("mfc") or 0)
     if rust_count == 0 and mfc_count == 0:
@@ -170,7 +199,7 @@ def _action_verdict(report: dict[str, Any], action_coverage: dict[str, Any]) -> 
 
 
 def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
-    """Builds a privacy-safe aggregate over per-action reports."""
+    """Builds one bounded aggregate over retained per-action reports."""
 
     verdict_counts: Counter[str] = Counter()
     action_verdict_counts: Counter[str] = Counter()
@@ -184,7 +213,17 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
     download_payload_missing = 0
     divergence_samples: list[dict[str, Any]] = []
     action_divergence_samples: list[dict[str, Any]] = []
+    result_polls: dict[str, dict[str, Any]] = {
+        client: {
+            "polls": 0,
+            "attempts": 0,
+            "errors": 0,
+            "terminationCounts": Counter(),
+        }
+        for client in ("rust", "mfc")
+    }
     for report in reports:
+        assessment = _assessment(report)
         kind = str(report.get("kind") or "unknown")
         verdict = str(report.get("verdict") or "unknown")
         action_coverage = _action_coverage(report)
@@ -219,7 +258,7 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
                     "downloadPayloadOk": action_coverage.get("downloadPayloadOk"),
                     "fullCoverageOk": report.get("fullCoverageOk", report.get("coverageOk")),
                     "diagOk": report.get("diagOk"),
-                    "packets": report.get("packets"),
+                    "packets": assessment.get("packets"),
                     "opcodeGapChannels": _gap_counts(report),
                 }
             )
@@ -234,10 +273,34 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
                     "downloadStartOk": action_coverage.get("downloadStartOk"),
                     "downloadPayloadOk": action_coverage.get("downloadPayloadOk"),
                     "diagOk": report.get("diagOk"),
-                    "packets": report.get("packets"),
+                    "packets": assessment.get("packets"),
                     "opcodeGapChannels": _gap_counts(report),
                 }
             )
+        driver_outcome = report.get("driverOutcome")
+        searches = (
+            driver_outcome.get("searches")
+            if isinstance(driver_outcome, dict)
+            and isinstance(driver_outcome.get("searches"), dict)
+            else {}
+        )
+        for client in ("rust", "mfc"):
+            search = searches.get(client)
+            results = (
+                search.get("results")
+                if isinstance(search, dict)
+                and isinstance(search.get("results"), dict)
+                else {}
+            )
+            poll = results.get("poll")
+            if not isinstance(poll, dict):
+                continue
+            result_polls[client]["polls"] += 1
+            result_polls[client]["attempts"] += int(poll.get("attempts") or 0)
+            result_polls[client]["errors"] += int(poll.get("errorCount") or 0)
+            result_polls[client]["terminationCounts"][
+                str(poll.get("termination") or "unknown")
+            ] += 1
     return {
         "actions": len(reports),
         "kindCounts": _counter_dict(kind_counts),
@@ -256,147 +319,245 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "diagFailures": diag_failures,
         "divergenceSamples": divergence_samples,
         "actionDivergenceSamples": action_divergence_samples,
+        "resultPolls": {
+            client: {
+                **{key: value for key, value in values.items() if key != "terminationCounts"},
+                "terminationCounts": _counter_dict(values["terminationCounts"]),
+            }
+            for client, values in result_polls.items()
+        },
     }
 
 
 def summarize_action_report_inventory(
     summary: dict[str, Any], reports: list[dict[str, Any]]
-) -> dict[str, int | None]:
-    """Compares summary action totals with loadable per-action JSON reports."""
+) -> dict[str, int]:
+    """Returns cumulative and retained action counts without conflating rotation."""
 
-    totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
-    expected = totals.get("actions")
-    expected_count = int(expected) if isinstance(expected, int) else None
-    loaded_count = len(reports)
+    retention = summary["retention"]["actions"]
+    loaded = len(reports)
     return {
-        "expected": expected_count,
-        "loaded": loaded_count,
-        "missing": max(expected_count - loaded_count, 0) if expected_count is not None else None,
+        "seen": retention["seen"],
+        "retained": retention["retained"],
+        "loaded": loaded,
+        "omittedByRetention": retention["omitted"],
+        "unexpectedMissing": max(retention["retained"] - loaded, 0),
+        "unexpectedExtra": max(loaded - retention["retained"], 0),
+        "retainedBytes": retention["retainedBytes"],
     }
-
-
-def summarize_driver(summary: dict[str, Any]) -> dict[str, Any]:
-    """Builds a compact driver-cycle aggregate from ``summary.json``."""
-
-    driver = summary.get("driver") if isinstance(summary.get("driver"), dict) else {}
-    cycles = driver.get("cycles") if isinstance(driver.get("cycles"), list) else []
-    downloads = [
-        cycle.get("download")
-        for cycle in cycles
-        if isinstance(cycle, dict) and isinstance(cycle.get("download"), dict)
-    ]
-    failure_reasons: Counter[str] = Counter()
-    for download in downloads:
-        if download.get("ok") is not False:
-            continue
-        reason = download.get("reason") or str(download.get("error") or "").split(":", 1)[0]
-        failure_reasons[str(reason or "unknown")] += 1
-    return {
-        "autoDrive": bool(driver.get("autoDrive")),
-        "cycles": len(cycles),
-        "downloadEvery": driver.get("downloadEvery"),
-        "searchIntervalSeconds": driver.get("searchIntervalSeconds"),
-        "downloadDelaySeconds": driver.get("downloadDelaySeconds"),
-        "downloadRequestedCycles": sum(
-            1 for cycle in cycles if isinstance(cycle, dict) and bool(cycle.get("downloadRequested"))
-        ),
-        "downloadOk": sum(1 for download in downloads if download.get("ok") is True),
-        "downloadFailed": sum(1 for download in downloads if download.get("ok") is False),
-        "downloadPending": sum(1 for download in downloads if download.get("ok") is None),
-        "downloadFailureReasons": _counter_dict(failure_reasons),
-    }
-
-
-def _rest_status(checkpoint: dict[str, Any], client: str) -> dict[str, Any]:
-    rest_status = checkpoint.get("restStatus")
-    if not isinstance(rest_status, dict):
-        return {}
-    status = rest_status.get(client)
-    return status if isinstance(status, dict) else {}
 
 
 def summarize_checkpoints(
     checkpoint_reports: list[dict[str, Any]], log_checkpoints: list[dict[str, int]]
 ) -> dict[str, Any]:
-    """Builds upload/share/process stability evidence from checkpoints."""
+    """Builds bounded current writer evidence from retained checkpoints."""
 
     if not checkpoint_reports:
         return {
-            "count": len(log_checkpoints),
-            "last": log_checkpoints[-1] if log_checkpoints else None,
-            "structuredCount": 0,
+            "retained": 0,
+            "firstTsUtc": None,
+            "lastTsUtc": None,
+            "lastPacketRecords": None,
+            "maxPacketRecords": {"rust": 0, "mfc": 0},
+            "lastDiagnosticWriters": None,
+            "logCount": len(log_checkpoints),
+            "lastLogCounters": log_checkpoints[-1] if log_checkpoints else None,
         }
 
-    rust_statuses = [_rest_status(checkpoint, "rust") for checkpoint in checkpoint_reports]
-    mfc_statuses = [_rest_status(checkpoint, "mfc") for checkpoint in checkpoint_reports]
     last = checkpoint_reports[-1]
-    last_rust = rust_statuses[-1] if rust_statuses else {}
-    last_mfc = mfc_statuses[-1] if mfc_statuses else {}
-    error_hits = [
-        hit
-        for checkpoint in checkpoint_reports
-        for hit in (checkpoint.get("errorLogHits") or [])
-        if isinstance(hit, dict)
-    ]
     return {
-        "count": len(log_checkpoints),
-        "last": log_checkpoints[-1] if log_checkpoints else None,
-        "structuredCount": len(checkpoint_reports),
-        "firstTsUtc": checkpoint_reports[0].get("ts_utc"),
-        "lastTsUtc": last.get("ts_utc"),
-        "rustAliveAll": all(bool(checkpoint.get("rustAlive")) for checkpoint in checkpoint_reports),
-        "connectedAll": {
-            "rust": all(status.get("connected") is True for status in rust_statuses),
-            "mfc": all(status.get("connected") is True for status in mfc_statuses),
+        "retained": len(checkpoint_reports),
+        "firstTsUtc": checkpoint_reports[0]["ts_utc"],
+        "lastTsUtc": last["ts_utc"],
+        "lastPacketRecords": copy.deepcopy(last["packetRecords"]),
+        "maxPacketRecords": {
+            client: max(
+                int(checkpoint["packetRecords"].get(client) or 0)
+                for checkpoint in checkpoint_reports
+            )
+            for client in ("rust", "mfc")
         },
-        "lowIdObserved": {
-            "rust": any(status.get("lowId") is True for status in rust_statuses),
-            "mfc": any(status.get("lowId") is True for status in mfc_statuses),
-        },
-        "activeUploadMax": {
-            "rust": max((int(status.get("activeUploads") or 0) for status in rust_statuses), default=0),
-            "mfc": max((int(status.get("activeUploads") or 0) for status in mfc_statuses), default=0),
-        },
-        "lastRestStatus": {
-            "rust": {
-                "activeUploads": last_rust.get("activeUploads"),
-                "waitingUploads": last_rust.get("waitingUploads"),
-                "sharedFileCount": last_rust.get("sharedFileCount"),
-                "sharedHashingCount": last_rust.get("sharedHashingCount"),
-            },
-            "mfc": {
-                "activeUploads": last_mfc.get("activeUploads"),
-                "waitingUploads": last_mfc.get("waitingUploads"),
-                "sharedFileCount": last_mfc.get("sharedFileCount"),
-                "sharedHashingCount": last_mfc.get("sharedHashingCount"),
-            },
-        },
-        "errorLogHitCount": len(error_hits),
+        "lastDiagnosticWriters": copy.deepcopy(last["diagnosticWriters"]),
+        "logCount": len(log_checkpoints),
+        "lastLogCounters": log_checkpoints[-1] if log_checkpoints else None,
     }
 
 
-def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[str, Any]:
-    """Returns a sanitized summary for one converged soak report directory."""
+def _retained_paths(report_dir: Path, stream: str) -> list[Path]:
+    return sorted((report_dir / stream).glob("*.json"))
 
-    summary = read_json(report_dir / "summary.json")
-    action_reports = load_action_reports(report_dir)
+
+def _poll_provenance(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    provenance: list[dict[str, Any]] = []
+    for report in reports:
+        driver = report["driverOutcome"]
+        searches = driver.get("searches") if isinstance(driver, dict) else None
+        clients: dict[str, Any] = {}
+        for client in ("rust", "mfc"):
+            search = searches.get(client) if isinstance(searches, dict) else None
+            results = search.get("results") if isinstance(search, dict) else None
+            poll = results.get("poll") if isinstance(results, dict) else None
+            clients[client] = copy.deepcopy(poll)
+        provenance.append(
+            {
+                "seq": report["seq"],
+                "actionId": report["actionId"],
+                "clients": clients,
+            }
+        )
+    return provenance
+
+
+def _validate_retained_stream(
+    *,
+    report_dir: Path,
+    state: dict[str, Any],
+    stream: str,
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    retention = state["retention"][stream]
+    cumulative_seen = (
+        state["totals"]["actions"]
+        if stream == "actions"
+        else state["checkpoints"]["count"]
+    )
+    if retention["seen"] != cumulative_seen:
+        raise SoakReportSummaryError(
+            f"Retained {stream} watermark disagrees with cumulative observer state."
+        )
+    paths = _retained_paths(report_dir, stream)
+    if len(paths) != len(reports) or len(reports) != retention["retained"]:
+        raise SoakReportSummaryError(
+            f"Retained {stream} count disagrees with observer state."
+        )
+    retained_bytes = sum(path.stat().st_size for path in paths)
+    if retained_bytes != retention["retainedBytes"]:
+        raise SoakReportSummaryError(
+            f"Retained {stream} bytes disagree with observer state."
+        )
+    latest_file = paths[-1].name if paths else None
+    if latest_file != retention["latestFile"]:
+        raise SoakReportSummaryError(
+            f"Retained {stream} latest file disagrees with observer state."
+        )
+    if any(report.get("campaignId") != state["campaignId"] for report in reports):
+        raise SoakReportSummaryError(
+            f"Retained {stream} campaign identity disagrees with observer state."
+        )
+    inventory = {
+        "seen": retention["seen"],
+        "retained": retention["retained"],
+        "omittedByRetention": retention["omitted"],
+        "unexpectedMissing": 0,
+        "retainedBytes": retained_bytes,
+        "latestFile": latest_file,
+    }
+    if stream == "actions":
+        sequences = [int(report["seq"]) for report in reports]
+        first_sequence = retention["seen"] - retention["retained"] + 1
+        expected = list(range(first_sequence, retention["seen"] + 1))
+        if sequences != expected:
+            raise SoakReportSummaryError(
+                "Retained action sequence is not the authoritative suffix."
+            )
+        inventory["firstRetainedSeq"] = sequences[0] if sequences else None
+        inventory["lastRetainedSeq"] = sequences[-1] if sequences else None
+    else:
+        timestamps = [str(report["ts_utc"]) for report in reports]
+        parsed = [
+            soak_action_diff.parse_utc_timestamp(
+                timestamp,
+                label="retained observer checkpoint timestamp",
+            )
+            for timestamp in timestamps
+        ]
+        if any(left >= right for left, right in zip(parsed, parsed[1:])):
+            raise SoakReportSummaryError(
+                "Retained checkpoint timestamps are not strictly increasing."
+            )
+        inventory["firstRetainedUtc"] = timestamps[0] if timestamps else None
+        inventory["lastRetainedUtc"] = timestamps[-1] if timestamps else None
+    return inventory
+
+
+def _load_consistent_report_inputs(
+    report_dir: Path,
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    dict[str, Any],
+]:
+    last_error: Exception | None = None
+    for attempt in range(CONSISTENCY_ATTEMPTS):
+        before = converged_observer_state.validate_state(
+            read_json(report_dir / "summary.json")
+        )
+        try:
+            actions = load_action_reports(report_dir)
+            checkpoints = load_checkpoint_reports(report_dir)
+            after = converged_observer_state.validate_state(
+                read_json(report_dir / "summary.json")
+            )
+            if before != after:
+                raise SoakReportSummaryError(
+                    "Observer state changed while loading its retained window."
+                )
+            action_inventory = _validate_retained_stream(
+                report_dir=report_dir,
+                state=after,
+                stream="actions",
+                reports=actions,
+            )
+            checkpoint_inventory = _validate_retained_stream(
+                report_dir=report_dir,
+                state=after,
+                stream="checkpoints",
+                reports=checkpoints,
+            )
+            return (
+                after,
+                actions,
+                checkpoints,
+                action_inventory,
+                checkpoint_inventory,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            last_error = error
+            if attempt + 1 < CONSISTENCY_ATTEMPTS:
+                time.sleep(CONSISTENCY_RETRY_SECONDS)
+                continue
+            break
+    raise SoakReportSummaryError(
+        "Could not load one consistent observer state and retained window."
+    ) from last_error
+
+
+def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[str, Any]:
+    """Returns the sole current cumulative-plus-retained soak report."""
+
+    (
+        state,
+        action_reports,
+        checkpoint_reports,
+        action_inventory,
+        checkpoint_inventory,
+    ) = _load_consistent_report_inputs(report_dir)
     log_checkpoints = parse_checkpoint_lines(log_path)
-    checkpoint_reports = load_checkpoint_reports(report_dir)
+    action_inventory["summary"] = summarize_actions(action_reports)
+    action_inventory["pollProvenance"] = _poll_provenance(action_reports)
+    checkpoint_inventory["summary"] = summarize_checkpoints(
+        checkpoint_reports,
+        log_checkpoints,
+    )
     return {
-        "schema": "converged_soak_report_summary_v1",
-        "campaignId": summary.get("campaignId"),
+        "schema": SCHEMA,
+        "campaignId": state["campaignId"],
         "finished": log_finished(log_path),
-        "totals": summary.get("totals"),
-        "baseline": summary.get("baseline"),
-        "driver": summarize_driver(summary),
-        "vpn": {
-            "sameBindIp": (summary.get("vpn") or {}).get("sameBindIp")
-            if isinstance(summary.get("vpn"), dict)
-            else None,
-            "bindIpPresent": bool(summary.get("bindIp") or (summary.get("vpn") or {}).get("sameBindIp")),
+        "observerState": state,
+        "retainedWindow": {
+            "actions": action_inventory,
+            "checkpoints": checkpoint_inventory,
         },
-        "environmentParity": summary.get("environmentParity"),
-        "actionReports": summarize_action_report_inventory(summary, action_reports),
-        "actions": summarize_actions(action_reports),
-        "checkpoints": summarize_checkpoints(checkpoint_reports, log_checkpoints),
     }

@@ -1,4 +1,4 @@
-"""Summarize a converged rust<->MFC soak report without exposing live titles."""
+"""Summarize exact cumulative state plus the retained converged-soak window."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import soak_report_summary
+from emule_test_harness import soak_report_summary  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
