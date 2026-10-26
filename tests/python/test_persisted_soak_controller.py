@@ -2652,39 +2652,21 @@ def test_watch_session_restores_rest_failure_streak_and_stops_on_third_sample(
     assert stop_requests == [manifest]
 
 
-@pytest.mark.parametrize(
-    ("failure_source", "phase"),
-    [("enforcement", "enforcement"), ("status", "watchStatus")],
-)
 def test_watch_session_fails_closed_on_raised_watch_loop_faults(
     tmp_path: Path,
     monkeypatch,
-    failure_source: str,
-    phase: str,
 ) -> None:
     paths = make_paths(tmp_path)
     output_root, manifest = storage_context_manifest(tmp_path)
     controller.write_json_atomic(paths.manifest, manifest)
     stop_requests: list[dict[str, object]] = []
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    if failure_source == "enforcement":
-        monkeypatch.setattr(
-            controller,
-            "enforce_session_storage_context",
-            lambda _context: (_ for _ in ()).throw(OSError("inventory failed")),
-        )
-        monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
-    else:
-        monkeypatch.setattr(
-            controller,
-            "enforce_session_storage_context",
-            lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
-        )
-        monkeypatch.setattr(
-            controller,
-            "session_status",
-            lambda _paths: (_ for _ in ()).throw(OSError("WMI failed")),
-        )
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: (_ for _ in ()).throw(OSError("inventory failed")),
+    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
@@ -2700,8 +2682,171 @@ def test_watch_session_fails_closed_on_raised_watch_loop_faults(
     )
 
     assert result["ok"] is False
-    assert result["latest"]["storage"]["phase"] == phase
+    assert result["latest"]["storage"]["phase"] == "enforcement"
     assert result["latest"]["shutdown"]["launcherGraceful"] is True
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_streak_gates_status_read_failures(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    stop_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "session_status",
+        lambda _paths: (_ for _ in ()).throw(OSError("WMI failed")),
+    )
+    monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024,
+        segments=2,
+    )
+
+    assert result["ok"] is False
+    assert result["samples"] == 3
+    assert result["latest"]["campaignId"] == manifest["campaignId"]
+    assert result["latest"]["storage"]["ok"] is True
+    assert result["latest"]["statusError"] == {
+        "type": "OSError",
+        "message": "WMI failed",
+    }
+    assert result["latest"]["findingStreaks"] == {"watch-status-unavailable": 3}
+    assert result["latest"]["terminalFindings"] == ["watch-status-unavailable"]
+    assert stop_requests == [manifest]
+
+
+def test_watch_session_recovers_from_transient_status_read_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    statuses = iter([OSError("observer snapshot changed"), watch_status_payload()])
+    emitted: list[dict[str, object]] = []
+    stop_requests: list[dict[str, object]] = []
+
+    def next_status(_paths):
+        value = next(statuses)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", next_status)
+    monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024 * 1024,
+        segments=2,
+        max_samples=2,
+        emit=emitted.append,
+    )
+
+    assert result["ok"] is True
+    assert result["samples"] == 2
+    assert emitted[0]["findings"] == ["watch-status-unavailable"]
+    assert emitted[0]["findingStreaks"] == {"watch-status-unavailable": 1}
+    assert emitted[1]["findings"] == []
+    assert emitted[1]["findingStreaks"] == {}
+    assert stop_requests == []
+
+
+def test_watch_session_preserves_campaign_evidence_across_status_failure_streak(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root, manifest = storage_context_manifest(tmp_path)
+    controller.write_json_atomic(paths.manifest, manifest)
+    healthy = watch_status_payload()
+    healthy["lastRun"]["status"] = "running"
+    healthy["diagnosticWriters"] = {
+        "required": True,
+        "rust": {"ok": True, "health": diagnostic_writer_health(client="rust")},
+        "mfc": {"ok": True, "health": diagnostic_writer_health(client="mfc")},
+    }
+    statuses = iter([healthy, OSError("snapshot"), OSError("snapshot"), OSError("snapshot")])
+    stop_requests: list[dict[str, object]] = []
+
+    def next_status(_paths):
+        value = next(statuses)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(controller, "session_status", next_status)
+    monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        controller,
+        "enforce_session_storage_context",
+        lambda _context: {"ok": True, "policySha256": "abc", "enforcement": {}},
+    )
+    monkeypatch.setattr(
+        controller,
+        "advance_diagnostic_indexes",
+        lambda _status, _context: {
+            "required": True,
+            "rust": {"ok": True},
+            "mfc": {"ok": True},
+        },
+    )
+    monkeypatch.setattr(
+        controller,
+        "request_watch_failure_stop",
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
+    )
+
+    result = controller.watch_session(
+        paths,
+        interval_seconds=1.0,
+        max_bytes=1024 * 1024,
+        segments=2,
+    )
+
+    assert result["samples"] == 4
+    assert result["latest"]["campaignId"] == manifest["campaignId"]
+    assert result["latest"]["diagnosticWriters"] == healthy["diagnosticWriters"]
+    assert result["latest"]["diagnosticIndexes"] == {
+        "required": True,
+        "rust": {"ok": True},
+        "mfc": {"ok": True},
+    }
+    assert result["latest"]["terminalFindings"] == ["watch-status-unavailable"]
     assert stop_requests == [manifest]
 
 
