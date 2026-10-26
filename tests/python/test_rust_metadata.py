@@ -14,6 +14,53 @@ def rust_repo() -> Path:
     return Path(__file__).resolve().parents[4] / "repos" / "emulebb-rust"
 
 
+class _TrackedConnection:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+        self.closed = False
+
+    def __enter__(self) -> _TrackedConnection:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return self._connection.__exit__(*args)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+    def close(self) -> None:
+        self.closed = True
+        self._connection.close()
+
+
+@pytest.mark.unit
+def test_metadata_writes_close_sqlite_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
+    with sqlite3.connect(metadata_db) as connection:
+        connection.execute(
+            "CREATE TABLE settings(section TEXT, key TEXT, value_json TEXT, updated_at_ms INTEGER, "
+            "PRIMARY KEY(section, key))"
+        )
+
+    original_connect = sqlite3.connect
+    tracked: list[_TrackedConnection] = []
+
+    def connect(*args: object, **kwargs: object) -> _TrackedConnection:
+        connection = _TrackedConnection(original_connect(*args, **kwargs))
+        tracked.append(connection)
+        return connection
+
+    monkeypatch.setattr(rust_metadata.sqlite3, "connect", connect)
+
+    rust_metadata.put_setting_json(metadata_db, "network", "enabled", True)
+
+    assert len(tracked) == 1
+    assert tracked[0].closed is True
+
+
 @pytest.mark.unit
 def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) -> None:
     source = tmp_path / "Sample Résumé 😀.bin"
