@@ -183,9 +183,22 @@ def test_detect_actions_remembers_vanished_ids() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _action(client: str, key: str, ts: datetime, kind: str = sad.SEARCH) -> sad.Action:
+def _action(
+    client: str,
+    key: str,
+    ts: datetime,
+    kind: str = sad.SEARCH,
+    *,
+    method: str | None = None,
+) -> sad.Action:
     return sad.Action(
-        client=client, kind=kind, action_id=f"{client}-{key}", key=key, label=key, observed_at=ts
+        client=client,
+        kind=kind,
+        action_id=f"{client}-{key}",
+        key=key,
+        label=key,
+        observed_at=ts,
+        method=method,
     )
 
 
@@ -385,6 +398,39 @@ def test_diff_action_search_gate_ignores_unrelated_background_opcodes() -> None:
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["fullCoverageOk"] is False
+
+
+def test_diff_action_zero_result_server_search_makes_response_optional() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "send", 0x15, "bb", _ts(2), marker=0xD4),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(3), marker=0xE3),
+        _pkt("server", "send", 0x15, "ccdd", _ts(4), marker=0xD4),
+    ]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        search_result_counts={"rust": 0, "mfc": 0},
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert [row["label"] for row in report["actionCoverage"]["required"]] == [
+        "server-search-request"
+    ]
+    assert [row["label"] for row in report["actionCoverage"]["optional"]] == [
+        "server-search-result"
+    ]
+    assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is False
 
 
 def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:

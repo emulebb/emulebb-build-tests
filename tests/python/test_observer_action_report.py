@@ -274,6 +274,7 @@ def _kad_records(client: str, process_id: int, run_id: str) -> list[dict[str, ob
 
 def test_build_report_combines_driver_evidence_and_method_assessment(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pending = _pending_action()
     evidence = _evidence(
@@ -282,6 +283,15 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         mfc_records=_kad_records("mfc", 4201, "mfc-run"),
     )
 
+    seen_result_counts = None
+    original_diff_action = soak_action_diff.diff_action
+
+    def capture_result_counts(*args, **kwargs):
+        nonlocal seen_result_counts
+        seen_result_counts = kwargs.get("search_result_counts")
+        return original_diff_action(*args, **kwargs)
+
+    monkeypatch.setattr(soak_action_diff, "diff_action", capture_result_counts)
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=pending,
@@ -297,6 +307,7 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["driverOutcome"] == pending["driverOutcome"]
+    assert seen_result_counts == {"rust": 2, "mfc": 2}
     assert report["diagnosticEvidence"]["status"] == "complete"
     assert report["diagnosticEvidence"]["clients"]["rust"]["identity"] == {
         "processId": 4101,
