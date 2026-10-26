@@ -318,6 +318,8 @@ def _diff_one_action(
     lead: float,
     settle: float,
     method: str | None = None,
+    search_ids: dict[str, str] | None = None,
+    search_result_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     import datetime
 
@@ -372,11 +374,19 @@ def _diff_one_action(
         kind,
         packet_diff or {},
         method=method,
+        search_ids=search_ids,
+        search_result_counts=search_result_counts,
         rust_kad_records=soak_action_diff.diagnostic_family_records(
             rust_diag, soak_action_diff.KAD_UDP_FAMILY
         ),
         mfc_kad_records=soak_action_diff.diagnostic_family_records(
             mfc_diag, soak_action_diff.KAD_UDP_FAMILY
+        ),
+        rust_kad_event_records=soak_action_diff.diagnostic_family_records(
+            rust_diag, soak_action_diff.KAD_EVENT_FAMILY
+        ),
+        mfc_kad_event_records=soak_action_diff.diagnostic_family_records(
+            mfc_diag, soak_action_diff.KAD_EVENT_FAMILY
         ),
         rust_server_udp_records=soak_action_diff.diagnostic_family_records(
             rust_diag, soak_action_diff.ED2K_SERVER_UDP_FAMILY
@@ -466,6 +476,37 @@ def _action_error_count(recording: dict[str, Any]) -> int:
         for row in rows
         if isinstance(row, dict) and str(row.get("status") or "").casefold() != "ok"
     )
+
+
+def _search_action_evidence(
+    recording: dict[str, Any], action_id: str
+) -> tuple[str, int] | None:
+    """Returns the exact successful search identity retained by one recording."""
+
+    rows = recording.get("meta", {}).get("actionResults")
+    if not isinstance(rows, list):
+        return None
+    matches = [
+        row
+        for row in rows
+        if isinstance(row, dict) and str(row.get("actionId") or "") == action_id
+    ]
+    if len(matches) != 1 or matches[0].get("status") != "ok":
+        return None
+    outcome = matches[0].get("outcome")
+    if not isinstance(outcome, dict):
+        return None
+    search_id = outcome.get("searchId")
+    result_count = outcome.get("resultCount")
+    if (
+        not isinstance(search_id, str)
+        or not search_id
+        or isinstance(result_count, bool)
+        or not isinstance(result_count, int)
+        or result_count < 0
+    ):
+        return None
+    return search_id, result_count
 
 
 def _completion_rows(
@@ -772,9 +813,17 @@ def main(argv: list[str] | None = None) -> int:
     for action_id in common:
         kind = rust_windows[action_id].get("kind") or "search"
         method = _action_method(action_id, rust_windows[action_id]) if kind == "search" else None
+        rust_search = _search_action_evidence(rust, action_id) if kind == "search" else None
+        mfc_search = _search_action_evidence(mfc, action_id) if kind == "search" else None
+        search_ids = None
+        search_result_counts = None
+        if rust_search is not None and mfc_search is not None:
+            search_ids = {"rust": rust_search[0], "mfc": mfc_search[0]}
+            search_result_counts = {"rust": rust_search[1], "mfc": mfc_search[1]}
         result = _diff_one_action(
             kind, rust, mfc, rust_windows[action_id], mfc_windows[action_id],
             lead=args.lead_seconds, settle=args.settle_seconds, method=method,
+            search_ids=search_ids, search_result_counts=search_result_counts,
         )
         per_action.append({"actionId": action_id, **result})
         viol = result.get("conformanceViolations") or []

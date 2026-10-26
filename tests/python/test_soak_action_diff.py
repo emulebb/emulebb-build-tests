@@ -636,6 +636,27 @@ def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
     }
 
 
+def _kad_lookup(
+    search_id: str,
+    milestone: str,
+    result_count: int,
+    ts: datetime,
+) -> dict:
+    return {
+        "schema": "diag_event_v2",
+        "ts": ts.isoformat().replace("+00:00", "Z"),
+        "family": "kad_event",
+        "event": "lookup",
+        "keys": {"searchId": search_id},
+        "body": {
+            "milestone": milestone,
+            "action": "search",
+            "searchKind": "keyword",
+            "resultCount": result_count,
+        },
+    }
+
+
 def _server_udp_diag(opcode: int, direction: str, ts: datetime) -> dict:
     return {
         "schema": "diag_event_v2",
@@ -667,21 +688,33 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
     # A Kad search produces NO server TCP search opcodes; the gate must read the
     # kad stream (KADEMLIA2_SEARCH_KEY_REQ / SEARCH_RES) instead of failing.
     pair = _search_pair("kad")
-    rust_kad = [_kad_diag(0x33, "send", _ts(1)), _kad_diag(0x3B, "recv", _ts(3))]
-    mfc_kad = [_kad_diag(0x33, "send", _ts(2)), _kad_diag(0x3B, "recv", _ts(4))]
+    rust_kad = [
+        _kad_diag(0x33, "send", _ts(1)),
+        _kad_diag(0x3B, "recv", _ts(3)),
+        _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+        _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+    ]
+    mfc_kad = [
+        _kad_diag(0x33, "send", _ts(2)),
+        _kad_diag(0x3B, "recv", _ts(4)),
+        _kad_lookup("mfc-1", "lookup_started", 0, _ts(2)),
+        _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+    ]
     report = sad.diff_action(
         pair,
         rust_packets=[],
         mfc_packets=[],
         rust_diag=rust_kad,
         mfc_diag=mfc_kad,
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_counts={"rust": 0, "mfc": 0},
     )
     assert report["method"] == "kad"
     assert report["actionCoverage"]["mode"] == "search-kad-stream"
     assert report["coverageOk"] is True
     assert report["verdict"] == "coverage-parity"
     assert report["assessmentRecords"] == {
-        "requiredFamilies": ["kad_udp"],
+        "requiredFamilies": ["kad_udp", "kad_event"],
         "rust": 2,
         "mfc": 2,
     }
@@ -694,9 +727,127 @@ def test_search_gate_kad_method_fails_without_kad_request_on_both() -> None:
         pair,
         rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
         mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
-        rust_diag=[_kad_diag(0x33, "send", _ts(1))],
-        mfc_diag=[_kad_diag(0x11, "send", _ts(2))],  # hello only, no search req
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(3)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x11, "send", _ts(2)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(2)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_counts={"rust": 0, "mfc": 0},
     )
+    assert report["coverageOk"] is False
+    assert report["actionCoverage"]["required"][0]["mfcPresent"] is False
+
+
+def test_search_gate_kad_rejects_wrong_search_identity() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(3)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("different-mfc-search", "lookup_started", 0, _ts(1)),
+            _kad_lookup("different-mfc-search", "lookup_complete", 0, _ts(3)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_counts={"rust": 0, "mfc": 0},
+    )
+
+    assert report["coverageOk"] is False
+    assert report["actionCoverage"]["required"][1]["mfcPresent"] is False
+    assert report["actionCoverage"]["required"][2]["mfcPresent"] is False
+
+
+def test_search_gate_kad_rejects_wrong_terminal_result_count() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_diag(0x3B, "recv", _ts(2)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(3)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_counts={"rust": 1, "mfc": 0},
+    )
+
+    assert report["coverageOk"] is False
+    assert report["actionCoverage"]["required"][2]["rustPresent"] is False
+
+
+def test_search_gate_kad_requires_result_packet_only_for_nonzero_side() -> None:
+    pair = _search_pair("kad")
+    common_rust = [
+        _kad_diag(0x33, "send", _ts(1)),
+        _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+        _kad_lookup("rust-1", "lookup_complete", 1, _ts(3)),
+    ]
+    mfc_diag = [
+        _kad_diag(0x33, "send", _ts(1)),
+        _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+        _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
+    ]
+    arguments = {
+        "rust_packets": [],
+        "mfc_packets": [],
+        "mfc_diag": mfc_diag,
+        "search_ids": {"rust": "rust-1", "mfc": "mfc-1"},
+        "search_result_counts": {"rust": 1, "mfc": 0},
+    }
+
+    missing_result = sad.diff_action(pair, rust_diag=common_rust, **arguments)
+    with_result = sad.diff_action(
+        pair,
+        rust_diag=[_kad_diag(0x3B, "recv", _ts(2)), *common_rust],
+        **arguments,
+    )
+
+    assert missing_result["coverageOk"] is False
+    assert with_result["coverageOk"] is True
+    result_row = with_result["actionCoverage"]["required"][3]
+    assert result_row["rustRequired"] is True
+    assert result_row["mfcRequired"] is False
+
+
+def test_search_gate_kad_rejects_request_opcode_in_wrong_direction() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(3)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "recv", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_counts={"rust": 0, "mfc": 0},
+    )
+
     assert report["coverageOk"] is False
     assert report["actionCoverage"]["required"][0]["mfcPresent"] is False
 
@@ -770,9 +921,7 @@ def test_search_gate_server_requires_ed2k_tcp_diagnostic_family() -> None:
     assert report["verdict"] == "evidence-incomplete"
 
 
-def test_search_gate_automatic_method_accepts_kad_evidence() -> None:
-    # An automatic search may resolve over Kad on both clients: the gate must not
-    # demand server TCP opcodes that never happened.
+def test_search_gate_automatic_method_rejects_uncorrelated_kad_packets() -> None:
     pair = _search_pair("automatic")
     report = sad.diff_action(
         pair,
@@ -782,8 +931,9 @@ def test_search_gate_automatic_method_accepts_kad_evidence() -> None:
         mfc_diag=[_kad_diag(0x33, "send", _ts(2))],
     )
     assert report["actionCoverage"]["mode"] == "search-automatic"
-    assert report["coverageOk"] is True
-    assert report["actionCoverage"]["kadOk"] is True
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+    assert report["actionCoverage"]["kadOk"] is False
     assert report["actionCoverage"]["serverOk"] is False
 
 

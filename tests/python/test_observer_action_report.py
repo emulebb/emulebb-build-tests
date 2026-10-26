@@ -52,6 +52,38 @@ def _kad_record(
     }
 
 
+def _kad_lifecycle_record(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    sequence: int,
+    seconds: float,
+    milestone: str,
+    result_count: int,
+) -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "client": client,
+        "processId": process_id,
+        "runId": run_id,
+        "segmentId": 0,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "ts": _ts(seconds).isoformat().replace("+00:00", "Z"),
+        "family": soak_action_diff.KAD_EVENT_FAMILY,
+        "event": "lookup",
+        "severity": "info",
+        "keys": {"searchId": f"{client}-search-1"},
+        "body": {
+            "milestone": milestone,
+            "action": "search",
+            "searchKind": "keyword",
+            "resultCount": result_count,
+        },
+    }
+
+
 def _client_evidence(
     root: Path,
     *,
@@ -269,6 +301,24 @@ def _kad_records(client: str, process_id: int, run_id: str) -> list[dict[str, ob
             opcode=soak_action_diff.KAD2_SEARCH_RES,
             direction="recv",
         ),
+        _kad_lifecycle_record(
+            client=client,
+            process_id=process_id,
+            run_id=run_id,
+            sequence=3,
+            seconds=7,
+            milestone="lookup_started",
+            result_count=0,
+        ),
+        _kad_lifecycle_record(
+            client=client,
+            process_id=process_id,
+            run_id=run_id,
+            sequence=4,
+            seconds=8,
+            milestone="lookup_complete",
+            result_count=2,
+        ),
     ]
 
 
@@ -314,7 +364,7 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         "runId": "rust-run",
     }
     assert report["assessment"]["assessmentRecords"] == {
-        "requiredFamilies": ["kad_udp"],
+        "requiredFamilies": ["kad_udp", "kad_event"],
         "rust": 2,
         "mfc": 2,
     }
@@ -348,7 +398,7 @@ def test_incomplete_exact_tail_overrides_an_otherwise_parity_verdict(
     ("rust_succeeded", "mfc_succeeded", "expected_assessment_verdict"),
     [
         (True, False, "evidence-incomplete"),
-        (False, False, "no-traffic"),
+        (False, False, "evidence-incomplete"),
     ],
 )
 def test_failed_driver_outcomes_still_produce_deterministic_reports(
@@ -384,7 +434,7 @@ def test_failed_driver_outcomes_still_produce_deterministic_reports(
     assert first["driverOutcome"]["errors"]
 
 
-def test_failed_driver_outcome_does_not_promote_raw_divergence(
+def test_failed_driver_outcome_keeps_raw_assessment_incomplete(
     tmp_path: Path,
 ) -> None:
     pending = _pending_action(rust_succeeded=True, mfc_succeeded=False)
@@ -410,7 +460,7 @@ def test_failed_driver_outcome_does_not_promote_raw_divergence(
         evidence=evidence,
     )
 
-    assert report["assessment"]["verdict"] == "divergence"
+    assert report["assessment"]["verdict"] == "evidence-incomplete"
     assert report["verdict"] == "evidence-incomplete"
     assert report["driverOutcome"]["ok"] is False
 
