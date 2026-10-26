@@ -365,7 +365,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         "20261025T120000Z",
     )
     storage_policy = soak_storage.SoakStoragePolicy(
-        max_total_bytes=1_000_000,
+        max_total_bytes=1_000,
         max_age_seconds=3_600,
         minimum_free_bytes=1,
         bundle_interval_seconds=900,
@@ -401,6 +401,23 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         },
         "settingsProvenance": {"sensitiveValues": "exact"},
     }
+    old_campaign_artifact = (
+        run_paths.campaigns_root
+        / "20261024T120000Z"
+        / "report"
+        / "obsolete-evidence.json"
+    )
+    old_campaign_artifact.parent.mkdir(parents=True)
+    old_campaign_artifact.write_bytes(b"o" * 2_048)
+    adjacent_artifacts = [
+        run_paths.soak_root / "control" / "persisted-soak.latest.json",
+        run_paths.last_run_dir / "manifest.json",
+        run_paths.soak_root / "transactions" / "mfc-preferences" / "journal.json",
+        run_paths.soak_root / "mfc-profile" / "logs" / "emule.log",
+    ]
+    for path in adjacent_artifacts:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"a" * 512)
     requests: list[tuple] = []
 
     def fake_retry(*args, **kwargs):
@@ -440,6 +457,8 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
     assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v4"
     assert evidence["bundleSummary"] == bundle["summary"]
     assert evidence["retainedCount"] == 1
+    assert not old_campaign_artifact.exists()
+    assert all(path.read_bytes() == b"a" * 512 for path in adjacent_artifacts)
 
 
 def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
@@ -752,6 +771,8 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     source = inspect.getsource(module.main)
 
     assert "load_live_wire_inputs(inputs_path)" in source
+    assert "artifact_store = campaign_artifact_store(run_paths, storage_policy)" in source
+    assert "BoundedArtifactStore(soak_root" not in source
     assert "direct_mfc_profile = resolve_direct_mfc_profile(inputs, no_mfc=args.no_mfc)" in source
     assert "rust_profile_dir = resolve_direct_rust_profile(inputs)" in source
     assert "rust_profile_location = soak_launch.require_rust_profile_location(" in source
