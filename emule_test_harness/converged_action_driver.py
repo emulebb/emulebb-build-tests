@@ -269,6 +269,30 @@ def create_search(client: ClientEndpoint, *, query: str, method: str) -> str:
     return str(api_data(created).get("id") or "")
 
 
+def read_search_results(
+    client: ClientEndpoint,
+    search_id: str,
+) -> SearchResults:
+    """Read one bounded search-results snapshot without waiting or sleeping."""
+
+    if not search_id.strip():
+        raise ValueError("search identifier must not be empty")
+    page = retry_http_json(
+        f"{client.name} soak search poll",
+        1,
+        client.base_url,
+        f"/api/v1/searches/{search_id}",
+        api_key=client.api_key,
+        timeout_seconds=30.0,
+    )
+    data = api_data(page)
+    return SearchResults(
+        extract_items(data, "items"),
+        completed=str(data.get("status") or "").casefold()
+        in {"complete", "completed"},
+    )
+
+
 def poll_search_results(
     client: ClientEndpoint,
     search_id: str,
@@ -280,20 +304,11 @@ def poll_search_results(
     deadline = time.monotonic() + timeout_seconds
     last_rows: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
-        page = retry_http_json(
-            f"{client.name} soak search poll",
-            2,
-            client.base_url,
-            f"/api/v1/searches/{search_id}",
-            api_key=client.api_key,
-            timeout_seconds=30.0,
-        )
-        data = api_data(page)
-        rows = extract_items(data, "items")
+        rows = read_search_results(client, search_id)
         if rows:
-            last_rows = rows
-        if str(data.get("status") or "").casefold() in {"complete", "completed"}:
-            return SearchResults(rows, completed=True)
+            last_rows = list(rows)
+        if rows.completed:
+            return rows
         time.sleep(2.0)
     return SearchResults(last_rows, completed=False)
 
@@ -364,6 +379,34 @@ def run_search_results_phase(
     return SearchResultsPhase(
         rows=tuple(rows),
         completed=bool(getattr(rows, "completed", True)),
+        error=None,
+    )
+
+
+def run_search_results_poll_phase(
+    client: ClientEndpoint,
+    search_id: str,
+) -> SearchResultsPhase:
+    """Read exactly one search-results snapshot and preserve its exact outcome."""
+
+    if not search_id.strip():
+        raise ValueError("search identifier must not be empty")
+    try:
+        rows = read_search_results(client, search_id)
+    except RuntimeError as error:
+        return SearchResultsPhase(
+            rows=(),
+            completed=False,
+            error={
+                "client": client.name,
+                "phase": "search-results",
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+        )
+    return SearchResultsPhase(
+        rows=tuple(rows),
+        completed=rows.completed,
         error=None,
     )
 
