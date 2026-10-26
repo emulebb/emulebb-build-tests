@@ -84,7 +84,8 @@ def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) ->
                    transfers.visible_state, transfers.delivery_state,
                    transfers.delivery_ownership,
                    length(transfers.source_fingerprint),
-                   length(shared_file_sources.source_fingerprint)
+                   length(shared_file_sources.source_fingerprint),
+                   transfers.removed_at_ms IS NOT NULL
             FROM transfers
             JOIN local_paths ON local_paths.id = transfers.source_path_id
             JOIN shared_file_sources
@@ -111,6 +112,7 @@ def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) ->
     assert row[2:5] == ("completed", "not_applicable", "none")
     assert row[5] > 0
     assert row[6] == row[5]
+    assert row[7] == 1
     assert profile_row == (1, "emulebb-rust")
     assert transfer_name_state == (0, 0)
     rust_metadata.require_current_profile_database(rust_repo(), metadata_db)

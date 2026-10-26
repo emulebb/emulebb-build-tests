@@ -452,9 +452,9 @@ def seed_transfer_manifest(
                 known_file_id, visible_state, control_state, download_priority,
                 payload_directory, delivery_state, delivery_ownership,
                 source_path_id, source_fingerprint,
-                created_at_ms, updated_at_ms, completed_at_ms
+                created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
             )
-            VALUES (?, ?, ?, 'normal', ?, ?, 'none', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'normal', ?, ?, 'none', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
@@ -466,7 +466,7 @@ def seed_transfer_manifest(
                 source_fingerprint = excluded.source_fingerprint,
                 updated_at_ms = excluded.updated_at_ms,
                 completed_at_ms = excluded.completed_at_ms,
-                removed_at_ms = NULL
+                removed_at_ms = excluded.removed_at_ms
             """,
             (
                 known_file_id,
@@ -479,6 +479,7 @@ def seed_transfer_manifest(
                 now,
                 now,
                 now if completed else None,
+                now if source_path_id is not None else None,
             ),
         )
         transfer_id = conn.execute(
@@ -823,7 +824,7 @@ def _seed_share_in_place_manifests_fast_conn(
         size_bytes = int(manifest["size_bytes"])
         source_fingerprint = _native_file_fingerprint(str(manifest["source_path"]))
         transfer_rows.append(
-            (known_file_id, ed2k_hash, path_id, source_fingerprint, now, now, now)
+            (known_file_id, ed2k_hash, path_id, source_fingerprint, now, now, now, now)
         )
         source_rows.append((known_file_id, path_id, size_bytes, source_fingerprint, now, now))
         range_rows.append((known_file_id, size_bytes, now))
@@ -837,9 +838,9 @@ def _seed_share_in_place_manifests_fast_conn(
         INSERT INTO transfers(
             known_file_id, visible_state, download_priority, payload_directory,
             delivery_state, delivery_ownership, source_path_id, source_fingerprint,
-            created_at_ms, updated_at_ms, completed_at_ms
+            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
         )
-        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?)
+        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
         ON CONFLICT(known_file_id) DO UPDATE SET
             visible_state = excluded.visible_state,
             download_priority = excluded.download_priority,
@@ -850,7 +851,7 @@ def _seed_share_in_place_manifests_fast_conn(
             source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
-            removed_at_ms = NULL
+            removed_at_ms = excluded.removed_at_ms
         """,
         transfer_rows,
     )
@@ -1026,9 +1027,9 @@ def _seed_share_in_place_manifest_conn(
         INSERT INTO transfers(
             known_file_id, visible_state, download_priority, payload_directory,
             delivery_state, delivery_ownership, source_path_id, source_fingerprint,
-            created_at_ms, updated_at_ms, completed_at_ms
+            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
         )
-        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?)
+        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
         ON CONFLICT(known_file_id) DO UPDATE SET
             visible_state = excluded.visible_state,
             download_priority = excluded.download_priority,
@@ -1039,13 +1040,14 @@ def _seed_share_in_place_manifest_conn(
             source_fingerprint = excluded.source_fingerprint,
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
-            removed_at_ms = NULL
+            removed_at_ms = excluded.removed_at_ms
         """,
         (
             known_file_id,
             ed2k_hash,
             source_path_id,
             _native_file_fingerprint(source_path),
+            now,
             now,
             now,
             now,
