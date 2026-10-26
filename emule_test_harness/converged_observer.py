@@ -40,8 +40,8 @@ DEFAULT_ACTION_INTERVAL_SECONDS = 1_800.0
 DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS = 180.0
 ACTION_RESULT_POLL_INTERVAL_SECONDS = 2.0
 ACTION_RESULT_REQUEST_TIMEOUT_SECONDS = 30.0
-DEFAULT_ACTION_METHOD = "server"
-ACTION_METHODS = ("server", "global", "kad")
+SUPPORTED_ACTION_METHODS = ("server", "global", "kad")
+DEFAULT_ACTION_METHODS = ("server", "kad")
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class ObserverActionConfig:
     enabled: bool = False
     source_profile: str | None = None
     terms: tuple[str, ...] = ()
-    method: str = DEFAULT_ACTION_METHOD
+    methods: tuple[str, ...] = DEFAULT_ACTION_METHODS
     start_delay_seconds: float = DEFAULT_ACTION_START_DELAY_SECONDS
     search_interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
     search_timeout_seconds: float = DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS
@@ -89,7 +89,7 @@ def action_configuration_digest(config: ObserverActionConfig) -> str:
         "enabled": config.enabled,
         "sourceProfile": config.source_profile,
         "terms": list(config.terms),
-        "method": config.method,
+        "methods": list(config.methods),
         "startDelaySeconds": config.start_delay_seconds,
         "searchIntervalSeconds": config.search_interval_seconds,
         "searchTimeoutSeconds": config.search_timeout_seconds,
@@ -117,7 +117,7 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
         "enabled",
         "sourceProfile",
         "terms",
-        "method",
+        "methods",
         "startDelaySeconds",
         "searchIntervalSeconds",
         "searchTimeoutSeconds",
@@ -143,9 +143,15 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
     terms = tuple(dict.fromkeys(term.strip() for term in raw_terms))
     if enabled and not terms:
         raise RuntimeError("Enabled observer action driving requires search terms.")
-    method = payload.get("method")
-    if not isinstance(method, str) or method not in ACTION_METHODS:
-        raise RuntimeError("Persisted soak observer action method is invalid.")
+    raw_methods = payload.get("methods")
+    if not isinstance(raw_methods, list) or any(
+        not isinstance(method, str) or method not in SUPPORTED_ACTION_METHODS
+        for method in raw_methods
+    ):
+        raise RuntimeError("Persisted soak observer action methods are invalid.")
+    methods = tuple(dict.fromkeys(raw_methods))
+    if not methods:
+        raise RuntimeError("Persisted soak observer action methods are empty.")
     start_delay = payload.get("startDelaySeconds")
     interval = payload.get("searchIntervalSeconds")
     search_timeout = payload.get("searchTimeoutSeconds")
@@ -183,7 +189,7 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
         enabled=enabled,
         source_profile=source_profile,
         terms=terms,
-        method=method,
+        methods=methods,
         start_delay_seconds=float(start_delay),
         search_interval_seconds=float(interval),
         search_timeout_seconds=float(search_timeout),
@@ -725,6 +731,20 @@ def action_due_in_seconds(
     return max((deadline - utc_datetime(now_utc)).total_seconds(), 0.0)
 
 
+def scheduled_action(config: ObserverActionConfig, cycle_index: int) -> tuple[str, str]:
+    """Returns the query and method for one positive observer cycle."""
+
+    if cycle_index <= 0:
+        raise ValueError("observer action cycle index must be positive")
+    if not config.terms or not config.methods:
+        raise ValueError("observer action schedule must contain terms and methods")
+    offset = cycle_index - 1
+    method_count = len(config.methods)
+    query = config.terms[(offset // method_count) % len(config.terms)]
+    method = config.methods[offset % method_count]
+    return query, method
+
+
 def action_phase_error(
     client: str,
     *,
@@ -841,7 +861,7 @@ def capture_action_cycle(
     resumed = validated["pendingAction"] is not None
     if not resumed:
         cycle_index = int(validated["scheduler"]["nextCycle"])
-        query = config.terms[(cycle_index - 1) % len(config.terms)]
+        query, method = scheduled_action(config, cycle_index)
         try:
             diagnostic_runs = action_diagnostic_runs(clients)
         except (OSError, RuntimeError) as error:
@@ -860,7 +880,7 @@ def capture_action_cycle(
         validated = converged_observer_state.reserve_driver_cycle(
             validated,
             query=query,
-            method=config.method,
+            method=method,
             reserved_at_utc=utc_text(now_utc),
             diagnostic_runs=diagnostic_runs,
         )

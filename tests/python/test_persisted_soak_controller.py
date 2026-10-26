@@ -934,7 +934,7 @@ def test_build_observer_action_config_resolves_exact_manifest_terms(tmp_path: Pa
         inputs,
         enabled=True,
         terms=(),
-        method="kad",
+        methods=("server", "kad"),
         start_delay_seconds=30,
         search_interval_seconds=900,
         search_timeout_seconds=120,
@@ -944,7 +944,7 @@ def test_build_observer_action_config_resolves_exact_manifest_terms(tmp_path: Pa
         inputs,
         enabled=True,
         terms=("Exact Local Term", "Exact Local Term", "debian"),
-        method="global",
+        methods=("global",),
         start_delay_seconds=60,
         search_interval_seconds=1_800,
         search_timeout_seconds=180,
@@ -955,7 +955,7 @@ def test_build_observer_action_config_resolves_exact_manifest_terms(tmp_path: Pa
         "enabled": True,
         "sourceProfile": "generic_open",
         "terms": ["linux"],
-        "method": "kad",
+        "methods": ["server", "kad"],
         "startDelaySeconds": 30.0,
         "searchIntervalSeconds": 900.0,
         "searchTimeoutSeconds": 120.0,
@@ -1061,7 +1061,7 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
         paths,
         watch_interval_seconds=30.0,
         observer_drive_actions=True,
-        observer_action_method="kad",
+        observer_action_methods=("server", "kad"),
         observer_action_start_delay_seconds=30,
         observer_action_search_interval_seconds=900,
         observer_action_search_timeout_seconds=120,
@@ -1081,7 +1081,7 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
         "enabled": True,
         "sourceProfile": "generic_open",
         "terms": ["linux"],
-        "method": "kad",
+        "methods": ["server", "kad"],
         "startDelaySeconds": 30.0,
         "searchIntervalSeconds": 900.0,
         "searchTimeoutSeconds": 120.0,
@@ -1379,7 +1379,9 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
             "--observer-action-term",
             "Exact Local Term",
             "--observer-action-method",
-            "global",
+            "server",
+            "--observer-action-method",
+            "kad",
             "--observer-action-start-delay-seconds",
             "30",
             "--observer-action-search-interval-seconds",
@@ -1393,7 +1395,7 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
 
     assert args.observer_drive_actions is True
     assert args.observer_action_term == ["Exact Local Term"]
-    assert args.observer_action_method == "global"
+    assert args.observer_action_methods == ["server", "kad"]
     assert args.observer_action_start_delay_seconds == 30
     assert args.observer_action_search_interval_seconds == 900
     assert args.observer_action_search_timeout_seconds == 120
