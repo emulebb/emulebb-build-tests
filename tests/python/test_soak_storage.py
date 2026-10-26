@@ -787,7 +787,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 1},
+        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 1},
         now_ns=1,
     )
     second = soak_storage.persist_bounded_json_artifact(
@@ -796,7 +796,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 2},
+        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 2},
         now_ns=2,
     )
     third = soak_storage.persist_bounded_json_artifact(
@@ -805,7 +805,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v4", "seq": 3},
+        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 3},
         now_ns=3,
     )
 
@@ -872,7 +872,7 @@ def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
             directory=directory,
             stream_name="diagnostic_bundles",
             stem="rust-diagnostic-bundle-ready",
-            payload={"schema": "emulebb.diagnostic-bundle.v4"},
+            payload={"schema": "emulebb.diagnostic-bundle.v5"},
             now_ns=1,
         )
 

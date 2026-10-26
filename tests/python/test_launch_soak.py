@@ -401,7 +401,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         },
     )
     bundle = {
-        "schema": "emulebb.diagnostic-bundle.v4",
+        "schema": "emulebb.diagnostic-bundle.v5",
         "capturedAt": "2026-10-25T12:00:00Z",
         "summary": {
             "artifactFileCount": 1,
@@ -463,14 +463,14 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
     assert artifact.parent == run_paths.diagnostic_bundles_dir.resolve()
     assert json.loads(artifact.read_text(encoding="utf-8")) == bundle
     assert evidence["phase"] == "ready"
-    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v4"
+    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v5"
     assert evidence["bundleSummary"] == bundle["summary"]
     assert evidence["retainedCount"] == 1
     assert not old_campaign_artifact.exists()
     assert all(path.read_bytes() == b"a" * 512 for path in adjacent_artifacts)
 
 
-def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
+def test_capture_rust_diagnostic_bundle_rejects_non_v5_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -515,7 +515,7 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
         lambda *_args, **_kwargs: {"data": {"schema": "emulebb.diagnostic-bundle.v3"}},
     )
 
-    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v4"):
+    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v5"):
         module.capture_rust_diagnostic_bundle(
             base_url="http://127.0.0.1:4711",
             run_paths=run_paths,

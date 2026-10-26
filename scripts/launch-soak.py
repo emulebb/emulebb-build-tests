@@ -64,6 +64,7 @@ from emule_test_harness.vm_guest_profiles import api_data, retry_http_json
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
+RUST_DIAGNOSTIC_BUNDLE_SCHEMA = "emulebb.diagnostic-bundle.v5"
 
 
 @dataclass(frozen=True)
@@ -154,9 +155,9 @@ def capture_rust_diagnostic_bundle(
     bundle = api_data(response)
     if not isinstance(bundle, dict):
         raise RuntimeError("Rust diagnostic bundle response data must be an object.")
-    if bundle.get("schema") != "emulebb.diagnostic-bundle.v4":
+    if bundle.get("schema") != RUST_DIAGNOSTIC_BUNDLE_SCHEMA:
         raise RuntimeError(
-            "Rust diagnostic bundle response must use emulebb.diagnostic-bundle.v4."
+            f"Rust diagnostic bundle response must use {RUST_DIAGNOSTIC_BUNDLE_SCHEMA}."
         )
     summary = bundle.get("summary")
     if not isinstance(summary, dict):
