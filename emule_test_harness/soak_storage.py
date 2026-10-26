@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v8"
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v9"
 REQUIRED_STREAMS = (
     "controller_output",
     "daemon_output",
@@ -23,6 +23,9 @@ REQUIRED_STREAMS = (
     "observer_actions",
     "observer_checkpoints",
     "observer_summary",
+    "preflight_archive_manifest",
+    "preflight_mfc_outputs",
+    "preflight_rust_outputs",
     "process_metrics",
     "process_metrics_summary",
 )
@@ -36,6 +39,9 @@ REQUIRED_STREAM_INSTANCES = {
     "observer_actions": 1,
     "observer_checkpoints": 1,
     "observer_summary": 1,
+    "preflight_archive_manifest": 1,
+    "preflight_mfc_outputs": 1,
+    "preflight_rust_outputs": 1,
     "process_metrics": 1,
     "process_metrics_summary": 1,
 }
@@ -219,6 +225,7 @@ class BoundedArtifactStore:
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
+        temporary_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StoragePrunePlan:
         """Builds one oldest-first plan including projected future allocation."""
@@ -229,6 +236,14 @@ class BoundedArtifactStore:
             or reserved_bytes < 0
         ):
             raise ValueError("reserved_bytes must be a non-negative integer.")
+        if temporary_bytes is None:
+            temporary_bytes = reserved_bytes
+        if (
+            isinstance(temporary_bytes, bool)
+            or not isinstance(temporary_bytes, int)
+            or temporary_bytes < 0
+        ):
+            raise ValueError("temporary_bytes must be a non-negative integer.")
 
         inventory = self._inventory(self.root)
         disk_space = self._disk_space(self.root)
@@ -265,7 +280,7 @@ class BoundedArtifactStore:
         selected_paths: set[Path] = set()
         triggered: list[str] = []
         projected_total = inventory.total_bytes + reserved_bytes
-        projected_free = disk_space.free_bytes - reserved_bytes
+        projected_free = disk_space.free_bytes - temporary_bytes
 
         def select(artifact: ArtifactFile, reason: str) -> None:
             nonlocal projected_free, projected_total
@@ -330,6 +345,7 @@ class BoundedArtifactStore:
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
+        temporary_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StorageEnforcementResult:
         """Deletes only whole planned artifacts and reports every failure."""
@@ -338,6 +354,7 @@ class BoundedArtifactStore:
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
+            temporary_bytes=temporary_bytes,
             now_ns=now_ns,
         )
         deleted_paths: list[Path] = []
@@ -355,6 +372,7 @@ class BoundedArtifactStore:
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
+            temporary_bytes=temporary_bytes,
             now_ns=now_ns,
         )
         return StorageEnforcementResult(
@@ -942,9 +960,11 @@ def persist_bounded_json_checkpoint(
             )
     temporary.unlink(missing_ok=True)
 
+    existing_bytes = path.stat().st_size if path.exists() else 0
     reservation = store.enforce(
         active_campaign=resolved_campaign,
-        reserved_bytes=len(encoded),
+        reserved_bytes=max(0, len(encoded) - existing_bytes),
+        temporary_bytes=len(encoded),
         now_ns=timestamp_ns,
     )
     if not reservation.within_limits:
@@ -1226,6 +1246,11 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
         retained_segments = _positive_integer(
             stream_payload, "retained_segments", context=context
         )
+        if name == "preflight_archive_manifest" and retained_segments != 1:
+            raise RuntimeError(
+                "soak_storage.streams.preflight_archive_manifest.retained_segments "
+                "must be 1."
+            )
         if max_segment_bytes > max_total_bytes:
             raise RuntimeError(
                 f"{context}.max_segment_bytes must not exceed soak_storage.max_total_bytes."

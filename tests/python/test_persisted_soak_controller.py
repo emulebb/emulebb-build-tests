@@ -58,6 +58,9 @@ def storage_policy(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_archive_manifest": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_mfc_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_rust_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }
@@ -108,7 +111,7 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     os.utime(latest_file, ns=(200, 200))
 
     summary = controller.preflight_campaign_storage(
-        live_inputs(tmp_path, policy=storage_policy(max_total_bytes=79)),
+        live_inputs(tmp_path, policy=storage_policy(max_total_bytes=82)),
         output_root,
         protected_campaigns=(latest_file.parents[1],),
     )
@@ -116,10 +119,10 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
     assert summary["deletionCount"] == 1
     assert summary["deletionBytes"] == 60
     assert summary["protectedFileCount"] == 1
-    assert summary["reservedBytes"] == 19
-    assert summary["projectedTotalBytes"] == 79
+    assert summary["reservedBytes"] == 22
+    assert summary["projectedTotalBytes"] == 82
     assert summary["reservation"] == {
-        "totalBytes": 19,
+        "totalBytes": 22,
         "streams": {
             "controller_output": {
                 "instances": 6,
@@ -175,6 +178,24 @@ def test_campaign_storage_preflight_is_read_only_and_protects_latest(
                 "retainedSegments": 1,
                 "capacityBytes": 1,
             },
+            "preflight_archive_manifest": {
+                "instances": 1,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 1,
+            },
+            "preflight_mfc_outputs": {
+                "instances": 1,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 1,
+            },
+            "preflight_rust_outputs": {
+                "instances": 1,
+                "maxSegmentBytes": 1,
+                "retainedSegments": 1,
+                "capacityBytes": 1,
+            },
             "process_metrics": {
                 "instances": 1,
                 "maxSegmentBytes": 1,
@@ -208,7 +229,7 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
     latest_file.write_bytes(b"n" * 60)
     os.utime(old_file, ns=(100, 100))
     os.utime(latest_file, ns=(200, 200))
-    inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=79))
+    inputs = live_inputs(tmp_path, policy=storage_policy(max_total_bytes=82))
 
     summary = controller.enforce_campaign_storage(
         inputs,
@@ -218,10 +239,10 @@ def test_campaign_storage_enforcement_deletes_closed_and_preserves_latest(
 
     assert summary["deletedCount"] == 1
     assert summary["deletedBytes"] == 60
-    assert summary["planned"]["reservedBytes"] == 19
-    assert summary["verification"]["reservedBytes"] == 19
-    assert summary["verification"]["projectedTotalBytes"] == 79
-    assert summary["reservation"]["totalBytes"] == 19
+    assert summary["planned"]["reservedBytes"] == 22
+    assert summary["verification"]["reservedBytes"] == 22
+    assert summary["verification"]["projectedTotalBytes"] == 82
+    assert summary["reservation"]["totalBytes"] == 22
     assert summary["reservation"]["streams"]["controller_output"]["capacityBytes"] == 6
     assert summary["verification"]["deletionCount"] == 0
     assert summary["withinLimits"] is True
