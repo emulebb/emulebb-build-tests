@@ -57,6 +57,8 @@ def runtime(tmp_path: Path) -> converged_observer.ObserverRuntime:
     mfc_profile = tmp_path / "mfc-profile"
     rust_profile.mkdir()
     mfc_profile.mkdir()
+    (rust_profile / "packet-dump").mkdir()
+    (mfc_profile / "logs").mkdir()
     return converged_observer.ObserverRuntime(
         session_manifest=soak_root / "control" / "persisted-soak.latest.json",
         stop_file=soak_root / "control" / "persisted-soak.stop",
@@ -210,21 +212,160 @@ def test_diagnostic_profile_directories_reject_invalid_authority(
         converged_observer.diagnostic_profile_directories({"profiles": profiles})
 
 
-def test_diagnostic_profile_directories_require_existing_profiles(
+def test_diagnostic_profile_directories_allow_profiles_created_during_readiness(
     tmp_path: Path,
 ) -> None:
     rust_profile = tmp_path / "rust-profile"
-    rust_profile.mkdir()
+    mfc_profile = tmp_path / "mfc-profile"
 
-    with pytest.raises(RuntimeError, match="mfc diagnostic profile does not exist"):
-        converged_observer.diagnostic_profile_directories(
-            {
-                "profiles": {
-                    "rust": str(rust_profile),
-                    "mfc": str(tmp_path / "missing-mfc-profile"),
-                }
+    directories = converged_observer.diagnostic_profile_directories(
+        {
+            "profiles": {
+                "rust": str(rust_profile),
+                "mfc": str(mfc_profile),
             }
-        )
+        }
+    )
+
+    assert directories == converged_observer.DiagnosticDirectories(
+        rust=(rust_profile / "packet-dump").resolve(),
+        mfc=(mfc_profile / "logs").resolve(),
+    )
+
+
+def test_load_runtime_accepts_profile_paths_before_first_import(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from emule_test_harness import persisted_soak_controller
+
+    output_root = tmp_path / "output"
+    soak_root = output_root / "soak"
+    run_paths = soak_run_layout.build_run_paths(soak_root, CAMPAIGN_ID)
+    rust_profile = tmp_path / "rust-profile"
+    mfc_profile = tmp_path / "mfc-profile"
+    session_manifest = output_root / "persisted-soak.latest.json"
+    session_manifest.parent.mkdir(parents=True)
+    session_manifest.write_text(
+        json.dumps(
+            {
+                "schema": persisted_soak_controller.MANIFEST_SCHEMA,
+                "state": "running",
+                "campaignId": CAMPAIGN_ID,
+                "launcher": {
+                    "pid": 100,
+                    "creationDate": "20261025120000.000000+000",
+                },
+                "observerConfig": {"enabled": True},
+                "controlFiles": {
+                    "stop": str(output_root / "persisted-soak.stop"),
+                    "lastRunManifest": str(run_paths.last_run_manifest),
+                },
+                "preflight": {
+                    "control": {
+                        "rustBaseUrl": "http://127.0.0.1:4731/api/v1",
+                        "mfcBaseUrl": "http://127.0.0.1:4732/api/v1",
+                    },
+                    "profiles": {
+                        "rust": str(rust_profile),
+                        "mfc": str(mfc_profile),
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    storage = persisted_soak_controller.SessionStorageContext(
+        root=run_paths.campaigns_root,
+        policy=storage_policy(),
+        policy_sha256="a" * 64,
+        active_campaign=run_paths.campaign_dir,
+        previous_campaign=None,
+    )
+    monkeypatch.setattr(
+        persisted_soak_controller,
+        "parse_session_storage_context",
+        lambda _manifest, _output_root: storage,
+    )
+
+    loaded = converged_observer.load_runtime(session_manifest, output_root)
+
+    assert loaded.diagnostic_directories == converged_observer.DiagnosticDirectories(
+        rust=(rust_profile / "packet-dump").resolve(),
+        mfc=(mfc_profile / "logs").resolve(),
+    )
+    assert not rust_profile.exists()
+    assert not mfc_profile.exists()
+
+
+def test_load_ready_manifest_waits_for_diagnostic_directories(tmp_path: Path) -> None:
+    subject = runtime(tmp_path)
+    subject.diagnostic_directories.rust.rmdir()
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert converged_observer.load_ready_manifest(subject) is None
+
+    subject.diagnostic_directories.rust.mkdir()
+
+    assert converged_observer.load_ready_manifest(subject) is not None
+
+
+def test_run_observer_waits_for_first_import_diagnostic_directory(
+    tmp_path: Path,
+) -> None:
+    subject = runtime(tmp_path)
+    subject.diagnostic_directories.rust.rmdir()
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        subject.diagnostic_directories.rust.mkdir()
+        clock[0] += seconds
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=1,
+        checkpoint_interval_seconds=5,
+        failure_threshold=3,
+        max_checkpoints=1,
+        monotonic=lambda: clock[0],
+        sleep=sleep,
+        launcher_alive=lambda _identity: True,
+        capture=lambda _runtime, state: converged_observer_state.record_checkpoint(
+            state,
+            {
+                "schema": "soak_checkpoint_v1",
+                "ts_utc": "2026-10-25T12:01:00+00:00",
+                "rustAlive": True,
+                "packetRecords": {"rust": 1, "mfc": 1},
+                "totals": {"actions": 0},
+            },
+        ),
+    )
+
+    assert clock == [1.0]
+    assert result["checkpoints"]["count"] == 1
 
 
 def test_capture_checkpoint_persists_full_health_and_cumulative_state(
@@ -861,8 +1002,6 @@ def test_finalize_pending_action_is_report_first_and_uses_persisted_authority(
         terms=("linux",),
     )
     subject = replace(runtime(tmp_path), action_config=config)
-    subject.diagnostic_directories.rust.mkdir(parents=True)
-    subject.diagnostic_directories.mfc.mkdir(parents=True)
     state = reportable_state(config)
     pending = state["pendingAction"]
     events: list[str] = []
