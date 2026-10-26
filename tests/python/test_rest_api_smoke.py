@@ -11,6 +11,8 @@ import urllib.error
 
 import pytest
 
+from emule_test_harness.diag_event_runs import DIAGNOSTIC_WRITER_HEALTH_FIELDS
+
 PRIVATE_NATIVE_ONLY_ROUTES: set[tuple[str, str]] = set()
 
 
@@ -2804,9 +2806,10 @@ def test_native_route_execution_model_inventory_matches_dispatch_boundary() -> N
     )
     routes_by_operation = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
 
-    assert direct_routes == [("GET", "/app")]
+    assert direct_routes == [("GET", "/app"), ("GET", "/diagnostics")]
     assert len(direct_routes) + len(ui_thread_routes) == len(native_contracts)
     assert routes_by_operation["getApp"]["executionModel"] == "direct"
+    assert routes_by_operation["getDiagnostics"]["executionModel"] == "direct"
     assert routes_by_operation["getPreferences"]["executionModel"] == "ui-thread"
     assert routes_by_operation["shutdownApp"]["executionModel"] == "ui-thread"
     assert all(route["executionModel"] in {"direct", "ui-thread"} for route in module.REST_CONTRACT_ROUTES)
@@ -3087,6 +3090,7 @@ def test_openapi_response_dtos_require_core_implementation_fields() -> None:
             "logs",
         }
     assert set(transfer_details_data["required"]) == {"transfer", "parts", "sources"}
+    assert tuple(schemas["DiagnosticWriterHealth"]["required"]) == DIAGNOSTIC_WRITER_HEALTH_FIELDS
     assert {
         "searchId",
         "method",
