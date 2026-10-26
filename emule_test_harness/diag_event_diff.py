@@ -7,7 +7,7 @@ sequence counters.
 
 It generalises ``packet_trace_diff.py``:
 
-* the packet families (``ed2k_tcp``, ``kad_udp``) reuse the same wire-identity
+* the packet families (``ed2k_tcp``, ``ed2k_server_udp``, ``kad_udp``) reuse the same wire-identity
   ``SequenceMatcher`` algorithm — the compare key is ``(protocolMarker, opcode,
   payloadHex)`` for eD2k TCP and ``(protocolMarker, opcode, decodedHex)`` for Kad
   UDP (decoded, so an obfuscation-key difference is not a false mismatch);
@@ -41,7 +41,7 @@ from emule_test_harness.diag_event_schema import (
     FULL_RUN_REQUIRED_PARITY_FAMILIES,
 )
 
-PACKET_FAMILIES = ("ed2k_tcp", "kad_udp")
+PACKET_FAMILIES = ("ed2k_tcp", "ed2k_server_udp", "kad_udp")
 EVENT_FAMILIES = ("kad_event", "bad_peer")
 SCHED_FAMILY = "sched"
 
@@ -151,7 +151,7 @@ def _require_current_trace(trace: list[dict[str, Any]], *, side: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Packet families (ed2k_tcp / kad_udp): wire-identity SequenceMatcher.
+# Packet families (ed2k_tcp / ed2k_server_udp / kad_udp): wire identity.
 # --------------------------------------------------------------------------- #
 
 
