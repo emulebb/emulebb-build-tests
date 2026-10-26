@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -356,6 +357,33 @@ def test_active_segment_snapshot_accepts_append_only_growth(
     assert [record["seq"] for record in snapshot.records] == [1]
     with original_open(segment, "rb") as reader:
         assert reader.read() == first_payload + second_payload
+
+
+def test_segment_snapshot_allows_equivalent_path_and_handle_stat_timestamps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "closed", 0)
+    payload = (_record("closed", 42, 0, 1) + "\n").encode()
+    segment.write_bytes(payload)
+    original_fstat = os.fstat
+
+    def fstat_with_handle_timestamp(file_descriptor: int):
+        stat = original_fstat(file_descriptor)
+        return SimpleNamespace(
+            st_dev=stat.st_dev,
+            st_ino=stat.st_ino,
+            st_size=stat.st_size,
+            st_mtime_ns=stat.st_mtime_ns + 100,
+            st_ctime_ns=stat.st_ctime_ns + 100,
+        )
+
+    monkeypatch.setattr(os, "fstat", fstat_with_handle_timestamp)
+
+    snapshot = load_diag_event_segment_snapshot(segment)
+
+    assert snapshot.byte_count == len(payload)
+    assert [record["seq"] for record in snapshot.records] == [1]
 
 
 def test_closed_segment_snapshot_rejects_append_during_read(
