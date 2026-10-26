@@ -2140,16 +2140,24 @@ def _check_packet_diagnostics_source__packet_diagnostics_logging_api_is_compile_
     emule_source = _h_packet_diagnostics_source__read_source("Emule.cpp")
     artifacts = _h_packet_diagnostics_source__read_source("LogArtifactNames.h")
 
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nextern CLogFile thePacketDiagnosticsLog;" in log_header
+    combined_packet_sources = "\n".join((log_header, log_source, emule_source, artifacts))
+
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n#include \"Opcodes.h\"\n#endif" in log_source
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nconstexpr UINT kMaxPacketDiagnosticsPayloadHexBytes = 4 * 1024;" in log_source
-    assert "CCriticalSection g_packetDiagnosticsLogLock;" in log_source
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nvoid PacketDiagnosticsLogInvalidSubOpcode(" in log_source
-    assert '\\"schema\\":\\"ed2k_invalid_sub_opcode_v1\\"' in log_source
-    assert '\\"context_hex\\":\\"%s\\",\\"payload_hex_truncated\\":%s,\\"payload_hex\\":\\"%s\\"' in log_source
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nCLogFile thePacketDiagnosticsLog;" in emule_source
-    assert "InitializeDiagnosticsLog(thePacketDiagnosticsLog, strDiagnosticsLogDir + LogArtifactNames::PacketDiagnosticsLogFileName(), thePrefs.GetMaxLogFileSize())" in emule_source
-    assert "WriteDiagnosticsLogLine(thePacketDiagnosticsLog, g_packetDiagnosticsLogLock, strJson)" in log_source
+    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nvoid DiagEventLogInvalidSubOpcode(" in log_source
+    assert "void DiagEventLogInvalidSubOpcode(" in log_header
+    assert '\\"direction\\":\\"recv\\",\\"outcome\\":\\"dropped\\",\\"flow\\":\\"listener\\"' in log_source
+    assert '\\"packetFamily\\":%s' in log_source
+    assert '\\"payloadHex\\":\\"%s\\",\\"payloadHexTruncated\\":false' in log_source
+    assert '\\"invalidSubOpcode\\":%u' in log_source
+    assert '\\"contextHex\\":\\"%s\\"' in log_source
+    assert 'WriteDiagEventV2(_T("ed2k_tcp"), _T("invalid_sub_opcode"), _T("warning"), strKeys, strBody);' in log_source
+    for legacy_symbol in (
+        "thePacketDiagnosticsLog",
+        "PacketDiagnosticsLogFileName",
+        "ed2k_packet_v1",
+        "ed2k_invalid_sub_opcode_v1",
+    ):
+        assert legacy_symbol not in combined_packet_sources
     assert "bool InitializeDiagnosticsLog(CLogFile &rLog, LPCTSTR pszLogPath, UINT uMaxLogFileSize)" in log_header
     assert "void WriteDiagnosticsLogLine(CLogFile &rLog, CCriticalSection &rLock, const CString &rstrLine)" in log_header
     assert "void WriteDiagnosticsLogLineV(CLogFile &rLog, CCriticalSection &rLock, LPCTSTR pszFmt, va_list argp)" in log_header
@@ -2169,9 +2177,6 @@ def _check_packet_diagnostics_source__packet_diagnostics_logging_api_is_compile_
     assert "bool CLogFile::FlushToDisk()" in log_source
     assert "_commit(_fileno(m_fp)) == 0" in log_source
     assert "FlushDiagnosticsLogToDiskIfDue(rLog, s_ullLastDiagnosticsDiskFlushTick, ::GetTickCount64());" in log_source
-    assert "LogArtifactNames::PacketDiagnosticsLogFileName()" in emule_source
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\ninline LPCTSTR PacketDiagnosticsLogFileName()" in artifacts
-    assert 'return _T("emulebb-diagnostics-packet.log");' in artifacts
 
 
 def _check_packet_diagnostics_source__rest_recent_log_ring_is_bounded_and_clearable() -> None:
@@ -2206,28 +2211,26 @@ def _check_packet_diagnostics_source__invalid_sub_opcode_diagnostics_call_sites_
     assert answer_block.index("LogInvalidMultipacketSubOpcode(_T(\"multipacket_answer\")") < answer_block.index("strError.Format(_T(\"Invalid sub opcode 0x%02x received\"), opcode_in);")
 
 
-def _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_packet_v1_schema() -> None:
-    # Both eMuleBB packet emitters converge on the shared ed2k_packet_v1 schema so
-    # the trace diffs 1:1 against the emulebb-rust client-to-client packet dump.
+def _check_packet_diagnostics_source__packet_diagnostics_emit_only_diag_event_v2_schema() -> None:
+    # Every MFC packet emitter writes directly to the canonical segmented v2
+    # stream. No parallel packet-text producer or legacy event schema remains.
     log_header = _h_packet_diagnostics_source__read_source("Log.h")
     log_source = _h_packet_diagnostics_source__read_source("Log.cpp")
 
-    # Client-to-client (peer) emitter declared + defined alongside the server one.
-    assert "void PacketDiagnosticsLogClientPacket(" in log_header
-    assert "void PacketDiagnosticsLogClientPacket(" in log_source
-    assert "void PacketDiagnosticsLogServerTcpPacket(" in log_source
+    for emitter in (
+        "DiagEventLogEd2kClientTcpPacket",
+        "DiagEventLogEd2kServerTcpPacket",
+        "DiagEventLogEd2kServerUdpPacket",
+    ):
+        assert f"void {emitter}(" in log_header
+        assert f"void {emitter}(" in log_source
 
-    # Shared emitter + converged schema with a flow discriminator + trace_key.
-    assert "static void PacketDiagnosticsLogEd2kPacket(" in log_source
-    assert '\\"schema\\":\\"ed2k_packet_v1\\"' in log_source
-    assert '\\"flow\\":\\"%s\\"' in log_source
-    assert '\\"trace_key\\":\\"%s\\"' in log_source
-    # The retired per-family schema name must be gone (fully converged).
-    assert "ed2k_server_packet_v1" not in log_source
-
-    # Server uses flow="server", accepted client-to-client sockets use flow="listener".
-    assert 'PacketDiagnosticsLogEd2kPacket(_T("server")' in log_source
-    assert 'PacketDiagnosticsLogEd2kPacket(_T("listener")' in log_source
+    assert 'DiagEventLogEd2kTcpPacket(_T("listener")' in log_source
+    assert 'WriteDiagEventV2(_T("ed2k_tcp"), _T("packet"), _T("info"), strKeys, strBody);' in log_source
+    assert 'WriteDiagEventV2(bUdp ? _T("ed2k_server_udp") : _T("ed2k_tcp"), _T("packet"), _T("info"), strKeys, strBody);' in log_source
+    assert '\\"payloadHex\\":\\"%s\\",\\"payloadHexTruncated\\":false' in log_source
+    for legacy_schema in ("ed2k_packet_v1", "ed2k_server_packet_v1"):
+        assert legacy_schema not in log_source
 
 
 def _check_packet_diagnostics_source__known_udp_opcodes_have_converged_names() -> None:
@@ -2251,8 +2254,8 @@ def _check_packet_diagnostics_source__known_udp_opcodes_have_converged_names() -
 
 
 def _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_sites_are_guarded() -> None:
-    # The client-to-client recv dispatch and send path both emit one ed2k_packet_v1
-    # record per packet, compile-gated on EMULEBB_ENABLE_PACKET_DIAGNOSTICS.
+    # The client-to-client recv dispatch and send path both emit one canonical
+    # diag_event_v2 packet record, compile-gated on packet diagnostics.
     source = _h_packet_diagnostics_source__read_source("ListenSocket.cpp")
 
     recv = source[source.index("bool CClientReqSocket::PacketReceived(") : source.index("void CClientReqSocket::SendPacket(")]
@@ -2261,7 +2264,7 @@ def _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_site
 
     for block, direction in ((recv, "recv"), (send, "send")):
         assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS" in block
-        assert "PacketDiagnosticsLogClientPacket(BuildPacketDiagnosticsPeerLabel(client)," in block
+        assert "DiagEventLogEd2kClientTcpPacket(BuildPacketDiagnosticsPeerLabel(client)," in block
         assert "GetPacketDiagnosticsTransportMode(client)" in block
         assert f'_T("{direction}")' in block
         assert "packet->prot, packet->opcode, (const BYTE*)packet->pBuffer, packet->size)" in block
@@ -4190,7 +4193,7 @@ _PARITY_CASES = [
     ("packet_diagnostics_source::test_packet_diagnostics_logging_api_is_compile_guarded", _check_packet_diagnostics_source__packet_diagnostics_logging_api_is_compile_guarded),
     ("packet_diagnostics_source::test_rest_recent_log_ring_is_bounded_and_clearable", _check_packet_diagnostics_source__rest_recent_log_ring_is_bounded_and_clearable),
     ("packet_diagnostics_source::test_invalid_sub_opcode_diagnostics_call_sites_are_guarded", _check_packet_diagnostics_source__invalid_sub_opcode_diagnostics_call_sites_are_guarded),
-    ("packet_diagnostics_source::test_packet_diagnostics_emit_converged_ed2k_packet_v1_schema", _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_packet_v1_schema),
+    ("packet_diagnostics_source::test_packet_diagnostics_emit_only_diag_event_v2_schema", _check_packet_diagnostics_source__packet_diagnostics_emit_only_diag_event_v2_schema),
     ("packet_diagnostics_source::test_known_udp_opcodes_have_converged_names", _check_packet_diagnostics_source__known_udp_opcodes_have_converged_names),
     ("packet_diagnostics_source::test_packet_diagnostics_client_packet_call_sites_are_guarded", _check_packet_diagnostics_source__packet_diagnostics_client_packet_call_sites_are_guarded),
     ("packet_diagnostics_source::test_packet_diagnostics_does_not_port_full_tracing_harness", _check_packet_diagnostics_source__packet_diagnostics_does_not_port_full_tracing_harness),
