@@ -2070,6 +2070,59 @@ def test_stop_session_requests_graceful_teardown_without_force(
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["state"] == "stopped"
 
 
+def test_stop_session_accepts_authoritative_no_writer_heartbeat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    campaign_id = "20261025T120000Z"
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "schema": controller.MANIFEST_SCHEMA,
+            "state": "running",
+            "campaignId": campaign_id,
+            "launcher": {"pid": 10, "creationDate": "launcher"},
+            "observer": {"pid": 30, "creationDate": "observer"},
+            "watcher": {"pid": 20, "creationDate": "watcher"},
+            "preflight": {
+                "diagnosticDirs": {
+                    "rust": str(tmp_path / "rust-profile" / "packet-dump"),
+                    "mfc": str(tmp_path / "mfc-profile" / "logs"),
+                }
+            },
+        },
+    )
+    controller.write_json_atomic(
+        paths.watch_heartbeat,
+        {
+            "campaignId": campaign_id,
+            "diagnosticWriters": {
+                "required": False,
+                "rust": None,
+                "mfc": None,
+            },
+        },
+    )
+    monkeypatch.setattr(controller, "wait_exact_exit", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        controller,
+        "session_status",
+        lambda *_args, **_kwargs: {"schema": controller.STATUS_SCHEMA, "ok": False},
+    )
+
+    result = controller.stop_session(paths, graceful_timeout_seconds=1.0)
+
+    assert result["ok"] is True
+    assert result["diagnosticFinalization"] == {
+        "required": False,
+        "ok": True,
+        "indexes": None,
+        "reason": "diagnostic-writers-not-started",
+    }
+    assert json.loads(paths.manifest.read_text(encoding="utf-8"))["state"] == "stopped"
+
+
 def test_stop_session_finalizes_both_active_diagnostic_segments(
     tmp_path: Path,
     monkeypatch,

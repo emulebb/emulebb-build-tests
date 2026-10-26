@@ -2919,10 +2919,18 @@ def finalize_stopped_session_diagnostics(
             "The final watcher heartbeat does not belong to the stopped campaign."
         )
     diagnostic_writers = heartbeat.get("diagnosticWriters")
-    if (
-        not isinstance(diagnostic_writers, dict)
-        or diagnostic_writers.get("required") is not True
-    ):
+    if not isinstance(diagnostic_writers, dict):
+        raise RuntimeError(
+            "The final watcher heartbeat has no authoritative diagnostic writer state."
+        )
+    if diagnostic_writers.get("required") is False:
+        return {
+            "required": False,
+            "ok": True,
+            "indexes": None,
+            "reason": "diagnostic-writers-not-started",
+        }
+    if diagnostic_writers.get("required") is not True:
         raise RuntimeError(
             "The final watcher heartbeat has no authoritative diagnostic writer state."
         )
