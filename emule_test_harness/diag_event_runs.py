@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -356,33 +357,69 @@ def load_diag_event_segment(
 def load_diag_event_segment_snapshot(
     path: Path, *, allow_incomplete_tail: bool = False
 ) -> DiagnosticSegmentSnapshot:
-    """Reads one stable segment exactly once and returns its records and digest."""
+    """Reads one bounded segment snapshot and returns its records and digest."""
 
     if path.is_symlink():
         raise DiagnosticTraceError(f"diagnostic segment must not be a symlink: {path}")
     try:
         before = path.stat()
-        payload = path.read_bytes()
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            payload = stream.read(opened.st_size)
+            read_complete = os.fstat(stream.fileno())
         after = path.stat()
     except OSError as error:
         raise DiagnosticTraceError(
             f"unable to read diagnostic segment {path}: {error}"
         ) from error
-    before_identity = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
+
+    path_identity = (before.st_dev, before.st_ino)
+    opened_identity = (opened.st_dev, opened.st_ino)
+    read_complete_identity = (read_complete.st_dev, read_complete.st_ino)
+    after_identity = (after.st_dev, after.st_ino)
+    identity_changed = not (
+        path_identity == opened_identity == read_complete_identity == after_identity
     )
-    after_identity = (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
-    if before_identity != after_identity or len(payload) != after.st_size:
+    if allow_incomplete_tail:
+        changed_during_read = (
+            identity_changed
+            or len(payload) != opened.st_size
+            or read_complete.st_size < opened.st_size
+            or after.st_size < opened.st_size
+        )
+    else:
+        before_state = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        opened_state = (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        )
+        read_complete_state = (
+            read_complete.st_dev,
+            read_complete.st_ino,
+            read_complete.st_size,
+            read_complete.st_mtime_ns,
+            read_complete.st_ctime_ns,
+        )
+        after_state = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        changed_during_read = not (
+            before_state == opened_state == read_complete_state == after_state
+        ) or len(payload) != opened.st_size
+    if changed_during_read:
         raise DiagnosticTraceError(
             f"diagnostic segment changed while being read: {path}"
         )
@@ -400,7 +437,7 @@ def load_diag_event_segment_snapshot(
     return DiagnosticSegmentSnapshot(
         path=path.resolve(),
         byte_count=len(payload),
-        modified_ns=after.st_mtime_ns,
+        modified_ns=opened.st_mtime_ns,
         sha256=hashlib.sha256(payload).hexdigest(),
         tail_terminated=not text or text.endswith(("\n", "\r")),
         incomplete_tail_ignored=incomplete_tail_ignored,
