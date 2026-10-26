@@ -88,6 +88,77 @@ def diagnostic_runs() -> dict[str, dict[str, object]]:
     }
 
 
+def reportable_state(
+    config: converged_observer.ObserverActionConfig,
+) -> dict[str, object]:
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+        state = converged_observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:02+00:00",
+            search_id=f"{client}-search-1",
+            error=None,
+        )
+        state = converged_observer_state.record_search_results(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:03+00:00",
+            completed=True,
+            result_count=1,
+            error=None,
+        )
+    pending = state["pendingAction"]
+    state = converged_observer_state.record_driver_cycle(
+        state,
+        converged_observer.pending_cycle_payload(
+            pending,
+            completed_at_utc="2026-10-25T12:00:04+00:00",
+        ),
+    )
+    return converged_observer_state.mark_evidence_pending(
+        state,
+        window_end_utc="2026-10-25T12:00:04+00:00",
+    )
+
+
+def pending_action_report(pending: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema": "emulebb-build-tests.observer-action-report.v1",
+        "campaignId": CAMPAIGN_ID,
+        "seq": pending["reportSeq"],
+        "actionId": pending["actionId"],
+        "cycle": pending["cycle"],
+        "kind": "search",
+        "method": pending["method"],
+        "key": pending["query"],
+        "label": pending["query"],
+        "window": {
+            "t0": pending["reservedAtUtc"],
+            "t1": pending["evidence"]["windowEndUtc"],
+        },
+        "observed": {
+            "rust": pending["evidence"]["windowEndUtc"],
+            "mfc": pending["evidence"]["windowEndUtc"],
+        },
+        "verdict": "no-traffic",
+        "coverageOk": False,
+        "byteMatch": False,
+        "diagOk": True,
+    }
+
+
 def test_diagnostic_profile_directories_use_only_manifest_authority(
     tmp_path: Path,
 ) -> None:
@@ -557,6 +628,179 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
         "status": "pending",
         "windowEndUtc": "2026-10-25T12:00:04+00:00",
     }
+
+
+def test_finalize_pending_action_is_report_first_and_uses_persisted_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    subject.diagnostic_directories.rust.mkdir(parents=True)
+    subject.diagnostic_directories.mfc.mkdir(parents=True)
+    state = reportable_state(config)
+    pending = state["pendingAction"]
+    events: list[str] = []
+    evidence_token = object()
+
+    def capture_evidence(*, window, rust, mfc):
+        events.append("capture")
+        assert window.start_utc.isoformat() == pending["reservedAtUtc"]
+        assert window.end_utc.isoformat() == pending["evidence"]["windowEndUtc"]
+        assert rust.directory == subject.diagnostic_directories.rust.resolve()
+        assert rust.process_id == 4101
+        assert rust.run_id == "rust-run"
+        assert mfc.directory == subject.diagnostic_directories.mfc.resolve()
+        assert mfc.process_id == 4201
+        assert mfc.run_id == "mfc-run"
+        return evidence_token
+
+    def build_report(*, campaign_id, pending_action, evidence):
+        events.append("build")
+        assert campaign_id == CAMPAIGN_ID
+        assert pending_action == pending
+        assert evidence is evidence_token
+        return pending_action_report(pending_action)
+
+    persisted = soak_storage.PersistedArtifact(
+        path=subject.run_paths.actions_dir
+        / f"action-00000001-{pending['actionId']}.json",
+        byte_count=512,
+        sha256="a" * 64,
+        deleted_paths=(),
+        retained_count=1,
+        retained_bytes=512,
+    )
+
+    def persist_report(**kwargs):
+        events.append("report")
+        assert kwargs["report"]["actionId"] == pending["actionId"]
+        assert kwargs["now_ns"] == 123
+        return persisted
+
+    original_commit = converged_observer_state.commit_action_report
+    original_retention = converged_observer_state.record_stream_retention
+
+    def commit_action(current_state, report):
+        events.append("commit")
+        return original_commit(current_state, report)
+
+    def record_retention(current_state, *, stream, persisted):
+        events.append("retention")
+        return original_retention(
+            current_state,
+            stream=stream,
+            persisted=persisted,
+        )
+
+    summaries = []
+
+    def persist_summary(**kwargs):
+        events.append("summary")
+        summaries.append(kwargs["summary"])
+        assert kwargs["now_ns"] == 123
+        return persisted
+
+    monkeypatch.setattr(
+        converged_observer.observer_action_evidence,
+        "capture_action_diagnostic_evidence",
+        capture_evidence,
+    )
+    monkeypatch.setattr(
+        converged_observer.observer_action_report,
+        "build_observer_action_report",
+        build_report,
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_action_report",
+        persist_report,
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_observer_state,
+        "commit_action_report",
+        commit_action,
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_observer_state,
+        "record_stream_retention",
+        record_retention,
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_summary",
+        persist_summary,
+    )
+
+    updated = converged_observer.finalize_pending_action(
+        subject,
+        state,
+        now_ns=123,
+    )
+
+    assert events == ["capture", "build", "report", "commit", "retention", "summary"]
+    assert updated["pendingAction"] is None
+    assert updated["totals"]["actions"] == 1
+    assert updated["retention"]["actions"] == {
+        "seen": 1,
+        "retained": 1,
+        "omitted": 0,
+        "retainedBytes": 512,
+        "latestFile": persisted.path.name,
+    }
+    assert summaries == [updated]
+
+
+def test_finalize_pending_action_does_not_commit_if_report_persistence_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = reportable_state(config)
+    pending = state["pendingAction"]
+    monkeypatch.setattr(
+        converged_observer,
+        "capture_pending_action_evidence",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        converged_observer.observer_action_report,
+        "build_observer_action_report",
+        lambda **_kwargs: pending_action_report(pending),
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_action_report",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic write failure")),
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_observer_state,
+        "commit_action_report",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("state must not commit")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.soak_run_layout,
+        "persist_observer_summary",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("summary must not persist")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic write failure"):
+        converged_observer.finalize_pending_action(subject, state)
+
+    assert state["pendingAction"] == pending
 
 
 def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
