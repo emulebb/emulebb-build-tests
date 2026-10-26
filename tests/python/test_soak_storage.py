@@ -391,6 +391,44 @@ def test_inventory_artifacts_rejects_non_directory_root(tmp_path: Path) -> None:
         soak_storage.inventory_artifacts(file_root)
 
 
+def test_inventory_artifacts_rejects_descendant_reparse_point(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    monkeypatch.setattr(
+        soak_storage,
+        "_is_reparse_point",
+        lambda path: path == linked,
+    )
+
+    with pytest.raises(RuntimeError, match="directory reparse point"):
+        soak_storage.inventory_artifacts(tmp_path)
+
+
+def test_bounded_store_minimum_free_override_is_exact(tmp_path: Path) -> None:
+    policy = soak_storage.parse_soak_storage_policy(policy_payload())
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        policy,
+        disk_space=lambda _path: soak_storage.DiskSpaceSnapshot(
+            measured_path=tmp_path,
+            total_bytes=1_000,
+            used_bytes=100,
+            free_bytes=900,
+        ),
+    )
+
+    exact = store.plan(temporary_bytes=100, minimum_free_bytes=800)
+    below = store.plan(temporary_bytes=101, minimum_free_bytes=800)
+
+    assert exact.within_limits is True
+    assert exact.projected_free_bytes == 800
+    assert below.within_limits is False
+    assert below.unresolved_constraints == ("minimum_free_bytes",)
+
+
 def test_disk_space_snapshot_uses_nearest_existing_ancestor(tmp_path: Path) -> None:
     measured: list[Path] = []
 

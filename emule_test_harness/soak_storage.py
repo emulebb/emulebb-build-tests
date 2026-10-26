@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -226,6 +227,7 @@ class BoundedArtifactStore:
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
         temporary_bytes: int | None = None,
+        minimum_free_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StoragePrunePlan:
         """Builds one oldest-first plan including projected future allocation."""
@@ -244,6 +246,14 @@ class BoundedArtifactStore:
             or temporary_bytes < 0
         ):
             raise ValueError("temporary_bytes must be a non-negative integer.")
+        if minimum_free_bytes is None:
+            minimum_free_bytes = self.policy.minimum_free_bytes
+        if (
+            isinstance(minimum_free_bytes, bool)
+            or not isinstance(minimum_free_bytes, int)
+            or minimum_free_bytes <= 0
+        ):
+            raise ValueError("minimum_free_bytes must be a positive integer.")
 
         inventory = self._inventory(self.root)
         disk_space = self._disk_space(self.root)
@@ -316,15 +326,15 @@ class BoundedArtifactStore:
         remaining = [
             artifact for artifact in remaining if artifact.path not in selected_paths
         ]
-        if projected_free < self.policy.minimum_free_bytes:
+        if projected_free < minimum_free_bytes:
             triggered.append("minimum_free_bytes")
-            while projected_free < self.policy.minimum_free_bytes and remaining:
+            while projected_free < minimum_free_bytes and remaining:
                 select(remaining.pop(0), "minimum_free_bytes")
 
         unresolved: list[str] = []
         if projected_total > self.policy.max_total_bytes:
             unresolved.append("max_total_bytes")
-        if projected_free < self.policy.minimum_free_bytes:
+        if projected_free < minimum_free_bytes:
             unresolved.append("minimum_free_bytes")
 
         return StoragePrunePlan(
@@ -346,6 +356,7 @@ class BoundedArtifactStore:
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
         temporary_bytes: int | None = None,
+        minimum_free_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StorageEnforcementResult:
         """Deletes only whole planned artifacts and reports every failure."""
@@ -355,6 +366,7 @@ class BoundedArtifactStore:
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
             temporary_bytes=temporary_bytes,
+            minimum_free_bytes=minimum_free_bytes,
             now_ns=now_ns,
         )
         deleted_paths: list[Path] = []
@@ -373,6 +385,7 @@ class BoundedArtifactStore:
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
             temporary_bytes=temporary_bytes,
+            minimum_free_bytes=minimum_free_bytes,
             now_ns=now_ns,
         )
         return StorageEnforcementResult(
@@ -1278,6 +1291,8 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
 def inventory_artifacts(root: Path) -> ArtifactInventory:
     """Inventories regular files without following directory symlinks."""
 
+    if _is_reparse_point(root):
+        raise RuntimeError(f"Soak artifact store root must not be a reparse point: {root}")
     resolved_root = root.resolve()
     if not resolved_root.exists():
         return ArtifactInventory(files=(), total_bytes=0)
@@ -1291,15 +1306,18 @@ def inventory_artifacts(root: Path) -> ArtifactInventory:
         resolved_root, followlinks=False
     ):
         current = Path(current_root)
-        directory_names[:] = sorted(
-            (name for name in directory_names if not (current / name).is_symlink()),
-            key=str.casefold,
-        )
+        for name in directory_names:
+            directory = current / name
+            if _is_reparse_point(directory):
+                raise RuntimeError(
+                    f"Soak artifact store contains a directory reparse point: {directory}"
+                )
+        directory_names[:] = sorted(directory_names, key=str.casefold)
         for name in sorted(file_names, key=str.casefold):
             path = current / name
-            if path.is_symlink():
+            if _is_reparse_point(path):
                 raise RuntimeError(
-                    f"Soak artifact store contains a file symlink: {path}"
+                    f"Soak artifact store contains a file reparse point: {path}"
                 )
             stat = path.stat()
             if not path.is_file():
@@ -1319,6 +1337,16 @@ def inventory_artifacts(root: Path) -> ArtifactInventory:
     return ArtifactInventory(
         files=tuple(files), total_bytes=sum(item.size_bytes for item in files)
     )
+
+
+def _is_reparse_point(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        attributes = path.lstat().st_file_attributes
+    except (AttributeError, FileNotFoundError, OSError):
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
 def disk_space_snapshot(
@@ -1348,6 +1376,14 @@ def disk_space_snapshot(
         used_bytes=used_bytes,
         free_bytes=free_bytes,
     )
+
+
+def storage_volume_identity(path: Path) -> str:
+    """Returns a stable local filesystem identity for one path's storage volume."""
+
+    measured_path = nearest_existing_ancestor(path)
+    stat_result = measured_path.stat()
+    return f"st_dev:{stat_result.st_dev}"
 
 
 def nearest_existing_ancestor(path: Path) -> Path:
