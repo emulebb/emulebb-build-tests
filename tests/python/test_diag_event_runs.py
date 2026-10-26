@@ -209,6 +209,11 @@ def test_exact_run_snapshot_retains_segment_provenance(tmp_path: Path) -> None:
         hashlib.sha256(first_payload).hexdigest(),
         hashlib.sha256(second_payload).hexdigest(),
     ]
+    assert [segment.tail_terminated for segment in snapshot.segments] == [True, True]
+    assert [segment.incomplete_tail_ignored for segment in snapshot.segments] == [
+        False,
+        False,
+    ]
     assert [record["seq"] for record in snapshot.records] == [17, 18]
 
 
@@ -259,6 +264,41 @@ def test_segment_snapshot_hashes_the_exact_stable_bytes(tmp_path: Path) -> None:
     assert snapshot.byte_count == len(payload)
     assert snapshot.modified_ns == segment.stat().st_mtime_ns
     assert snapshot.sha256 == hashlib.sha256(payload).hexdigest()
+    assert snapshot.tail_terminated is True
+    assert snapshot.incomplete_tail_ignored is False
+    assert [record["seq"] for record in snapshot.records] == [1]
+
+
+def test_segment_snapshot_reports_ignored_incomplete_tail(tmp_path: Path) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    segment.write_text(
+        _record("active", 42, 0, 1) + '\n{"schema"',
+        encoding="utf-8",
+    )
+
+    snapshot = load_diag_event_segment_snapshot(
+        segment,
+        allow_incomplete_tail=True,
+    )
+
+    assert snapshot.tail_terminated is False
+    assert snapshot.incomplete_tail_ignored is True
+    assert [record["seq"] for record in snapshot.records] == [1]
+
+
+def test_segment_snapshot_distinguishes_complete_unterminated_json(
+    tmp_path: Path,
+) -> None:
+    segment = tmp_path / _segment_name("rust", 42, "active", 0)
+    segment.write_text(_record("active", 42, 0, 1), encoding="utf-8")
+
+    snapshot = load_diag_event_segment_snapshot(
+        segment,
+        allow_incomplete_tail=True,
+    )
+
+    assert snapshot.tail_terminated is False
+    assert snapshot.incomplete_tail_ignored is False
     assert [record["seq"] for record in snapshot.records] == [1]
 
 

@@ -24,6 +24,8 @@ class DiagnosticSegmentSnapshot:
     byte_count: int
     modified_ns: int
     sha256: str
+    tail_terminated: bool
+    incomplete_tail_ignored: bool
     records: tuple[dict[str, Any], ...]
 
 
@@ -390,7 +392,7 @@ def load_diag_event_segment_snapshot(
         raise DiagnosticTraceError(
             f"diagnostic segment is not valid UTF-8: {path}: {error}"
         ) from error
-    records = _parse_diag_event_segment_text(
+    records, incomplete_tail_ignored = _parse_diag_event_segment_text(
         text,
         path=path,
         allow_incomplete_tail=allow_incomplete_tail,
@@ -400,15 +402,18 @@ def load_diag_event_segment_snapshot(
         byte_count=len(payload),
         modified_ns=after.st_mtime_ns,
         sha256=hashlib.sha256(payload).hexdigest(),
+        tail_terminated=not text or text.endswith(("\n", "\r")),
+        incomplete_tail_ignored=incomplete_tail_ignored,
         records=tuple(records),
     )
 
 
 def _parse_diag_event_segment_text(
     text: str, *, path: Path, allow_incomplete_tail: bool
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
     lines = text.splitlines(keepends=True)
     records: list[dict[str, Any]] = []
+    incomplete_tail_ignored = False
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line:
@@ -422,6 +427,7 @@ def _parse_diag_event_segment_text(
                 and not raw_line.endswith(("\n", "\r"))
             )
             if is_incomplete_tail:
+                incomplete_tail_ignored = True
                 continue
             raise DiagnosticTraceError(
                 f"malformed JSON in diagnostic segment {path} at line {line_number}: {error.msg}"
@@ -435,7 +441,7 @@ def _parse_diag_event_segment_text(
                 f"unexpected diagnostic schema in {path}: {record.get('schema')!r}"
             )
         records.append(record)
-    return records
+    return records, incomplete_tail_ignored
 
 
 def load_latest_diag_records(
