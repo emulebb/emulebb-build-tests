@@ -1839,6 +1839,25 @@ def test_status_findings_distinguishes_writer_transport_from_integrity() -> None
     assert "mfc-diagnostic-writer-unhealthy" in findings
 
 
+def test_status_findings_scopes_launcher_failure_to_current_campaign() -> None:
+    status = {
+        "launcher": {"alive": True},
+        "manifest": {"state": "running", "campaignId": "current"},
+        "watcher": {},
+        "clients": {"rustCount": 1, "mfcCount": 1},
+        "rest": None,
+        "diagnosticWriters": {"required": False},
+        "vpn": {"ok": True},
+        "lastRun": {"campaignId": "previous", "status": "failed"},
+        "storage": {"ok": True},
+    }
+
+    assert "launcher-reported-failure" not in controller.status_findings(status)
+
+    status["lastRun"] = {"campaignId": "current", "status": "failed"}
+    assert "launcher-reported-failure" in controller.status_findings(status)
+
+
 def test_session_status_reports_current_storage_failure_and_dead_watcher(
     tmp_path: Path,
     monkeypatch,

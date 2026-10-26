@@ -2007,7 +2007,13 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     if isinstance(vpn, dict) and not vpn.get("ok"):
         findings.append("full-tunnel-unhealthy")
     last_run = status.get("lastRun") or {}
-    if last_run.get("status") == "failed":
+    campaign_id = (status.get("manifest") or {}).get("campaignId")
+    if (
+        isinstance(campaign_id, str)
+        and campaign_id
+        and last_run.get("campaignId") == campaign_id
+        and last_run.get("status") == "failed"
+    ):
         findings.append("launcher-reported-failure")
     storage = status.get("storage")
     if isinstance(storage, dict) and storage.get("ok") is False:
