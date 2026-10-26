@@ -447,9 +447,9 @@ def advance_diagnostic_indexes(
     if not required:
         return result
 
-    profiles = status.get("profiles")
-    if not isinstance(profiles, dict):
-        raise RuntimeError("Watch status is missing diagnostic profile paths.")
+    diagnostic_dirs = status.get("diagnosticDirs")
+    if not isinstance(diagnostic_dirs, dict):
+        raise RuntimeError("Watch status is missing diagnostic directories.")
     observed_utc = status.get("timestampUtc")
     if not isinstance(observed_utc, str) or not observed_utc:
         raise RuntimeError("Watch status timestampUtc is invalid.")
@@ -462,19 +462,19 @@ def advance_diagnostic_indexes(
                 "status": "writer-health-unavailable",
             }
             continue
-        profile_value = profiles.get(client)
-        if not isinstance(profile_value, str) or not profile_value.strip():
+        diagnostic_dir_value = diagnostic_dirs.get(client)
+        if not isinstance(diagnostic_dir_value, str) or not diagnostic_dir_value.strip():
             raise RuntimeError(
-                f"Watch status {client} diagnostic profile path is invalid."
+                f"Watch status {client} diagnostic directory is invalid."
             )
-        profile_dir = Path(profile_value).resolve()
+        diagnostic_dir = Path(diagnostic_dir_value).resolve()
         directory = (
             context.active_campaign / "report" / "diagnostic-indexes" / client
         ).resolve()
         checkpoint_path = directory / DIAGNOSTIC_INDEX_FILE_NAME
         checkpoint = load_json(checkpoint_path) if checkpoint_path.is_file() else None
         advanced = diagnostic_run_scan.scan_closed_segments(
-            profile_dir=profile_dir,
+            profile_dir=diagnostic_dir,
             client=client,
             writer_health=writer["health"],
             observed_utc=observed_utc,
@@ -1112,6 +1112,10 @@ def preflight_session(
         "profiles": {
             "mfc": str(inputs.mfc_profile_dir.resolve()),
             "rust": str(rust_profile_dir),
+        },
+        "diagnosticDirs": {
+            "mfc": str((inputs.mfc_profile_dir / "logs").resolve()),
+            "rust": str((rust_profile_dir / "packet-dump").resolve()),
         },
         "executables": {
             "mfc": str(mfc_exe.resolve()),
@@ -2084,6 +2088,7 @@ def session_status(
             ],
         },
         "profiles": preflight.get("profiles"),
+        "diagnosticDirs": preflight.get("diagnosticDirs"),
         "lastRun": {
             "campaignId": last_run.get("campaignId"),
             "status": last_run.get("status"),

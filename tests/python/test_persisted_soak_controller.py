@@ -308,6 +308,10 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "mfc": str(tmp_path / "EMULE_BIN"),
             "rust": str(tmp_path / "EMULE_RUST_PROFILE_PERSISTED"),
         },
+        "diagnosticDirs": {
+            "mfc": str(tmp_path / "EMULE_BIN" / "logs"),
+            "rust": str(tmp_path / "EMULE_RUST_PROFILE_PERSISTED" / "packet-dump"),
+        },
         "executables": {
             "mfc": str(tmp_path / "bin" / "emule.exe"),
             "rust": str(tmp_path / "bin" / "emulebb-rust-diagnostics.exe"),
@@ -597,10 +601,16 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
         "rust": tmp_path / "rust-profile",
         "mfc": tmp_path / "mfc-profile",
     }
+    diagnostic_dirs = {
+        "rust": profiles["rust"] / "packet-dump",
+        "mfc": profiles["mfc"] / "logs",
+    }
     for client, profile in profiles.items():
         profile.mkdir()
+        diagnostic_dir = diagnostic_dirs[client]
+        diagnostic_dir.mkdir()
         prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
-        segment = profile / f"{prefix}-diag-42-run-a-000000.jsonl"
+        segment = diagnostic_dir / f"{prefix}-diag-42-run-a-000000.jsonl"
         segment.write_text(
             json.dumps(
                 diagnostic_record(
@@ -616,6 +626,9 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
     status = {
         "timestampUtc": "2026-10-25T12:00:00+00:00",
         "profiles": {client: str(path) for client, path in profiles.items()},
+        "diagnosticDirs": {
+            client: str(path) for client, path in diagnostic_dirs.items()
+        },
         "diagnosticWriters": {
             "required": True,
             "rust": {
