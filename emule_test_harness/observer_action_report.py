@@ -98,8 +98,11 @@ def build_observer_action_report(
         ),
         action_window=evidence.window,
     )
+    driver_complete = pending_action["driverOutcome"]["ok"] is True
     verdict = (
-        assessment["verdict"] if evidence.complete else "evidence-incomplete"
+        assessment["verdict"]
+        if evidence.complete and driver_complete
+        else "evidence-incomplete"
     )
     report = {
         "schema": SCHEMA,
@@ -175,6 +178,10 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
     driver = report.get("driverOutcome")
     if not isinstance(driver, dict):
         raise ObserverActionReportError("Observer action driver outcome is invalid.")
+    if not isinstance(driver.get("ok"), bool):
+        raise ObserverActionReportError(
+            "Observer action driver outcome ok flag is invalid."
+        )
     if (
         driver.get("actionId") != report["actionId"]
         or driver.get("cycle") != report["cycle"]
@@ -224,7 +231,7 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
         raise ObserverActionReportError("Observer action assessment verdict is invalid.")
     expected_verdict = (
         "evidence-incomplete"
-        if evidence_status == "incomplete"
+        if evidence_status == "incomplete" or not driver["ok"]
         else assessment["verdict"]
     )
     if report["verdict"] != expected_verdict:
@@ -383,6 +390,10 @@ def _validate_pending_action(pending: object) -> None:
     driver = pending["driverOutcome"]
     if not isinstance(driver, dict):
         raise ObserverActionReportError("pending_action driver outcome is missing")
+    if not isinstance(driver.get("ok"), bool):
+        raise ObserverActionReportError(
+            "pending_action driver outcome ok flag is invalid"
+        )
     if (
         driver.get("actionId") != pending["actionId"]
         or driver.get("cycle") != pending["cycle"]

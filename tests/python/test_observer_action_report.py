@@ -345,7 +345,7 @@ def test_incomplete_exact_tail_overrides_an_otherwise_parity_verdict(
 
 
 @pytest.mark.parametrize(
-    ("rust_succeeded", "mfc_succeeded", "expected_verdict"),
+    ("rust_succeeded", "mfc_succeeded", "expected_assessment_verdict"),
     [
         (True, False, "evidence-incomplete"),
         (False, False, "no-traffic"),
@@ -355,7 +355,7 @@ def test_failed_driver_outcomes_still_produce_deterministic_reports(
     tmp_path: Path,
     rust_succeeded: bool,
     mfc_succeeded: bool,
-    expected_verdict: str,
+    expected_assessment_verdict: str,
 ) -> None:
     pending = _pending_action(
         rust_succeeded=rust_succeeded,
@@ -378,9 +378,41 @@ def test_failed_driver_outcomes_still_produce_deterministic_reports(
     )
 
     assert first == second
-    assert first["verdict"] == expected_verdict
+    assert first["verdict"] == "evidence-incomplete"
+    assert first["assessment"]["verdict"] == expected_assessment_verdict
     assert first["driverOutcome"]["ok"] is False
     assert first["driverOutcome"]["errors"]
+
+
+def test_failed_driver_outcome_does_not_promote_raw_divergence(
+    tmp_path: Path,
+) -> None:
+    pending = _pending_action(rust_succeeded=True, mfc_succeeded=False)
+    evidence = _evidence(
+        tmp_path,
+        rust_records=_kad_records("rust", 4101, "rust-run"),
+        mfc_records=[
+            _kad_record(
+                client="mfc",
+                process_id=4201,
+                run_id="mfc-run",
+                sequence=1,
+                seconds=6,
+                opcode=soak_action_diff.KAD2_SEARCH_RES,
+                direction="recv",
+            )
+        ],
+    )
+
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=pending,
+        evidence=evidence,
+    )
+
+    assert report["assessment"]["verdict"] == "divergence"
+    assert report["verdict"] == "evidence-incomplete"
+    assert report["driverOutcome"]["ok"] is False
 
 
 def test_report_rejects_evidence_from_a_different_window(tmp_path: Path) -> None:
