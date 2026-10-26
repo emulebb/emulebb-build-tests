@@ -19,6 +19,7 @@ def record(
     outcome: str | None = None,
     opcode: int | None = None,
     marker: int | None = None,
+    keys: dict[str, object] | None = None,
 ) -> dict[str, object]:
     body: dict[str, object] = {}
     if outcome is not None:
@@ -43,7 +44,7 @@ def record(
         "family": family,
         "event": event,
         "severity": severity,
-        "keys": {},
+        "keys": keys or {},
         "body": body,
     }
 
@@ -86,8 +87,24 @@ def test_advance_records_builds_compact_family_opcode_and_outcome_index() -> Non
     advanced = diagnostic_run_index.advance_records(
         index,
         [
-            record(10, segment_id=3, opcode=1, outcome="attempted"),
-            record(11, segment_id=3, opcode=1, outcome="sent"),
+            record(
+                10,
+                segment_id=3,
+                opcode=1,
+                outcome="attempted",
+                keys={"peer": "198.51.100.2:4662", "peerHash": "00" * 16},
+            ),
+            record(
+                11,
+                segment_id=3,
+                opcode=1,
+                outcome="sent",
+                keys={
+                    "peer": "198.51.100.2:4662",
+                    "peerHash": "00" * 16,
+                    "fileHash": "11" * 16,
+                },
+            ),
             record(
                 12,
                 segment_id=4,
@@ -118,6 +135,11 @@ def test_advance_records_builds_compact_family_opcode_and_outcome_index() -> Non
     assert ed2k["records"] == 2
     assert ed2k["events"] == {"packet": 2}
     assert ed2k["outcomes"] == {"attempted": 1, "sent": 1}
+    assert ed2k["keyPresence"] == {
+        "fileHash": 1,
+        "peer": 2,
+        "peerHash": 2,
+    }
     assert ed2k["opcodes"]["227:1"] == {
         "protocolMarker": 227,
         "opcode": 1,
@@ -126,6 +148,7 @@ def test_advance_records_builds_compact_family_opcode_and_outcome_index() -> Non
         "directions": {"send": 2},
         "events": {"packet": 2},
         "outcomes": {"attempted": 1, "sent": 1},
+        "keyPresence": {"fileHash": 1, "peer": 2, "peerHash": 2},
     }
     assert advanced.index["families"]["kad_udp"]["streamSequence"] == {
         "first": 7,
@@ -175,6 +198,7 @@ def test_advance_records_indexes_keys_opcode_without_protocol_marker() -> None:
         "directions": {"recv": 1},
         "events": {"packet": 1},
         "outcomes": {},
+        "keyPresence": {"opcode": 1},
     }
 
 
