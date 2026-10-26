@@ -1401,9 +1401,22 @@ def test_session_status_reports_exact_dual_process_tree(
         ),
     )
     monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
+    exact_observer_report = {
+        "schema": "emulebb-build-tests.converged-soak-report.v2",
+        "campaignId": "20261024T120000Z",
+        "observerState": {"exact": "unredacted local evidence"},
+        "retainedWindow": {},
+    }
+    monkeypatch.setattr(
+        controller,
+        "current_observer_report",
+        lambda _manifest, _last_run: exact_observer_report,
+    )
 
     result = controller.session_status(paths)
 
+    assert result["schema"] == "emulebb.persisted-soak-status.v2"
+    assert result["observerReport"] is exact_observer_report
     assert result["ok"] is True
     assert result["launcher"]["alive"] is True
     assert result["observer"]["alive"] is True
@@ -1418,6 +1431,150 @@ def test_session_status_reports_exact_dual_process_tree(
         "mfc": None,
     }
     assert result["findings"] == []
+
+
+def test_current_observer_report_loads_exact_current_campaign(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    campaign_id = "20261024T120000Z"
+    campaign_dir = tmp_path / "soak" / "campaigns" / campaign_id
+    report_dir = campaign_dir / "report"
+    controller.write_json_atomic(report_dir / "summary.json", {"placeholder": True})
+    exact_report = {
+        "schema": "emulebb-build-tests.converged-soak-report.v2",
+        "campaignId": campaign_id,
+        "observerState": {"exact": "unredacted local evidence"},
+        "retainedWindow": {},
+    }
+    calls: list[Path] = []
+
+    def summarize_report(path: Path) -> dict[str, object]:
+        calls.append(path)
+        return exact_report
+
+    monkeypatch.setattr(
+        controller.soak_report_summary,
+        "summarize_report",
+        summarize_report,
+    )
+
+    result = controller.current_observer_report(
+        {
+            "campaignId": campaign_id,
+            "campaignDir": str(campaign_dir),
+            "observerConfig": {"enabled": True},
+        },
+        {
+            "campaignId": campaign_id,
+            "reportDir": str(report_dir),
+        },
+    )
+
+    assert result is exact_report
+    assert calls == [report_dir.resolve()]
+
+
+def test_current_observer_report_allows_not_ready_campaign(tmp_path: Path) -> None:
+    campaign_id = "20261024T120000Z"
+
+    result = controller.current_observer_report(
+        {
+            "campaignId": campaign_id,
+            "campaignDir": str(tmp_path / campaign_id),
+            "observerConfig": {"enabled": True},
+        },
+        {
+            "campaignId": campaign_id,
+            "reportDir": str(tmp_path / campaign_id / "report"),
+        },
+    )
+
+    assert result is None
+
+
+def test_current_observer_report_rejects_stale_or_misdirected_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    campaign_id = "20261024T120000Z"
+    campaign_dir = tmp_path / "soak" / "campaigns" / campaign_id
+    report_dir = campaign_dir / "report"
+    controller.write_json_atomic(report_dir / "summary.json", {"placeholder": True})
+    manifest = {
+        "campaignId": campaign_id,
+        "campaignDir": str(campaign_dir),
+        "observerConfig": {"enabled": True},
+    }
+
+    with pytest.raises(
+        controller.soak_report_summary.SoakReportSummaryError,
+        match="directory does not match",
+    ):
+        controller.current_observer_report(
+            manifest,
+            {
+                "campaignId": campaign_id,
+                "reportDir": str(tmp_path / "other" / "report"),
+            },
+        )
+
+    with pytest.raises(
+        controller.soak_report_summary.SoakReportSummaryError,
+        match="campaign directory is unavailable",
+    ):
+        controller.current_observer_report(
+            {
+                "campaignId": campaign_id,
+                "observerConfig": {"enabled": True},
+            },
+            {
+                "campaignId": campaign_id,
+                "reportDir": str(report_dir),
+            },
+        )
+
+    monkeypatch.setattr(
+        controller.soak_report_summary,
+        "summarize_report",
+        lambda _path: {
+            "schema": "emulebb-build-tests.converged-soak-report.v2",
+            "campaignId": "20261023T120000Z",
+        },
+    )
+    with pytest.raises(
+        controller.soak_report_summary.SoakReportSummaryError,
+        match="campaign does not match",
+    ):
+        controller.current_observer_report(
+            manifest,
+            {
+                "campaignId": campaign_id,
+                "reportDir": str(report_dir),
+            },
+        )
+
+    def reject_inconsistent_report(_path: Path) -> dict[str, object]:
+        raise controller.soak_report_summary.SoakReportSummaryError(
+            "exact retained-window integrity failure"
+        )
+
+    monkeypatch.setattr(
+        controller.soak_report_summary,
+        "summarize_report",
+        reject_inconsistent_report,
+    )
+    with pytest.raises(
+        controller.soak_report_summary.SoakReportSummaryError,
+        match="exact retained-window integrity failure",
+    ):
+        controller.current_observer_report(
+            manifest,
+            {
+                "campaignId": campaign_id,
+                "reportDir": str(report_dir),
+            },
+        )
 
 
 def test_diagnostic_writer_health_retains_complete_strict_payload(

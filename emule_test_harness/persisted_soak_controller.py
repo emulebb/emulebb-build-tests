@@ -22,6 +22,7 @@ from . import (
     diagnostic_run_scan,
     hideme_vpn,
     soak_launch,
+    soak_report_summary,
     soak_run_layout,
     soak_storage,
     windows_processes,
@@ -36,7 +37,7 @@ LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
 MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v3"
-STATUS_SCHEMA = "emulebb.persisted-soak-status.v1"
+STATUS_SCHEMA = "emulebb.persisted-soak-status.v2"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
@@ -1944,6 +1945,46 @@ def bounded_error(value: object) -> dict[str, str] | None:
     return {"type": error_type, "message": message}
 
 
+def current_observer_report(
+    manifest: dict[str, Any],
+    last_run: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Returns the exact current cumulative-plus-retained observer report."""
+
+    observer_config = manifest.get("observerConfig")
+    if (
+        not isinstance(observer_config, dict)
+        or observer_config.get("enabled") is not True
+    ):
+        return None
+    campaign_id = manifest.get("campaignId")
+    if not isinstance(campaign_id, str) or last_run.get("campaignId") != campaign_id:
+        return None
+    report_dir_value = last_run.get("reportDir")
+    if not isinstance(report_dir_value, str) or not report_dir_value.strip():
+        return None
+    report_dir = Path(report_dir_value).resolve()
+    campaign_dir_value = manifest.get("campaignDir")
+    if isinstance(campaign_dir_value, str) and campaign_dir_value.strip():
+        expected_report_dir = Path(campaign_dir_value).resolve() / "report"
+        if report_dir != expected_report_dir:
+            raise soak_report_summary.SoakReportSummaryError(
+                "Observer report directory does not match the persisted session campaign."
+            )
+    elif (report_dir / "summary.json").is_file():
+        raise soak_report_summary.SoakReportSummaryError(
+            "Persisted session campaign directory is unavailable."
+        )
+    if not (report_dir / "summary.json").is_file():
+        return None
+    report = soak_report_summary.summarize_report(report_dir)
+    if report.get("campaignId") != campaign_id:
+        raise soak_report_summary.SoakReportSummaryError(
+            "Observer report campaign does not match the persisted session."
+        )
+    return report
+
+
 def session_status(
     paths: ControlPaths,
     *,
@@ -2005,6 +2046,7 @@ def session_status(
     heartbeat = load_json(paths.watch_heartbeat)
     heartbeat_health = watch_heartbeat_health(manifest, heartbeat)
     heartbeat_storage = heartbeat.get("storage") if heartbeat_health.get("accepted") else None
+    observer_report = current_observer_report(manifest, last_run)
     result: dict[str, Any] = {
         "schema": STATUS_SCHEMA,
         "timestampUtc": datetime.now(UTC).isoformat(),
@@ -2026,6 +2068,7 @@ def session_status(
             "alive": observer is not None,
             "identity": observer_identity,
         },
+        "observerReport": observer_report,
         "watcher": {
             "alive": watcher is not None,
             "identity": watcher_identity,
