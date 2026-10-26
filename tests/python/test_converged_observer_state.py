@@ -21,6 +21,34 @@ def diagnostic_runs() -> dict[str, dict[str, object]]:
     }
 
 
+def state_with_created_search(*, client: str = "rust") -> dict[str, object]:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    state = observer_state.reserve_driver_cycle(
+        state,
+        query="exact local query",
+        method="server",
+        reserved_at_utc="2026-10-01T00:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    state = observer_state.prepare_search_create(
+        state,
+        client=client,
+        prepared_at_utc="2026-10-01T00:00:01+00:00",
+    )
+    return observer_state.complete_search_create(
+        state,
+        client=client,
+        completed_at_utc="2026-10-01T00:00:02+00:00",
+        search_id=f"{client}-search-1",
+        error=None,
+    )
+
+
 def storage_policy() -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=10 * 1024 * 1024,
@@ -404,6 +432,218 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
     }
 
 
+def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None:
+    state = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:03:03+00:00",
+    )
+
+    reloaded = observer_state.validate_state(
+        json.loads(observer_state.canonical_bytes(state)),
+        campaign_id="20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+    )
+
+    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v6"
+    assert reloaded["pendingAction"]["clients"]["rust"]["resultPoll"] == {
+        "startedAtUtc": "2026-10-01T00:00:03+00:00",
+        "deadlineUtc": "2026-10-01T00:03:03+00:00",
+        "nextAttemptAtUtc": "2026-10-01T00:00:03+00:00",
+        "attempts": 0,
+        "latestAttemptAtUtc": None,
+        "latestResultCount": None,
+        "latestError": None,
+    }
+
+
+def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
+    state = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:03:03+00:00",
+    )
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:03+00:00",
+        next_attempt_at_utc="2026-10-01T00:00:05+00:00",
+        completed=False,
+        result_count=3,
+        error=None,
+    )
+    exact_error = {
+        "client": "rust",
+        "phase": "search-results",
+        "type": "RuntimeError",
+        "message": "exact local REST failure",
+    }
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:05+00:00",
+        next_attempt_at_utc="2026-10-01T00:00:07+00:00",
+        completed=False,
+        result_count=None,
+        error=exact_error,
+    )
+
+    poll = state["pendingAction"]["clients"]["rust"]["resultPoll"]
+    assert poll == {
+        "startedAtUtc": "2026-10-01T00:00:03+00:00",
+        "deadlineUtc": "2026-10-01T00:03:03+00:00",
+        "nextAttemptAtUtc": "2026-10-01T00:00:07+00:00",
+        "attempts": 2,
+        "latestAttemptAtUtc": "2026-10-01T00:00:05+00:00",
+        "latestResultCount": 3,
+        "latestError": exact_error,
+    }
+
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:07+00:00",
+        next_attempt_at_utc=None,
+        completed=True,
+        result_count=5,
+        error=None,
+    )
+
+    client_state = state["pendingAction"]["clients"]["rust"]
+    assert client_state["resultPoll"] is None
+    assert client_state["results"] == {
+        "completedAtUtc": "2026-10-01T00:00:07+00:00",
+        "completed": True,
+        "resultCount": 5,
+        "error": None,
+    }
+
+
+def test_incremental_result_poll_expiry_preserves_exact_latest_error() -> None:
+    state = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:00:05+00:00",
+    )
+    exact_error = {
+        "type": "RuntimeError",
+        "message": "exact timeout-adjacent REST failure",
+    }
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:03+00:00",
+        next_attempt_at_utc="2026-10-01T00:00:05+00:00",
+        completed=False,
+        result_count=None,
+        error=exact_error,
+    )
+
+    state = observer_state.expire_search_results_poll(
+        state,
+        client="rust",
+        completed_at_utc="2026-10-01T00:00:05+00:00",
+    )
+
+    assert state["pendingAction"]["clients"]["rust"]["resultPoll"] is None
+    assert state["pendingAction"]["clients"]["rust"]["results"] == {
+        "completedAtUtc": "2026-10-01T00:00:05+00:00",
+        "completed": False,
+        "resultCount": None,
+        "error": exact_error,
+    }
+
+
+def test_incremental_result_poll_attempt_at_deadline_is_terminal() -> None:
+    state = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:00:05+00:00",
+    )
+
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:05+00:00",
+        next_attempt_at_utc=None,
+        completed=False,
+        result_count=4,
+        error=None,
+    )
+
+    client_state = state["pendingAction"]["clients"]["rust"]
+    assert client_state["resultPoll"] is None
+    assert client_state["results"] == {
+        "completedAtUtc": "2026-10-01T00:00:05+00:00",
+        "completed": False,
+        "resultCount": 4,
+        "error": None,
+    }
+
+
+def test_incremental_result_poll_rejects_invalid_or_premature_progress() -> None:
+    created = state_with_created_search()
+    with pytest.raises(RuntimeError, match="deadline must follow"):
+        observer_state.start_search_results_poll(
+            created,
+            client="rust",
+            started_at_utc="2026-10-01T00:00:03+00:00",
+            deadline_utc="2026-10-01T00:00:03+00:00",
+        )
+    with pytest.raises(RuntimeError, match="ISO-8601 UTC timestamp"):
+        observer_state.start_search_results_poll(
+            created,
+            client="rust",
+            started_at_utc="2026-10-01T00:00:03+00:00",
+            deadline_utc="2026-10-01T00:03:03",
+        )
+    with pytest.raises(RuntimeError, match="predates creation"):
+        observer_state.start_search_results_poll(
+            created,
+            client="rust",
+            started_at_utc="2026-10-01T00:00:01+00:00",
+            deadline_utc="2026-10-01T00:03:01+00:00",
+        )
+
+    state = observer_state.start_search_results_poll(
+        created,
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:03:03+00:00",
+    )
+    with pytest.raises(RuntimeError, match="next attempt is invalid"):
+        observer_state.record_search_results_poll_attempt(
+            state,
+            client="rust",
+            attempted_at_utc="2026-10-01T00:00:03+00:00",
+            next_attempt_at_utc="2026-10-01T00:03:04+00:00",
+            completed=False,
+            result_count=0,
+            error=None,
+        )
+    with pytest.raises(RuntimeError, match="still active"):
+        observer_state.record_search_results(
+            state,
+            client="rust",
+            completed_at_utc="2026-10-01T00:00:04+00:00",
+            completed=False,
+            result_count=0,
+            error=None,
+        )
+    with pytest.raises(RuntimeError, match="driver cycle is premature"):
+        observer_state.record_driver_cycle(
+            state,
+            {
+                "cycle": 1,
+                "actionId": "20261001T000000Z-cycle-00000001",
+            },
+        )
+
+
 @pytest.mark.parametrize(
     "deadline",
     (
@@ -443,7 +683,7 @@ def test_pending_action_cannot_restore_a_consumed_deadline() -> None:
         diagnostic_runs=diagnostic_runs(),
     )
 
-    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v5"
+    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v6"
     assert state["scheduler"]["nextActionAtUtc"] is None
     with pytest.raises(RuntimeError, match="cannot set a scheduler deadline"):
         observer_state.set_next_action_deadline(

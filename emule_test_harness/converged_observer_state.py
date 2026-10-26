@@ -9,7 +9,7 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v5"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v6"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -425,7 +425,10 @@ def reserve_driver_cycle(
         "method": method,
         "reservedAtUtc": reserved_at_utc,
         "diagnosticRuns": copy.deepcopy(diagnostic_runs),
-        "clients": {client: {"create": None, "results": None} for client in _CLIENTS},
+        "clients": {
+            client: {"create": None, "resultPoll": None, "results": None}
+            for client in _CLIENTS
+        },
         "driverOutcome": None,
         "evidence": None,
     }
@@ -522,6 +525,149 @@ def skip_search_create(
     return validate_state(updated)
 
 
+def start_search_results_poll(
+    state: dict[str, Any],
+    *,
+    client: str,
+    started_at_utc: str,
+    deadline_utc: str,
+) -> dict[str, Any]:
+    """Starts one restart-safe incremental result poll for a created search."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    create = client_state["create"]
+    if not isinstance(create, dict) or create.get("status") != "succeeded":
+        raise RuntimeError("Converged observer search result poll requires a search ID.")
+    if client_state["resultPoll"] is not None:
+        raise RuntimeError("Converged observer search result poll is already active.")
+    if client_state["results"] is not None:
+        raise RuntimeError("Converged observer search results are already recorded.")
+    started = _parse_utc_timestamp(started_at_utc, "started_at_utc")
+    deadline = _parse_utc_timestamp(deadline_utc, "deadline_utc")
+    if deadline <= started:
+        raise RuntimeError(
+            "Converged observer search result poll deadline must follow its start."
+        )
+    client_state["resultPoll"] = {
+        "startedAtUtc": started_at_utc,
+        "deadlineUtc": deadline_utc,
+        "nextAttemptAtUtc": started_at_utc,
+        "attempts": 0,
+        "latestAttemptAtUtc": None,
+        "latestResultCount": None,
+        "latestError": None,
+    }
+    return validate_state(updated)
+
+
+def record_search_results_poll_attempt(
+    state: dict[str, Any],
+    *,
+    client: str,
+    attempted_at_utc: str,
+    next_attempt_at_utc: str | None,
+    completed: bool,
+    result_count: int | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Records one GET outcome and either reschedules or closes its poll."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    poll = client_state["resultPoll"]
+    if not isinstance(poll, dict):
+        raise RuntimeError("Converged observer search result poll is not active.")
+    attempted = _parse_utc_timestamp(attempted_at_utc, "attempted_at_utc")
+    due = _parse_utc_timestamp(poll["nextAttemptAtUtc"], "nextAttemptAtUtc")
+    deadline = _parse_utc_timestamp(poll["deadlineUtc"], "deadlineUtc")
+    if attempted < due:
+        raise RuntimeError("Converged observer search result poll attempt is premature.")
+    if not isinstance(completed, bool):
+        raise RuntimeError("Converged observer search result completion is invalid.")
+    if result_count is not None:
+        _require_nonnegative_integer(result_count, "result_count")
+    _validate_optional_error(error)
+    if (result_count is None) == (error is None):
+        raise RuntimeError(
+            "Converged observer search result poll requires exactly one result or error."
+        )
+    if completed and error is not None:
+        raise RuntimeError("Completed observer search results are inconsistent.")
+
+    poll["attempts"] += 1
+    poll["latestAttemptAtUtc"] = attempted_at_utc
+    if result_count is not None:
+        poll["latestResultCount"] = result_count
+    poll["latestError"] = copy.deepcopy(error)
+
+    if completed or attempted >= deadline:
+        if next_attempt_at_utc is not None:
+            raise RuntimeError(
+                "Terminal observer search result poll cannot be rescheduled."
+            )
+        client_state["results"] = {
+            "completedAtUtc": attempted_at_utc,
+            "completed": completed,
+            "resultCount": poll["latestResultCount"],
+            "error": copy.deepcopy(error),
+        }
+        client_state["resultPoll"] = None
+        return validate_state(updated)
+
+    if next_attempt_at_utc is None:
+        raise RuntimeError(
+            "Incomplete observer search result poll requires a next attempt."
+        )
+    next_attempt = _parse_utc_timestamp(
+        next_attempt_at_utc,
+        "next_attempt_at_utc",
+    )
+    if next_attempt <= attempted or next_attempt > deadline:
+        raise RuntimeError(
+            "Converged observer search result poll next attempt is invalid."
+        )
+    poll["nextAttemptAtUtc"] = next_attempt_at_utc
+    return validate_state(updated)
+
+
+def expire_search_results_poll(
+    state: dict[str, Any],
+    *,
+    client: str,
+    completed_at_utc: str,
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Closes an elapsed poll from its last persisted count and exact error."""
+
+    updated = validate_state(state)
+    pending = _require_pending_action(updated)
+    client_state = _pending_client(pending, client)
+    poll = client_state["resultPoll"]
+    if not isinstance(poll, dict):
+        raise RuntimeError("Converged observer search result poll is not active.")
+    completed_at = _parse_utc_timestamp(completed_at_utc, "completed_at_utc")
+    deadline = _parse_utc_timestamp(poll["deadlineUtc"], "deadlineUtc")
+    if completed_at < deadline:
+        raise RuntimeError("Converged observer search result poll has not expired.")
+    _validate_optional_error(error)
+    terminal_error = error if error is not None else poll["latestError"]
+    if poll["latestResultCount"] is None and terminal_error is None:
+        raise RuntimeError(
+            "Expired observer search result poll requires a count or exact error."
+        )
+    client_state["results"] = {
+        "completedAtUtc": completed_at_utc,
+        "completed": False,
+        "resultCount": poll["latestResultCount"],
+        "error": copy.deepcopy(terminal_error),
+    }
+    client_state["resultPoll"] = None
+    return validate_state(updated)
+
+
 def record_search_results(
     state: dict[str, Any],
     *,
@@ -539,6 +685,8 @@ def record_search_results(
     create = client_state["create"]
     if not isinstance(create, dict) or create.get("status") != "succeeded":
         raise RuntimeError("Converged observer search results require a search ID.")
+    if client_state["resultPoll"] is not None:
+        raise RuntimeError("Converged observer search result poll is still active.")
     if client_state["results"] is not None:
         raise RuntimeError("Converged observer search results are already recorded.")
     _require_nonempty_string(completed_at_utc, "completed_at_utc")
@@ -790,7 +938,11 @@ def _validate_diagnostic_runs(value: object) -> None:
 
 
 def _validate_pending_client(value: object, client: str) -> None:
-    if not isinstance(value, dict) or set(value) != {"create", "results"}:
+    if not isinstance(value, dict) or set(value) != {
+        "create",
+        "resultPoll",
+        "results",
+    }:
         raise RuntimeError(f"Converged observer pending {client} state is invalid.")
     create = value["create"]
     if create is not None:
@@ -871,6 +1023,30 @@ def _validate_pending_client(value: object, client: str) -> None:
             )
         _validate_optional_error(error)
 
+    result_poll = value["resultPoll"]
+    if result_poll is not None:
+        if not isinstance(create, dict) or create.get("status") != "succeeded":
+            raise RuntimeError(
+                f"Converged observer pending {client} result poll lacks a search ID."
+            )
+        if value["results"] is not None:
+            raise RuntimeError(
+                f"Converged observer pending {client} result poll is already terminal."
+            )
+        _validate_search_results_poll(result_poll, client)
+        poll_started = _parse_utc_timestamp(
+            result_poll["startedAtUtc"],
+            f"pendingAction.clients.{client}.resultPoll.startedAtUtc",
+        )
+        create_completed = _parse_utc_timestamp(
+            create["completedAtUtc"],
+            f"pendingAction.clients.{client}.create.completedAtUtc",
+        )
+        if poll_started < create_completed:
+            raise RuntimeError(
+                f"Converged observer pending {client} result poll predates creation."
+            )
+
     results = value["results"]
     if results is None:
         return
@@ -906,6 +1082,74 @@ def _validate_pending_client(value: object, client: str) -> None:
     if results["completed"] and (result_count is None or results["error"] is not None):
         raise RuntimeError(
             f"Converged observer pending {client} completion is inconsistent."
+        )
+
+
+def _validate_search_results_poll(value: object, client: str) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "startedAtUtc",
+        "deadlineUtc",
+        "nextAttemptAtUtc",
+        "attempts",
+        "latestAttemptAtUtc",
+        "latestResultCount",
+        "latestError",
+    }:
+        raise RuntimeError(
+            f"Converged observer pending {client} result poll is invalid."
+        )
+    started = _parse_utc_timestamp(
+        value["startedAtUtc"],
+        f"pendingAction.clients.{client}.resultPoll.startedAtUtc",
+    )
+    deadline = _parse_utc_timestamp(
+        value["deadlineUtc"],
+        f"pendingAction.clients.{client}.resultPoll.deadlineUtc",
+    )
+    next_attempt = _parse_utc_timestamp(
+        value["nextAttemptAtUtc"],
+        f"pendingAction.clients.{client}.resultPoll.nextAttemptAtUtc",
+    )
+    if deadline <= started or next_attempt < started or next_attempt > deadline:
+        raise RuntimeError(
+            f"Converged observer pending {client} result poll schedule is invalid."
+        )
+    attempts = _require_nonnegative_integer(
+        value["attempts"],
+        f"pendingAction.clients.{client}.resultPoll.attempts",
+    )
+    latest_attempt_at_utc = value["latestAttemptAtUtc"]
+    latest_result_count = value["latestResultCount"]
+    latest_error = value["latestError"]
+    if latest_result_count is not None:
+        _require_nonnegative_integer(
+            latest_result_count,
+            f"pendingAction.clients.{client}.resultPoll.latestResultCount",
+        )
+    _validate_optional_error(latest_error)
+    if attempts == 0:
+        if (
+            latest_attempt_at_utc is not None
+            or latest_result_count is not None
+            or latest_error is not None
+            or next_attempt != started
+        ):
+            raise RuntimeError(
+                f"Converged observer pending {client} unstarted result poll is inconsistent."
+            )
+        return
+    latest_attempt = _parse_utc_timestamp(
+        latest_attempt_at_utc,
+        f"pendingAction.clients.{client}.resultPoll.latestAttemptAtUtc",
+    )
+    if (
+        latest_attempt < started
+        or latest_attempt >= next_attempt
+        or latest_attempt >= deadline
+        or (latest_result_count is None and latest_error is None)
+    ):
+        raise RuntimeError(
+            f"Converged observer pending {client} result poll progress is invalid."
         )
 
 
@@ -1024,6 +1268,10 @@ def _validate_optional_timestamp(value: object) -> None:
 def _validate_optional_utc_timestamp(value: object, name: str) -> None:
     if value is None:
         return
+    _parse_utc_timestamp(value, name)
+
+
+def _parse_utc_timestamp(value: object, name: str) -> datetime:
     text = _require_nonempty_string(value, name)
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -1031,6 +1279,7 @@ def _validate_optional_utc_timestamp(value: object, name: str) -> None:
         raise RuntimeError(f"{name} must be an ISO-8601 UTC timestamp.") from error
     if parsed.utcoffset() != timedelta(0):
         raise RuntimeError(f"{name} must be an ISO-8601 UTC timestamp.")
+    return parsed
 
 
 def _require_nonempty_string(value: object, name: str) -> str:
