@@ -9,7 +9,7 @@ import math
 import sys
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -615,7 +615,95 @@ def action_diagnostic_runs(
 def utc_text(now_utc: Callable[[], datetime]) -> str:
     """Returns one canonical UTC timestamp from the injected clock."""
 
-    return now_utc().astimezone(UTC).isoformat()
+    return utc_datetime(now_utc).isoformat()
+
+
+def utc_datetime(now_utc: Callable[[], datetime]) -> datetime:
+    """Returns one aware UTC datetime from the injected wall clock."""
+
+    current = now_utc()
+    if not isinstance(current, datetime) or current.utcoffset() is None:
+        raise RuntimeError("Observer wall clock must return an aware datetime.")
+    return current.astimezone(UTC)
+
+
+def action_cycle_limit_reached(
+    state: dict[str, Any], config: ObserverActionConfig
+) -> bool:
+    """Returns whether no additional action cycle may be reserved."""
+
+    return bool(
+        config.max_cycles
+        and int(state["driver"]["cycles"]) >= config.max_cycles
+        and state["pendingAction"] is None
+    )
+
+
+def reconcile_action_deadline(
+    runtime: ObserverRuntime,
+    state: dict[str, Any],
+    *,
+    now_utc: Callable[[], datetime] = utc_now,
+    after_action: bool = False,
+    now_ns: int | None = None,
+) -> dict[str, Any]:
+    """Persists the one authoritative UTC deadline when scheduling is eligible."""
+
+    validated = converged_observer_state.validate_state(
+        state,
+        campaign_id=runtime.run_paths.campaign_id,
+        configuration_digest=action_configuration_digest(runtime.action_config),
+    )
+    config = runtime.action_config
+    current_deadline = validated["scheduler"]["nextActionAtUtc"]
+    scheduling_enabled = bool(
+        config.enabled
+        and validated["pendingAction"] is None
+        and not action_cycle_limit_reached(validated, config)
+    )
+    if not scheduling_enabled:
+        desired_deadline = None
+    elif current_deadline is not None and not after_action:
+        return validated
+    else:
+        delay_seconds = (
+            config.search_interval_seconds
+            if after_action or int(validated["driver"]["cycles"]) > 0
+            else config.start_delay_seconds
+        )
+        desired_deadline = (
+            utc_datetime(now_utc) + timedelta(seconds=delay_seconds)
+        ).isoformat()
+    if current_deadline == desired_deadline:
+        return validated
+    updated = converged_observer_state.set_next_action_deadline(
+        validated,
+        desired_deadline,
+    )
+    return persist_state(runtime, updated, now_ns=now_ns)
+
+
+def action_due_in_seconds(
+    state: dict[str, Any],
+    config: ObserverActionConfig,
+    *,
+    now_utc: Callable[[], datetime] = utc_now,
+) -> float:
+    """Returns wall-clock seconds until the next persisted action is due."""
+
+    validated = converged_observer_state.validate_state(state)
+    if not config.enabled or action_cycle_limit_reached(validated, config):
+        return float("inf")
+    if validated["pendingAction"] is not None:
+        return 0.0
+    deadline_text = validated["scheduler"]["nextActionAtUtc"]
+    if not isinstance(deadline_text, str):
+        raise RuntimeError("Observer action deadline is not reconciled.")
+    deadline = soak_action_diff.parse_utc_timestamp(
+        deadline_text,
+        label="observer next action deadline",
+    )
+    return max((deadline - utc_datetime(now_utc)).total_seconds(), 0.0)
 
 
 def action_phase_error(
@@ -732,7 +820,6 @@ def capture_action_cycle(
     if not resumed:
         cycle_index = int(validated["scheduler"]["nextCycle"])
         query = config.terms[(cycle_index - 1) % len(config.terms)]
-        validated = converged_observer_state.set_next_action_deadline(validated, None)
         validated = converged_observer_state.reserve_driver_cycle(
             validated,
             query=query,
@@ -887,6 +974,7 @@ def run_observer(
     failure_threshold: int,
     max_checkpoints: int = 0,
     monotonic: Callable[[], float] = time.monotonic,
+    now_utc: Callable[[], datetime] = utc_now,
     sleep: Callable[[float], None] = time.sleep,
     launcher_alive: Callable[[dict[str, Any]], bool] = launcher_is_alive,
     capture: Callable[..., dict[str, Any]] = capture_checkpoint,
@@ -919,17 +1007,14 @@ def run_observer(
             )
         sleep(poll_interval_seconds)
 
-    state = load_state(runtime)
+    state = reconcile_action_deadline(
+        runtime,
+        load_state(runtime),
+        now_utc=now_utc,
+    )
     checkpoint_count = 0
     consecutive_failures = 0
     next_checkpoint = monotonic()
-    next_action = (
-        next_checkpoint
-        if runtime.action_config.enabled and state["pendingAction"] is not None
-        else next_checkpoint + runtime.action_config.start_delay_seconds
-        if runtime.action_config.enabled
-        else float("inf")
-    )
     while True:
         if runtime.stop_file.exists():
             return state
@@ -959,23 +1044,27 @@ def run_observer(
             continue
 
         action_config = runtime.action_config
-        action_cycles = int(state["driver"]["cycles"])
-        has_pending_action = state["pendingAction"] is not None
-        action_limit_reached = bool(
-            action_config.max_cycles
-            and action_cycles >= action_config.max_cycles
-            and not has_pending_action
+        action_delay = action_due_in_seconds(
+            state,
+            action_config,
+            now_utc=now_utc,
         )
-        if action_config.enabled and has_pending_action:
-            next_action = now
-        elif action_limit_reached:
-            next_action = float("inf")
-        if action_config.enabled and now >= next_action:
+        if action_delay <= 0:
             state = drive_action(runtime, state, action_config)
-            next_action = monotonic() + action_config.search_interval_seconds
+            state = reconcile_action_deadline(
+                runtime,
+                state,
+                now_utc=now_utc,
+                after_action=True,
+            )
+            action_delay = action_due_in_seconds(
+                state,
+                action_config,
+                now_utc=now_utc,
+            )
 
-        next_due = min(next_checkpoint, next_action)
-        sleep(min(poll_interval_seconds, max(next_due - monotonic(), 0.0)))
+        checkpoint_delay = max(next_checkpoint - monotonic(), 0.0)
+        sleep(min(poll_interval_seconds, checkpoint_delay, action_delay))
 
 
 def build_parser() -> argparse.ArgumentParser:

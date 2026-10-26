@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from types import MappingProxyType
@@ -996,7 +996,9 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
         encoding="utf-8",
     )
     clock = [0.0]
+    started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
     action_cycles: list[int] = []
+    action_times: list[float] = []
 
     def capture(_runtime, state):
         return converged_observer_state.record_checkpoint(
@@ -1013,6 +1015,7 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     def drive_action(_runtime, state, config):
         cycle = int(state["driver"]["cycles"]) + 1
         action_cycles.append(cycle)
+        action_times.append(clock[0])
         assert config.method == "global"
         updated = converged_observer_state.record_driver_cycle(
             state,
@@ -1034,6 +1037,7 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
         checkpoint_interval_seconds=1_000,
         failure_threshold=3,
         monotonic=lambda: clock[0],
+        now_utc=lambda: started_at + timedelta(seconds=clock[0]),
         sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
         launcher_alive=lambda _identity: True,
         capture=capture,
@@ -1041,8 +1045,194 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     )
 
     assert action_cycles == [1, 2]
+    assert action_times == [0.0, 300.0]
     assert result["driver"]["cycles"] == 2
     assert result["driver"]["latestCycle"]["query"] == "debian"
+    assert result["scheduler"]["nextActionAtUtc"] is None
+
+
+def test_reconcile_action_deadline_persists_initial_and_post_action_schedule(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        method="server",
+        start_delay_seconds=60,
+        search_interval_seconds=300,
+        search_timeout_seconds=120,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+    scheduled = converged_observer.reconcile_action_deadline(
+        subject,
+        new_state(config),
+        now_utc=lambda: started_at,
+    )
+
+    assert (
+        scheduled["scheduler"]["nextActionAtUtc"]
+        == (started_at + timedelta(seconds=60)).isoformat()
+    )
+    assert (
+        converged_observer.load_json_object(
+            subject.run_paths.report_dir / "summary.json"
+        )
+        == scheduled
+    )
+
+    preserved = converged_observer.reconcile_action_deadline(
+        subject,
+        scheduled,
+        now_utc=lambda: started_at + timedelta(seconds=30),
+    )
+    assert preserved == scheduled
+
+    completed = converged_observer_state.record_driver_cycle(
+        preserved,
+        {"cycle": 1, "query": "linux", "method": "server"},
+    )
+    rescheduled = converged_observer.reconcile_action_deadline(
+        subject,
+        completed,
+        now_utc=lambda: started_at + timedelta(seconds=90),
+        after_action=True,
+    )
+    assert (
+        rescheduled["scheduler"]["nextActionAtUtc"]
+        == (started_at + timedelta(seconds=390)).isoformat()
+    )
+
+
+def test_run_observer_services_exact_persisted_utc_deadline_after_restart(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        method="server",
+        start_delay_seconds=3_600,
+        search_interval_seconds=300,
+        search_timeout_seconds=120,
+        max_cycles=1,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    deadline = started_at + timedelta(seconds=120)
+    state = converged_observer_state.set_next_action_deadline(
+        new_state(config),
+        deadline.isoformat(),
+    )
+    converged_observer.persist_state(subject, state)
+    clock = [0.0]
+    action_times: list[float] = []
+
+    def drive_action(_runtime, action_state, _config):
+        action_times.append(clock[0])
+        assert action_state["scheduler"]["nextActionAtUtc"] == deadline.isoformat()
+        subject.stop_file.parent.mkdir(parents=True, exist_ok=True)
+        subject.stop_file.write_text("stop\n", encoding="utf-8")
+        return converged_observer_state.record_driver_cycle(
+            action_state,
+            {"cycle": 1, "query": "linux", "method": "server"},
+        )
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=60,
+        checkpoint_interval_seconds=1_000,
+        failure_threshold=3,
+        monotonic=lambda: clock[0],
+        now_utc=lambda: started_at + timedelta(seconds=clock[0]),
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        launcher_alive=lambda _identity: True,
+        capture=lambda _runtime, action_state: action_state,
+        drive_action=drive_action,
+    )
+
+    assert action_times == [120.0]
+    assert result["scheduler"]["nextActionAtUtc"] is None
+
+
+def test_run_observer_reconciles_missing_deadline_after_report_commit(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        method="server",
+        start_delay_seconds=60,
+        search_interval_seconds=300,
+        search_timeout_seconds=120,
+        max_cycles=2,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = reportable_state(config)
+    state = converged_observer_state.commit_action_report(
+        state,
+        pending_action_report(state["pendingAction"]),
+    )
+    converged_observer.persist_state(subject, state)
+    started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    first_deadline = started_at + timedelta(seconds=300)
+    clock = [0.0]
+    action_times: list[float] = []
+
+    def drive_action(_runtime, action_state, _config):
+        action_times.append(clock[0])
+        assert action_state["scheduler"]["nextActionAtUtc"] == (
+            first_deadline.isoformat()
+        )
+        subject.stop_file.parent.mkdir(parents=True, exist_ok=True)
+        subject.stop_file.write_text("stop\n", encoding="utf-8")
+        return action_state
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=60,
+        checkpoint_interval_seconds=1_000,
+        failure_threshold=3,
+        monotonic=lambda: clock[0],
+        now_utc=lambda: started_at + timedelta(seconds=clock[0]),
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        launcher_alive=lambda _identity: True,
+        capture=lambda _runtime, action_state: action_state,
+        drive_action=drive_action,
+    )
+
+    assert action_times == [300.0]
+    assert (
+        result["scheduler"]["nextActionAtUtc"]
+        == (started_at + timedelta(seconds=600)).isoformat()
+    )
 
 
 def test_run_observer_services_pending_action_before_delay_or_cycle_limit(
