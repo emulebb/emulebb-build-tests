@@ -109,12 +109,24 @@ def test_parse_live_wire_inputs_keeps_mfc_profile_optional() -> None:
 def test_parse_live_wire_inputs_reads_optional_mfc_profile_dir() -> None:
     with_profile = payload()
     with_profile["mfc_profile"] = {"profile_dir": " Q:\\Retired\\ClientProfile "}
-    with_profile["rust_profile"] = {"profile_dir": " c:\\profiles\\rust-live "}
+    with_profile["rust_profile"] = {
+        "profile_dir": " c:\\profiles\\rust-live ",
+        "storage_guard": {
+            "max_growth_bytes": 1_000_000,
+            "minimum_free_bytes": 2_000_000,
+        },
+    }
 
     inputs = live_wire_inputs.parse_live_wire_inputs(with_profile)
 
     assert inputs.mfc_profile_dir == Path("Q:\\Retired\\ClientProfile").expanduser()
     assert inputs.rust_profile_dir == Path("c:\\profiles\\rust-live").expanduser()
+    assert inputs.rust_profile_storage_guard == (
+        live_wire_inputs.ProfileGrowthGuardPolicy(
+            max_growth_bytes=1_000_000,
+            minimum_free_bytes=2_000_000,
+        )
+    )
 
 
 def test_parse_live_wire_inputs_rejects_blank_mfc_profile_dir() -> None:
@@ -130,6 +142,28 @@ def test_parse_live_wire_inputs_rejects_blank_rust_profile_dir() -> None:
     bad_profile["rust_profile"] = {"profile_dir": "   "}
 
     with pytest.raises(RuntimeError, match="profile_dir"):
+        live_wire_inputs.parse_live_wire_inputs(bad_profile)
+
+
+@pytest.mark.parametrize(
+    "storage_guard",
+    [
+        {},
+        {"max_growth_bytes": 1, "minimum_free_bytes": 1, "unknown": 1},
+        {"max_growth_bytes": 0, "minimum_free_bytes": 1},
+        {"max_growth_bytes": 1, "minimum_free_bytes": True},
+    ],
+)
+def test_parse_live_wire_inputs_rejects_invalid_rust_profile_storage_guard(
+    storage_guard: object,
+) -> None:
+    bad_profile = payload()
+    bad_profile["rust_profile"] = {
+        "profile_dir": "c:\\profiles\\rust-live",
+        "storage_guard": storage_guard,
+    }
+
+    with pytest.raises(RuntimeError, match="rust_profile.storage_guard"):
         live_wire_inputs.parse_live_wire_inputs(bad_profile)
 
 
@@ -159,11 +193,17 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
             "observer_actions": {"max_segment_bytes": 25, "retained_segments": 2},
             "observer_checkpoints": {"max_segment_bytes": 30, "retained_segments": 3},
             "observer_summary": {"max_segment_bytes": 40, "retained_segments": 1},
-            "preflight_archive_manifest": {"max_segment_bytes": 13, "retained_segments": 1},
+            "preflight_archive_manifest": {
+                "max_segment_bytes": 13,
+                "retained_segments": 1,
+            },
             "preflight_mfc_outputs": {"max_segment_bytes": 12, "retained_segments": 2},
             "preflight_rust_outputs": {"max_segment_bytes": 11, "retained_segments": 1},
             "process_metrics": {"max_segment_bytes": 20, "retained_segments": 2},
-            "process_metrics_summary": {"max_segment_bytes": 10, "retained_segments": 1},
+            "process_metrics_summary": {
+                "max_segment_bytes": 10,
+                "retained_segments": 1,
+            },
         },
     }
 

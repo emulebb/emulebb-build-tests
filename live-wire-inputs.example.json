@@ -4,7 +4,11 @@
     "profile_dir": "%EMULEBB_MFC_SOAK_PROFILE_DIR%"
   },
   "rust_profile": {
-    "profile_dir": "%EMULEBB_RUST_SOAK_PROFILE_DIR%"
+    "profile_dir": "%EMULEBB_RUST_SOAK_PROFILE_DIR%",
+    "storage_guard": {
+      "max_growth_bytes": 68719476736,
+      "minimum_free_bytes": 17179869184
+    }
   },
   "soak_storage": {
     "schema": "emulebb-build-tests.soak-storage-policy.v9",

@@ -11,11 +11,22 @@ from typing import Any
 
 from .soak_storage import SoakStoragePolicy, parse_soak_storage_policy
 
-SCHEMA = "emulebb-build-tests.live-wire-inputs.v1"
-LEGACY_SCHEMAS = ("emule-build-tests.live-wire-inputs.v1",)
+SCHEMA = "emulebb-build-tests.live-wire-inputs.v2"
+LEGACY_SCHEMAS = (
+    "emulebb-build-tests.live-wire-inputs.v1",
+    "emule-build-tests.live-wire-inputs.v1",
+)
 DEFAULT_INPUTS_FILE_NAME = "live-wire-inputs.local.json"
 HASH_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 PLACEHOLDER_HASH = "0123456789abcdef0123456789abcdef"
+
+
+@dataclass(frozen=True)
+class ProfileGrowthGuardPolicy:
+    """Read-only limits for one operator-owned persisted profile."""
+
+    max_growth_bytes: int
+    minimum_free_bytes: int
 
 
 @dataclass(frozen=True)
@@ -32,6 +43,7 @@ class LiveWireInputs:
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
     mfc_profile_dir: Path | None = None
     rust_profile_dir: Path | None = None
+    rust_profile_storage_guard: ProfileGrowthGuardPolicy | None = None
     soak_storage: SoakStoragePolicy | None = None
 
 
@@ -112,9 +124,46 @@ def parse_live_wire_inputs(
         ),
         mfc_profile_dir=read_optional_single_path(mfc_profile, "profile_dir"),
         rust_profile_dir=read_optional_single_path(rust_profile, "profile_dir"),
+        rust_profile_storage_guard=parse_profile_growth_guard(
+            rust_profile.get("storage_guard")
+        ),
         soak_storage=parse_soak_storage_policy(soak_storage)
         if soak_storage is not None
         else None,
+    )
+
+
+def parse_profile_growth_guard(payload: object) -> ProfileGrowthGuardPolicy | None:
+    """Validates one optional persisted-profile growth guard."""
+
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Live-wire inputs field 'rust_profile.storage_guard' must be an object."
+        )
+    expected_keys = {"max_growth_bytes", "minimum_free_bytes"}
+    actual_keys = set(payload)
+    if actual_keys != expected_keys:
+        missing = ", ".join(sorted(expected_keys - actual_keys))
+        unknown = ", ".join(sorted(actual_keys - expected_keys))
+        raise RuntimeError(
+            "Live-wire inputs field 'rust_profile.storage_guard' has invalid fields: "
+            f"missing={missing or '-'} unknown={unknown or '-'}."
+        )
+
+    values: dict[str, int] = {}
+    for key in sorted(expected_keys):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise RuntimeError(
+                "Live-wire inputs field "
+                f"'rust_profile.storage_guard.{key}' must be a positive integer."
+            )
+        values[key] = value
+    return ProfileGrowthGuardPolicy(
+        max_growth_bytes=values["max_growth_bytes"],
+        minimum_free_bytes=values["minimum_free_bytes"],
     )
 
 
