@@ -129,6 +129,15 @@ def _evidence(
 
 
 def _successful_client(client: str, completed_seconds: float) -> dict[str, object]:
+    poll = {
+        "startedAtUtc": _utc(2),
+        "deadlineUtc": _utc(12),
+        "attempts": 1,
+        "errorCount": 0,
+        "latestAttemptAtUtc": _utc(completed_seconds),
+        "latestError": None,
+        "termination": "completed",
+    }
     return {
         "create": {
             "status": "succeeded",
@@ -137,11 +146,13 @@ def _successful_client(client: str, completed_seconds: float) -> dict[str, objec
             "searchId": f"{client}-search-1",
             "error": None,
         },
+        "resultPoll": None,
         "results": {
             "completedAtUtc": _utc(completed_seconds),
             "completed": True,
             "resultCount": 2,
             "error": None,
+            "poll": poll,
         },
     }
 
@@ -161,6 +172,7 @@ def _failed_client(client: str, completed_seconds: float) -> dict[str, object]:
             "searchId": None,
             "error": error,
         },
+        "resultPoll": None,
         "results": None,
     }
 
@@ -192,6 +204,7 @@ def _pending_action(
                     "ok": True,
                     "count": results["resultCount"],
                     "completed": True,
+                    "poll": results["poll"],
                 },
             }
             search_ids[client] = create["searchId"]

@@ -272,18 +272,22 @@ def create_search(client: ClientEndpoint, *, query: str, method: str) -> str:
 def read_search_results(
     client: ClientEndpoint,
     search_id: str,
+    *,
+    timeout_seconds: float = 30.0,
 ) -> SearchResults:
     """Read one bounded search-results snapshot without waiting or sleeping."""
 
     if not search_id.strip():
         raise ValueError("search identifier must not be empty")
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be greater than zero")
     page = retry_http_json(
         f"{client.name} soak search poll",
         1,
         client.base_url,
         f"/api/v1/searches/{search_id}",
         api_key=client.api_key,
-        timeout_seconds=30.0,
+        timeout_seconds=timeout_seconds,
     )
     data = api_data(page)
     return SearchResults(
@@ -386,13 +390,19 @@ def run_search_results_phase(
 def run_search_results_poll_phase(
     client: ClientEndpoint,
     search_id: str,
+    *,
+    timeout_seconds: float = 30.0,
 ) -> SearchResultsPhase:
     """Read exactly one search-results snapshot and preserve its exact outcome."""
 
     if not search_id.strip():
         raise ValueError("search identifier must not be empty")
     try:
-        rows = read_search_results(client, search_id)
+        rows = read_search_results(
+            client,
+            search_id,
+            timeout_seconds=timeout_seconds,
+        )
     except RuntimeError as error:
         return SearchResultsPhase(
             rows=(),

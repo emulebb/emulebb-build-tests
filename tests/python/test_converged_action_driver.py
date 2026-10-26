@@ -6,6 +6,7 @@ import pytest
 
 from emule_test_harness import converged_action_driver as driver
 from emule_test_harness import soak_action_diff
+from emule_test_harness import vm_guest_profiles
 
 
 class AllowSafeDownloads:
@@ -99,6 +100,59 @@ def test_read_search_results_recognizes_completed_status(
 
     assert list(result) == []
     assert result.completed is True
+
+
+def test_read_search_results_passes_custom_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[float] = []
+
+    def fake_retry(*_args: object, **kwargs: object) -> dict[str, object]:
+        observed.append(float(kwargs["timeout_seconds"]))
+        return {"data": {"status": "running", "items": []}}
+
+    monkeypatch.setattr(driver, "retry_http_json", fake_retry)
+
+    driver.read_search_results(
+        endpoint("rust"),
+        "rust-search-17",
+        timeout_seconds=0.25,
+    )
+
+    assert observed == [0.25]
+    with pytest.raises(ValueError, match="greater than zero"):
+        driver.read_search_results(
+            endpoint("rust"),
+            "rust-search-17",
+            timeout_seconds=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected_sleeps"),
+    [(1, []), (2, [1.0])],
+)
+def test_retry_http_json_never_sleeps_after_final_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    attempts: int,
+    expected_sleeps: list[float],
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(vm_guest_profiles.time, "sleep", sleeps.append)
+
+    def fail_request(*_args: object, **_kwargs: object) -> object:
+        raise OSError("exact local failure")
+
+    with pytest.raises(RuntimeError, match=f"failed after {attempts} attempts"):
+        vm_guest_profiles.retry_http_json(
+            "bounded read",
+            attempts,
+            "http://rust",
+            "/api/v1/searches/rust-search-17",
+            request_func=fail_request,
+        )
+
+    assert sleeps == expected_sleeps
 
 
 def test_search_results_poll_phase_preserves_exact_rest_error(

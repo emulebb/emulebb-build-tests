@@ -391,10 +391,17 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
         search_id=None,
         error=exact_error,
     )
-    state = observer_state.record_search_results(
+    state = observer_state.start_search_results_poll(
         state,
         client="rust",
-        completed_at_utc="2026-10-01T00:02:00+00:00",
+        started_at_utc="2026-10-01T00:00:02+00:00",
+        deadline_utc="2026-10-01T00:02:00+00:00",
+    )
+    state = observer_state.record_search_results_poll_attempt(
+        state,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:02:00+00:00",
+        next_attempt_at_utc=None,
         completed=False,
         result_count=3,
         error=None,
@@ -452,8 +459,10 @@ def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None
         "deadlineUtc": "2026-10-01T00:03:03+00:00",
         "nextAttemptAtUtc": "2026-10-01T00:00:03+00:00",
         "attempts": 0,
+        "errorCount": 0,
         "latestAttemptAtUtc": None,
-        "latestResultCount": None,
+        "lastObservedResultCount": None,
+        "lastAttemptError": None,
         "latestError": None,
     }
 
@@ -489,6 +498,11 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         result_count=None,
         error=exact_error,
     )
+    state = observer_state.validate_state(
+        json.loads(observer_state.canonical_bytes(state)),
+        campaign_id="20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+    )
 
     poll = state["pendingAction"]["clients"]["rust"]["resultPoll"]
     assert poll == {
@@ -496,8 +510,10 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         "deadlineUtc": "2026-10-01T00:03:03+00:00",
         "nextAttemptAtUtc": "2026-10-01T00:00:07+00:00",
         "attempts": 2,
+        "errorCount": 1,
         "latestAttemptAtUtc": "2026-10-01T00:00:05+00:00",
-        "latestResultCount": 3,
+        "lastObservedResultCount": 3,
+        "lastAttemptError": exact_error,
         "latestError": exact_error,
     }
 
@@ -518,6 +534,15 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         "completed": True,
         "resultCount": 5,
         "error": None,
+        "poll": {
+            "startedAtUtc": "2026-10-01T00:00:03+00:00",
+            "deadlineUtc": "2026-10-01T00:03:03+00:00",
+            "attempts": 3,
+            "errorCount": 1,
+            "latestAttemptAtUtc": "2026-10-01T00:00:07+00:00",
+            "latestError": exact_error,
+            "termination": "completed",
+        },
     }
 
 
@@ -554,6 +579,15 @@ def test_incremental_result_poll_expiry_preserves_exact_latest_error() -> None:
         "completed": False,
         "resultCount": None,
         "error": exact_error,
+        "poll": {
+            "startedAtUtc": "2026-10-01T00:00:03+00:00",
+            "deadlineUtc": "2026-10-01T00:00:05+00:00",
+            "attempts": 1,
+            "errorCount": 1,
+            "latestAttemptAtUtc": "2026-10-01T00:00:03+00:00",
+            "latestError": exact_error,
+            "termination": "expired",
+        },
     }
 
 
@@ -582,6 +616,15 @@ def test_incremental_result_poll_attempt_at_deadline_is_terminal() -> None:
         "completed": False,
         "resultCount": 4,
         "error": None,
+        "poll": {
+            "startedAtUtc": "2026-10-01T00:00:03+00:00",
+            "deadlineUtc": "2026-10-01T00:00:05+00:00",
+            "attempts": 1,
+            "errorCount": 0,
+            "latestAttemptAtUtc": "2026-10-01T00:00:05+00:00",
+            "latestError": None,
+            "termination": "deadline",
+        },
     }
 
 
@@ -625,15 +668,7 @@ def test_incremental_result_poll_rejects_invalid_or_premature_progress() -> None
             result_count=0,
             error=None,
         )
-    with pytest.raises(RuntimeError, match="still active"):
-        observer_state.record_search_results(
-            state,
-            client="rust",
-            completed_at_utc="2026-10-01T00:00:04+00:00",
-            completed=False,
-            result_count=0,
-            error=None,
-        )
+    assert not hasattr(observer_state, "record_search_results")
     with pytest.raises(RuntimeError, match="driver cycle is premature"):
         observer_state.record_driver_cycle(
             state,
@@ -642,6 +677,52 @@ def test_incremental_result_poll_rejects_invalid_or_premature_progress() -> None
                 "actionId": "20261001T000000Z-cycle-00000001",
             },
         )
+
+
+def test_incremental_result_poll_rejects_impossible_success_history() -> None:
+    exact_error = {
+        "type": "RuntimeError",
+        "message": "exact local REST failure",
+    }
+    active = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:00:05+00:00",
+    )
+    active = observer_state.record_search_results_poll_attempt(
+        active,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:03+00:00",
+        next_attempt_at_utc="2026-10-01T00:00:05+00:00",
+        completed=False,
+        result_count=None,
+        error=exact_error,
+    )
+    active["pendingAction"]["clients"]["rust"]["resultPoll"][
+        "lastObservedResultCount"
+    ] = 4
+    with pytest.raises(RuntimeError, match="success history is invalid"):
+        observer_state.validate_state(active)
+
+    terminal = observer_state.start_search_results_poll(
+        state_with_created_search(),
+        client="rust",
+        started_at_utc="2026-10-01T00:00:03+00:00",
+        deadline_utc="2026-10-01T00:00:05+00:00",
+    )
+    terminal = observer_state.record_search_results_poll_attempt(
+        terminal,
+        client="rust",
+        attempted_at_utc="2026-10-01T00:00:05+00:00",
+        next_attempt_at_utc=None,
+        completed=False,
+        result_count=None,
+        error=exact_error,
+    )
+    terminal["pendingAction"]["clients"]["rust"]["results"]["resultCount"] = 4
+    with pytest.raises(RuntimeError, match="success history is invalid"):
+        observer_state.validate_state(terminal)
 
 
 @pytest.mark.parametrize(
@@ -828,10 +909,17 @@ def test_matching_action_report_is_the_only_commit_that_clears_pending() -> None
             search_id=f"{client}-search-1",
             error=None,
         )
-        state = observer_state.record_search_results(
+        state = observer_state.start_search_results_poll(
             state,
             client=client,
-            completed_at_utc="2026-10-01T00:01:00+00:00",
+            started_at_utc="2026-10-01T00:00:02+00:00",
+            deadline_utc="2026-10-01T00:02:00+00:00",
+        )
+        state = observer_state.record_search_results_poll_attempt(
+            state,
+            client=client,
+            attempted_at_utc="2026-10-01T00:01:00+00:00",
+            next_attempt_at_utc=None,
             completed=True,
             result_count=2,
             error=None,
