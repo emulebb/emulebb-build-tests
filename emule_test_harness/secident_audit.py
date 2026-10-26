@@ -1,4 +1,4 @@
-"""SecIdent liveness audit over ``ed2k_packet_v1`` recordings.
+"""SecIdent liveness audit over canonical eD2K TCP packet views.
 
 WHY this exists: the 2026-07-04 MFC soak capture ran with SecIdent effectively
 dead — zero OP_PUBLICKEY/OP_SIGNATURE/OP_SECIDENTSTATE (0xC5 0x85/86/87) packets

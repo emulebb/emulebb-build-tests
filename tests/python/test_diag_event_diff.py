@@ -14,6 +14,7 @@ from emule_test_harness.diag_event_diff import (
     load_trace,
     load_traces,
 )
+from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
 
 
@@ -197,6 +198,7 @@ def _family(report, name):
 
 def test_ed2k_tcp_packets_extracts_complete_packet_shape() -> None:
     expected = {
+            "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
             "source": "rust",
             "ts_utc": "2026-06-16T00:00:00.000Z",
             "event_seq": 23,

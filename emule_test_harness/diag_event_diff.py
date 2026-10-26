@@ -38,6 +38,7 @@ from emule_test_harness.diag_event_schema import (
     DIAG_EVENT_SCHEMA,
     DIAG_EVENT_SCHEMA_AUDIT_REPORT_SCHEMA,
     ED2K_CLIENT_UDP_FAMILY,
+    ED2K_TCP_PACKET_VIEW_SCHEMA,
     FULL_RUN_REQUIRED_PARITY_FAMILIES,
 )
 
@@ -304,6 +305,7 @@ def ed2k_tcp_packet_view(record: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     packet = {
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "source": record.get("client"),
         "ts_utc": timestamp,
         "event_seq": event_sequence,

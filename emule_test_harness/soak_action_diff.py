@@ -15,8 +15,8 @@ This module is the side-effect-free core the soak orchestrator builds on:
 * :func:`correlate_actions` pairs the same search term / ed2k hash across the two
   clients within a correlation window (unpaired actions are surfaced so the
   operator can bracket them with a manual marker instead);
-* :func:`slice_trace` cuts an ``ed2k_packet_v1`` / ``diag_event_v2`` record list to
-  one authoritative UTC action window and rejects malformed timestamps;
+* :func:`slice_trace` cuts a canonical packet-view or ``diag_event_v2`` record
+  list to one authoritative UTC action window and rejects malformed timestamps;
 * :func:`diff_action` slices both sides and delegates to the existing
   :mod:`packet_trace_diff` and :mod:`diag_event_diff` engines, then classifies the
   per-action verdict;
@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from . import diag_event_diff, packet_trace_diff
+from .diag_event_schema import DIAG_EVENT_SCHEMA, ED2K_TCP_PACKET_VIEW_SCHEMA
 
 SEARCH = "search"
 DOWNLOAD = "download"
@@ -333,9 +334,9 @@ def slice_trace(
 ) -> list[dict[str, Any]]:
     """Returns records whose timestamp falls within ``[t0, t1]`` (inclusive).
 
-    ``ed2k_packet_v1`` records carry top-level ``ts_utc`` while ``diag_event_v2``
+    Canonical packet views carry top-level ``ts_utc`` while ``diag_event_v2``
     records carry top-level ``ts``. Every record must use a current supported
-    shape and provide a parseable explicit UTC timestamp. Invalid evidence is
+    schema and provide a parseable explicit UTC timestamp. Invalid evidence is
     rejected rather than silently dropped from the action window.
     """
 
@@ -344,17 +345,10 @@ def slice_trace(
         if not isinstance(record, dict):
             raise ActionTraceError(f"{trace_name} record {index} must be an object")
         schema = record.get("schema")
-        if schema == "ed2k_packet_v1":
+        if schema == ED2K_TCP_PACKET_VIEW_SCHEMA:
             field = "ts_utc"
-        elif schema == "diag_event_v2":
+        elif schema == DIAG_EVENT_SCHEMA:
             field = "ts"
-        elif (
-            schema is None
-            and "flow" in record
-            and "direction" in record
-            and "opcode" in record
-        ):
-            field = "ts_utc"
         else:
             raise ActionTraceError(
                 f"{trace_name} record {index} has unsupported schema {schema!r}"

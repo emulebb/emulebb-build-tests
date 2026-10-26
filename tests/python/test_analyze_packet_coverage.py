@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
+
 pytestmark = pytest.mark.unit
 
 
@@ -30,7 +32,7 @@ def _ed2k(
     file_hash: str | None = None,
 ) -> dict[str, object]:
     return {
-        "schema": "ed2k_packet_v1",
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "flow": flow,
         "direction": direction,
         "protocol_marker": 0xE3,

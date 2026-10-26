@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness.diag_event_schema import (
+    ED2K_PACKET_DIFF_REPORT_SCHEMA,
+    ED2K_TCP_PACKET_VIEW_SCHEMA,
+)
 from emule_test_harness.packet_trace_diff import (
     decode_found_sources_record,
     diff_traces,
@@ -15,7 +19,7 @@ from emule_test_harness.packet_trace_diff import (
 
 def _pkt(flow, direction, opcode, payload_hex, *, marker=229, name=None):
     return {
-        "schema": "ed2k_packet_v1",
+        "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "flow": flow,
         "direction": direction,
         "protocol_marker": marker,
@@ -36,6 +40,7 @@ def test_identical_traces_match() -> None:
         _pkt("client", "send", 0x4c, "ccdd"),
     ]
     report = diff_traces(rust, emule)
+    assert report["schema"] == ED2K_PACKET_DIFF_REPORT_SCHEMA
     assert report["ok"] is True
     assert report["totals"]["matched"] == 2
     assert report["totals"]["payload_mismatches"] == 0
@@ -82,8 +87,8 @@ def test_load_trace_filters_non_packet_records(tmp_path: Path) -> None:
     path = tmp_path / "dump.jsonl"
     lines = [
         json.dumps(_pkt("client", "recv", 0x01, "aabb")),
-        json.dumps({"schema": "ed2k_packet_v1", "direction": "meta", "note": "x"}),  # meta, dropped
-        json.dumps({"schema": "other_v1", "direction": "recv", "opcode": 1}),  # wrong schema
+        json.dumps({"schema": ED2K_TCP_PACKET_VIEW_SCHEMA, "direction": "meta", "note": "x"}),
+        json.dumps({"schema": "ed2k_packet_v1", "direction": "recv", "opcode": 1}),
         "not json",
         "",
     ]

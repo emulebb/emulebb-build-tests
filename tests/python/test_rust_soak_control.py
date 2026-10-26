@@ -1644,8 +1644,8 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
         '{"schema":"diag_event_v2","event":"routing_summary","severity":"info","network":"Kad"}\n',
         encoding="utf-8",
     )
-    (mfc_logs / "emulebb-diagnostics-packet.log").write_text(
-        '{"schema":"ed2k_packet_v1","direction":"out","network":"ED2K"}\n',
+    (mfc_logs / "emulebb-diagnostics-v2-123.jsonl").write_text(
+        '{"schema":"diag_event_v2","family":"ed2k_tcp","event":"packet","severity":"info","body":{"protocolName":"ED2K"}}\n',
         encoding="utf-8",
     )
 
@@ -1658,11 +1658,8 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
     assert len(result["logDirs"]) == 2
     assert result["aggregatePatternCounts"]["kad"] == 1
     assert result["aggregatePatternCounts"]["ed2k"] == 1
-    assert result["aggregateJsonCounts"]["schema"] == {
-        "diag_event_v2": 1,
-        "ed2k_packet_v1": 1,
-    }
-    assert result["aggregateJsonCounts"]["event"] == {"routing_summary": 1}
+    assert result["aggregateJsonCounts"]["schema"] == {"diag_event_v2": 2}
+    assert result["aggregateJsonCounts"]["event"] == {"packet": 1, "routing_summary": 1}
     rendered = repr(result)
     assert str(rust_logs) not in rendered
     assert str(mfc_logs) not in rendered
