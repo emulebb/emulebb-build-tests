@@ -380,45 +380,39 @@ def load_diag_event_segment_snapshot(
     identity_changed = not (
         path_identity == opened_identity == read_complete_identity == after_identity
     )
+    handle_metadata_changed = (
+        opened.st_mtime_ns != read_complete.st_mtime_ns
+        or opened.st_ctime_ns != read_complete.st_ctime_ns
+    )
+    path_metadata_changed = (
+        before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ctime_ns != after.st_ctime_ns
+    )
     if allow_incomplete_tail:
         changed_during_read = (
             identity_changed
             or len(payload) != opened.st_size
             or read_complete.st_size < opened.st_size
             or after.st_size < opened.st_size
+            or (read_complete.st_size == opened.st_size and handle_metadata_changed)
+            or (
+                before.st_size == after.st_size == opened.st_size
+                and path_metadata_changed
+            )
         )
     else:
-        before_state = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
+        changed_during_read = (
+            identity_changed
+            or len(payload) != opened.st_size
+            or not (
+                before.st_size
+                == opened.st_size
+                == read_complete.st_size
+                == after.st_size
+            )
+            or handle_metadata_changed
+            or path_metadata_changed
         )
-        opened_state = (
-            opened.st_dev,
-            opened.st_ino,
-            opened.st_size,
-            opened.st_mtime_ns,
-            opened.st_ctime_ns,
-        )
-        read_complete_state = (
-            read_complete.st_dev,
-            read_complete.st_ino,
-            read_complete.st_size,
-            read_complete.st_mtime_ns,
-            read_complete.st_ctime_ns,
-        )
-        after_state = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        changed_during_read = not (
-            before_state == opened_state == read_complete_state == after_state
-        ) or len(payload) != opened.st_size
     if changed_during_read:
         raise DiagnosticTraceError(
             f"diagnostic segment changed while being read: {path}"
