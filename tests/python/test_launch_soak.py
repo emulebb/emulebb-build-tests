@@ -816,6 +816,7 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "launch_rust_ui(" not in source
     assert "direct_profile_dir=direct_mfc_profile" in source
     assert "vpn_guard_mode=str(vpn_guard_profile[\"mode\"])" in source
+    assert "allow_loopback_rest=args.vpn_topology == soak_launch.hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL" in source
     assert "duration_deadline = time.monotonic() + args.duration_seconds" in source
     assert "stop_file is not None and stop_file.exists()" in source
     assert "\"durationSeconds\": args.duration_seconds" in source

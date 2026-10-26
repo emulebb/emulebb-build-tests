@@ -1040,6 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
                 server_udp_port=args.mfc_server_udp_port,
                 vpn_guard_mode=str(vpn_guard_profile["mode"]),
                 vpn_guard_allowed_public_ip_cidrs=str(vpn_guard_profile["allowed_public_ip_cidrs"] or ""),
+                allow_loopback_rest=args.vpn_topology == soak_launch.hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL,
             )
             mfc_base = mfc_handles["baseUrl"]
 

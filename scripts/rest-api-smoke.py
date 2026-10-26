@@ -7,6 +7,7 @@ import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -1510,6 +1511,24 @@ def require_lan_bind_addr(
     return bind_host
 
 
+def require_webserver_bind_addr(
+    bind_addr: str | None,
+    *,
+    allow_loopback: bool = False,
+) -> str:
+    """Returns an explicit REST bind address for the selected network topology."""
+
+    candidate = (bind_addr or "").strip()
+    if allow_loopback:
+        try:
+            parsed = ipaddress.ip_address(candidate)
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed.version == 4 and parsed.is_loopback:
+            return candidate
+    return require_lan_bind_addr(candidate)
+
+
 def rest_base_host_for_lan_bind_addr(lan_bind_addr: str) -> str:
     """Returns the host the harness should use to reach one WebServer bind address."""
 
@@ -1841,6 +1860,7 @@ def configure_webserver_profile(
     https_key: str = "",
     enable_crash_test_endpoint: bool = False,
     live_network: bool = True,
+    allow_loopback: bool = False,
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
@@ -1863,7 +1883,10 @@ def configure_webserver_profile(
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            lan_bind_addr=require_lan_bind_addr(lan_bind_addr),
+            lan_bind_addr=require_webserver_bind_addr(
+                lan_bind_addr,
+                allow_loopback=allow_loopback,
+            ),
             use_gzip=True,
             allow_admin_high_level_func=True,
             use_https=use_https,
