@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,6 +65,7 @@ def diagnostic_event(
 
 
 def ed2k_tcp_packet(sequence: int = 1) -> dict[str, object]:
+    clear_frame = ed2k_tcp_clear_frame(227, 1, b"")
     return diagnostic_event(
         sequence,
         family="ed2k_tcp",
@@ -71,13 +74,15 @@ def ed2k_tcp_packet(sequence: int = 1) -> dict[str, object]:
         body={
             "direction": "recv",
             "flow": "client",
-            "transportMode": "plain",
+            "transportMode": "plaintext",
             "protocolMarker": 227,
             "protocolName": "ed2k",
             "opcode": 1,
             "opcodeName": "OP_HELLO",
-            "rawLen": 2,
-            "rawHex": "e301",
+            "rawLen": len(clear_frame),
+            "rawHex": clear_frame.hex(),
+            "clearFrameLen": len(clear_frame),
+            "clearFrameHex": clear_frame.hex(),
             "payloadLen": 0,
             "payloadHex": "",
             "payloadHexTruncated": False,

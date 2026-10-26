@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
+
 
 def load_live_wire_module():
     script_path = (
@@ -26,7 +28,7 @@ def ed2k_tcp_packet_event(
     process_id: int = 42,
     run_id: str = "active",
 ) -> dict[str, object]:
-    raw = bytes([0xE3, opcode]) + payload
+    clear_frame = ed2k_tcp_clear_frame(0xE3, opcode, payload)
     return {
         "schema": "diag_event_v2",
         "client": "rust",
@@ -53,8 +55,10 @@ def ed2k_tcp_packet_event(
             "protocolName": "ed2k",
             "opcode": opcode,
             "opcodeName": f"OP_{opcode:02X}",
-            "rawLen": len(raw),
-            "rawHex": raw.hex(),
+            "rawLen": len(clear_frame),
+            "rawHex": clear_frame.hex(),
+            "clearFrameLen": len(clear_frame),
+            "clearFrameHex": clear_frame.hex(),
             "payloadLen": len(payload),
             "payloadHex": payload.hex(),
             "payloadHexTruncated": False,

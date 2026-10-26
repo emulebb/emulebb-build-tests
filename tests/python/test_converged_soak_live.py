@@ -11,7 +11,10 @@ from types import ModuleType
 import pytest
 
 from emule_test_harness import converged_action_driver, soak_action_diff, soak_launch
-from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
+from tests.python.diagnostic_fixtures import (
+    current_diagnostic_writer_health,
+    ed2k_tcp_clear_frame,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SOAK_RUNNER = REPO_ROOT / "scripts" / "converged-soak-live.py"
@@ -2302,6 +2305,8 @@ def test_load_diag_mtime_filter_applies_to_common_segments(tmp_path: Path) -> No
 def test_load_packets_uses_unified_peer_tcp_events_only(tmp_path: Path) -> None:
     runner = _load_soak_runner()
     diag = tmp_path / "emulebb-rust-diag-42-active-000000.jsonl"
+    payload = bytes.fromhex("aabb")
+    clear_frame = ed2k_tcp_clear_frame(0xE3, 0x01, payload)
     base = {
         "schema": "diag_event_v2",
         "client": "rust",
@@ -2328,10 +2333,12 @@ def test_load_packets_uses_unified_peer_tcp_events_only(tmp_path: Path) -> None:
             "protocolName": "ed2k",
             "opcode": 0x01,
             "opcodeName": "OP_HELLO",
-            "rawLen": 8,
-            "rawHex": "e30200000001aabb",
-            "payloadLen": 2,
-            "payloadHex": "aabb",
+            "rawLen": len(clear_frame),
+            "rawHex": clear_frame.hex(),
+            "clearFrameLen": len(clear_frame),
+            "clearFrameHex": clear_frame.hex(),
+            "payloadLen": len(payload),
+            "payloadHex": payload.hex(),
             "payloadHexTruncated": False,
             "traceKey": "listener:198.51.100.2:4662",
             "stateId": "listener.hello",

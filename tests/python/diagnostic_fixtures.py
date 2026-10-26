@@ -3,6 +3,19 @@
 from __future__ import annotations
 
 
+def ed2k_tcp_clear_frame(
+    protocol_marker: int, opcode: int, payload: bytes
+) -> bytes:
+    """Builds one plaintext eD2K TCP frame from its decoded packet fields."""
+
+    return (
+        bytes([protocol_marker])
+        + (len(payload) + 1).to_bytes(4, "little")
+        + bytes([opcode])
+        + payload
+    )
+
+
 def current_diagnostic_writer_health(
     *,
     client: str = "rust",

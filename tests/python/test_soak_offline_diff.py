@@ -11,6 +11,8 @@ from types import ModuleType
 
 import pytest
 
+from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
+
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -91,6 +93,8 @@ def _segmented_peer_packet(
     at: float,
 ) -> dict:
     record = _segmented_diag(client, process_id, run_id, segment_id, seq, at)
+    payload = bytes.fromhex("aabb")
+    clear_frame = ed2k_tcp_clear_frame(0xE3, 0x01, payload)
     record.update(
         {
             "family": "ed2k_tcp",
@@ -103,16 +107,18 @@ def _segmented_peer_packet(
             "body": {
                 "direction": "send",
                 "flow": "client",
-                "transportMode": "plain",
+                "transportMode": "plaintext",
                 "obfuscated": False,
                 "protocolMarker": 0xE3,
                 "protocolName": "ed2k",
                 "opcode": 0x01,
                 "opcodeName": "OP_HELLO",
-                "rawLen": 2,
-                "rawHex": "aabb",
-                "payloadLen": 2,
-                "payloadHex": "aabb",
+                "rawLen": len(clear_frame),
+                "rawHex": clear_frame.hex(),
+                "clearFrameLen": len(clear_frame),
+                "clearFrameHex": clear_frame.hex(),
+                "payloadLen": len(payload),
+                "payloadHex": payload.hex(),
                 "payloadHexTruncated": False,
             },
         }
