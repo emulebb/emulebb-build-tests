@@ -632,6 +632,60 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
     )
 
 
+def test_capture_action_cycle_records_diagnostic_connectivity_skip(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_interval_seconds=900,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    monkeypatch.setattr(
+        converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TimeoutError("diagnostics request timed out")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("search must not start without diagnostic identities")
+        ),
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        new_state(config),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        now_ns=1_000_000_000,
+    )
+
+    assert updated["pendingAction"] is None
+    assert updated["driver"]["cycles"] == 0
+    assert updated["driver"]["cycleErrors"] == 0
+    assert updated["driver"]["connectivitySkips"] == 1
+    assert updated["driver"]["latestConnectivitySkip"] == {
+        "attemptedAtUtc": "2026-10-25T12:01:00+00:00",
+        "phase": "diagnostic_run_identity",
+        "error": {
+            "type": "TimeoutError",
+            "message": "diagnostics request timed out",
+        },
+    }
+    assert (
+        converged_observer.load_json_object(
+            subject.run_paths.report_dir / "summary.json"
+        )
+        == updated
+    )
+
+
 def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(
     tmp_path: Path,
     monkeypatch,

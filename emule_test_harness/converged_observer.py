@@ -842,12 +842,27 @@ def capture_action_cycle(
     if not resumed:
         cycle_index = int(validated["scheduler"]["nextCycle"])
         query = config.terms[(cycle_index - 1) % len(config.terms)]
+        try:
+            diagnostic_runs = action_diagnostic_runs(clients)
+        except (OSError, RuntimeError) as error:
+            skipped = converged_observer_state.record_connectivity_skip(
+                validated,
+                {
+                    "attemptedAtUtc": utc_text(now_utc),
+                    "phase": "diagnostic_run_identity",
+                    "error": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                },
+            )
+            return persist_state(runtime, skipped, now_ns=now_ns)
         validated = converged_observer_state.reserve_driver_cycle(
             validated,
             query=query,
             method=config.method,
             reserved_at_utc=utc_text(now_utc),
-            diagnostic_runs=action_diagnostic_runs(clients),
+            diagnostic_runs=diagnostic_runs,
         )
         validated = persist_state(runtime, validated, now_ns=now_ns)
 
