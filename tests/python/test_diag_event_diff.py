@@ -48,6 +48,39 @@ def _pkt(family, direction, opcode, payload, *, marker=227):
     )
 
 
+def test_server_udp_uses_packet_diff_strategy() -> None:
+    rust = [_pkt("ed2k_server_udp", "send", 0xA2, "0011")]
+    mfc = [_pkt("ed2k_server_udp", "send", 0xA2, "0011")]
+
+    report = diff_traces(rust, mfc)
+
+    assert report["ok"] is True
+    assert report["families"] == [
+        {
+            "family": "ed2k_server_udp",
+            "strategy": "wire_identity",
+            "ok": True,
+            "totals": {
+                "matched": 1,
+                "payloadMismatches": 0,
+                "onlyRust": 0,
+                "onlyMfc": 0,
+            },
+            "directions": [
+                {
+                    "direction": "send",
+                    "rustCount": 1,
+                    "mfcCount": 1,
+                    "matched": 1,
+                    "payloadMismatches": [],
+                    "onlyRust": [],
+                    "onlyMfc": [],
+                }
+            ],
+        }
+    ]
+
+
 def _peer_tcp_packet_event(event: str = "packet") -> dict:
     record = _env(
         "ed2k_tcp",

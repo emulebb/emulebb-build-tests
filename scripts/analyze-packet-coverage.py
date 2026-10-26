@@ -31,7 +31,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import diag_event_diff, diag_event_runs
 from emule_test_harness import packet_trace_diff as ptd
-from emule_test_harness.diag_event_schema import PERSISTED_SOAK_REQUIRED_PARITY_FAMILIES
+from emule_test_harness.diag_event_schema import (
+    ED2K_SERVER_UDP_FAMILY,
+    PERSISTED_SOAK_REQUIRED_PARITY_FAMILIES,
+)
 
 # eD2k opcodes that only appear when WE serve an upload (a peer downloads from
 # us). Their presence on the client/listener channel proves the upload path ran.
@@ -92,6 +95,30 @@ def _kad_histogram(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _server_udp_views(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    views = []
+    for record in records:
+        if record.get("family") != ED2K_SERVER_UDP_FAMILY or record.get("event") != "packet":
+            continue
+        body = record.get("body")
+        if not isinstance(body, dict) or body.get("direction") not in {"send", "recv"}:
+            continue
+        protocol_marker = body.get("protocolMarker")
+        opcode = body.get("opcode")
+        if not isinstance(protocol_marker, int) or not isinstance(opcode, int):
+            continue
+        views.append(
+            {
+                "flow": "server",
+                "direction": body["direction"],
+                "protocol_marker": protocol_marker,
+                "opcode": opcode,
+                "opcode_name": body.get("opcodeName") or "UNKNOWN",
+            }
+        )
+    return views
+
+
 def build_summary(
     rust_ed2k: list[dict[str, Any]],
     mfc_ed2k: list[dict[str, Any]],
@@ -116,6 +143,8 @@ def build_summary(
         for record in ptd.kad_records(mfc_diagnostics)
         if record.get("event") == "packet"
     ]
+    rust_server_udp = _server_udp_views(rust_diagnostics)
+    mfc_server_udp = _server_udp_views(mfc_diagnostics)
     return {
         "schema": "packet_coverage_summary_v2",
         "records": {
@@ -125,6 +154,8 @@ def build_summary(
             "mfcEd2k": len(mfc_ed2k),
             "rustKadUdp": len(rust_kad),
             "mfcKadUdp": len(mfc_kad),
+            "rustServerUdp": len(rust_server_udp),
+            "mfcServerUdp": len(mfc_server_udp),
         },
         "persistedSoakConformance": diag_event_diff.full_run_conformance(
             rust_diagnostics,
@@ -137,6 +168,10 @@ def build_summary(
         ),
         "ed2kOpcodeCoverage": ptd._opcode_coverage(rust_ed2k, mfc_ed2k),
         "kadOpcodeCoverage": ptd.kad_opcode_coverage(rust_kad, mfc_kad),
+        "serverUdpOpcodeCoverage": ptd._opcode_coverage(
+            rust_server_udp,
+            mfc_server_udp,
+        ),
         "rustUploadServing": [
             {"flow": flow, "direction": direction, "opcodeName": name, "count": count}
             for (flow, direction, name), count in sorted(serving.items())
@@ -144,6 +179,10 @@ def build_summary(
         "kadUdpHistogram": {
             "rust": _kad_histogram(rust_kad),
             "mfc": _kad_histogram(mfc_kad),
+        },
+        "serverUdpHistogram": {
+            "rust": _kad_histogram(rust_server_udp),
+            "mfc": _kad_histogram(mfc_server_udp),
         },
     }
 
@@ -181,7 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         "rust ed2k records: "
         f"{records['rustEd2k']} | mfc ed2k records: {records['mfcEd2k']} | "
         f"rust kad-udp records: {records['rustKadUdp']} | "
-        f"mfc kad-udp records: {records['mfcKadUdp']}"
+        f"mfc kad-udp records: {records['mfcKadUdp']} | "
+        f"rust server-udp records: {records['rustServerUdp']} | "
+        f"mfc server-udp records: {records['mfcServerUdp']}"
     )
 
     cov = summary["ed2kOpcodeCoverage"]
@@ -211,6 +252,17 @@ def main(argv: list[str] | None = None) -> int:
     for side in ("rust", "mfc"):
         print(f"\n  [{side}]")
         for row in summary["kadUdpHistogram"][side]:
+            print(f"    {row['count']:5d}  {row['direction']:4}  {row['opcodeName']}")
+
+    server_udp_coverage = summary["serverUdpOpcodeCoverage"]
+    print(
+        "\n=== server UDP opcode coverage "
+        f"(coverageOk={server_udp_coverage['ok']}, "
+        f"oracleOk={server_udp_coverage['oracleOk']}) ==="
+    )
+    for side in ("rust", "mfc"):
+        print(f"\n  [{side}]")
+        for row in summary["serverUdpHistogram"][side]:
             print(f"    {row['count']:5d}  {row['direction']:4}  {row['opcodeName']}")
 
     conformance = summary["persistedSoakConformance"]

@@ -148,6 +148,27 @@ def _kad_event_diag(*, client: str, sequence: int) -> dict[str, object]:
     )
 
 
+def _server_udp_diag(*, client: str, sequence: int) -> dict[str, object]:
+    return _diag_envelope(
+        client=client,
+        sequence=sequence,
+        family="ed2k_server_udp",
+        event="packet",
+        keys={"protocolMarker": 0xE3, "opcode": 0xA2},
+        body={
+            "direction": "send",
+            "outcome": "send_succeeded",
+            "protocolMarker": 0xE3,
+            "protocolName": "ed2k",
+            "opcode": 0xA2,
+            "opcodeName": "OP_GLOBSERVSTATREQ",
+            "payloadLen": 1,
+            "payloadHex": "00",
+            "payloadHexTruncated": False,
+        },
+    )
+
+
 def _complete_diagnostics(client: str) -> list[dict[str, object]]:
     return [
         _ed2k_diag(client=client, sequence=1, flow="client", direction="recv"),
@@ -155,6 +176,7 @@ def _complete_diagnostics(client: str) -> list[dict[str, object]]:
         _client_udp_diag(client=client, sequence=3, event="send_outcome", stream_sequence=2),
         _kad_diag(client=client, sequence=4),
         _kad_event_diag(client=client, sequence=5),
+        _server_udp_diag(client=client, sequence=6),
     ]
 
 
@@ -176,15 +198,18 @@ def test_build_summary_reports_opcode_and_upload_coverage() -> None:
 
     assert summary["schema"] == "packet_coverage_summary_v2"
     assert summary["records"] == {
-        "rustDiagnosticEvents": 5,
-        "mfcDiagnosticEvents": 5,
+        "rustDiagnosticEvents": 6,
+        "mfcDiagnosticEvents": 6,
         "rustEd2k": 2,
         "mfcEd2k": 1,
         "rustKadUdp": 1,
         "mfcKadUdp": 1,
+        "rustServerUdp": 1,
+        "mfcServerUdp": 1,
     }
     assert summary["ed2kOpcodeCoverage"]["ok"] is False
     assert summary["kadOpcodeCoverage"]["oracleOk"] is True
+    assert summary["serverUdpOpcodeCoverage"]["oracleOk"] is True
     assert summary["persistedSoakConformance"]["ok"] is True
     assert summary["rustUploadServing"] == [
         {"flow": "listener", "direction": "send", "opcodeName": "OP_STARTUPLOADREQ", "count": 1}
@@ -237,6 +262,37 @@ def test_build_summary_rejects_missing_mfc_kad_evidence() -> None:
     assert required["kad_event"]["ok"] is False
 
 
+def test_build_summary_rejects_missing_mfc_server_udp_evidence() -> None:
+    module = load_script_module()
+    rust_diagnostics = _complete_diagnostics("rust")
+    mfc_diagnostics = [
+        record
+        for record in _complete_diagnostics("mfc")
+        if record["family"] != "ed2k_server_udp"
+    ]
+
+    summary = module.build_summary(
+        module.diag_event_diff.ed2k_tcp_packet_views(rust_diagnostics),
+        module.diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics),
+        rust_diagnostics,
+        mfc_diagnostics,
+    )
+
+    assert summary["persistedSoakConformance"]["ok"] is False
+    required = {
+        row["family"]: row
+        for row in summary["persistedSoakConformance"]["familyConformance"][
+            "requiredFamilies"
+        ]
+    }
+    assert required["ed2k_server_udp"] == {
+        "family": "ed2k_server_udp",
+        "rustPresent": True,
+        "mfcPresent": False,
+        "ok": False,
+    }
+
+
 def test_main_writes_json_summary(tmp_path: Path) -> None:
     module = load_script_module()
     rust_dir = tmp_path / "rust-diagnostics"
@@ -266,13 +322,16 @@ def test_main_writes_json_summary(tmp_path: Path) -> None:
 
     summary = json.loads(json_output.read_text(encoding="utf-8"))
     assert summary["records"] == {
-        "rustDiagnosticEvents": 5,
-        "mfcDiagnosticEvents": 5,
+        "rustDiagnosticEvents": 6,
+        "mfcDiagnosticEvents": 6,
         "rustEd2k": 1,
         "mfcEd2k": 1,
         "rustKadUdp": 1,
         "mfcKadUdp": 1,
+        "rustServerUdp": 1,
+        "mfcServerUdp": 1,
     }
     assert summary["ed2kOpcodeCoverage"]["ok"] is True
     assert summary["kadOpcodeCoverage"]["oracleOk"] is True
+    assert summary["serverUdpOpcodeCoverage"]["oracleOk"] is True
     assert summary["persistedSoakConformance"]["ok"] is True
