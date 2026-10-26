@@ -622,9 +622,9 @@ def test_search_gate_kad_method_fails_without_kad_request_on_both() -> None:
     assert report["actionCoverage"]["required"][0]["mfcPresent"] is False
 
 
-def test_search_gate_global_method_holds_on_rust_only_evidence() -> None:
+def test_search_gate_global_method_is_not_assessable_from_rust_only_evidence() -> None:
     # MFC has no server-UDP packet hook, so the MFC side of a global search is
-    # not-assessable; the gate holds on rust's OP_GLOBSEARCHREQ send alone.
+    # not-assessable and Rust's OP_GLOBSEARCHREQ cannot establish parity alone.
     pair = _search_pair("global")
     report = sad.diff_action(
         pair,
@@ -632,7 +632,9 @@ def test_search_gate_global_method_holds_on_rust_only_evidence() -> None:
         mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
     )
     assert report["actionCoverage"]["mode"] == "search-global-server-udp"
-    assert report["coverageOk"] is True
+    assert report["actionCoverage"]["status"] == "not-assessable"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "not-assessable"
     row = report["actionCoverage"]["required"][0]
     assert row["mfcAssessable"] is False
     assert row["mfcStatus"] == "not-assessable"
@@ -646,6 +648,7 @@ def test_search_gate_global_method_fails_without_rust_send() -> None:
         mfc_packets=[_pkt("server", "send", 0x14, "bb", _ts(2), marker=0xE3)],
     )
     assert report["coverageOk"] is False
+    assert report["verdict"] == "not-assessable"
 
 
 def test_search_gate_automatic_method_accepts_kad_evidence() -> None:
@@ -709,17 +712,25 @@ def test_required_diagnostics_reject_empty_action_windows() -> None:
 
 def test_summary_folds_verdicts() -> None:
     summary = sad.empty_summary("camp-1")
-    for verdict in ("coverage-parity", "divergence", "unpaired"):
+    for verdict in (
+        "coverage-parity",
+        "divergence",
+        "unpaired",
+        "not-assessable",
+        "evidence-incomplete",
+    ):
         report = sad.build_action_report(
             {"kind": "search", "key": "k", "label": "k", "verdict": verdict, "coverageOk": True},
             campaign_id="camp-1",
             seq=1,
         )
         sad.append_to_summary(summary, report)
-    assert summary["totals"]["actions"] == 3
+    assert summary["totals"]["actions"] == 5
     assert summary["totals"]["coverageParity"] == 1
     assert summary["totals"]["divergence"] == 1
     assert summary["totals"]["unpaired"] == 1
+    assert summary["totals"]["notAssessable"] == 1
+    assert summary["totals"]["evidenceIncomplete"] == 1
 
 
 def test_write_action_report_persists_json(tmp_path) -> None:

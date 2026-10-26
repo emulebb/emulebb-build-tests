@@ -275,6 +275,37 @@ def test_observer_state_rejects_configuration_digest_mismatch() -> None:
         observer_state.validate_state(state, configuration_digest="b" * 64)
 
 
+@pytest.mark.parametrize(
+    ("verdict", "total_field"),
+    (
+        ("not-assessable", "notAssessable"),
+        ("evidence-incomplete", "evidenceIncomplete"),
+    ),
+)
+def test_observer_state_counts_inconclusive_action_verdicts(
+    verdict: str,
+    total_field: str,
+) -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=2,
+        recent_anomaly_limit=1,
+    )
+    report = action_report(
+        state["campaignId"],
+        1,
+        "2026-10-01T00:00:00+00:00",
+    )
+    report["verdict"] = verdict
+
+    updated = observer_state.record_action(state, report)
+
+    assert updated["totals"][total_field] == 1
+    assert updated["histograms"]["verdict"][verdict] == 1
+    assert updated["recentAnomalies"][0]["verdict"] == verdict
+
+
 @pytest.mark.parametrize("cycle", (1, 3))
 def test_observer_state_rejects_duplicate_or_skipped_driver_cycle(cycle: int) -> None:
     state = observer_state.new_state(

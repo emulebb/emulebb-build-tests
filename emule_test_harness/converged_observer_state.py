@@ -8,7 +8,7 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v3"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v4"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -32,6 +32,8 @@ _VERDICT_BUCKETS = (
     "one-sided",
     "no-traffic",
     "unpaired",
+    "not-assessable",
+    "evidence-incomplete",
     "other",
 )
 _TOTAL_BUCKETS = {
@@ -40,6 +42,8 @@ _TOTAL_BUCKETS = {
     "one-sided": "oneSided",
     "no-traffic": "noTraffic",
     "unpaired": "unpaired",
+    "not-assessable": "notAssessable",
+    "evidence-incomplete": "evidenceIncomplete",
     "other": "other",
 }
 _KIND_BUCKETS = ("search", "download", "other")
@@ -77,6 +81,8 @@ def new_state(
             "oneSided": 0,
             "noTraffic": 0,
             "unpaired": 0,
+            "notAssessable": 0,
+            "evidenceIncomplete": 0,
             "other": 0,
         },
         "histograms": {
