@@ -108,9 +108,33 @@ def persist_observer_action_report(
 ) -> soak_storage.PersistedArtifact:
     """Persists one immutable observer action report under its stream budget."""
 
-    campaign_id = report.get("campaignId")
-    sequence = report.get("seq")
-    action_id = report.get("actionId")
+    path = observer_action_report_path(
+        paths=paths,
+        campaign_id=report.get("campaignId"),
+        sequence=report.get("seq"),
+        action_id=report.get("actionId"),
+    )
+    return soak_storage.persist_bounded_json_identity_artifact(
+        store=store,
+        active_campaign=paths.campaign_dir,
+        directory=paths.actions_dir,
+        stream_name="observer_actions",
+        stem="action",
+        artifact_name=path.name,
+        payload=report,
+        now_ns=now_ns,
+    )
+
+
+def observer_action_report_path(
+    *,
+    paths: SoakRunPaths,
+    campaign_id: object,
+    sequence: object,
+    action_id: object,
+) -> Path:
+    """Returns one validated deterministic observer action-report path."""
+
     if campaign_id != paths.campaign_id:
         raise RuntimeError("Observer action report campaign identity is invalid.")
     if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
@@ -122,17 +146,64 @@ def persist_observer_action_report(
         or any(not (character.isalnum() or character == "-") for character in action_id)
     ):
         raise RuntimeError("Observer action report action identity is invalid.")
-    artifact_name = f"action-{sequence:08d}-{action_id}.json"
-    return soak_storage.persist_bounded_json_identity_artifact(
-        store=store,
-        active_campaign=paths.campaign_dir,
-        directory=paths.actions_dir,
-        stream_name="observer_actions",
-        stem="action",
-        artifact_name=artifact_name,
-        payload=report,
-        now_ns=now_ns,
+    return paths.actions_dir / f"action-{sequence:08d}-{action_id}.json"
+
+
+def load_observer_action_report_candidate(
+    *,
+    paths: SoakRunPaths,
+    pending_action: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Loads an exact final or prepared report before diagnostic recapture."""
+
+    path = observer_action_report_path(
+        paths=paths,
+        campaign_id=paths.campaign_id,
+        sequence=pending_action.get("reportSeq"),
+        action_id=pending_action.get("actionId"),
     )
+    temporary = path.with_name(f".{path.name}.tmp")
+    if path.exists() and temporary.exists():
+        raise RuntimeError(
+            f"Observer action report has ambiguous final and temporary state: {path.name}"
+        )
+    candidate = path if path.exists() else temporary if temporary.exists() else None
+    if candidate is None:
+        return None
+    if candidate.is_symlink() or not candidate.is_file():
+        raise RuntimeError(
+            f"Observer action report candidate must be one regular file: {candidate}"
+        )
+    before = candidate.stat()
+    try:
+        encoded = candidate.read_bytes()
+        payload = json.loads(encoded.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"Unable to load observer action report candidate {candidate}: {error}"
+        ) from error
+    after = candidate.stat()
+    if (
+        before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or len(encoded) != after.st_size
+    ):
+        raise RuntimeError(
+            f"Observer action report candidate changed while reading: {candidate}"
+        )
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Observer action report candidate must be an object: {candidate}"
+        )
+    if (
+        payload.get("campaignId") != paths.campaign_id
+        or payload.get("seq") != pending_action.get("reportSeq")
+        or payload.get("actionId") != pending_action.get("actionId")
+    ):
+        raise RuntimeError(
+            f"Observer action report candidate identity is invalid: {candidate}"
+        )
+    return payload
 
 
 def persist_observer_checkpoint(

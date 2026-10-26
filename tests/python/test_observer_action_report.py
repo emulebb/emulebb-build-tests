@@ -412,3 +412,30 @@ def test_validator_rejects_schema_and_assessment_drift(tmp_path: Path) -> None:
         match="assessment method is inconsistent",
     ):
         observer_action_report.validate_observer_action_report(inconsistent)
+
+
+def test_pending_validator_rejects_a_valid_report_for_another_action(
+    tmp_path: Path,
+) -> None:
+    original_pending = _pending_action()
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=original_pending,
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records("rust", 4101, "rust-run"),
+            mfc_records=_kad_records("mfc", 4201, "mfc-run"),
+        ),
+    )
+    different_pending = _pending_action()
+    different_pending["query"] = "Debian ISO"
+    different_pending["driverOutcome"]["query"] = "Debian ISO"
+
+    with pytest.raises(
+        observer_action_report.ObserverActionReportError,
+        match="does not match the pending action",
+    ):
+        observer_action_report.validate_observer_action_report_for_pending(
+            report,
+            different_pending,
+        )
