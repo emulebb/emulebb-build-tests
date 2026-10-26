@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta
 import json
 from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v4"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v5"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -232,12 +233,20 @@ def validate_state(
     next_cycle = _require_positive_integer(
         scheduler["nextCycle"], "scheduler.nextCycle"
     )
-    _validate_optional_timestamp(scheduler["nextActionAtUtc"])
+    next_action_at_utc = scheduler["nextActionAtUtc"]
+    _validate_optional_utc_timestamp(
+        next_action_at_utc,
+        "scheduler.nextActionAtUtc",
+    )
     pending_action = payload.get("pendingAction")
     if pending_action is None:
         if next_cycle != driver["cycles"] + 1:
             raise RuntimeError("Converged observer driver cycle is discontinuous.")
     else:
+        if next_action_at_utc is not None:
+            raise RuntimeError(
+                "Converged observer pending action cannot retain a scheduler deadline."
+            )
         _validate_pending_action(
             pending_action,
             next_action_seq=next_action_seq,
@@ -374,7 +383,14 @@ def set_next_action_deadline(
     """Persists the restart-safe UTC deadline for the next scheduled action."""
 
     updated = validate_state(state)
-    _validate_optional_timestamp(next_action_at_utc)
+    _validate_optional_utc_timestamp(
+        next_action_at_utc,
+        "scheduler.nextActionAtUtc",
+    )
+    if next_action_at_utc is not None and updated["pendingAction"] is not None:
+        raise RuntimeError(
+            "Converged observer pending action cannot set a scheduler deadline."
+        )
     updated["scheduler"]["nextActionAtUtc"] = next_action_at_utc
     return validate_state(updated)
 
@@ -399,6 +415,7 @@ def reserve_driver_cycle(
     _validate_diagnostic_runs(diagnostic_runs)
     cycle = updated["scheduler"]["nextCycle"]
     action_id = driver_action_id(updated["campaignId"], cycle)
+    updated["scheduler"]["nextActionAtUtc"] = None
     updated["pendingAction"] = {
         "actionId": action_id,
         "reportSeq": updated["nextActionSeq"],
@@ -1002,6 +1019,18 @@ def _append_bounded(
 def _validate_optional_timestamp(value: object) -> None:
     if value is not None:
         _require_nonempty_string(value, "timestamp")
+
+
+def _validate_optional_utc_timestamp(value: object, name: str) -> None:
+    if value is None:
+        return
+    text = _require_nonempty_string(value, name)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an ISO-8601 UTC timestamp.") from error
+    if parsed.utcoffset() != timedelta(0):
+        raise RuntimeError(f"{name} must be an ISO-8601 UTC timestamp.")
 
 
 def _require_nonempty_string(value: object, name: str) -> str:
