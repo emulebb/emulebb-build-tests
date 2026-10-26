@@ -389,6 +389,21 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
             error=None,
         )
 
+    def finalize_action(_runtime, state, *, now_ns):
+        assert now_ns == 1_000_000_000
+        assert state["pendingAction"]["evidence"] == {
+            "status": "pending",
+            "windowEndUtc": "2026-10-25T12:01:00+00:00",
+        }
+        assert (
+            converged_observer.load_json_object(
+                subject.run_paths.report_dir / "summary.json"
+            )
+            == state
+        )
+        events.append(("finalize", "report"))
+        return state
+
     monkeypatch.setattr(converged_observer, "diagnostic_writer_health", health)
     monkeypatch.setattr(
         converged_observer.converged_action_driver,
@@ -407,6 +422,7 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         now_ns=1_000_000_000,
+        finalize_action=finalize_action,
     )
 
     assert events == [
@@ -414,6 +430,7 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
         ("create", "mfc"),
         ("results", "rust"),
         ("results", "mfc"),
+        ("finalize", "report"),
     ]
     assert updated["driver"]["cycles"] == 1
     assert updated["driver"]["latestCycle"]["query"] == "Exact Local Search Term"
@@ -473,6 +490,7 @@ def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(
         converged_observer.load_state(subject),
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
     )
 
     assert updated["driver"]["cycles"] == 1
@@ -545,6 +563,7 @@ def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
         converged_observer.load_state(subject),
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
     )
 
     assert polled == [
@@ -616,18 +635,30 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
             AssertionError("completed driver must not poll again")
         ),
     )
+    finalized_state = {"finalized": True}
+
+    def finalize_action(_runtime, action_state, **_kwargs):
+        assert action_state["pendingAction"]["evidence"] == {
+            "status": "pending",
+            "windowEndUtc": "2026-10-25T12:00:04+00:00",
+        }
+        assert (
+            converged_observer.load_json_object(
+                subject.run_paths.report_dir / "summary.json"
+            )
+            == action_state
+        )
+        return finalized_state
 
     updated = converged_observer.capture_action_cycle(
         subject,
         converged_observer.load_state(subject),
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 5, tzinfo=UTC),
+        finalize_action=finalize_action,
     )
 
-    assert updated["pendingAction"]["evidence"] == {
-        "status": "pending",
-        "windowEndUtc": "2026-10-25T12:00:04+00:00",
-    }
+    assert updated is finalized_state
 
 
 def test_finalize_pending_action_is_report_first_and_uses_persisted_authority(
@@ -780,7 +811,9 @@ def test_finalize_pending_action_does_not_commit_if_report_persistence_fails(
     monkeypatch.setattr(
         converged_observer.soak_run_layout,
         "persist_observer_action_report",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic write failure")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic write failure")
+        ),
     )
     monkeypatch.setattr(
         converged_observer.converged_observer_state,
@@ -1010,6 +1043,66 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     assert action_cycles == [1, 2]
     assert result["driver"]["cycles"] == 2
     assert result["driver"]["latestCycle"]["query"] == "debian"
+
+
+def test_run_observer_services_pending_action_before_delay_or_cycle_limit(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        method="server",
+        start_delay_seconds=3_600,
+        search_interval_seconds=300,
+        search_timeout_seconds=120,
+        max_cycles=1,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    converged_observer.persist_state(subject, reportable_state(config))
+    clock = [0.0]
+    action_times: list[float] = []
+
+    def drive_action(_runtime, state, _config):
+        action_times.append(clock[0])
+        subject.stop_file.parent.mkdir(parents=True, exist_ok=True)
+        subject.stop_file.write_text("stop\n", encoding="utf-8")
+        return state
+
+    def sleep(seconds: float) -> None:
+        if not action_times:
+            raise AssertionError(
+                "persisted pending action was not serviced immediately"
+            )
+        clock[0] += seconds
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=60,
+        checkpoint_interval_seconds=1_000,
+        failure_threshold=3,
+        monotonic=lambda: clock[0],
+        sleep=sleep,
+        launcher_alive=lambda _identity: True,
+        capture=lambda _runtime, state: state,
+        drive_action=drive_action,
+    )
+
+    assert action_times == [0.0]
+    assert result["pendingAction"] is not None
+    assert result["driver"]["cycles"] == config.max_cycles
 
 
 def test_run_observer_honors_shared_stop_before_process_probe(tmp_path: Path) -> None:

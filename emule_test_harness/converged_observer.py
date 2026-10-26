@@ -716,6 +716,7 @@ def capture_action_cycle(
     *,
     now_utc: Callable[[], datetime] = utc_now,
     now_ns: int | None = None,
+    finalize_action: Callable[..., dict[str, Any]] = finalize_pending_action,
 ) -> dict[str, Any]:
     """Advances one crash-safe synchronized search without owning either client."""
 
@@ -753,8 +754,8 @@ def capture_action_cycle(
                 validated,
                 window_end_utc=completed_at_utc,
             )
-            return persist_state(runtime, validated, now_ns=now_ns)
-        return validated
+            validated = persist_state(runtime, validated, now_ns=now_ns)
+        return finalize_action(runtime, validated, now_ns=now_ns)
 
     entry_creates = {
         client: pending["clients"][client]["create"] for client in ("rust", "mfc")
@@ -873,7 +874,8 @@ def capture_action_cycle(
         validated,
         window_end_utc=completed_at_utc,
     )
-    return persist_state(runtime, validated, now_ns=now_ns)
+    validated = persist_state(runtime, validated, now_ns=now_ns)
+    return finalize_action(runtime, validated, now_ns=now_ns)
 
 
 def run_observer(
@@ -922,7 +924,9 @@ def run_observer(
     consecutive_failures = 0
     next_checkpoint = monotonic()
     next_action = (
-        monotonic() + runtime.action_config.start_delay_seconds
+        next_checkpoint
+        if runtime.action_config.enabled and state["pendingAction"] is not None
+        else next_checkpoint + runtime.action_config.start_delay_seconds
         if runtime.action_config.enabled
         else float("inf")
     )
@@ -956,12 +960,17 @@ def run_observer(
 
         action_config = runtime.action_config
         action_cycles = int(state["driver"]["cycles"])
+        has_pending_action = state["pendingAction"] is not None
         action_limit_reached = bool(
-            action_config.max_cycles and action_cycles >= action_config.max_cycles
+            action_config.max_cycles
+            and action_cycles >= action_config.max_cycles
+            and not has_pending_action
         )
-        if action_limit_reached:
+        if action_config.enabled and has_pending_action:
+            next_action = now
+        elif action_limit_reached:
             next_action = float("inf")
-        elif action_config.enabled and now >= next_action:
+        if action_config.enabled and now >= next_action:
             state = drive_action(runtime, state, action_config)
             next_action = monotonic() + action_config.search_interval_seconds
 
