@@ -408,8 +408,16 @@ def _validate_pending_action(pending: object) -> None:
 
 
 def _validate_pending_client(value: object, client: str) -> None:
-    if not isinstance(value, dict) or set(value) != {"create", "results"}:
+    if not isinstance(value, dict) or set(value) != {
+        "create",
+        "resultPoll",
+        "results",
+    }:
         raise ObserverActionReportError(f"pending_action {client} client state is invalid")
+    if value["resultPoll"] is not None:
+        raise ObserverActionReportError(
+            f"pending_action {client} result poll is not terminal"
+        )
     create = value["create"]
     if not isinstance(create, dict):
         raise ObserverActionReportError(f"pending_action {client} create is not terminal")

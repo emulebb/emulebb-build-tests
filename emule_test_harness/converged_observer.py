@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -37,6 +38,8 @@ MIN_ACTION_INTERVAL_SECONDS = 300.0
 DEFAULT_ACTION_START_DELAY_SECONDS = 60.0
 DEFAULT_ACTION_INTERVAL_SECONDS = 1_800.0
 DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS = 180.0
+ACTION_RESULT_POLL_INTERVAL_SECONDS = 2.0
+ACTION_RESULT_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_ACTION_METHOD = "server"
 ACTION_METHODS = ("server", "global", "kad")
 
@@ -694,8 +697,22 @@ def action_due_in_seconds(
     validated = converged_observer_state.validate_state(state)
     if not config.enabled or action_cycle_limit_reached(validated, config):
         return float("inf")
-    if validated["pendingAction"] is not None:
-        return 0.0
+    pending = validated["pendingAction"]
+    if isinstance(pending, dict):
+        poll_deadlines = []
+        for client in ("rust", "mfc"):
+            result_poll = pending["clients"][client]["resultPoll"]
+            if isinstance(result_poll, dict):
+                poll_deadlines.append(
+                    soak_action_diff.parse_utc_timestamp(
+                        result_poll["nextAttemptAtUtc"],
+                        label=f"observer {client} result poll next attempt",
+                    )
+                )
+        if not poll_deadlines:
+            return 0.0
+        now = utc_datetime(now_utc)
+        return max((min(poll_deadlines) - now).total_seconds(), 0.0)
     deadline_text = validated["scheduler"]["nextActionAtUtc"]
     if not isinstance(deadline_text, str):
         raise RuntimeError("Observer action deadline is not reconciled.")
@@ -709,6 +726,7 @@ def action_due_in_seconds(
 def action_phase_error(
     client: str,
     *,
+    phase: str = "search-create",
     error_type: str,
     message: str,
 ) -> dict[str, str]:
@@ -716,7 +734,7 @@ def action_phase_error(
 
     return {
         "client": client,
-        "phase": "search-create",
+        "phase": phase,
         "type": error_type,
         "message": message,
     }
@@ -778,6 +796,8 @@ def pending_cycle_payload(
                 "completed": results["completed"],
             }
             result_counts[client] = result_count
+        if status == "succeeded":
+            results_record["poll"] = copy.deepcopy(results["poll"])
         searches[client] = {"create": create_record, "results": results_record}
 
     return {
@@ -921,11 +941,12 @@ def capture_action_cycle(
             )
             validated = persist_state(runtime, validated, now_ns=now_ns)
 
+    polls_started = False
     for client in ("rust", "mfc"):
         pending = validated["pendingAction"]
         if not isinstance(pending, dict):
             raise RuntimeError(
-                "Observer pending action disappeared during result polling."
+                "Observer pending action disappeared before result polling."
             )
         client_state = pending["clients"][client]
         create = client_state["create"]
@@ -933,26 +954,106 @@ def capture_action_cycle(
             not isinstance(create, dict)
             or create.get("status") != "succeeded"
             or client_state["results"] is not None
+            or client_state["resultPoll"] is not None
         ):
             continue
-        phase = converged_action_driver.run_search_results_phase(
-            clients[client],
-            str(create["searchId"]),
-            timeout_seconds=config.search_timeout_seconds,
+        started_at = soak_action_diff.parse_utc_timestamp(
+            create["completedAtUtc"],
+            label=f"observer {client} search create completion",
         )
-        validated = converged_observer_state.record_search_results(
+        validated = converged_observer_state.start_search_results_poll(
             validated,
             client=client,
-            completed_at_utc=utc_text(now_utc),
-            completed=phase.completed,
-            result_count=len(phase.rows),
+            started_at_utc=started_at.isoformat(),
+            deadline_utc=(
+                started_at + timedelta(seconds=config.search_timeout_seconds)
+            ).isoformat(),
+        )
+        polls_started = True
+    if polls_started:
+        validated = persist_state(runtime, validated, now_ns=now_ns)
+
+    for client in ("rust", "mfc"):
+        pending = validated["pendingAction"]
+        if not isinstance(pending, dict):
+            raise RuntimeError(
+                "Observer pending action disappeared during result polling."
+            )
+        result_poll = pending["clients"][client]["resultPoll"]
+        if not isinstance(result_poll, dict):
+            continue
+        observed_at = utc_datetime(now_utc)
+        deadline = soak_action_diff.parse_utc_timestamp(
+            result_poll["deadlineUtc"],
+            label=f"observer {client} result poll deadline",
+        )
+        if observed_at >= deadline:
+            expiration_error = None
+            if (
+                result_poll["lastObservedResultCount"] is None
+                and result_poll["lastAttemptError"] is None
+            ):
+                expiration_error = action_phase_error(
+                    client,
+                    phase="search-results",
+                    error_type="SearchResultsDeadlineElapsed",
+                    message=(
+                        f"{client} search results deadline {deadline.isoformat()} "
+                        "elapsed without a persisted result attempt"
+                    ),
+                )
+            validated = converged_observer_state.expire_search_results_poll(
+                validated,
+                client=client,
+                completed_at_utc=observed_at.isoformat(),
+                error=expiration_error,
+            )
+            validated = persist_state(runtime, validated, now_ns=now_ns)
+            break
+        next_attempt = soak_action_diff.parse_utc_timestamp(
+            result_poll["nextAttemptAtUtc"],
+            label=f"observer {client} result poll next attempt",
+        )
+        if observed_at < next_attempt:
+            continue
+        phase = converged_action_driver.run_search_results_poll_phase(
+            clients[client],
+            str(pending["clients"][client]["create"]["searchId"]),
+            timeout_seconds=min(
+                ACTION_RESULT_REQUEST_TIMEOUT_SECONDS,
+                (deadline - observed_at).total_seconds(),
+            ),
+        )
+        attempted_at = utc_datetime(now_utc)
+        completed_before_deadline = phase.completed and attempted_at < deadline
+        terminal = completed_before_deadline or attempted_at >= deadline
+        next_attempt_at = None
+        if not terminal:
+            next_attempt_at = min(
+                attempted_at + timedelta(seconds=ACTION_RESULT_POLL_INTERVAL_SECONDS),
+                deadline,
+            ).isoformat()
+        validated = converged_observer_state.record_search_results_poll_attempt(
+            validated,
+            client=client,
+            attempted_at_utc=attempted_at.isoformat(),
+            next_attempt_at_utc=next_attempt_at,
+            completed=completed_before_deadline,
+            result_count=None if phase.error is not None else len(phase.rows),
             error=phase.error,
         )
         validated = persist_state(runtime, validated, now_ns=now_ns)
+        break
 
     pending = validated["pendingAction"]
     if not isinstance(pending, dict):
-        raise RuntimeError("Observer pending action disappeared before completion.")
+        raise RuntimeError("Observer pending action disappeared after result polling.")
+    if any(
+        not converged_observer_state.pending_client_is_terminal(pending, client)
+        for client in ("rust", "mfc")
+    ):
+        return validated
+
     completed_at_utc = utc_text(now_utc)
     cycle = pending_cycle_payload(pending, completed_at_utc=completed_at_utc)
     validated = converged_observer_state.record_driver_cycle(validated, cycle)

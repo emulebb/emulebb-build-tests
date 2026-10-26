@@ -111,10 +111,17 @@ def reportable_state(
             search_id=f"{client}-search-1",
             error=None,
         )
-        state = converged_observer_state.record_search_results(
+        state = converged_observer_state.start_search_results_poll(
             state,
             client=client,
-            completed_at_utc="2026-10-25T12:00:03+00:00",
+            started_at_utc="2026-10-25T12:00:02+00:00",
+            deadline_utc="2026-10-25T12:02:02+00:00",
+        )
+        state = converged_observer_state.record_search_results_poll_attempt(
+            state,
+            client=client,
+            attempted_at_utc="2026-10-25T12:00:03+00:00",
+            next_attempt_at_utc=None,
             completed=True,
             result_count=1,
             error=None,
@@ -380,12 +387,12 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
 
     def results_phase(client, search_id: str, *, timeout_seconds: float):
         assert search_id == f"{client.name}-search"
-        assert timeout_seconds == 120
+        assert timeout_seconds == 30.0
         events.append(("results", client.name))
         rows = tuple({"hash": str(index) * 32} for index in range(1, 3))
         return converged_observer.converged_action_driver.SearchResultsPhase(
             rows=rows,
-            completed=client.name == "rust",
+            completed=True,
             error=None,
         )
 
@@ -412,13 +419,29 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
     )
     monkeypatch.setattr(
         converged_observer.converged_action_driver,
-        "run_search_results_phase",
+        "run_search_results_poll_phase",
         results_phase,
     )
 
-    updated = converged_observer.capture_action_cycle(
+    first = converged_observer.capture_action_cycle(
         subject,
         new_state(config),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        now_ns=1_000_000_000,
+        finalize_action=finalize_action,
+    )
+    assert events == [
+        ("create", "rust"),
+        ("create", "mfc"),
+        ("results", "rust"),
+    ]
+    assert first["pendingAction"]["clients"]["rust"]["results"] is not None
+    assert first["pendingAction"]["clients"]["mfc"]["resultPoll"] is not None
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        first,
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         now_ns=1_000_000_000,
@@ -438,8 +461,19 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
         "rust": 2,
         "mfc": 2,
     }
+    assert updated["driver"]["latestCycle"]["searches"]["rust"]["results"][
+        "poll"
+    ] == {
+        "startedAtUtc": "2026-10-25T12:01:00+00:00",
+        "deadlineUtc": "2026-10-25T12:03:00+00:00",
+        "attempts": 1,
+        "errorCount": 0,
+        "latestAttemptAtUtc": "2026-10-25T12:01:00+00:00",
+        "latestError": None,
+        "termination": "completed",
+    }
     assert updated["pendingAction"]["diagnosticRuns"] == diagnostic_runs()
-    assert updated["pendingAction"]["clients"]["mfc"]["results"]["completed"] is False
+    assert updated["pendingAction"]["clients"]["mfc"]["results"]["completed"] is True
     assert updated["pendingAction"]["evidence"] == {
         "status": "pending",
         "windowEndUtc": "2026-10-25T12:01:00+00:00",
@@ -544,23 +578,30 @@ def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
     polled: list[tuple[str, str]] = []
 
     def results_phase(client, search_id: str, *, timeout_seconds: float):
-        assert timeout_seconds == config.search_timeout_seconds
+        assert timeout_seconds == 30.0
         polled.append((client.name, search_id))
         return converged_observer.converged_action_driver.SearchResultsPhase(
             rows=({"hash": "a" * 32},),
-            completed=False,
+            completed=True,
             error=None,
         )
 
     monkeypatch.setattr(
         converged_observer.converged_action_driver,
-        "run_search_results_phase",
+        "run_search_results_poll_phase",
         results_phase,
     )
 
-    updated = converged_observer.capture_action_cycle(
+    first = converged_observer.capture_action_cycle(
         subject,
         converged_observer.load_state(subject),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
+    )
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        first,
         config,
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
@@ -574,6 +615,143 @@ def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
         "rust": "rust-search-9",
         "mfc": "mfc-search-9",
     }
+
+
+def test_capture_action_cycle_expires_one_overdue_poll_without_get(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_timeout_seconds=3,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+        state = converged_observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:02+00:00",
+            search_id=f"{client}-search-9",
+            error=None,
+        )
+        state = converged_observer_state.start_search_results_poll(
+            state,
+            client=client,
+            started_at_utc="2026-10-25T12:00:02+00:00",
+            deadline_utc="2026-10-25T12:00:05+00:00",
+        )
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_results_poll_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("expired result poll must not issue a GET")
+        ),
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        state,
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
+    )
+
+    rust = updated["pendingAction"]["clients"]["rust"]
+    assert rust["resultPoll"] is None
+    assert rust["results"]["error"]["type"] == "SearchResultsDeadlineElapsed"
+    assert rust["results"]["poll"]["termination"] == "expired"
+    assert updated["pendingAction"]["clients"]["mfc"]["resultPoll"] is not None
+    assert updated["driver"]["cycles"] == 0
+
+
+def test_capture_action_cycle_reclassifies_get_finishing_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        search_timeout_seconds=3,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc="2026-10-25T12:00:00+00:00",
+        diagnostic_runs=diagnostic_runs(),
+    )
+    for client in ("rust", "mfc"):
+        state = converged_observer_state.prepare_search_create(
+            state,
+            client=client,
+            prepared_at_utc="2026-10-25T12:00:01+00:00",
+        )
+        state = converged_observer_state.complete_search_create(
+            state,
+            client=client,
+            completed_at_utc="2026-10-25T12:00:02+00:00",
+            search_id=f"{client}-search-9",
+            error=None,
+        )
+    state = converged_observer_state.start_search_results_poll(
+        state,
+        client="rust",
+        started_at_utc="2026-10-25T12:00:02+00:00",
+        deadline_utc="2026-10-25T12:00:05+00:00",
+    )
+    current_time = {
+        "value": datetime(2026, 10, 25, 12, 0, 4, 500_000, tzinfo=UTC)
+    }
+
+    def results_phase(client, search_id: str, *, timeout_seconds: float):
+        assert client.name == "rust"
+        assert search_id == "rust-search-9"
+        assert timeout_seconds == pytest.approx(0.5)
+        current_time["value"] = datetime(
+            2026, 10, 25, 12, 0, 5, 250_000, tzinfo=UTC
+        )
+        return converged_observer.converged_action_driver.SearchResultsPhase(
+            rows=({"hash": "a" * 32},),
+            completed=True,
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_results_poll_phase",
+        results_phase,
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        state,
+        config,
+        now_utc=lambda: current_time["value"],
+        finalize_action=lambda _runtime, action_state, **_kwargs: action_state,
+    )
+
+    rust_results = updated["pendingAction"]["clients"]["rust"]["results"]
+    assert rust_results["completed"] is False
+    assert rust_results["resultCount"] == 1
+    assert rust_results["completedAtUtc"] == "2026-10-25T12:00:05.250000+00:00"
+    assert rust_results["poll"]["termination"] == "deadline"
+    assert updated["pendingAction"]["clients"]["mfc"]["resultPoll"] is not None
 
 
 def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
@@ -607,10 +785,17 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
             search_id=f"{client}-search-9",
             error=None,
         )
-        state = converged_observer_state.record_search_results(
+        state = converged_observer_state.start_search_results_poll(
             state,
             client=client,
-            completed_at_utc="2026-10-25T12:00:03+00:00",
+            started_at_utc="2026-10-25T12:00:02+00:00",
+            deadline_utc="2026-10-25T12:02:02+00:00",
+        )
+        state = converged_observer_state.record_search_results_poll_attempt(
+            state,
+            client=client,
+            attempted_at_utc="2026-10-25T12:00:03+00:00",
+            next_attempt_at_utc=None,
             completed=True,
             result_count=1,
             error=None,
@@ -630,7 +815,7 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
     )
     monkeypatch.setattr(
         converged_observer.converged_action_driver,
-        "run_search_results_phase",
+        "run_search_results_poll_phase",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("completed driver must not poll again")
         ),
@@ -968,6 +1153,126 @@ def test_run_observer_waits_for_existing_campaign_and_never_owns_clients(
 
     assert captured == [1, 2]
     assert result["checkpoints"]["count"] == 2
+
+
+def test_run_observer_services_checkpoints_between_result_attempts(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        start_delay_seconds=0,
+        search_interval_seconds=300,
+        search_timeout_seconds=120,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    subject.last_run_manifest.parent.mkdir(parents=True)
+    subject.last_run_manifest.write_text(
+        json.dumps(
+            {
+                "campaignId": CAMPAIGN_ID,
+                "campaignDir": str(subject.run_paths.campaign_dir),
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    state = converged_observer_state.reserve_driver_cycle(
+        new_state(config),
+        query="linux",
+        method="server",
+        reserved_at_utc=started_at.isoformat(),
+        diagnostic_runs=diagnostic_runs(),
+    )
+    state = converged_observer_state.prepare_search_create(
+        state,
+        client="rust",
+        prepared_at_utc=started_at.isoformat(),
+    )
+    state = converged_observer_state.complete_search_create(
+        state,
+        client="rust",
+        completed_at_utc=started_at.isoformat(),
+        search_id="rust-search-1",
+        error=None,
+    )
+    state = converged_observer_state.start_search_results_poll(
+        state,
+        client="rust",
+        started_at_utc=started_at.isoformat(),
+        deadline_utc=(started_at + timedelta(seconds=120)).isoformat(),
+    )
+    state = converged_observer_state.skip_search_create(
+        state,
+        client="mfc",
+        completed_at_utc=started_at.isoformat(),
+        error={"type": "SearchCreateSkipped", "message": "fixture"},
+    )
+    converged_observer.persist_state(subject, state)
+    clock = [0.0]
+    events: list[tuple[str, float]] = []
+    attempts = [0]
+
+    def capture(_runtime, action_state):
+        events.append(("checkpoint", clock[0]))
+        return converged_observer_state.record_checkpoint(
+            action_state,
+            {
+                "schema": "soak_checkpoint_v1",
+                "ts_utc": (started_at + timedelta(seconds=clock[0])).isoformat(),
+                "rustAlive": True,
+                "packetRecords": {"rust": 1, "mfc": 1},
+                "totals": {"actions": 0},
+            },
+        )
+
+    def drive_action(_runtime, action_state, _config):
+        events.append(("action", clock[0]))
+        attempts[0] += 1
+        completed = attempts[0] == 2
+        updated = converged_observer_state.record_search_results_poll_attempt(
+            action_state,
+            client="rust",
+            attempted_at_utc=(
+                started_at + timedelta(seconds=clock[0])
+            ).isoformat(),
+            next_attempt_at_utc=None
+            if completed
+            else (started_at + timedelta(seconds=2)).isoformat(),
+            completed=completed,
+            result_count=attempts[0],
+            error=None,
+        )
+        if completed:
+            subject.stop_file.parent.mkdir(parents=True, exist_ok=True)
+            subject.stop_file.write_text("stop\n", encoding="utf-8")
+        return updated
+
+    result = converged_observer.run_observer(
+        subject,
+        ready_timeout_seconds=30,
+        poll_interval_seconds=10,
+        checkpoint_interval_seconds=1,
+        failure_threshold=3,
+        monotonic=lambda: clock[0],
+        now_utc=lambda: started_at + timedelta(seconds=clock[0]),
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        launcher_alive=lambda _identity: True,
+        capture=capture,
+        drive_action=drive_action,
+    )
+
+    assert events == [
+        ("checkpoint", 0.0),
+        ("action", 0.0),
+        ("checkpoint", 1.0),
+        ("checkpoint", 2.0),
+        ("action", 2.0),
+    ]
+    assert result["checkpoints"]["count"] == 3
+    assert result["pendingAction"]["clients"]["rust"]["results"] is not None
 
 
 def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -> None:

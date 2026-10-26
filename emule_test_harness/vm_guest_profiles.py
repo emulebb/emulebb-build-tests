@@ -106,7 +106,8 @@ def retry_http_json(
             return request(base_url, path, **kwargs)
         except (OSError, TimeoutError, urllib.error.URLError, RuntimeError) as exc:
             last_error = str(exc)
-            time.sleep(min(1.0 + attempt, 5.0))
+            if attempt + 1 < attempts:
+                time.sleep(min(1.0 + attempt, 5.0))
     suffix = f": {last_error}" if last_error else ""
     raise RuntimeError(f"{description} failed after {attempts} attempts{suffix}")
 
