@@ -413,7 +413,7 @@ def test_parse_action_config_requires_gentle_complete_schedule() -> None:
                 "enabled": True,
                 "sourceProfile": "generic_open",
                 "terms": ["linux", "debian", "linux"],
-                "method": "kad",
+                "methods": ["server", "kad", "server"],
                 "startDelaySeconds": 30,
                 "searchIntervalSeconds": 900,
                 "searchTimeoutSeconds": 120,
@@ -426,12 +426,30 @@ def test_parse_action_config_requires_gentle_complete_schedule() -> None:
         enabled=True,
         source_profile="generic_open",
         terms=("linux", "debian"),
-        method="kad",
+        methods=("server", "kad"),
         start_delay_seconds=30.0,
         search_interval_seconds=900.0,
         search_timeout_seconds=120.0,
         max_cycles=12,
     )
+
+
+def test_parse_action_config_rejects_retired_single_method_shape() -> None:
+    with pytest.raises(RuntimeError, match="config fields are invalid"):
+        converged_observer.parse_action_config(
+            {
+                "actionDriving": {
+                    "enabled": True,
+                    "sourceProfile": "generic_open",
+                    "terms": ["linux"],
+                    "method": "server",
+                    "startDelaySeconds": 30,
+                    "searchIntervalSeconds": 900,
+                    "searchTimeoutSeconds": 120,
+                    "maxCycles": 0,
+                }
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -451,7 +469,7 @@ def test_parse_action_config_rejects_ambiguous_or_nonfinite_values(
         "enabled": True,
         "sourceProfile": "generic_open",
         "terms": ["linux"],
-        "method": "server",
+        "methods": ["server"],
         "startDelaySeconds": 60,
         "searchIntervalSeconds": 900,
         "searchTimeoutSeconds": 120,
@@ -468,7 +486,7 @@ def test_load_state_binds_the_exact_action_configuration(tmp_path: Path) -> None
         enabled=True,
         source_profile="explicit",
         terms=("exact local term", "ünicode term"),
-        method="kad",
+        methods=("kad",),
         start_delay_seconds=30,
         search_interval_seconds=900,
         search_timeout_seconds=120,
@@ -498,7 +516,7 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
         enabled=True,
         source_profile="explicit",
         terms=("Exact Local Search Term",),
-        method="server",
+        methods=("server",),
         start_delay_seconds=0,
         search_interval_seconds=900,
         search_timeout_seconds=120,
@@ -1480,7 +1498,7 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
             enabled=True,
             source_profile="generic_open",
             terms=("linux", "debian"),
-            method="global",
+            methods=("global", "kad"),
             start_delay_seconds=0,
             search_interval_seconds=300,
             search_timeout_seconds=120,
@@ -1501,6 +1519,8 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     clock = [0.0]
     started_at = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
     action_cycles: list[int] = []
+    action_methods: list[str] = []
+    action_queries: list[str] = []
     action_times: list[float] = []
 
     def capture(_runtime, state):
@@ -1519,13 +1539,15 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
         cycle = int(state["driver"]["cycles"]) + 1
         action_cycles.append(cycle)
         action_times.append(clock[0])
-        assert config.method == "global"
+        query, method = converged_observer.scheduled_action(config, cycle)
+        action_queries.append(query)
+        action_methods.append(method)
         updated = converged_observer_state.record_driver_cycle(
             state,
             {
                 "cycle": cycle,
-                "query": config.terms[(cycle - 1) % len(config.terms)],
-                "method": config.method,
+                "query": query,
+                "method": method,
             },
         )
         if cycle == 2:
@@ -1548,10 +1570,33 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     )
 
     assert action_cycles == [1, 2]
+    assert action_methods == ["global", "kad"]
+    assert action_queries == ["linux", "linux"]
     assert action_times == [0.0, 300.0]
     assert result["driver"]["cycles"] == 2
-    assert result["driver"]["latestCycle"]["query"] == "debian"
+    assert result["driver"]["latestCycle"]["query"] == "linux"
+    assert result["driver"]["latestCycle"]["method"] == "kad"
     assert result["scheduler"]["nextActionAtUtc"] is None
+
+
+def test_scheduled_action_runs_every_method_for_each_term() -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux", "debian"),
+        methods=("server", "kad"),
+    )
+
+    assert [
+        converged_observer.scheduled_action(config, cycle)
+        for cycle in range(1, 6)
+    ] == [
+        ("linux", "server"),
+        ("linux", "kad"),
+        ("debian", "server"),
+        ("debian", "kad"),
+        ("linux", "server"),
+    ]
 
 
 def test_reconcile_action_deadline_persists_initial_and_post_action_schedule(
@@ -1561,7 +1606,7 @@ def test_reconcile_action_deadline_persists_initial_and_post_action_schedule(
         enabled=True,
         source_profile="generic_open",
         terms=("linux",),
-        method="server",
+        methods=("server",),
         start_delay_seconds=60,
         search_interval_seconds=300,
         search_timeout_seconds=120,
@@ -1616,7 +1661,7 @@ def test_run_observer_services_exact_persisted_utc_deadline_after_restart(
         enabled=True,
         source_profile="generic_open",
         terms=("linux",),
-        method="server",
+        methods=("server",),
         start_delay_seconds=3_600,
         search_interval_seconds=300,
         search_timeout_seconds=120,
@@ -1679,7 +1724,7 @@ def test_run_observer_reconciles_missing_deadline_after_report_commit(
         enabled=True,
         source_profile="generic_open",
         terms=("linux",),
-        method="server",
+        methods=("server",),
         start_delay_seconds=60,
         search_interval_seconds=300,
         search_timeout_seconds=120,
@@ -1745,7 +1790,7 @@ def test_run_observer_services_pending_action_before_delay_or_cycle_limit(
         enabled=True,
         source_profile="generic_open",
         terms=("linux",),
-        method="server",
+        methods=("server",),
         start_delay_seconds=3_600,
         search_interval_seconds=300,
         search_timeout_seconds=120,

@@ -1290,7 +1290,7 @@ def build_observer_action_config(
     *,
     enabled: bool,
     terms: tuple[str, ...],
-    method: str,
+    methods: tuple[str, ...],
     start_delay_seconds: float,
     search_interval_seconds: float,
     search_timeout_seconds: float,
@@ -1314,7 +1314,7 @@ def build_observer_action_config(
         "enabled": enabled,
         "sourceProfile": source_profile,
         "terms": list(normalized_terms) if enabled else [],
-        "method": method,
+        "methods": list(methods),
         "startDelaySeconds": start_delay_seconds,
         "searchIntervalSeconds": search_interval_seconds,
         "searchTimeoutSeconds": search_timeout_seconds,
@@ -1330,7 +1330,7 @@ def build_observer_action_config(
         "enabled": validated.enabled,
         "sourceProfile": validated.source_profile,
         "terms": list(validated.terms),
-        "method": validated.method,
+        "methods": list(validated.methods),
         "startDelaySeconds": validated.start_delay_seconds,
         "searchIntervalSeconds": validated.search_interval_seconds,
         "searchTimeoutSeconds": validated.search_timeout_seconds,
@@ -1479,7 +1479,7 @@ def start_session(
     observer_failure_threshold: int = converged_observer.DEFAULT_FAILURE_THRESHOLD,
     observer_drive_actions: bool = False,
     observer_action_terms: tuple[str, ...] = (),
-    observer_action_method: str = converged_observer.DEFAULT_ACTION_METHOD,
+    observer_action_methods: tuple[str, ...] = converged_observer.DEFAULT_ACTION_METHODS,
     observer_action_start_delay_seconds: float = converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
     observer_action_search_interval_seconds: float = converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
     observer_action_search_timeout_seconds: float = converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
@@ -1524,7 +1524,7 @@ def start_session(
         inputs,
         enabled=observer_drive_actions,
         terms=observer_action_terms,
-        method=observer_action_method,
+        methods=observer_action_methods,
         start_delay_seconds=observer_action_start_delay_seconds,
         search_interval_seconds=observer_action_search_interval_seconds,
         search_timeout_seconds=observer_action_search_timeout_seconds,
@@ -3084,8 +3084,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--observer-action-term", action="append", default=[])
     start.add_argument(
         "--observer-action-method",
-        choices=converged_observer.ACTION_METHODS,
-        default=converged_observer.DEFAULT_ACTION_METHOD,
+        action="append",
+        choices=converged_observer.SUPPORTED_ACTION_METHODS,
+        dest="observer_action_methods",
+        default=None,
     )
     start.add_argument(
         "--observer-action-start-delay-seconds",
@@ -3177,7 +3179,10 @@ def main(argv: list[str] | None = None) -> int:
             observer_failure_threshold=args.observer_failure_threshold,
             observer_drive_actions=args.observer_drive_actions,
             observer_action_terms=tuple(args.observer_action_term),
-            observer_action_method=args.observer_action_method,
+            observer_action_methods=tuple(
+                args.observer_action_methods
+                or converged_observer.DEFAULT_ACTION_METHODS
+            ),
             observer_action_start_delay_seconds=args.observer_action_start_delay_seconds,
             observer_action_search_interval_seconds=args.observer_action_search_interval_seconds,
             observer_action_search_timeout_seconds=args.observer_action_search_timeout_seconds,
