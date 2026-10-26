@@ -72,8 +72,11 @@ def test_server_udp_uses_packet_diff_strategy() -> None:
                     "rustCount": 1,
                     "mfcCount": 1,
                     "matched": 1,
+                    "payloadMismatchCount": 0,
                     "payloadMismatches": [],
+                    "onlyRustCount": 0,
                     "onlyRust": [],
+                    "onlyMfcCount": 0,
                     "onlyMfc": [],
                 }
             ],
@@ -296,7 +299,19 @@ def test_identical_packet_traces_match() -> None:
     fam = _family(report, "ed2k_tcp")
     assert fam["totals"]["matched"] == 2
     assert fam["totals"]["payloadMismatches"] == 0
-    assert report["schema"] == "diag_event_diff_v1"
+    assert report["schema"] == "diag_event_diff_v2"
+
+
+def test_packet_difference_details_are_bounded_with_exact_counts() -> None:
+    rust = [_pkt("ed2k_tcp", "recv", opcode, "aabb") for opcode in range(64)]
+
+    family = _family(diff_traces(rust, []), "ed2k_tcp")
+    direction = family["directions"][0]
+
+    assert family["totals"]["onlyRust"] == 64
+    assert direction["onlyRustCount"] == 64
+    assert len(direction["onlyRust"]) == 32
+    assert diff_traces(rust, [])["detailLimit"] == 32
 
 
 def test_diff_rejects_legacy_schema() -> None:
