@@ -379,3 +379,12 @@ def test_scan_rejects_a_finalized_checkpoint(tmp_path: Path) -> None:
             observed_utc="2026-10-25T12:01:00+00:00",
             checkpoint=finalized.checkpoint,
         )
+
+    repeated = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=tmp_path,
+        client="rust",
+        observed_utc="2026-10-25T12:02:00+00:00",
+        checkpoint=finalized.checkpoint,
+    )
+    assert repeated.processed_segments == ()
+    assert repeated.checkpoint == finalized.checkpoint

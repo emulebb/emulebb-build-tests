@@ -480,42 +480,120 @@ def advance_diagnostic_indexes(
             observed_utc=observed_utc,
             checkpoint=checkpoint,
         )
-        pin_result = reconcile_diagnostic_evidence_pins(
+        result[client] = _persist_diagnostic_advance(
             client=client,
-            checkpoint=advanced.checkpoint,
+            advanced=advanced,
             prior_checkpoint=checkpoint,
-            processed_segments=advanced.processed_segments,
             context=context,
             observed_utc=observed_utc,
-        )
-        advanced.checkpoint["evidencePins"] = pin_result["pins"]
-        persisted = soak_storage.persist_bounded_json_checkpoint(
             store=store,
-            active_campaign=context.active_campaign,
             directory=directory,
-            stream_name="diagnostic_indexes",
-            artifact_name=DIAGNOSTIC_INDEX_FILE_NAME,
-            payload=advanced.checkpoint,
+            status="indexed",
         )
-        _finalize_diagnostic_evidence_pin_swaps(pin_result["pendingCleanup"])
-        source = advanced.checkpoint["source"]
-        index = advanced.checkpoint["index"]
-        result[client] = {
-            "ok": True,
-            "status": "indexed",
-            "checkpoint": str(persisted.path),
-            "bytes": persisted.byte_count,
-            "sha256": persisted.sha256,
-            "coverage": source["coverage"],
-            "closedSegmentCount": source["closedSegmentCount"],
-            "recordCount": index["recordCount"],
-            "writerHealthSamples": index["writerHealth"]["samples"],
-            "writerHealthViolationsSeen": index["writerHealth"]["violationsSeen"],
-            "processedSegments": list(advanced.processed_segments),
-            "evidencePins": pin_result["pins"],
-            "pinActions": pin_result["actions"],
-        }
     return result
+
+
+def finalize_diagnostic_indexes(
+    *,
+    diagnostic_dirs: dict[str, Any],
+    diagnostic_writers: dict[str, Any],
+    context: SessionStorageContext,
+    observed_utc: str,
+) -> dict[str, Any]:
+    """Finalizes both stopped diagnostic runs, including their former active files."""
+
+    required = diagnostic_writers.get("required") is True
+    result: dict[str, Any] = {"required": required, "rust": None, "mfc": None}
+    if not required:
+        return result
+    if not observed_utc:
+        raise RuntimeError("Diagnostic finalization timestamp is invalid.")
+
+    store = soak_storage.BoundedArtifactStore(context.root, context.policy)
+    for client in ("rust", "mfc"):
+        diagnostic_dir_value = diagnostic_dirs.get(client)
+        if not isinstance(diagnostic_dir_value, str) or not diagnostic_dir_value.strip():
+            raise RuntimeError(
+                f"Persisted session {client} diagnostic directory is invalid."
+            )
+        writer = diagnostic_writers.get(client)
+        writer_health = (
+            writer.get("health")
+            if isinstance(writer, dict) and isinstance(writer.get("health"), dict)
+            else None
+        )
+        directory = (
+            context.active_campaign / "report" / "diagnostic-indexes" / client
+        ).resolve()
+        checkpoint_path = directory / DIAGNOSTIC_INDEX_FILE_NAME
+        checkpoint = load_json(checkpoint_path) if checkpoint_path.is_file() else None
+        advanced = diagnostic_run_scan.finalize_stopped_run(
+            profile_dir=Path(diagnostic_dir_value).resolve(),
+            client=client,
+            observed_utc=observed_utc,
+            checkpoint=checkpoint,
+            writer_health=writer_health,
+        )
+        result[client] = _persist_diagnostic_advance(
+            client=client,
+            advanced=advanced,
+            prior_checkpoint=checkpoint,
+            context=context,
+            observed_utc=observed_utc,
+            store=store,
+            directory=directory,
+            status="finalized",
+        )
+    return result
+
+
+def _persist_diagnostic_advance(
+    *,
+    client: str,
+    advanced: diagnostic_run_scan.ClosedSegmentAdvance,
+    prior_checkpoint: dict[str, Any] | None,
+    context: SessionStorageContext,
+    observed_utc: str,
+    store: soak_storage.BoundedArtifactStore,
+    directory: Path,
+    status: str,
+) -> dict[str, Any]:
+    pin_result = reconcile_diagnostic_evidence_pins(
+        client=client,
+        checkpoint=advanced.checkpoint,
+        prior_checkpoint=prior_checkpoint,
+        processed_segments=advanced.processed_segments,
+        context=context,
+        observed_utc=observed_utc,
+    )
+    advanced.checkpoint["evidencePins"] = pin_result["pins"]
+    persisted = soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=context.active_campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name=DIAGNOSTIC_INDEX_FILE_NAME,
+        payload=advanced.checkpoint,
+    )
+    _finalize_diagnostic_evidence_pin_swaps(pin_result["pendingCleanup"])
+    source = advanced.checkpoint["source"]
+    index = advanced.checkpoint["index"]
+    return {
+        "ok": True,
+        "status": status,
+        "checkpoint": str(persisted.path),
+        "bytes": persisted.byte_count,
+        "sha256": persisted.sha256,
+        "coverage": source["coverage"],
+        "finalized": source["finalized"],
+        "closedSegmentCount": source["closedSegmentCount"],
+        "recordCount": index["recordCount"],
+        "writerHealthSamples": index["writerHealth"]["samples"],
+        "writerHealthViolationsSeen": index["writerHealth"]["violationsSeen"],
+        "processedSegments": list(advanced.processed_segments),
+        "evidencePins": pin_result["pins"],
+        "pinActions": pin_result["actions"],
+    }
 
 
 def reconcile_diagnostic_evidence_pins(
@@ -2805,6 +2883,59 @@ def stop_exact_process(identity: dict[str, Any], *, markers: tuple[str, ...], ti
     }
 
 
+def finalize_stopped_session_diagnostics(
+    paths: ControlPaths,
+    manifest: dict[str, Any],
+    *,
+    stopped_utc: str,
+    launcher_stopped: bool,
+    watcher_stopped: bool,
+) -> dict[str, Any]:
+    """Seals both diagnostic indexes after all writers and the watcher stop."""
+
+    preflight = manifest.get("preflight")
+    diagnostic_dirs = (
+        preflight.get("diagnosticDirs") if isinstance(preflight, dict) else None
+    )
+    if not isinstance(diagnostic_dirs, dict):
+        return {"required": False, "ok": True, "indexes": None}
+    if not launcher_stopped:
+        raise RuntimeError(
+            "Diagnostic finalization requires the launcher and both clients to stop."
+        )
+    if not watcher_stopped:
+        raise RuntimeError("Diagnostic finalization requires the watcher to stop.")
+
+    heartbeat = load_json(paths.watch_heartbeat)
+    campaign_id = manifest.get("campaignId")
+    if not isinstance(campaign_id, str) or heartbeat.get("campaignId") != campaign_id:
+        raise RuntimeError(
+            "The final watcher heartbeat does not belong to the stopped campaign."
+        )
+    diagnostic_writers = heartbeat.get("diagnosticWriters")
+    if (
+        not isinstance(diagnostic_writers, dict)
+        or diagnostic_writers.get("required") is not True
+    ):
+        raise RuntimeError(
+            "The final watcher heartbeat has no authoritative diagnostic writer state."
+        )
+    context = parse_session_storage_context(manifest, get_workspace_output_root())
+    indexes = finalize_diagnostic_indexes(
+        diagnostic_dirs=diagnostic_dirs,
+        diagnostic_writers=diagnostic_writers,
+        context=context,
+        observed_utc=stopped_utc,
+    )
+    ok = all(
+        isinstance(indexes.get(client), dict)
+        and indexes[client].get("ok") is True
+        and indexes[client].get("finalized") is True
+        for client in ("rust", "mfc")
+    )
+    return {"required": True, "ok": ok, "indexes": indexes}
+
+
 def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0) -> dict[str, Any]:
     """Requests graceful teardown, then force-stops exact owned processes if needed."""
 
@@ -2844,6 +2975,34 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
             timeout_seconds=15.0,
         )
     )
+    stopped_utc = datetime.now(UTC).isoformat()
+    launcher_stopped = launcher_graceful or launcher_force.get("verifiedStopped") is True
+    watcher_stopped = watcher_graceful or watcher_force.get("verifiedStopped") is True
+    try:
+        diagnostic_finalization = finalize_stopped_session_diagnostics(
+            paths,
+            manifest,
+            stopped_utc=stopped_utc,
+            launcher_stopped=launcher_stopped,
+            watcher_stopped=watcher_stopped,
+        )
+    except Exception as error:  # noqa: BLE001 - evidence loss must remain explicit
+        diagnostic_finalization = {
+            "required": True,
+            "ok": False,
+            "errorType": type(error).__name__,
+            "error": str(error)[:1024],
+        }
+    observer_stopped = bool(
+        observer_stop["graceful"]
+        or observer_stop["force"].get("verifiedStopped") is True
+    )
+    stop_ok = bool(
+        launcher_stopped
+        and observer_stopped
+        and watcher_stopped
+        and diagnostic_finalization.get("ok") is True
+    )
     report = {
         "stopRequestedUtc": requested_at,
         "launcherGraceful": launcher_graceful,
@@ -2852,14 +3011,16 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
         "observerForce": observer_stop["force"],
         "watcherGraceful": watcher_graceful,
         "watcherForce": watcher_force,
+        "diagnosticFinalization": diagnostic_finalization,
     }
-    manifest["state"] = "stopped"
-    manifest["stoppedUtc"] = datetime.now(UTC).isoformat()
+    manifest["state"] = "stopped" if stop_ok else "stop-failed"
+    manifest["stoppedUtc"] = stopped_utc
     manifest["stop"] = report
     if manifest:
         write_json_atomic(paths.manifest, manifest)
     return {
         "schema": "emulebb.persisted-soak-stop.v1",
+        "ok": stop_ok,
         **report,
         "status": session_status(paths, check_rest=False, check_vpn=False),
     }

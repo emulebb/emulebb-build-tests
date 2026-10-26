@@ -166,7 +166,11 @@ def finalize_stopped_run(
         run_id=run_id,
     )
     if source["finalized"]:
-        raise DiagnosticRunScanError("diagnostic run checkpoint is already finalized")
+        assert checkpoint is not None
+        return ClosedSegmentAdvance(
+            checkpoint=copy.deepcopy(checkpoint),
+            processed_segments=(),
+        )
     if source["activeSegmentId"] is not None:
         last_observed_active_segment_id = source["activeSegmentId"]
     if checkpoint is None:
