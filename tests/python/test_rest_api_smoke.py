@@ -398,6 +398,46 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
     assert "EnableDiagnosticRestEndpoints=1" in text
 
 
+def test_configure_webserver_profile_can_bind_loopback_for_full_tunnel(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
+    app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+
+    module.configure_webserver_profile(
+        config_dir,
+        app_exe,
+        "api-key",
+        4711,
+        "127.0.0.1",
+        allow_loopback=True,
+    )
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "BindAddr=127.0.0.1" in section_text(text, "WebServer")
+
+
+def test_configure_webserver_profile_rejects_loopback_without_full_tunnel(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "preferences.ini").write_text(
+        "[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n",
+        encoding="utf-16",
+    )
+
+    with pytest.raises(ValueError, match="loopback/wildcard"):
+        module.configure_webserver_profile(
+            config_dir,
+            tmp_path / "emulebb.exe",
+            "api-key",
+            4711,
+            "127.0.0.1",
+        )
+
+
 def test_configure_webserver_profile_can_use_local_rest_only_network(tmp_path: Path) -> None:
     module = load_rest_api_smoke_module()
     config_dir = tmp_path / "config"

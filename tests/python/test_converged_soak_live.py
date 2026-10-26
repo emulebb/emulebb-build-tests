@@ -458,6 +458,7 @@ def test_bring_up_mfc_enables_diagnostic_rest_for_direct_profile(tmp_path: Path,
             "port": 4732,
             "bind_addr": "192.0.2.10",
             "enable_crash_test_endpoint": True,
+            "allow_loopback": False,
         }
     ]
 

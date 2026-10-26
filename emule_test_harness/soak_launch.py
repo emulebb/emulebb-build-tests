@@ -1167,6 +1167,7 @@ def bring_up_mfc(
     vpn_guard_mode: str = "off",
     vpn_guard_allowed_public_ip_cidrs: str = "",
     secure_ident: bool = True,
+    allow_loopback_rest: bool = False,
 ) -> dict[str, Any]:
     """Launches the MFC diagnostics GUI on the persistent profile (left open).
 
@@ -1206,6 +1207,7 @@ def bring_up_mfc(
         rest_port,
         rest_host,
         enable_crash_test_endpoint=True,
+        allow_loopback=allow_loopback_rest,
     )
     apply_mfc_endpoint_ports(
         live_common=live_common,
