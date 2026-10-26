@@ -16,7 +16,7 @@ This module is the side-effect-free core the soak orchestrator builds on:
   clients within a correlation window (unpaired actions are surfaced so the
   operator can bracket them with a manual marker instead);
 * :func:`slice_trace` cuts an ``ed2k_packet_v1`` / ``diag_event_v2`` record list to
-  one action's ``[t0, t1]`` window by ``ts_utc``;
+  one authoritative UTC action window and rejects malformed timestamps;
 * :func:`diff_action` slices both sides and delegates to the existing
   :mod:`packet_trace_diff` and :mod:`diag_event_diff` engines, then classifies the
   per-action verdict;
@@ -55,6 +55,10 @@ _WINDOWS_RESERVED_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _HEX_REPORT_KEY = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
 
 
+class ActionTraceError(ValueError):
+    """Raised when an action trace cannot be sliced without losing evidence."""
+
+
 def parse_ts(value: Any) -> datetime | None:
     """Parses an ``ts_utc`` RFC3339-millis string (``...Z``) into aware UTC.
 
@@ -73,6 +77,25 @@ def parse_ts(value: Any) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_utc_timestamp(value: Any, *, label: str) -> datetime:
+    """Parses one required timezone-aware UTC timestamp without fallback."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ActionTraceError(f"{label} must be a non-empty UTC timestamp string")
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as error:
+        raise ActionTraceError(f"{label} is not a valid UTC timestamp: {value!r}") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ActionTraceError(f"{label} must include an explicit UTC offset")
+    if parsed.utcoffset() != timedelta(0):
+        raise ActionTraceError(f"{label} must use UTC, not offset {parsed.utcoffset()}")
     return parsed.astimezone(timezone.utc)
 
 
@@ -168,6 +191,45 @@ class Action:
 
 
 @dataclass(frozen=True)
+class ActionWindow:
+    """One inclusive authoritative UTC evidence window."""
+
+    start_utc: datetime
+    end_utc: datetime
+
+    def __post_init__(self) -> None:
+        start_utc = _require_utc_datetime(self.start_utc, label="action window start")
+        end_utc = _require_utc_datetime(self.end_utc, label="action window end")
+        if end_utc < start_utc:
+            raise ActionTraceError("action window end must not precede its start")
+        object.__setattr__(self, "start_utc", start_utc)
+        object.__setattr__(self, "end_utc", end_utc)
+
+    @classmethod
+    def from_utc_strings(cls, start_utc: Any, end_utc: Any) -> ActionWindow:
+        return cls(
+            start_utc=parse_utc_timestamp(start_utc, label="action window start"),
+            end_utc=parse_utc_timestamp(end_utc, label="action window end"),
+        )
+
+    def report_payload(self) -> dict[str, str]:
+        return {
+            "t0": self.start_utc.isoformat(),
+            "t1": self.end_utc.isoformat(),
+        }
+
+
+def _require_utc_datetime(value: Any, *, label: str) -> datetime:
+    if not isinstance(value, datetime):
+        raise ActionTraceError(f"{label} must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ActionTraceError(f"{label} must be timezone-aware UTC")
+    if value.utcoffset() != timedelta(0):
+        raise ActionTraceError(f"{label} must use UTC, not offset {value.utcoffset()}")
+    return value.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
 class ActionPair:
     """A correlated rust↔MFC action: the same key seen on both within the window."""
 
@@ -181,12 +243,12 @@ class ActionPair:
         *,
         lead_seconds: float = DEFAULT_LEAD_SECONDS,
         settle_seconds: float = DEFAULT_SETTLE_SECONDS,
-    ) -> tuple[datetime, datetime]:
+    ) -> ActionWindow:
         """The ``[t0, t1]`` capture window spanning both sides of the action."""
 
         start = min(self.rust.observed_at, self.mfc.observed_at) - timedelta(seconds=lead_seconds)
         end = max(self.rust.observed_at, self.mfc.observed_at) + timedelta(seconds=settle_seconds)
-        return start, end
+        return ActionWindow(start_utc=start, end_utc=end)
 
 
 def detect_actions(
@@ -265,22 +327,43 @@ def correlate_actions(
 
 def slice_trace(
     records: list[dict[str, Any]],
-    t0: datetime,
-    t1: datetime,
+    window: ActionWindow,
+    *,
+    trace_name: str,
 ) -> list[dict[str, Any]]:
     """Returns records whose timestamp falls within ``[t0, t1]`` (inclusive).
 
     ``ed2k_packet_v1`` records carry top-level ``ts_utc`` while ``diag_event_v2``
-    records carry top-level ``ts``. Records without a parseable timestamp are
-    dropped because they cannot be placed in an action window.
+    records carry top-level ``ts``. Every record must use a current supported
+    shape and provide a parseable explicit UTC timestamp. Invalid evidence is
+    rejected rather than silently dropped from the action window.
     """
 
     sliced: list[dict[str, Any]] = []
-    for record in records:
-        timestamp = parse_ts(record.get("ts_utc") or record.get("ts"))
-        if timestamp is None:
-            continue
-        if t0 <= timestamp <= t1:
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ActionTraceError(f"{trace_name} record {index} must be an object")
+        schema = record.get("schema")
+        if schema == "ed2k_packet_v1":
+            field = "ts_utc"
+        elif schema == "diag_event_v2":
+            field = "ts"
+        elif (
+            schema is None
+            and "flow" in record
+            and "direction" in record
+            and "opcode" in record
+        ):
+            field = "ts_utc"
+        else:
+            raise ActionTraceError(
+                f"{trace_name} record {index} has unsupported schema {schema!r}"
+            )
+        timestamp = parse_utc_timestamp(
+            record.get(field),
+            label=f"{trace_name} record {index} field {field}",
+        )
+        if window.start_utc <= timestamp <= window.end_utc:
             sliced.append(record)
     return sliced
 
@@ -715,23 +798,28 @@ def diff_action(
     rust_diag: list[dict[str, Any]] | None = None,
     mfc_diag: list[dict[str, Any]] | None = None,
     diagnostics_required: bool = False,
+    action_window: ActionWindow | None = None,
     lead_seconds: float = DEFAULT_LEAD_SECONDS,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
 ) -> dict[str, Any]:
     """Diffs one correlated action's window across both clients.
 
-    Slices every trace to the action's ``[t0, t1]`` window, then runs the existing
-    :func:`packet_trace_diff.diff_traces` and (when diag traces are present)
-    :func:`diag_event_diff.diff_traces`. Returns a per-action report object.
+    Slices every trace to the supplied authoritative window or the pair-derived
+    default, then runs the existing :func:`packet_trace_diff.diff_traces` and
+    (when diag traces are present) :func:`diag_event_diff.diff_traces`. Returns a
+    per-action report object.
     """
 
-    t0, t1 = pair.window(lead_seconds=lead_seconds, settle_seconds=settle_seconds)
-    rust_slice = slice_trace(rust_packets, t0, t1)
-    mfc_slice = slice_trace(mfc_packets, t0, t1)
+    window = action_window or pair.window(
+        lead_seconds=lead_seconds,
+        settle_seconds=settle_seconds,
+    )
+    rust_slice = slice_trace(rust_packets, window, trace_name="rust packet trace")
+    mfc_slice = slice_trace(mfc_packets, window, trace_name="mfc packet trace")
     packet_diff = packet_trace_diff.diff_traces(rust_slice, mfc_slice)
 
-    rust_diag_slice = slice_trace(rust_diag or [], t0, t1)
-    mfc_diag_slice = slice_trace(mfc_diag or [], t0, t1)
+    rust_diag_slice = slice_trace(rust_diag or [], window, trace_name="rust diagnostic trace")
+    mfc_diag_slice = slice_trace(mfc_diag or [], window, trace_name="mfc diagnostic trace")
     if diagnostics_required and (not rust_diag_slice or not mfc_diag_slice):
         raise ValueError(
             "required current diagnostics are missing from one or both action windows"
@@ -755,7 +843,7 @@ def diff_action(
         "key": pair.key,
         "method": pair_method(pair),
         "label": pair.rust.label,
-        "window": {"t0": t0.isoformat(), "t1": t1.isoformat()},
+        "window": window.report_payload(),
         "observed": {
             "rust": pair.rust.observed_at.isoformat(),
             "mfc": pair.mfc.observed_at.isoformat(),

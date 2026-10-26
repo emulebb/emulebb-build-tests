@@ -48,7 +48,7 @@ def _pkt(flow: str, direction: str, opcode: int, payload_hex: str, at: float, *,
 def _diag(family: str, event: str, at: float, *, body: dict | None = None) -> dict:
     return {
         "schema": "diag_event_v2",
-        "ts_utc": _ts(at),
+        "ts": _ts(at),
         "family": family,
         "event": event,
         "severity": "info",
@@ -212,8 +212,8 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
 
     assert loaded["nativeCaptureSizes"] == [4096]
     assert len(loaded["diag"]) == 2
-    assert loaded["diag"][0]["ts_utc"] == _ts(1)
-    assert loaded["diag"][1]["ts_utc"] == _ts(2)
+    assert loaded["diag"][0]["ts"] == _ts(1)
+    assert loaded["diag"][1]["ts"] == _ts(2)
     assert len(loaded["packets"]) == 1
 
 
@@ -472,7 +472,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
     def _kad(opcode: int, at: float) -> dict:
         return {
             "schema": "diag_event_v2",
-            "ts_utc": _ts(at),
+            "ts": _ts(at),
             "family": "kad_udp",
             "event": "packet",
             "keys": {"opcode": opcode},

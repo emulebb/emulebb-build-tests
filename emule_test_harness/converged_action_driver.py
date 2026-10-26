@@ -721,11 +721,11 @@ class ActionTracker:
 
         ready_pairs: list[soak_action_diff.ActionPair] = []
         for pair in pairs:
-            _, window_end = pair.window(
+            action_window = pair.window(
                 lead_seconds=self.lead,
                 settle_seconds=self.settle_seconds_for(pair.kind),
             )
-            if now >= window_end:
+            if now >= action_window.end_utc:
                 self.processed.add(pair.rust.action_id)
                 self.processed.add(pair.mfc.action_id)
                 ready_pairs.append(pair)

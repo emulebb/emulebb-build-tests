@@ -57,6 +57,41 @@ def test_parse_ts_returns_none_for_garbage() -> None:
     assert sad.parse_ts("not-a-timestamp") is None
 
 
+def test_action_window_parses_explicit_utc_bounds() -> None:
+    window = sad.ActionWindow.from_utc_strings(
+        "2026-06-24T12:00:00Z",
+        "2026-06-24T12:00:30+00:00",
+    )
+
+    assert window.start_utc == _ts(0)
+    assert window.end_utc == _ts(30)
+    assert window.report_payload() == {
+        "t0": "2026-06-24T12:00:00+00:00",
+        "t1": "2026-06-24T12:00:30+00:00",
+    }
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "match"),
+    [
+        (datetime(2026, 6, 24, 12, 0), _ts(30), "timezone-aware UTC"),
+        (
+            datetime(2026, 6, 24, 14, 0, tzinfo=timezone(timedelta(hours=2))),
+            _ts(30),
+            "must use UTC",
+        ),
+        (_ts(30), _ts(0), "must not precede"),
+    ],
+)
+def test_action_window_rejects_non_authoritative_bounds(
+    start: datetime,
+    end: datetime,
+    match: str,
+) -> None:
+    with pytest.raises(sad.ActionTraceError, match=match):
+        sad.ActionWindow(start_utc=start, end_utc=end)
+
+
 # --------------------------------------------------------------------------- #
 # normalization
 # --------------------------------------------------------------------------- #
@@ -199,7 +234,11 @@ def test_slice_trace_keeps_only_in_window_records() -> None:
         _pkt("client", "send", 0x02, "bb", _ts(10)),  # inside
         _pkt("client", "send", 0x03, "cc", _ts(99)),  # after
     ]
-    sliced = sad.slice_trace(records, _ts(0), _ts(30))
+    sliced = sad.slice_trace(
+        records,
+        sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+        trace_name="test packets",
+    )
     assert [r["opcode"] for r in sliced] == [0x02]
 
 
@@ -219,14 +258,54 @@ def test_slice_trace_keeps_diag_event_records_with_ts_field() -> None:
         },
     ]
 
-    sliced = sad.slice_trace(records, _ts(0), _ts(30))
+    sliced = sad.slice_trace(
+        records,
+        sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+        trace_name="test diagnostics",
+    )
 
     assert [r["event"] for r in sliced] == ["inside"]
 
 
-def test_slice_trace_drops_records_without_timestamp() -> None:
+def test_slice_trace_rejects_records_without_timestamp() -> None:
     records = [{"schema": "ed2k_packet_v1", "opcode": 1, "direction": "send"}]
-    assert sad.slice_trace(records, _ts(0), _ts(30)) == []
+
+    with pytest.raises(sad.ActionTraceError, match="record 0 field ts_utc"):
+        sad.slice_trace(
+            records,
+            sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+            trace_name="test packets",
+        )
+
+
+def test_slice_trace_rejects_malformed_timestamp_outside_window() -> None:
+    records = [
+        _pkt("client", "send", 0x02, "bb", _ts(10)),
+        {
+            "schema": "diag_event_v2",
+            "family": "sched",
+            "event": "invalid",
+            "ts": "not-a-timestamp",
+        },
+    ]
+
+    with pytest.raises(sad.ActionTraceError, match="record 1 field ts"):
+        sad.slice_trace(
+            records,
+            sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+            trace_name="mixed trace",
+        )
+
+
+def test_slice_trace_rejects_unknown_schema() -> None:
+    records = [{"schema": "diag_event_v1", "ts": "2026-06-24T12:00:10Z"}]
+
+    with pytest.raises(sad.ActionTraceError, match="unsupported schema 'diag_event_v1'"):
+        sad.slice_trace(
+            records,
+            sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30)),
+            trace_name="legacy trace",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -255,6 +334,35 @@ def test_diff_action_coverage_parity_when_same_opcodes() -> None:
     assert report["coverageOk"] is True
     assert report["actionCoverage"]["mode"] == "action-required-opcodes"
     assert report["byteMatch"] is False  # payload differs — expected for live clients
+
+
+def test_diff_action_uses_authoritative_action_window() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(100)),
+        mfc=_action("mfc", "ubuntu", _ts(102)),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(10), marker=0xE3),
+        _pkt("server", "recv", 0x33, "bb", _ts(11), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "cc", _ts(12), marker=0xE3),
+        _pkt("server", "recv", 0x33, "dd", _ts(13), marker=0xE3),
+    ]
+    action_window = sad.ActionWindow(start_utc=_ts(0), end_utc=_ts(30))
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        action_window=action_window,
+    )
+
+    assert report["window"] == action_window.report_payload()
+    assert report["packets"] == {"rust": 2, "mfc": 2}
+    assert report["verdict"] == "coverage-parity"
 
 
 def test_diff_action_search_gate_ignores_unrelated_background_opcodes() -> None:
@@ -462,7 +570,7 @@ def test_diff_action_download_gate_fails_without_request_parts() -> None:
 def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
     return {
         "schema": "diag_event_v2",
-        "ts_utc": ts.isoformat().replace("+00:00", "Z"),
+        "ts": ts.isoformat().replace("+00:00", "Z"),
         "family": "kad_udp",
         "event": "packet",
         "keys": {"opcode": opcode},
