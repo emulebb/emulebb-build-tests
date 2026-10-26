@@ -559,6 +559,7 @@ def _build_search_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None,
+    search_result_counts: dict[str, int] | None,
     rust_kad_records: list[dict[str, Any]] | None,
     mfc_kad_records: list[dict[str, Any]] | None,
     rust_server_udp_records: list[dict[str, Any]] | None,
@@ -566,7 +567,9 @@ def _build_search_coverage(
 ) -> dict[str, Any]:
     """Method-aware search gate: each search method has its own live evidence.
 
-    ``server`` keeps the original TCP OP_SEARCHREQUEST/OP_SEARCHRESULT gate.
+    ``server`` always requires TCP OP_SEARCHREQUEST. OP_SEARCHRESULT is required
+    unless the action driver authoritatively completed with zero results on both
+    clients; a zero-hit server search may complete without a result packet.
     ``global`` goes over server UDP. The MFC capture has no aligned server-UDP
     diagnostics, so global search remains explicitly ``not-assessable`` and can
     never become parity from Rust-only evidence. ``kad`` is assessed from the
@@ -578,16 +581,34 @@ def _build_search_coverage(
     normalized = str(method).strip().lower() if method is not None else None
     full_coverage_ok = bool(packet_diff.get("coverageOk"))
 
-    server_checked = _check_action_requirements(_SERVER_SEARCH_REQUIRED, packet_diff)
-    server_ok = all(row["presentOnBoth"] for row in server_checked)
+    zero_results_on_both = bool(
+        isinstance(search_result_counts, dict)
+        and set(search_result_counts) == {"rust", "mfc"}
+        and all(
+            not isinstance(value, bool) and isinstance(value, int) and value == 0
+            for value in search_result_counts.values()
+        )
+    )
+    server_request = _check_action_requirements(
+        _SERVER_SEARCH_REQUIRED[:1], packet_diff
+    )
+    server_result = _check_action_requirements(
+        _SERVER_SEARCH_REQUIRED[1:], packet_diff
+    )
+    server_required = server_request + ([] if zero_results_on_both else server_result)
+    server_optional = server_result if zero_results_on_both else []
+    server_ok = all(row["presentOnBoth"] for row in server_required)
     if normalized in (None, "", SEARCH_METHOD_SERVER):
-        return {
+        coverage = {
             "ok": server_ok,
             "mode": "action-required-opcodes",
             "method": normalized or SEARCH_METHOD_SERVER,
-            "required": server_checked,
+            "required": server_required,
             "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
         }
+        if server_optional:
+            coverage["optional"] = server_optional
+        return coverage
 
     if normalized == SEARCH_METHOD_GLOBAL:
         rust_records = rust_server_udp_records or []
@@ -668,8 +689,8 @@ def _build_search_coverage(
         "method": normalized,
         "serverOk": server_ok,
         "kadOk": kad_ok,
-        "required": server_checked + kad_required,
-        "optional": kad_optional,
+        "required": server_required + kad_required,
+        "optional": server_optional + kad_optional,
         "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
     }
 
@@ -679,6 +700,7 @@ def build_action_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None = None,
+    search_result_counts: dict[str, int] | None = None,
     rust_kad_records: list[dict[str, Any]] | None = None,
     mfc_kad_records: list[dict[str, Any]] | None = None,
     rust_server_udp_records: list[dict[str, Any]] | None = None,
@@ -695,6 +717,7 @@ def build_action_coverage(
         return _build_search_coverage(
             packet_diff,
             method=method,
+            search_result_counts=search_result_counts,
             rust_kad_records=rust_kad_records,
             mfc_kad_records=mfc_kad_records,
             rust_server_udp_records=rust_server_udp_records,
@@ -877,6 +900,7 @@ def diff_action(
     rust_diag: list[dict[str, Any]] | None = None,
     mfc_diag: list[dict[str, Any]] | None = None,
     diagnostics_required: bool = False,
+    search_result_counts: dict[str, int] | None = None,
     action_window: ActionWindow | None = None,
     lead_seconds: float = DEFAULT_LEAD_SECONDS,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
@@ -926,6 +950,7 @@ def diff_action(
         pair.kind,
         packet_diff,
         method=method,
+        search_result_counts=search_result_counts,
         rust_kad_records=rust_kad_records,
         mfc_kad_records=mfc_kad_records,
         rust_server_udp_records=rust_server_udp_records,

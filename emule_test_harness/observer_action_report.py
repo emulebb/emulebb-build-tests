@@ -93,6 +93,9 @@ def build_observer_action_report(
         mfc_packets=diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics),
         rust_diag=rust_diagnostics,
         mfc_diag=mfc_diagnostics,
+        search_result_counts=copy.deepcopy(
+            pending_action["driverOutcome"]["resultCounts"]
+        ),
         action_window=evidence.window,
     )
     verdict = (
