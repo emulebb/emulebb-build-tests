@@ -2051,6 +2051,116 @@ def test_stop_session_requests_graceful_teardown_without_force(
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["state"] == "stopped"
 
 
+def test_stop_session_finalizes_both_active_diagnostic_segments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    output_root = tmp_path / "output"
+    root = controller.campaign_storage_root(output_root)
+    active_campaign = root / "20261025T120000Z"
+    policy = storage_policy(
+        max_total_bytes=1_000_000,
+        index_max_bytes=64 * 1024,
+        pin_max_bytes=64 * 1024,
+        pin_retained=2,
+    )
+    diagnostic_dirs = {
+        "rust": tmp_path / "rust-profile" / "packet-dump",
+        "mfc": tmp_path / "mfc-profile" / "logs",
+    }
+    for client, diagnostic_dir in diagnostic_dirs.items():
+        diagnostic_dir.mkdir(parents=True)
+        prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
+        segment = diagnostic_dir / f"{prefix}-diag-42-run-a-000000.jsonl"
+        segment.write_text(
+            json.dumps(
+                diagnostic_record(client=client, segment_id=0, sequence=1)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    manifest = {
+        "schema": controller.MANIFEST_SCHEMA,
+        "state": "running",
+        "campaignId": active_campaign.name,
+        "launcher": {"pid": 10, "creationDate": "launcher"},
+        "observer": {"pid": 30, "creationDate": "observer"},
+        "watcher": {"pid": 20, "creationDate": "watcher"},
+        "preflight": {
+            "diagnosticDirs": {
+                client: str(path) for client, path in diagnostic_dirs.items()
+            }
+        },
+        "storage": controller.session_storage_manifest(
+            root=root,
+            policy=policy,
+            active_campaign=active_campaign,
+            previous_campaign=None,
+            preflight_plan={"feasible": True},
+            launch_enforcement={"withinLimits": True},
+        ),
+    }
+    controller.write_json_atomic(paths.manifest, manifest)
+    controller.write_json_atomic(
+        paths.watch_heartbeat,
+        {
+            "campaignId": active_campaign.name,
+            "diagnosticWriters": {
+                "required": True,
+                "rust": {
+                    "health": diagnostic_writer_health(
+                        client="rust", active_segment_id=0
+                    )
+                },
+                "mfc": {
+                    "health": diagnostic_writer_health(
+                        client="mfc", active_segment_id=0
+                    )
+                },
+            },
+        },
+    )
+    events: list[str] = []
+
+    def fake_wait(identity: dict[str, object], _timeout: float) -> bool:
+        events.append(f"wait-{identity['pid']}")
+        return True
+
+    original_finalize = controller.finalize_stopped_session_diagnostics
+
+    def record_finalize(*args, **kwargs):
+        events.append("finalize")
+        return original_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(controller, "wait_exact_exit", fake_wait)
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        controller,
+        "finalize_stopped_session_diagnostics",
+        record_finalize,
+    )
+    monkeypatch.setattr(
+        controller,
+        "session_status",
+        lambda *_args, **_kwargs: {"schema": controller.STATUS_SCHEMA, "ok": False},
+    )
+
+    result = controller.stop_session(paths, graceful_timeout_seconds=1.0)
+
+    assert events == ["wait-30", "wait-10", "wait-20", "finalize"]
+    assert result["ok"] is True
+    assert result["diagnosticFinalization"]["ok"] is True
+    for client in ("rust", "mfc"):
+        finalized = result["diagnosticFinalization"]["indexes"][client]
+        assert finalized["finalized"] is True
+        assert [item["segmentId"] for item in finalized["processedSegments"]] == [0]
+        checkpoint = json.loads(Path(finalized["checkpoint"]).read_text(encoding="utf-8"))
+        assert checkpoint["source"]["activeSegmentId"] is None
+        assert checkpoint["source"]["finalized"] is True
+        assert checkpoint["index"]["recordCount"] == 1
+
+
 def test_stop_session_without_manifest_does_not_create_control_files(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
 
