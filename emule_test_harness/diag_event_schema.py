@@ -20,5 +20,3 @@ PERSISTED_SOAK_REQUIRED_PARITY_FAMILIES = frozenset(
         KAD_UDP_FAMILY,
     }
 )
-
-LEGACY_DIAG_EVENT_SCHEMA = "diag_event_v1"
