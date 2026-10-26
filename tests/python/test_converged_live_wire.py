@@ -13,7 +13,10 @@ import pytest
 
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import live_profile_seed
-from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
+from tests.python.diagnostic_fixtures import (
+    current_diagnostic_writer_health,
+    ed2k_tcp_clear_frame,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
@@ -351,6 +354,8 @@ def test_converged_runner_uses_selected_unified_runs_for_packet_diff(
     mfc_segment = mfc_dir / "emulebb-mfc-diag-42-mfc-run-000000.jsonl"
 
     def record(client: str, process_id: int, run_id: str) -> dict[str, object]:
+        payload = b"\x00"
+        clear_frame = ed2k_tcp_clear_frame(0xE3, 0x01, payload)
         return {
             "schema": "diag_event_v2",
             "client": client,
@@ -377,10 +382,12 @@ def test_converged_runner_uses_selected_unified_runs_for_packet_diff(
                 "protocolName": "ed2k",
                 "opcode": 0x01,
                 "opcodeName": "OP_LOGINREQUEST",
-                "rawLen": 3,
-                "rawHex": "e30100",
-                "payloadLen": 1,
-                "payloadHex": "00",
+                "rawLen": len(clear_frame),
+                "rawHex": clear_frame.hex(),
+                "clearFrameLen": len(clear_frame),
+                "clearFrameHex": clear_frame.hex(),
+                "payloadLen": len(payload),
+                "payloadHex": payload.hex(),
                 "payloadHexTruncated": False,
             },
         }

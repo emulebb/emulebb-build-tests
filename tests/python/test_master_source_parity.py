@@ -2215,7 +2215,7 @@ def _check_packet_diagnostics_source__packet_diagnostics_emit_converged_ed2k_pac
     # Client-to-client (peer) emitter declared + defined alongside the server one.
     assert "void PacketDiagnosticsLogClientPacket(" in log_header
     assert "void PacketDiagnosticsLogClientPacket(" in log_source
-    assert "void PacketDiagnosticsLogServerPacket(" in log_source
+    assert "void PacketDiagnosticsLogServerTcpPacket(" in log_source
 
     # Shared emitter + converged schema with a flow discriminator + trace_key.
     assert "static void PacketDiagnosticsLogEd2kPacket(" in log_source

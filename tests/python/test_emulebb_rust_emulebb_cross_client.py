@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
+from tests.python.diagnostic_fixtures import (
+    current_diagnostic_writer_health,
+    ed2k_tcp_clear_frame,
+)
 
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
 
@@ -632,6 +635,7 @@ def test_cross_client_diagnostics_require_client_udp_family_on_both_sides(
     tmp_path: Path,
 ) -> None:
     module = load_suite_module()
+    clear_frame = ed2k_tcp_clear_frame(0xE3, 0x01, b"")
     def diag_records(_directory, *, side):
         family = "ed2k_client_udp" if side == "rust" else "sched"
         return [
@@ -655,8 +659,10 @@ def test_cross_client_diagnostics_require_client_udp_family_on_both_sides(
                     "protocolName": "ed2k",
                     "opcode": 0x01,
                     "opcodeName": "OP_HELLO",
-                    "rawLen": 6,
-                    "rawHex": "e30100000001",
+                    "rawLen": len(clear_frame),
+                    "rawHex": clear_frame.hex(),
+                    "clearFrameLen": len(clear_frame),
+                    "clearFrameHex": clear_frame.hex(),
                     "payloadLen": 0,
                     "payloadHex": "",
                     "payloadHexTruncated": False,
@@ -693,6 +699,7 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     mfc = tmp_path / "mfc"
     rust.mkdir()
     mfc.mkdir()
+    clear_frame = ed2k_tcp_clear_frame(0xE3, 0x01, b"")
     for client, directory, process_id, run_id in (
         ("rust", rust, 41, "rust-run"),
         ("mfc", mfc, 42, "mfc-run"),
@@ -760,8 +767,10 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                             "protocolName": "ed2k",
                             "opcode": 0x01,
                             "opcodeName": "OP_HELLO",
-                            "rawLen": 6,
-                            "rawHex": "e30100000001",
+                            "rawLen": len(clear_frame),
+                            "rawHex": clear_frame.hex(),
+                            "clearFrameLen": len(clear_frame),
+                            "clearFrameHex": clear_frame.hex(),
                             "payloadLen": 0,
                             "payloadHex": "",
                             "payloadHexTruncated": False,
