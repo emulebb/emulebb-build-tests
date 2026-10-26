@@ -225,6 +225,7 @@ class BoundedArtifactStore:
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
+        temporary_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StoragePrunePlan:
         """Builds one oldest-first plan including projected future allocation."""
@@ -235,6 +236,14 @@ class BoundedArtifactStore:
             or reserved_bytes < 0
         ):
             raise ValueError("reserved_bytes must be a non-negative integer.")
+        if temporary_bytes is None:
+            temporary_bytes = reserved_bytes
+        if (
+            isinstance(temporary_bytes, bool)
+            or not isinstance(temporary_bytes, int)
+            or temporary_bytes < 0
+        ):
+            raise ValueError("temporary_bytes must be a non-negative integer.")
 
         inventory = self._inventory(self.root)
         disk_space = self._disk_space(self.root)
@@ -271,7 +280,7 @@ class BoundedArtifactStore:
         selected_paths: set[Path] = set()
         triggered: list[str] = []
         projected_total = inventory.total_bytes + reserved_bytes
-        projected_free = disk_space.free_bytes - reserved_bytes
+        projected_free = disk_space.free_bytes - temporary_bytes
 
         def select(artifact: ArtifactFile, reason: str) -> None:
             nonlocal projected_free, projected_total
@@ -336,6 +345,7 @@ class BoundedArtifactStore:
         active_campaign: Path | None = None,
         pinned_paths: Iterable[Path] = (),
         reserved_bytes: int = 0,
+        temporary_bytes: int | None = None,
         now_ns: int | None = None,
     ) -> StorageEnforcementResult:
         """Deletes only whole planned artifacts and reports every failure."""
@@ -344,6 +354,7 @@ class BoundedArtifactStore:
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
+            temporary_bytes=temporary_bytes,
             now_ns=now_ns,
         )
         deleted_paths: list[Path] = []
@@ -361,6 +372,7 @@ class BoundedArtifactStore:
             active_campaign=active_campaign,
             pinned_paths=pinned_paths,
             reserved_bytes=reserved_bytes,
+            temporary_bytes=temporary_bytes,
             now_ns=now_ns,
         )
         return StorageEnforcementResult(
@@ -948,9 +960,11 @@ def persist_bounded_json_checkpoint(
             )
     temporary.unlink(missing_ok=True)
 
+    existing_bytes = path.stat().st_size if path.exists() else 0
     reservation = store.enforce(
         active_campaign=resolved_campaign,
-        reserved_bytes=len(encoded),
+        reserved_bytes=max(0, len(encoded) - existing_bytes),
+        temporary_bytes=len(encoded),
         now_ns=timestamp_ns,
     )
     if not reservation.within_limits:

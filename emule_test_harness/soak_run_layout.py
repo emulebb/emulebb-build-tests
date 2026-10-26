@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +81,70 @@ class _PreflightArchiveEntry:
             "bytes": self.byte_count,
             "sha256": self.sha256,
         }
+
+
+def _absolute_path(path: Path) -> Path:
+    candidate = path if path.is_absolute() else Path.cwd() / path
+    return Path(os.path.normpath(str(candidate)))
+
+
+def _is_reparse_point(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        attributes = path.lstat().st_file_attributes
+    except (AttributeError, FileNotFoundError, OSError):
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _validate_preflight_archive_name(name: str) -> str:
+    if (
+        not name
+        or Path(name).name != name
+        or name in {".", ".."}
+        or not name.isascii()
+        or any(
+            not (character.isalnum() or character in {".", "_", "-"})
+            for character in name
+        )
+    ):
+        raise RuntimeError(
+            "Preflight archive filenames must use safe ASCII letters, digits, dots, "
+            f"underscores, and hyphens: {name!r}"
+        )
+    return name
+
+
+def _assert_campaign_destination_authority(
+    *, paths: SoakRunPaths, target: Path
+) -> Path:
+    campaign = _absolute_path(paths.campaign_dir)
+    absolute_target = _absolute_path(target)
+    try:
+        relative_target = absolute_target.relative_to(campaign)
+    except ValueError:
+        raise RuntimeError(
+            f"Preflight archive destination escaped its campaign: {absolute_target}"
+        ) from None
+    current = campaign
+    if _is_reparse_point(current):
+        raise RuntimeError(
+            f"Preflight archive destination contains a reparse point: {current}"
+        )
+    for part in relative_target.parts:
+        current /= part
+        if _is_reparse_point(current):
+            raise RuntimeError(
+                f"Preflight archive destination contains a reparse point: {current}"
+            )
+    resolved_campaign = campaign.resolve()
+    resolved_target = absolute_target.resolve()
+    if not path_is_relative_to(resolved_target, resolved_campaign):
+        raise RuntimeError(
+            f"Preflight archive destination resolved outside its campaign: {target}"
+        )
+    return absolute_target
 
 
 def utc_campaign_id(now: datetime | None = None) -> str:
@@ -429,7 +494,7 @@ def _snapshot_preflight_files(
     files: Iterable[Path],
 ) -> list[_PreflightArchiveEntry]:
     resolved_source_root = source_root.resolve()
-    resolved_destination_root = destination_root.resolve()
+    absolute_destination_root = _absolute_path(destination_root)
     if source_root.is_symlink():
         raise RuntimeError(
             f"Preflight archive source root must not be a symlink: {source_root}"
@@ -465,7 +530,8 @@ def _snapshot_preflight_files(
                 "Preflight archive inputs must be direct children of their source root: "
                 f"{source}"
             )
-        destination = resolved_destination_root / relative
+        _validate_preflight_archive_name(relative.name)
+        destination = absolute_destination_root / relative
         destination_key = str(destination).casefold()
         if destination_key in seen_destinations:
             raise RuntimeError(
@@ -588,11 +654,11 @@ def _entry_from_manifest_row(
     category = row["category"]
     if category == "rust":
         source_root = rust_profile_dir.resolve()
-        destination_root = (preflight_archive_dir / "rust-profile").resolve()
+        destination_root = _absolute_path(preflight_archive_dir / "rust-profile")
         stream_name = "preflight_rust_outputs"
     elif category == "mfc" and mfc_log_dir is not None:
         source_root = mfc_log_dir.resolve()
-        destination_root = (preflight_archive_dir / "mfc-logs").resolve()
+        destination_root = _absolute_path(preflight_archive_dir / "mfc-logs")
         stream_name = "preflight_mfc_outputs"
     else:
         raise RuntimeError(
@@ -604,13 +670,6 @@ def _entry_from_manifest_row(
     sha256 = row["sha256"]
     if (
         not isinstance(relative_path, str)
-        or Path(relative_path).name != relative_path
-        or not relative_path
-        or not relative_path.isascii()
-        or any(
-            not (character.isalnum() or character in {".", "_", "-"})
-            for character in relative_path
-        )
         or isinstance(byte_count, bool)
         or not isinstance(byte_count, int)
         or byte_count < 0
@@ -621,6 +680,7 @@ def _entry_from_manifest_row(
         or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
     ):
         raise RuntimeError("Preflight archive manifest contains invalid file metadata.")
+    _validate_preflight_archive_name(relative_path)
     return _PreflightArchiveEntry(
         category=category,
         stream_name=stream_name,
@@ -719,24 +779,30 @@ def _validate_preflight_entry_limits(
 def _assert_archive_destinations_known(
     entries: Iterable[_PreflightArchiveEntry],
     *,
+    paths: SoakRunPaths,
     destination_roots: Iterable[Path],
 ) -> None:
     entries = list(entries)
-    expected = {entry.destination.resolve() for entry in entries}
-    roots = {root.resolve() for root in destination_roots}
+    expected = {
+        _assert_campaign_destination_authority(paths=paths, target=entry.destination)
+        for entry in entries
+    }
+    roots = {
+        _assert_campaign_destination_authority(paths=paths, target=root)
+        for root in destination_roots
+    }
     for root in roots:
-        if root.is_symlink():
-            raise RuntimeError(
-                f"Preflight archive destination must not be a symlink: {root}"
-            )
         if not root.exists():
             continue
         for candidate in root.iterdir():
-            if candidate.is_symlink() or not candidate.is_file():
+            candidate = _assert_campaign_destination_authority(
+                paths=paths, target=candidate
+            )
+            if not candidate.is_file():
                 raise RuntimeError(
                     f"Preflight archive destination contains an unsafe entry: {candidate}"
                 )
-            if candidate.resolve() not in expected:
+            if candidate not in expected:
                 raise RuntimeError(
                     "Preflight archive destination contains an unplanned artifact: "
                     f"{candidate}"
@@ -772,6 +838,7 @@ def _copy_or_verify_preflight_entry(
     entry: _PreflightArchiveEntry,
 ) -> None:
     _verify_preflight_file(entry.source, entry)
+    _assert_campaign_destination_authority(paths=paths, target=entry.destination)
     if entry.destination.exists() or entry.destination.is_symlink():
         _verify_preflight_file(entry.destination, entry)
         return
@@ -858,6 +925,7 @@ def archive_preflight_outputs(
         _validate_preflight_entry_limits(entries=entries, store=store)
         _assert_archive_destinations_known(
             entries,
+            paths=paths,
             destination_roots=(
                 paths.preflight_archive_dir / "rust-profile",
                 paths.preflight_archive_dir / "mfc-logs",
@@ -896,6 +964,7 @@ def archive_preflight_outputs(
     _validate_preflight_entry_limits(entries=entries, store=store)
     _assert_archive_destinations_known(
         entries,
+        paths=paths,
         destination_roots=(
             paths.preflight_archive_dir / "rust-profile",
             paths.preflight_archive_dir / "mfc-logs",
@@ -907,6 +976,9 @@ def archive_preflight_outputs(
                 "Completed preflight archive sources were recreated; use a new campaign."
             )
         for entry in entries:
+            _assert_campaign_destination_authority(
+                paths=paths, target=entry.destination
+            )
             _verify_preflight_file(entry.destination, entry)
     else:
         if state == "prepared":
@@ -925,6 +997,9 @@ def archive_preflight_outputs(
                 ),
             )
         for entry in entries:
+            _assert_campaign_destination_authority(
+                paths=paths, target=entry.destination
+            )
             _verify_preflight_file(entry.destination, entry)
             if not entry.source.exists() and not entry.source.is_symlink():
                 continue

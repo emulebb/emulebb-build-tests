@@ -220,11 +220,19 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "observer_actions": payload["streams"]["observer_actions"],
                     "observer_checkpoints": payload["streams"]["observer_checkpoints"],
                     "observer_summary": payload["streams"]["observer_summary"],
-                    "preflight_archive_manifest": payload["streams"]["preflight_archive_manifest"],
-                    "preflight_mfc_outputs": payload["streams"]["preflight_mfc_outputs"],
-                    "preflight_rust_outputs": payload["streams"]["preflight_rust_outputs"],
+                    "preflight_archive_manifest": payload["streams"][
+                        "preflight_archive_manifest"
+                    ],
+                    "preflight_mfc_outputs": payload["streams"][
+                        "preflight_mfc_outputs"
+                    ],
+                    "preflight_rust_outputs": payload["streams"][
+                        "preflight_rust_outputs"
+                    ],
                     "process_metrics": payload["streams"]["process_metrics"],
-                    "process_metrics_summary": payload["streams"]["process_metrics_summary"],
+                    "process_metrics_summary": payload["streams"][
+                        "process_metrics_summary"
+                    ],
                 },
             }
         )
@@ -533,6 +541,30 @@ def test_bounded_store_reserves_future_bytes_at_exact_policy_boundaries(
     assert plan.within_limits
 
 
+def test_bounded_store_tracks_final_growth_separately_from_temporary_bytes(
+    tmp_path: Path,
+) -> None:
+    inventory = fake_inventory(tmp_path, [("protected.bin", 100, 100)])
+    store = soak_storage.BoundedArtifactStore(
+        tmp_path,
+        direct_policy(max_total_bytes=100, minimum_free_bytes=50),
+        inventory=lambda _root: inventory,
+        disk_space=lambda root: fake_disk_space(root, free_bytes=110),
+    )
+
+    plan = store.plan(
+        pinned_paths=[tmp_path / "protected.bin"],
+        reserved_bytes=0,
+        temporary_bytes=60,
+        now_ns=100,
+    )
+
+    assert plan.reserved_bytes == 0
+    assert plan.projected_total_bytes == 100
+    assert plan.projected_free_bytes == 50
+    assert plan.within_limits
+
+
 def test_bounded_store_prunes_closed_artifacts_for_reserved_future_bytes(
     tmp_path: Path,
 ) -> None:
@@ -591,6 +623,17 @@ def test_bounded_store_rejects_invalid_reserved_bytes(
 
     with pytest.raises(ValueError, match="non-negative integer"):
         store.plan(reserved_bytes=reserved_bytes)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("temporary_bytes", [-1, True, 1.5])
+def test_bounded_store_rejects_invalid_temporary_bytes(
+    tmp_path: Path,
+    temporary_bytes: object,
+) -> None:
+    store = soak_storage.BoundedArtifactStore(tmp_path, direct_policy())
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        store.plan(temporary_bytes=temporary_bytes)  # type: ignore[arg-type]
 
 
 def test_bounded_store_reports_limits_blocked_by_active_campaign(
@@ -876,6 +919,58 @@ def test_persist_bounded_json_checkpoint_replaces_one_verified_file(
     assert second.retained_count == 1
     assert second.retained_bytes == second.byte_count
     assert not list(directory.glob("*.tmp"))
+
+
+def test_persist_bounded_json_checkpoint_replaces_at_exact_aggregate_bound(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-indexes" / "rust"
+    first_payload = {"schema": "checkpoint-v1", "seq": 1}
+    second_payload = {"schema": "checkpoint-v1", "seq": 2}
+    encoded_size = len(
+        (
+            json.dumps(
+                first_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+    )
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=encoded_size,
+            minimum_free_bytes=1,
+            index_max_bytes=1_024,
+        ),
+    )
+
+    soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name="diagnostic-run-index.json",
+        payload=first_payload,
+        now_ns=1,
+    )
+    replaced = soak_storage.persist_bounded_json_checkpoint(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_indexes",
+        artifact_name="diagnostic-run-index.json",
+        payload=second_payload,
+        now_ns=2,
+    )
+
+    assert replaced.byte_count == encoded_size
+    assert json.loads(replaced.path.read_text(encoding="utf-8"))["seq"] == 2
 
 
 def test_persist_bounded_json_checkpoint_recovers_stale_temporary_file(

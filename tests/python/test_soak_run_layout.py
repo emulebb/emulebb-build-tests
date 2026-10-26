@@ -706,6 +706,90 @@ def test_prepare_clean_run_rejects_archive_count_before_mutation(
     assert not (paths.preflight_archive_dir / "mfc-logs").exists()
 
 
+def test_prepare_clean_run_rejects_unsupported_name_before_manifest(
+    tmp_path: Path,
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "mfc-logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir()
+    source = mfc_logs / "emulebb diagnostic.log"
+    source.write_text("exact evidence", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="safe ASCII"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths),
+            stop_process_cleanup=False,
+        )
+
+    assert source.read_text(encoding="utf-8") == "exact evidence"
+    assert not (
+        paths.preflight_archive_dir / "manifest" / "preflight-archives.json"
+    ).exists()
+
+
+def test_prepare_clean_run_rejects_reparse_destination_during_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "mfc-logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir()
+    source = mfc_logs / "emulebb-evidence.log"
+    source.write_text("exact evidence", encoding="utf-8")
+
+    def fail_removal(_path: Path) -> None:
+        raise OSError("leave copied transaction")
+
+    monkeypatch.setattr(soak_run_layout, "_remove_preflight_source", fail_removal)
+    with pytest.raises(OSError, match="leave copied transaction"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths),
+            stop_process_cleanup=False,
+        )
+
+    destination_root = paths.preflight_archive_dir / "mfc-logs"
+    archived = destination_root / source.name
+    outside = tmp_path / "outside-archive"
+    outside.mkdir()
+    (outside / source.name).write_bytes(archived.read_bytes())
+    archived.unlink()
+    destination_root.rmdir()
+    try:
+        destination_root.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    monkeypatch.setattr(
+        soak_run_layout,
+        "_remove_preflight_source",
+        lambda path: path.unlink(),
+    )
+
+    with pytest.raises(RuntimeError, match="reparse point"):
+        soak_run_layout.prepare_clean_run(
+            paths=paths,
+            rust_profile_dir=rust_profile_dir,
+            rust_packet_dump_dir=rust_packet_dump,
+            mfc_log_dir=mfc_logs,
+            artifact_store=artifact_store(paths),
+            stop_process_cleanup=False,
+        )
+
+    assert source.read_text(encoding="utf-8") == "exact evidence"
+
+
 def test_promote_latest_diagnostic_segments_copies_bounded_validated_suffixes(
     tmp_path: Path,
 ) -> None:
