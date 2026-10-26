@@ -66,6 +66,7 @@ POST_READINESS_IMMEDIATE_FAILURE_FINDINGS = frozenset(
     }
 )
 CONSECUTIVE_FAILURE_THRESHOLDS = {
+    "watch-status-unavailable": 3,
     "rust-rest-unhealthy": 3,
     "mfc-rest-unhealthy": 3,
     "rust-diagnostic-writer-unavailable": 3,
@@ -2222,16 +2223,29 @@ def build_watch_sample(
 ) -> dict[str, Any]:
     """Builds one bounded health and storage enforcement record."""
 
-    findings = list(status.get("findings", [])) if status is not None else ["watch-status-unavailable"]
+    findings = (
+        list(status.get("findings", []))
+        if status is not None and status_error is None
+        else []
+    )
+    if status_error is not None and "watch-status-unavailable" not in findings:
+        findings.append("watch-status-unavailable")
     if not storage.get("ok") and STORAGE_FAILURE_FINDING not in findings:
         findings.append(STORAGE_FAILURE_FINDING)
     sample = {
         "schema": WATCH_SCHEMA,
         "campaignId": status.get("manifest", {}).get("campaignId") if status is not None else None,
         "timestampUtc": (
-            status.get("timestampUtc") if status is not None else datetime.now(UTC).isoformat()
+            status.get("timestampUtc")
+            if status is not None and status_error is None
+            else datetime.now(UTC).isoformat()
         ),
-        "ok": bool(status is not None and status.get("ok") and storage.get("ok")),
+        "ok": bool(
+            status is not None
+            and status_error is None
+            and status.get("ok")
+            and storage.get("ok")
+        ),
         "findings": findings,
         "launcherAlive": bool(status is not None and status.get("launcher", {}).get("alive")),
         "rustProcessCount": status.get("clients", {}).get("rustCount", 0) if status is not None else 0,
@@ -2253,6 +2267,28 @@ def build_watch_sample(
             "message": str(status_error)[:1024],
         }
     return sample
+
+
+def unavailable_watch_status(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Returns campaign-scoped placeholder state for a failed status read."""
+
+    campaign_id = manifest.get("campaignId")
+    state = manifest.get("state")
+    if state not in {"starting", "running"}:
+        state = "running"
+    return {
+        "timestampUtc": datetime.now(UTC).isoformat(),
+        "ok": False,
+        "findings": [],
+        "manifest": {"campaignId": campaign_id},
+        "launcher": {"alive": True},
+        "clients": {"rustCount": 0, "mfcCount": 0},
+        "rest": None,
+        "diagnosticWriters": None,
+        "diagnosticIndexes": None,
+        "vpn": None,
+        "lastRun": {"campaignId": campaign_id, "status": state},
+    }
 
 
 def watch_sample_is_post_readiness(sample: dict[str, Any]) -> bool:
@@ -2693,6 +2729,7 @@ def watch_session(
     manifest: dict[str, Any] = {}
     sample_count = 0
     latest: dict[str, Any] | None = None
+    last_status: dict[str, Any] | None = None
     finding_streaks: dict[str, int] = {}
     try:
         manifest = load_json(paths.manifest)
@@ -2754,17 +2791,10 @@ def watch_session(
         try:
             status = session_status(paths)
             status_error = None
-        except Exception as error:  # noqa: BLE001 - unattended health loss is terminal
-            status = None
+        except Exception as error:  # noqa: BLE001 - bounded status loss is streak-gated
+            status = last_status or unavailable_watch_status(manifest)
             status_error = error
-            storage = {
-                **storage,
-                "ok": False,
-                "phase": "watchStatus",
-                "errorType": type(error).__name__,
-                "error": str(error)[:1024],
-            }
-        if status is not None and storage.get("ok"):
+        if status_error is None and status is not None and storage.get("ok"):
             try:
                 status["diagnosticIndexes"] = advance_diagnostic_indexes(
                     status,
@@ -2785,6 +2815,8 @@ def watch_session(
                     "errorType": type(error).__name__,
                     "error": str(error)[:1024],
                 }
+        if status_error is None:
+            last_status = status
         latest = build_watch_sample(status, storage, status_error=status_error)
         finding_annotation = watch_finding_annotation(latest, finding_streaks)
         finding_streaks = finding_annotation["findingStreaks"]
