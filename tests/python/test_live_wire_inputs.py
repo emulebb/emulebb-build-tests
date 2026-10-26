@@ -137,7 +137,7 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
     with_storage = payload()
     with_storage["soak_storage"] = {
         "schema": soak_storage.SCHEMA,
-        "max_total_bytes": 5_430,
+        "max_total_bytes": 5_478,
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
@@ -159,6 +159,9 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
             "observer_actions": {"max_segment_bytes": 25, "retained_segments": 2},
             "observer_checkpoints": {"max_segment_bytes": 30, "retained_segments": 3},
             "observer_summary": {"max_segment_bytes": 40, "retained_segments": 1},
+            "preflight_archive_manifest": {"max_segment_bytes": 13, "retained_segments": 1},
+            "preflight_mfc_outputs": {"max_segment_bytes": 12, "retained_segments": 2},
+            "preflight_rust_outputs": {"max_segment_bytes": 11, "retained_segments": 1},
             "process_metrics": {"max_segment_bytes": 20, "retained_segments": 2},
             "process_metrics_summary": {"max_segment_bytes": 10, "retained_segments": 1},
         },
@@ -169,7 +172,7 @@ def test_parse_live_wire_inputs_parses_optional_soak_storage_policy() -> None:
     assert inputs.soak_storage is not None
     assert inputs.soak_storage.minimum_free_bytes == 500
     assert inputs.soak_storage.rust_diagnostics.max_total_bytes == 2_097_152
-    assert soak_storage.required_stream_capacity_bytes(inputs.soak_storage) == 5_430
+    assert soak_storage.required_stream_capacity_bytes(inputs.soak_storage) == 5_478
 
 
 def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> (

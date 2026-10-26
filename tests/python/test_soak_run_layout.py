@@ -42,6 +42,9 @@ def artifact_store(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(1_024, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1_024, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
+                "preflight_archive_manifest": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_mfc_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_rust_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }

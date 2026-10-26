@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v8"
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v9"
 REQUIRED_STREAMS = (
     "controller_output",
     "daemon_output",
@@ -23,6 +23,9 @@ REQUIRED_STREAMS = (
     "observer_actions",
     "observer_checkpoints",
     "observer_summary",
+    "preflight_archive_manifest",
+    "preflight_mfc_outputs",
+    "preflight_rust_outputs",
     "process_metrics",
     "process_metrics_summary",
 )
@@ -36,6 +39,9 @@ REQUIRED_STREAM_INSTANCES = {
     "observer_actions": 1,
     "observer_checkpoints": 1,
     "observer_summary": 1,
+    "preflight_archive_manifest": 1,
+    "preflight_mfc_outputs": 1,
+    "preflight_rust_outputs": 1,
     "process_metrics": 1,
     "process_metrics_summary": 1,
 }
@@ -1226,6 +1232,11 @@ def parse_soak_storage_policy(payload: object) -> SoakStoragePolicy:
         retained_segments = _positive_integer(
             stream_payload, "retained_segments", context=context
         )
+        if name == "preflight_archive_manifest" and retained_segments != 1:
+            raise RuntimeError(
+                "soak_storage.streams.preflight_archive_manifest.retained_segments "
+                "must be 1."
+            )
         if max_segment_bytes > max_total_bytes:
             raise RuntimeError(
                 f"{context}.max_segment_bytes must not exceed soak_storage.max_total_bytes."

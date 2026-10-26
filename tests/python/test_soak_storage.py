@@ -14,7 +14,7 @@ from emule_test_harness import soak_storage
 def policy_payload() -> dict[str, object]:
     return {
         "schema": soak_storage.SCHEMA,
-        "max_total_bytes": 5_430,
+        "max_total_bytes": 5_478,
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
@@ -61,6 +61,18 @@ def policy_payload() -> dict[str, object]:
             },
             "observer_summary": {
                 "max_segment_bytes": 40,
+                "retained_segments": 1,
+            },
+            "preflight_archive_manifest": {
+                "max_segment_bytes": 13,
+                "retained_segments": 1,
+            },
+            "preflight_mfc_outputs": {
+                "max_segment_bytes": 12,
+                "retained_segments": 2,
+            },
+            "preflight_rust_outputs": {
+                "max_segment_bytes": 11,
                 "retained_segments": 1,
             },
             "process_metrics": {
@@ -125,6 +137,9 @@ def direct_policy(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_archive_manifest": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_mfc_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
+                "preflight_rust_outputs": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
                 "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }
@@ -164,7 +179,7 @@ def fake_disk_space(
 def test_parse_soak_storage_policy_accepts_strict_complete_contract() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert policy.max_total_bytes == 5_430
+    assert policy.max_total_bytes == 5_478
     assert policy.max_age_seconds == 3_600
     assert policy.minimum_free_bytes == 500
     assert policy.bundle_interval_seconds == 900
@@ -205,6 +220,9 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "observer_actions": payload["streams"]["observer_actions"],
                     "observer_checkpoints": payload["streams"]["observer_checkpoints"],
                     "observer_summary": payload["streams"]["observer_summary"],
+                    "preflight_archive_manifest": payload["streams"]["preflight_archive_manifest"],
+                    "preflight_mfc_outputs": payload["streams"]["preflight_mfc_outputs"],
+                    "preflight_rust_outputs": payload["streams"]["preflight_rust_outputs"],
                     "process_metrics": payload["streams"]["process_metrics"],
                     "process_metrics_summary": payload["streams"]["process_metrics_summary"],
                 },
@@ -293,15 +311,27 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
         soak_storage.parse_soak_storage_policy(payload)
 
 
+def test_parse_soak_storage_policy_requires_singleton_preflight_manifest() -> None:
+    payload = policy_payload()
+    streams = payload["streams"]
+    assert isinstance(streams, dict)
+    manifest = streams["preflight_archive_manifest"]
+    assert isinstance(manifest, dict)
+    manifest["retained_segments"] = 2
+
+    with pytest.raises(RuntimeError, match="preflight_archive_manifest.*must be 1"):
+        soak_storage.parse_soak_storage_policy(payload)
+
+
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 5_430
+    assert soak_storage.required_stream_capacity_bytes(policy) == 5_478
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
     payload = policy_payload()
-    payload["max_total_bytes"] = 5_429
+    payload["max_total_bytes"] = 5_477
 
     with pytest.raises(RuntimeError, match="every retained required-stream instance"):
         soak_storage.parse_soak_storage_policy(payload)
