@@ -291,7 +291,7 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
 
 
 def diagnostic_profile_directories(preflight: object) -> DiagnosticDirectories:
-    """Returns live diagnostic directories from the persisted profile authority."""
+    """Returns authoritative diagnostic paths without requiring runtime creation."""
 
     if not isinstance(preflight, dict):
         raise RuntimeError("Persisted soak observer preflight authority is invalid.")
@@ -306,13 +306,7 @@ def diagnostic_profile_directories(preflight: object) -> DiagnosticDirectories:
             raise RuntimeError(
                 f"Persisted soak observer {client} diagnostic profile is invalid."
             )
-        profile = Path(value).resolve()
-        if not profile.is_dir():
-            raise RuntimeError(
-                f"Persisted soak observer {client} diagnostic profile does not exist: "
-                f"{profile}"
-            )
-        resolved[client] = profile
+        resolved[client] = Path(value).resolve()
     return DiagnosticDirectories(
         rust=(resolved["rust"] / "packet-dump").resolve(),
         mfc=(resolved["mfc"] / "logs").resolve(),
@@ -336,6 +330,14 @@ def launcher_is_alive(identity: dict[str, Any]) -> bool:
 def load_ready_manifest(runtime: ObserverRuntime) -> dict[str, Any] | None:
     """Returns the matching running launcher manifest when clients are ready."""
 
+    if any(
+        not directory.is_dir()
+        for directory in (
+            runtime.diagnostic_directories.rust,
+            runtime.diagnostic_directories.mfc,
+        )
+    ):
+        return None
     if not runtime.last_run_manifest.is_file():
         return None
     manifest = load_json_object(runtime.last_run_manifest)
