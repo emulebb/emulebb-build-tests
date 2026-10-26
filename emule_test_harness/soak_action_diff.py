@@ -489,16 +489,61 @@ KAD2_SEARCH_RES = 0x3B  # KADEMLIA2_SEARCH_RES
 ED2K_TCP_FAMILY = "ed2k_tcp"
 ED2K_SERVER_UDP_FAMILY = "ed2k_server_udp"
 KAD_UDP_FAMILY = "kad_udp"
+KAD_EVENT_FAMILY = "kad_event"
 
 
 def _kad_record_opcode(record: dict[str, Any]) -> int | str | None:
     return packet_trace_diff._kad_opcode(record)  # noqa: SLF001 - harness-internal reuse
 
 
-def _kad_opcode_exercised(records: list[dict[str, Any]] | None, opcode: int) -> bool:
-    """Whether a kad diag/dump record list exercises an opcode in any direction."""
+def _kad_wire_opcode_observed(
+    records: list[dict[str, Any]] | None,
+    opcode: int,
+    *,
+    direction: str,
+) -> bool:
+    """Whether current Kad packet diagnostics observed one directional opcode."""
 
-    return any(_kad_record_opcode(record) == opcode for record in records or [])
+    return any(
+        record.get("event") == "packet"
+        and _kad_record_opcode(record) == opcode
+        and isinstance(record.get("body"), dict)
+        and record["body"].get("direction") == direction
+        for record in records or []
+    )
+
+
+def _kad_lookup_lifecycle(
+    records: list[dict[str, Any]] | None,
+    *,
+    search_id: str,
+    result_count: int,
+) -> dict[str, bool]:
+    """Finds the exact started and terminal records for one driven Kad lookup."""
+
+    started = False
+    completed = False
+    for record in records or []:
+        if record.get("event") != "lookup":
+            continue
+        keys = record.get("keys")
+        body = record.get("body")
+        if (
+            not isinstance(keys, dict)
+            or str(keys.get("searchId")) != search_id
+            or not isinstance(body, dict)
+            or body.get("action") != "search"
+            or body.get("searchKind") != "keyword"
+        ):
+            continue
+        if body.get("milestone") == "lookup_started" and body.get("resultCount") == 0:
+            started = True
+        if (
+            body.get("milestone") == "lookup_complete"
+            and body.get("resultCount") == result_count
+        ):
+            completed = True
+    return {"started": started, "completed": completed}
 
 
 def diagnostic_family_records(
@@ -526,7 +571,7 @@ def action_required_diagnostic_families(
     if normalized == SEARCH_METHOD_GLOBAL:
         return (ED2K_SERVER_UDP_FAMILY,)
     if normalized == SEARCH_METHOD_KAD:
-        return (KAD_UDP_FAMILY,)
+        return (KAD_UDP_FAMILY, KAD_EVENT_FAMILY)
     return ()
 
 
@@ -553,9 +598,12 @@ def _build_search_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None,
+    search_ids: dict[str, str] | None,
     search_result_counts: dict[str, int] | None,
     rust_kad_records: list[dict[str, Any]] | None,
     mfc_kad_records: list[dict[str, Any]] | None,
+    rust_kad_event_records: list[dict[str, Any]] | None,
+    mfc_kad_event_records: list[dict[str, Any]] | None,
     rust_server_udp_records: list[dict[str, Any]] | None,
     mfc_server_udp_records: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
@@ -568,8 +616,8 @@ def _build_search_coverage(
     diagnostics, so global search remains explicitly ``not-assessable`` and can
     never become parity from Rust-only evidence. ``kad`` is assessed from the
     Kad stream (KADEMLIA2_SEARCH_KEY_REQ / KADEMLIA2_SEARCH_RES), never from
-    server TCP. ``automatic`` (or an unrecognized method) accepts server OR Kad
-    evidence since the client picks the network itself.
+    server TCP. ``automatic`` (or an unrecognized method) accepts server OR
+    fully correlated Kad evidence since the client picks the network itself.
     """
 
     normalized = str(method).strip().lower() if method is not None else None
@@ -639,10 +687,18 @@ def _build_search_coverage(
             coverage["status"] = status
         return coverage
 
-    kad_req_rust = _kad_opcode_exercised(rust_kad_records, KAD2_SEARCH_KEY_REQ)
-    kad_req_mfc = _kad_opcode_exercised(mfc_kad_records, KAD2_SEARCH_KEY_REQ)
-    kad_res_rust = _kad_opcode_exercised(rust_kad_records, KAD2_SEARCH_RES)
-    kad_res_mfc = _kad_opcode_exercised(mfc_kad_records, KAD2_SEARCH_RES)
+    kad_req_rust = _kad_wire_opcode_observed(
+        rust_kad_records, KAD2_SEARCH_KEY_REQ, direction="send"
+    )
+    kad_req_mfc = _kad_wire_opcode_observed(
+        mfc_kad_records, KAD2_SEARCH_KEY_REQ, direction="send"
+    )
+    kad_res_rust = _kad_wire_opcode_observed(
+        rust_kad_records, KAD2_SEARCH_RES, direction="recv"
+    )
+    kad_res_mfc = _kad_wire_opcode_observed(
+        mfc_kad_records, KAD2_SEARCH_RES, direction="recv"
+    )
     kad_required = [
         {
             "label": "kad-search-key-request",
@@ -653,21 +709,81 @@ def _build_search_coverage(
             "presentOnBoth": kad_req_rust and kad_req_mfc,
         }
     ]
-    # The result is network-driven (zero hits -> zero SEARCH_RES), so it stays an
-    # optional signal rather than a structurally unattainable requirement.
-    kad_optional = [
-        {
-            "label": "kad-search-result",
-            "opcode": KAD2_SEARCH_RES,
-            "opcodeName": "KADEMLIA2_SEARCH_RES",
-            "rustPresent": kad_res_rust,
-            "mfcPresent": kad_res_mfc,
-            "presentOnBoth": kad_res_rust and kad_res_mfc,
+    driver_evidence_complete = bool(
+        isinstance(search_ids, dict)
+        and set(search_ids) == {"rust", "mfc"}
+        and all(isinstance(value, str) and value for value in search_ids.values())
+        and isinstance(search_result_counts, dict)
+        and set(search_result_counts) == {"rust", "mfc"}
+        and all(
+            not isinstance(value, bool) and isinstance(value, int) and value >= 0
+            for value in search_result_counts.values()
+        )
+    )
+    lifecycle = {
+        "rust": {"started": False, "completed": False},
+        "mfc": {"started": False, "completed": False},
+    }
+    if driver_evidence_complete:
+        assert search_ids is not None
+        assert search_result_counts is not None
+        lifecycle = {
+            "rust": _kad_lookup_lifecycle(
+                rust_kad_event_records,
+                search_id=search_ids["rust"],
+                result_count=search_result_counts["rust"],
+            ),
+            "mfc": _kad_lookup_lifecycle(
+                mfc_kad_event_records,
+                search_id=search_ids["mfc"],
+                result_count=search_result_counts["mfc"],
+            ),
         }
-    ]
-    kad_ok = kad_req_rust and kad_req_mfc
+    kad_required.extend(
+        [
+            {
+                "label": "kad-lookup-started",
+                "rustPresent": lifecycle["rust"]["started"],
+                "mfcPresent": lifecycle["mfc"]["started"],
+                "presentOnBoth": lifecycle["rust"]["started"]
+                and lifecycle["mfc"]["started"],
+            },
+            {
+                "label": "kad-lookup-complete",
+                "rustPresent": lifecycle["rust"]["completed"],
+                "mfcPresent": lifecycle["mfc"]["completed"],
+                "presentOnBoth": lifecycle["rust"]["completed"]
+                and lifecycle["mfc"]["completed"],
+            },
+        ]
+    )
+    rust_result_required = bool(
+        driver_evidence_complete and search_result_counts["rust"] > 0
+    )
+    mfc_result_required = bool(
+        driver_evidence_complete and search_result_counts["mfc"] > 0
+    )
+    result_evidence = {
+        "label": "kad-search-result",
+        "opcode": KAD2_SEARCH_RES,
+        "opcodeName": "KADEMLIA2_SEARCH_RES",
+        "rustRequired": rust_result_required,
+        "mfcRequired": mfc_result_required,
+        "rustPresent": kad_res_rust,
+        "mfcPresent": kad_res_mfc,
+        "presentOnBoth": (not rust_result_required or kad_res_rust)
+        and (not mfc_result_required or kad_res_mfc),
+    }
+    kad_optional: list[dict[str, Any]] = []
+    if rust_result_required or mfc_result_required:
+        kad_required.append(result_evidence)
+    else:
+        kad_optional.append(result_evidence)
+    kad_ok = driver_evidence_complete and all(
+        row["presentOnBoth"] for row in kad_required
+    )
     if normalized == SEARCH_METHOD_KAD:
-        return {
+        coverage = {
             "ok": kad_ok,
             "mode": "search-kad-stream",
             "method": SEARCH_METHOD_KAD,
@@ -675,9 +791,11 @@ def _build_search_coverage(
             "optional": kad_optional,
             "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
         }
+        if not driver_evidence_complete:
+            coverage["status"] = "evidence-incomplete"
+        return coverage
 
-    # automatic / unknown method: the client chose the network itself.
-    return {
+    coverage = {
         "ok": server_ok or kad_ok,
         "mode": "search-automatic",
         "method": normalized,
@@ -687,6 +805,9 @@ def _build_search_coverage(
         "optional": server_optional + kad_optional,
         "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
     }
+    if not server_ok and not driver_evidence_complete:
+        coverage["status"] = "evidence-incomplete"
+    return coverage
 
 
 def build_action_coverage(
@@ -694,9 +815,12 @@ def build_action_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None = None,
+    search_ids: dict[str, str] | None = None,
     search_result_counts: dict[str, int] | None = None,
     rust_kad_records: list[dict[str, Any]] | None = None,
     mfc_kad_records: list[dict[str, Any]] | None = None,
+    rust_kad_event_records: list[dict[str, Any]] | None = None,
+    mfc_kad_event_records: list[dict[str, Any]] | None = None,
     rust_server_udp_records: list[dict[str, Any]] | None = None,
     mfc_server_udp_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -711,9 +835,12 @@ def build_action_coverage(
         return _build_search_coverage(
             packet_diff,
             method=method,
+            search_ids=search_ids,
             search_result_counts=search_result_counts,
             rust_kad_records=rust_kad_records,
             mfc_kad_records=mfc_kad_records,
+            rust_kad_event_records=rust_kad_event_records,
+            mfc_kad_event_records=mfc_kad_event_records,
             rust_server_udp_records=rust_server_udp_records,
             mfc_server_udp_records=mfc_server_udp_records,
         )
@@ -894,6 +1021,7 @@ def diff_action(
     rust_diag: list[dict[str, Any]] | None = None,
     mfc_diag: list[dict[str, Any]] | None = None,
     diagnostics_required: bool = False,
+    search_ids: dict[str, str] | None = None,
     search_result_counts: dict[str, int] | None = None,
     action_window: ActionWindow | None = None,
     lead_seconds: float = DEFAULT_LEAD_SECONDS,
@@ -924,6 +1052,10 @@ def diff_action(
     method = pair_method(pair)
     rust_kad_records = diagnostic_family_records(rust_diag_slice, KAD_UDP_FAMILY)
     mfc_kad_records = diagnostic_family_records(mfc_diag_slice, KAD_UDP_FAMILY)
+    rust_kad_event_records = diagnostic_family_records(
+        rust_diag_slice, KAD_EVENT_FAMILY
+    )
+    mfc_kad_event_records = diagnostic_family_records(mfc_diag_slice, KAD_EVENT_FAMILY)
     rust_server_udp_records = diagnostic_family_records(
         rust_diag_slice, ED2K_SERVER_UDP_FAMILY
     )
@@ -944,9 +1076,12 @@ def diff_action(
         pair.kind,
         packet_diff,
         method=method,
+        search_ids=search_ids,
         search_result_counts=search_result_counts,
         rust_kad_records=rust_kad_records,
         mfc_kad_records=mfc_kad_records,
+        rust_kad_event_records=rust_kad_event_records,
+        mfc_kad_event_records=mfc_kad_event_records,
         rust_server_udp_records=rust_server_udp_records,
         mfc_server_udp_records=mfc_server_udp_records,
     )

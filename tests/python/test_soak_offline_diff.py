@@ -487,16 +487,66 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
             "body": {"direction": "send", "opcode": opcode},
         }
 
+    def _lookup(search_id: str, milestone: str, result_count: int, at: float) -> dict:
+        return {
+            "schema": "diag_event_v2",
+            "ts": _ts(at),
+            "family": "kad_event",
+            "event": "lookup",
+            "keys": {"searchId": search_id},
+            "body": {
+                "milestone": milestone,
+                "action": "search",
+                "searchKind": "keyword",
+                "resultCount": result_count,
+            },
+        }
+
     rust, mfc = _sides(
         [_pkt("client", "send", 0x99, "aa", 1.0)],
         [_pkt("client", "send", 0x99, "bb", 1.0)],
-        [_kad(0x33, 1.0)],
-        [_kad(0x33, 1.5)],
+        [
+            _kad(0x33, 1.0),
+            _lookup("rust-search", "lookup_started", 0, 1.0),
+            _lookup("rust-search", "lookup_complete", 0, 2.0),
+        ],
+        [
+            _kad(0x33, 1.5),
+            _lookup("mfc-search", "lookup_started", 0, 1.5),
+            _lookup("mfc-search", "lookup_complete", 0, 2.5),
+        ],
     )
     result = mod._diff_one_action(
-        "search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0, method="kad"
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=2.0,
+        settle=5.0,
+        method="kad",
+        search_ids={"rust": "rust-search", "mfc": "mfc-search"},
+        search_result_counts={"rust": 0, "mfc": 0},
     )
     assert result["coverageOk"] is True
+
+
+def test_search_action_evidence_requires_exact_successful_outcome() -> None:
+    mod = _load_offline_diff()
+    recording = {
+        "meta": {
+            "actionResults": [
+                {
+                    "actionId": "action-0003",
+                    "status": "ok",
+                    "outcome": {"searchId": "search-42", "resultCount": 7},
+                }
+            ]
+        }
+    }
+
+    assert mod._search_action_evidence(recording, "action-0003") == ("search-42", 7)
+    assert mod._search_action_evidence(recording, "action-missing") is None
 
 
 def test_no_window_result_carries_gate_keys() -> None:
