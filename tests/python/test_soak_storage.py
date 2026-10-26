@@ -14,7 +14,7 @@ from emule_test_harness import soak_storage
 def policy_payload() -> dict[str, object]:
     return {
         "schema": soak_storage.SCHEMA,
-        "max_total_bytes": 5_380,
+        "max_total_bytes": 5_430,
         "max_age_seconds": 3_600,
         "minimum_free_bytes": 500,
         "bundle_interval_seconds": 900,
@@ -61,6 +61,14 @@ def policy_payload() -> dict[str, object]:
             },
             "observer_summary": {
                 "max_segment_bytes": 40,
+                "retained_segments": 1,
+            },
+            "process_metrics": {
+                "max_segment_bytes": 20,
+                "retained_segments": 2,
+            },
+            "process_metrics_summary": {
+                "max_segment_bytes": 10,
                 "retained_segments": 1,
             },
         },
@@ -117,6 +125,8 @@ def direct_policy(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(1, 1),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
     )
@@ -154,7 +164,7 @@ def fake_disk_space(
 def test_parse_soak_storage_policy_accepts_strict_complete_contract() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert policy.max_total_bytes == 5_380
+    assert policy.max_total_bytes == 5_430
     assert policy.max_age_seconds == 3_600
     assert policy.minimum_free_bytes == 500
     assert policy.bundle_interval_seconds == 900
@@ -195,6 +205,8 @@ def test_storage_policy_payload_round_trips_and_hashes_canonically() -> None:
                     "observer_actions": payload["streams"]["observer_actions"],
                     "observer_checkpoints": payload["streams"]["observer_checkpoints"],
                     "observer_summary": payload["streams"]["observer_summary"],
+                    "process_metrics": payload["streams"]["process_metrics"],
+                    "process_metrics_summary": payload["streams"]["process_metrics_summary"],
                 },
             }
         )
@@ -284,12 +296,12 @@ def test_parse_soak_storage_policy_rejects_unknown_stream_fields() -> None:
 def test_required_stream_capacity_includes_every_retained_instance() -> None:
     policy = soak_storage.parse_soak_storage_policy(policy_payload())
 
-    assert soak_storage.required_stream_capacity_bytes(policy) == 5_380
+    assert soak_storage.required_stream_capacity_bytes(policy) == 5_430
 
 
 def test_parse_soak_storage_policy_requires_total_to_cover_retained_streams() -> None:
     payload = policy_payload()
-    payload["max_total_bytes"] = 5_379
+    payload["max_total_bytes"] = 5_429
 
     with pytest.raises(RuntimeError, match="every retained required-stream instance"):
         soak_storage.parse_soak_storage_policy(payload)

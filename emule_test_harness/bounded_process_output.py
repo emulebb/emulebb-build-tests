@@ -101,6 +101,26 @@ class RotatingBinaryLog:
             self._size += written
             remaining = remaining[written:]
 
+    def write_record(self, data: bytes) -> None:
+        """Writes one indivisible record, rotating before it when required."""
+
+        if not data:
+            raise ValueError("record data must not be empty.")
+        if len(data) > self.max_segment_bytes:
+            raise RuntimeError(
+                f"Record requires {len(data)} bytes, exceeding the "
+                f"{self.max_segment_bytes}-byte segment limit."
+            )
+        if self._size and self._size + len(data) > self.max_segment_bytes:
+            self._rotate()
+        written = self._open().write(data)
+        if written != len(data):
+            raise OSError(
+                f"Short process-log record write: expected {len(data)} bytes, "
+                f"wrote {written}."
+            )
+        self._size += written
+
     def close(self) -> None:
         """Closes the active segment handle."""
 

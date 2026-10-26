@@ -40,6 +40,8 @@ def storage_policy() -> soak_storage.SoakStoragePolicy:
                 "observer_actions": soak_storage.ArtifactStreamPolicy(4_096, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(16_384, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(16_384, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             }
         ),
     )

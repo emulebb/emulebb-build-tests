@@ -279,6 +279,8 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
                 "observer_actions": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(16, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             },
         ),
     )
@@ -323,6 +325,8 @@ def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(16, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             },
         ),
     )
@@ -383,6 +387,8 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
             "observer_actions": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_checkpoints": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
         },
     )
     bundle = {
@@ -468,6 +474,8 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
             "observer_actions": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_checkpoints": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
         },
     )
     monkeypatch.setattr(
@@ -599,6 +607,144 @@ def test_launch_soak_initializes_cpu_profile_with_staged_symbols(tmp_path: Path,
     assert report["app_exe"] == str(rust_exe)
     assert report["profile_paths"]["summary"].endswith("cpu-profile-summary.json")
     assert report["symbols"]["app_pdb_exists"] is True
+
+
+def test_rust_process_metrics_rotates_samples_and_keeps_cumulative_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = load_launch_soak_module()
+    policy = soak_storage.SoakStoragePolicy(
+        max_total_bytes=16_384,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams={
+            "process_metrics": soak_storage.ArtifactStreamPolicy(320, 2),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(8_192, 1),
+        },
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(module.live_process_monitor, "open_process", lambda _pid: 99)
+    monkeypatch.setattr(
+        module.live_process_monitor,
+        "close_handle",
+        lambda handle: closed.append(handle),
+    )
+    metrics = module.RustProcessMetrics(
+        process=type("Process", (), {"pid": 321})(),
+        report_dir=tmp_path / "report",
+        interval_seconds=2.0,
+        storage_policy=policy,
+    )
+
+    for index in range(6):
+        metrics.record_sample(
+            {
+                "utc_time": f"2026-10-26T12:00:0{index}Z",
+                "elapsed_seconds": float(index * 2),
+                "pid": 321,
+                "cpu_seconds": float(index),
+                "process_pct_one_core": float(index * 10),
+                "working_set_mb": float(100 + index),
+                "peak_working_set_mb": float(110 + index),
+                "private_mb": float(90 + index),
+                "pagefile_mb": float(95 + index),
+                "handles": 200 + index,
+                "exit_code": None,
+            }
+        )
+    metrics.close()
+
+    summary = json.loads(metrics.summary_path.read_text(encoding="utf-8"))
+    assert summary["schema"] == "emulebb-build-tests.process-metrics-summary.v1"
+    assert summary["summary"]["sample_count"] == 6
+    assert summary["summary"]["first"]["working_set_mb"] == 100.0
+    assert summary["summary"]["last"]["working_set_mb"] == 105.0
+    assert summary["summary"]["working_set_mb"] == {
+        "min": 100.0,
+        "max": 105.0,
+        "delta": 5.0,
+    }
+    assert not hasattr(metrics, "rows")
+    retained = sorted(metrics.samples_path.parent.glob(f"{metrics.samples_path.name}*"))
+    assert len(retained) == 2
+    assert all(path.stat().st_size <= 320 for path in retained)
+    retained_rows = [
+        json.loads(line)
+        for path in retained
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(retained_rows) < 6
+    assert any(row["elapsed_seconds"] == 10.0 for row in retained_rows)
+    assert closed == [99]
+
+
+def test_rust_process_metrics_rejects_summary_over_its_reserved_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = load_launch_soak_module()
+    policy = soak_storage.SoakStoragePolicy(
+        max_total_bytes=16_384,
+        max_age_seconds=3_600,
+        minimum_free_bytes=1,
+        bundle_interval_seconds=900,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=1_048_576,
+            max_segment_seconds=60,
+            retained_segments=2,
+            max_total_bytes=2_097_152,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=1,
+        ),
+        streams={
+            "process_metrics": soak_storage.ArtifactStreamPolicy(2_048, 2),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(64, 1),
+        },
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(module.live_process_monitor, "open_process", lambda _pid: 99)
+    monkeypatch.setattr(
+        module.live_process_monitor,
+        "close_handle",
+        lambda handle: closed.append(handle),
+    )
+    metrics = module.RustProcessMetrics(
+        process=type("Process", (), {"pid": 321})(),
+        report_dir=tmp_path / "report",
+        interval_seconds=2.0,
+        storage_policy=policy,
+    )
+
+    with pytest.raises(RuntimeError, match="process_metrics_summary requires"):
+        metrics.record_sample(
+            {
+                "utc_time": "2026-10-26T12:00:00Z",
+                "elapsed_seconds": 0.0,
+                "pid": 321,
+                "cpu_seconds": 0.0,
+                "process_pct_one_core": 0.0,
+                "working_set_mb": 100.0,
+                "peak_working_set_mb": 110.0,
+                "private_mb": 90.0,
+                "pagefile_mb": 95.0,
+                "handles": 200,
+                "exit_code": None,
+            }
+        )
+    metrics.close()
+
+    assert not metrics.summary_path.exists()
+    assert closed == [99]
 
 
 def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:

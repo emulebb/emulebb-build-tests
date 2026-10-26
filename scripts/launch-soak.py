@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -37,7 +38,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
-from emule_test_harness import cpu_profile, live_process_monitor, mfc_profile_import, profile_overlay
+from emule_test_harness import bounded_process_output, cpu_profile, live_process_monitor
+from emule_test_harness import mfc_profile_import, profile_overlay
 from emule_test_harness import soak_launch, soak_run_layout, soak_storage
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
@@ -496,9 +498,25 @@ def finalize_cpu_profile(
 
 
 class RustProcessMetrics:
-    """Samples a launched Rust-family process into the soak report directory."""
+    """Persists bounded samples and an O(1)-memory cumulative summary."""
 
-    def __init__(self, *, process, report_dir: Path, interval_seconds: float, label: str = "rust") -> None:
+    SUMMARY_FIELDS = (
+        "working_set_mb",
+        "private_mb",
+        "peak_working_set_mb",
+        "process_pct_one_core",
+        "handles",
+    )
+
+    def __init__(
+        self,
+        *,
+        process,
+        report_dir: Path,
+        interval_seconds: float,
+        storage_policy: soak_storage.SoakStoragePolicy,
+        label: str = "rust",
+    ) -> None:
         self.process = process
         self.report_dir = report_dir
         self.interval_seconds = interval_seconds
@@ -507,10 +525,25 @@ class RustProcessMetrics:
         self.last_sample_monotonic: float | None = None
         self.last_cpu_seconds: float | None = None
         self.next_sample = 0.0
-        self.rows: list[dict[str, object]] = []
+        self.sample_count = 0
+        self.first: dict[str, object] | None = None
+        self.last: dict[str, object] | None = None
+        self.minimums: dict[str, float] = {}
+        self.maximums: dict[str, float] = {}
         self.handle: int | None = None
-        self.csv_path = report_dir / "analysis" / f"{label}-process-metrics.csv"
+        self.samples_path = report_dir / "analysis" / f"{label}-process-metrics.jsonl"
         self.summary_path = report_dir / "analysis" / f"{label}-process-metrics-summary.json"
+        stream_policy = storage_policy.stream("process_metrics")
+        self.summary_policy = storage_policy.stream("process_metrics_summary")
+        if self.summary_policy.retained_segments != 1:
+            raise RuntimeError(
+                "process_metrics_summary must retain exactly one artifact."
+            )
+        self.samples = bounded_process_output.RotatingBinaryLog(
+            self.samples_path,
+            max_segment_bytes=stream_policy.max_segment_bytes,
+            retained_segments=stream_policy.retained_segments,
+        )
         self.handle = live_process_monitor.open_process(process.pid)
 
     def maybe_sample(self) -> dict[str, object] | None:
@@ -524,31 +557,130 @@ class RustProcessMetrics:
             last_cpu_seconds=self.last_cpu_seconds,
         )
         row["pid"] = self.process.pid
-        self.rows.append(row)
+        self.record_sample(row)
         self.last_sample_monotonic = time.monotonic()
         self.last_cpu_seconds = float(row["cpu_seconds"])
         self.next_sample = now + self.interval_seconds
-        live_process_monitor.write_metric_csv(self.csv_path, self.rows)
-        self.write_summary()
         return row
 
+    def record_sample(self, row: dict[str, object]) -> None:
+        """Persists one complete sample and advances cumulative aggregates."""
+
+        encoded = (
+            json.dumps(
+                row,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        self.samples.write_record(encoded)
+        copied = dict(row)
+        if self.first is None:
+            self.first = copied
+        self.last = copied
+        self.sample_count += 1
+        for name in self.SUMMARY_FIELDS:
+            value = row.get(name)
+            if value is None:
+                continue
+            numeric = float(value)
+            self.minimums[name] = min(self.minimums.get(name, numeric), numeric)
+            self.maximums[name] = max(self.maximums.get(name, numeric), numeric)
+        self.write_summary()
+
+    def metric_summary(self) -> dict[str, object]:
+        """Returns the cumulative summary without retaining individual rows."""
+
+        if self.first is None or self.last is None:
+            return {"sample_count": 0}
+        summary: dict[str, object] = {
+            "sample_count": self.sample_count,
+            "first": self.first,
+            "last": self.last,
+        }
+        for name in self.SUMMARY_FIELDS:
+            if (
+                name not in self.minimums
+                or self.first.get(name) is None
+                or self.last.get(name) is None
+            ):
+                continue
+            summary[name] = {
+                "min": self.minimums[name],
+                "max": self.maximums[name],
+                "delta": round(
+                    float(self.last[name]) - float(self.first[name]),
+                    3,
+                ),
+            }
+        return summary
+
     def write_summary(self) -> dict[str, object]:
-        summary = live_process_monitor.summarize_metric_rows(self.rows)
+        summary = self.metric_summary()
         payload = {
+            "schema": "emulebb-build-tests.process-metrics-summary.v1",
             "enabled": True,
             "label": self.label,
             "pid": self.process.pid,
-            "csv_path": str(self.csv_path),
+            "samplesPath": str(self.samples_path),
+            "retention": {
+                "maxSegmentBytes": self.samples.max_segment_bytes,
+                "retainedSegments": self.samples.retained_segments,
+            },
             "summary": summary,
         }
+        encoded = (
+            json.dumps(
+                payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if len(encoded) > self.summary_policy.max_segment_bytes:
+            raise RuntimeError(
+                f"process_metrics_summary requires {len(encoded)} bytes, exceeding "
+                f"its {self.summary_policy.max_segment_bytes}-byte limit."
+            )
         self.summary_path.parent.mkdir(parents=True, exist_ok=True)
-        self.summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary = self.summary_path.with_name(f".{self.summary_path.name}.tmp")
+        for candidate in (self.summary_path, temporary):
+            if candidate.is_symlink():
+                raise RuntimeError(
+                    f"Process metrics summary path must not be a symlink: {candidate}"
+                )
+            if candidate.exists() and not candidate.is_file():
+                raise RuntimeError(
+                    f"Process metrics summary path must be a file: {candidate}"
+                )
+        temporary.unlink(missing_ok=True)
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if temporary.stat().st_size != len(encoded):
+                raise OSError(
+                    f"Short process metrics summary write: expected {len(encoded)} bytes, "
+                    f"wrote {temporary.stat().st_size}."
+                )
+            temporary.replace(self.summary_path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return payload
 
     def close(self) -> None:
-        if self.handle is not None:
-            live_process_monitor.close_handle(self.handle)
-            self.handle = None
+        try:
+            self.samples.close()
+        finally:
+            if self.handle is not None:
+                live_process_monitor.close_handle(self.handle)
+                self.handle = None
 
 
 def graceful_teardown(
@@ -878,6 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
                 process=rust_proc,
                 report_dir=run_paths.report_dir,
                 interval_seconds=args.process_sample_interval,
+                storage_policy=storage_policy,
                 label="rust",
             )
 
