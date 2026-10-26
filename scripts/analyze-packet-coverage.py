@@ -50,6 +50,40 @@ UPLOAD_SERVING_OPCODES = (
     "OP_REQUESTPARTS_I64",
 )
 
+FILE_HASH_OPCODES = frozenset(
+    {
+        "OP_AICHANSWER",
+        "OP_AICHFILEHASHANS",
+        "OP_AICHFILEHASHREQ",
+        "OP_AICHREQUEST",
+        "OP_ANSWERSOURCES",
+        "OP_ANSWERSOURCES2",
+        "OP_COMPRESSEDPART",
+        "OP_COMPRESSEDPART_I64",
+        "OP_END_OF_DOWNLOAD",
+        "OP_FILEREQANSNOFIL",
+        "OP_FILESTATUS",
+        "OP_HASHSETANSWER",
+        "OP_HASHSETANSWER2",
+        "OP_HASHSETREQUEST",
+        "OP_HASHSETREQUEST2",
+        "OP_MULTIPACKET",
+        "OP_MULTIPACKET_EXT",
+        "OP_MULTIPACKET_EXT2",
+        "OP_MULTIPACKETANSWER",
+        "OP_MULTIPACKETANSWER_EXT2",
+        "OP_REQFILENAMEANSWER",
+        "OP_REQUESTFILENAME",
+        "OP_REQUESTPARTS",
+        "OP_REQUESTSOURCES",
+        "OP_REQUESTSOURCES2",
+        "OP_SENDINGPART",
+        "OP_SENDINGPART_I64",
+        "OP_SETREQFILEID",
+        "OP_STARTUPLOADREQ",
+    }
+)
+
 
 def _discover_diag_dir(run_dir: Path, *, client: str) -> Path | None:
     candidates = sorted(run_dir.rglob(f"emulebb-{client}-diag-*.jsonl"))
@@ -119,6 +153,39 @@ def _server_udp_views(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return views
 
 
+def _join_key_side_coverage(records: list[dict[str, Any]]) -> dict[str, Any]:
+    peer_hash_packets = sum(record.get("peer_hash") is not None for record in records)
+    file_packets = [
+        record for record in records if record.get("opcode_name") in FILE_HASH_OPCODES
+    ]
+    missing_file_hash = collections.Counter(
+        record.get("opcode_name") or "UNKNOWN"
+        for record in file_packets
+        if record.get("file_hash") is None
+    )
+    return {
+        "ok": bool(records) and peer_hash_packets > 0 and not missing_file_hash,
+        "packetCount": len(records),
+        "peerHashPackets": peer_hash_packets,
+        "filePacketCount": len(file_packets),
+        "fileHashPackets": sum(
+            record.get("file_hash") is not None for record in file_packets
+        ),
+        "missingFileHashByOpcode": [
+            {"opcodeName": opcode_name, "count": count}
+            for opcode_name, count in sorted(missing_file_hash.items())
+        ],
+    }
+
+
+def _join_key_coverage(
+    rust_records: list[dict[str, Any]], mfc_records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    rust = _join_key_side_coverage(rust_records)
+    mfc = _join_key_side_coverage(mfc_records)
+    return {"ok": rust["ok"] and mfc["ok"], "rust": rust, "mfc": mfc}
+
+
 def build_summary(
     rust_ed2k: list[dict[str, Any]],
     mfc_ed2k: list[dict[str, Any]],
@@ -167,6 +234,7 @@ def build_summary(
             mfc_diagnostics,
         ),
         "ed2kOpcodeCoverage": ptd._opcode_coverage(rust_ed2k, mfc_ed2k),
+        "ed2kJoinKeyCoverage": _join_key_coverage(rust_ed2k, mfc_ed2k),
         "kadOpcodeCoverage": ptd.kad_opcode_coverage(rust_kad, mfc_kad),
         "serverUdpOpcodeCoverage": ptd._opcode_coverage(
             rust_server_udp,
@@ -233,6 +301,16 @@ def main(argv: list[str] | None = None) -> int:
         print("    onlyRust :", _fmt(ch["onlyRust"]))
         print("    onlyEmule:", _fmt(ch["onlyEmule"]))
 
+    join_coverage = summary["ed2kJoinKeyCoverage"]
+    print(f"\n=== eD2k join-key coverage: {join_coverage['ok']} ===")
+    for side in ("rust", "mfc"):
+        row = join_coverage[side]
+        print(
+            f"  {side}: peerHash={row['peerHashPackets']}/{row['packetCount']} "
+            f"fileHash={row['fileHashPackets']}/{row['filePacketCount']} "
+            f"missing={row['missingFileHashByOpcode']}"
+        )
+
     # Upload-serving evidence (rust side): does the client/listener channel show
     # us serving an upload? Counts by raw flow so listener vs native_upload shows.
     print("\n=== rust upload-serving opcodes (proves the upload path ran) ===")
@@ -273,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
             f"mfc={row['mfcPresent']} ok={row['ok']}"
         )
 
-    return 0 if conformance["ok"] else 1
+    return 0 if conformance["ok"] and join_coverage["ok"] else 1
 
 
 if __name__ == "__main__":
