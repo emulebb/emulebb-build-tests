@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import time
 import unicodedata
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +68,7 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     schema_id, schema_version = _schema_marker(rust_repo)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.executescript(_schema_sql(rust_repo))
         conn.execute(
             "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, ?, ?)",
@@ -83,7 +84,7 @@ def put_setting_json(db_path: Path, section: str, key: str, value: object) -> No
         raise ValueError("settings section must not be empty")
     if not key.strip():
         raise ValueError("settings key must not be empty")
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO settings(section, key, value_json, updated_at_ms)
@@ -103,7 +104,7 @@ def replace_settings_section(db_path: Path, section: str, values: dict[str, obje
     if not section.strip():
         raise ValueError("settings section must not be empty")
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("DELETE FROM settings WHERE section = ?", (section,))
         for key, value in sorted(values.items()):
             if not key.strip():
@@ -122,7 +123,7 @@ def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None
     """Replace the ordered Rust Kad bootstrap endpoint list."""
 
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("DELETE FROM kad_bootstrap_endpoints")
         for position, endpoint in enumerate(endpoints):
             if not endpoint.strip():
@@ -148,7 +149,7 @@ def seed_local_user_hash(db_path: Path, user_hash: bytes) -> None:
     if _user_hash_is_bad(bytes(normalized)):
         raise ValueError("ED2K user hash must not be an eMule bad hash")
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO local_identities(
@@ -179,7 +180,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
     if not address or not (1 <= port <= 65535):
         raise ValueError("Rust server seed requires host/address and port.")
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO servers(
@@ -221,7 +222,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
 def clear_servers(db_path: Path) -> None:
     """Remove persisted ED2K server rows from a Rust SQLite profile."""
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("DELETE FROM servers")
         conn.commit()
 
@@ -246,7 +247,7 @@ def seed_indexed_file(
     hash_blob = bytes.fromhex(ed2k_hash)
     normalized = normalize_search_text(name)
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             """
@@ -326,7 +327,7 @@ def seed_transfer_manifest(
     else:
         visible_state = "queued"
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         source_path_id = _optional_local_path_id(conn, source_path, now)
         conn.execute(
@@ -554,7 +555,7 @@ def seed_imported_known_files(db_path: Path, rows: list[dict[str, object]]) -> N
     """Replace pathless stock ``known.met`` hash-cache rows in a Rust profile."""
 
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM imported_known_files")
         for row in rows:
@@ -635,7 +636,7 @@ def seed_share_in_place_manifests(
     """Seed many completed share-in-place manifests in one SQLite transaction."""
 
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         if not seed_piece_rows:
             _seed_share_in_place_manifests_fast_conn(conn, now=now, manifests=manifests)
@@ -842,7 +843,7 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
     """
 
     now = _now_ms()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             "UPDATE shared_directory_roots SET deleted_at_ms = ? WHERE deleted_at_ms IS NULL",
@@ -1082,7 +1083,7 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
     """
 
     hash_blob = bytes.fromhex(ed2k_hash)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute(
             """
             SELECT known_files.id, transfers.id, transfers.control_state,
