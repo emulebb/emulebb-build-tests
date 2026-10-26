@@ -50,6 +50,138 @@ def test_search_create_phase_resumes_persisted_identifier_without_post(
     }
 
 
+def test_read_search_results_performs_one_bounded_read_without_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    rows = [{"hash": "a" * 32}]
+
+    def fake_retry(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append((*args, kwargs))
+        return {"data": {"status": "running", "items": rows}}
+
+    monkeypatch.setattr(driver, "retry_http_json", fake_retry)
+    monkeypatch.setattr(
+        driver.time,
+        "sleep",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("one-shot results read must not sleep")
+        ),
+    )
+
+    result = driver.read_search_results(endpoint("rust"), "rust-search-17")
+
+    assert list(result) == rows
+    assert result.completed is False
+    assert calls == [
+        (
+            "rust soak search poll",
+            1,
+            "http://rust",
+            "/api/v1/searches/rust-search-17",
+            {"api_key": "rust-key", "timeout_seconds": 30.0},
+        )
+    ]
+
+
+def test_read_search_results_recognizes_completed_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "retry_http_json",
+        lambda *_args, **_kwargs: {
+            "data": {"status": "COMPLETED", "items": []}
+        },
+    )
+
+    result = driver.read_search_results(endpoint("mfc"), "mfc-search-9")
+
+    assert list(result) == []
+    assert result.completed is True
+
+
+def test_search_results_poll_phase_preserves_exact_rest_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        driver,
+        "read_search_results",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("raw local REST failure")
+        ),
+    )
+
+    phase = driver.run_search_results_poll_phase(
+        endpoint("rust"),
+        "rust-search-17",
+    )
+
+    assert phase.rows == ()
+    assert phase.completed is False
+    assert phase.error == {
+        "client": "rust",
+        "phase": "search-results",
+        "type": "RuntimeError",
+        "message": "raw local REST failure",
+    }
+
+
+def test_search_results_poll_phase_preserves_incomplete_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [{"hash": "a" * 32}, {"hash": "b" * 32}]
+    monkeypatch.setattr(
+        driver,
+        "read_search_results",
+        lambda *_args, **_kwargs: driver.SearchResults(rows, completed=False),
+    )
+
+    phase = driver.run_search_results_poll_phase(
+        endpoint("mfc"),
+        "mfc-search-9",
+    )
+
+    assert list(phase.rows) == rows
+    assert phase.completed is False
+    assert phase.error is None
+    assert phase.cycle_record() == {
+        "ok": True,
+        "count": 2,
+        "completed": False,
+    }
+
+
+def test_blocking_search_results_poll_retains_last_rows_at_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = iter(
+        [
+            driver.SearchResults([{"hash": "a" * 32}], completed=False),
+            driver.SearchResults([], completed=False),
+        ]
+    )
+    monotonic = iter([0.0, 0.0, 1.0, 2.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        driver,
+        "read_search_results",
+        lambda *_args, **_kwargs: next(snapshots),
+    )
+    monkeypatch.setattr(driver.time, "monotonic", lambda: next(monotonic))
+    monkeypatch.setattr(driver.time, "sleep", sleeps.append)
+
+    result = driver.poll_search_results(
+        endpoint("mfc"),
+        "mfc-search-9",
+        timeout_seconds=2.0,
+    )
+
+    assert list(result) == [{"hash": "a" * 32}]
+    assert result.completed is False
+    assert sleeps == [2.0, 2.0]
+
+
 def test_search_results_phase_preserves_incomplete_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
