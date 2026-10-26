@@ -32,9 +32,18 @@ def _load_soak_runner() -> ModuleType:
 def _action_client(name: str) -> converged_action_driver.ClientEndpoint:
     return converged_action_driver.ClientEndpoint(
         name=name,
-        base_url=f"http://{name}",
+        api_root_url=f"http://{name}/api/v1",
         api_key=f"{name}-key",
     )
+
+
+def test_action_clients_append_one_canonical_api_root() -> None:
+    runner = _load_soak_runner()
+
+    rust, mfc = runner.action_clients("http://rust/", "http://mfc")
+
+    assert rust.api_root_url == "http://rust/api/v1"
+    assert mfc.api_root_url == "http://mfc/api/v1"
 
 
 def test_soak_launch_requires_same_vpn_bind_ip() -> None:
@@ -810,7 +819,7 @@ def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.Mo
 
     rows = runner.get_list(
         _action_client("client"),
-        "/api/v1/searches",
+        "/searches",
         "searches",
         timeout_seconds=42.5,
     )
@@ -818,10 +827,10 @@ def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.Mo
     assert rows == [{"id": "one"}]
     assert calls == [
         {
-            "description": "poll client /api/v1/searches",
+            "description": "poll client /searches",
             "attempts": 1,
-            "base_url": "http://client",
-            "path": "/api/v1/searches",
+            "base_url": "http://client/api/v1",
+            "path": "/searches",
             "timeout_seconds": 42.5,
         }
     ]
