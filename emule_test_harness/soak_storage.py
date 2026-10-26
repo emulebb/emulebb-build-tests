@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-SCHEMA = "emulebb-build-tests.soak-storage-policy.v7"
+SCHEMA = "emulebb-build-tests.soak-storage-policy.v8"
 REQUIRED_STREAMS = (
     "controller_output",
     "daemon_output",
@@ -23,6 +23,8 @@ REQUIRED_STREAMS = (
     "observer_actions",
     "observer_checkpoints",
     "observer_summary",
+    "process_metrics",
+    "process_metrics_summary",
 )
 REQUIRED_STREAM_INSTANCES = {
     "controller_output": 6,
@@ -34,6 +36,8 @@ REQUIRED_STREAM_INSTANCES = {
     "observer_actions": 1,
     "observer_checkpoints": 1,
     "observer_summary": 1,
+    "process_metrics": 1,
+    "process_metrics_summary": 1,
 }
 _POLICY_KEYS = {
     "schema",

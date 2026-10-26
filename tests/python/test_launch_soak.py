@@ -279,6 +279,8 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
                 "observer_actions": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(16, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             },
         ),
     )
@@ -323,6 +325,8 @@ def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
                 "observer_actions": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_checkpoints": soak_storage.ArtifactStreamPolicy(16, 2),
                 "observer_summary": soak_storage.ArtifactStreamPolicy(16, 1),
+                "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+                "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
             },
         ),
     )
@@ -383,6 +387,8 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
             "observer_actions": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_checkpoints": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
         },
     )
     bundle = {
@@ -468,6 +474,8 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v4_response(
             "observer_actions": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_checkpoints": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "observer_summary": soak_storage.ArtifactStreamPolicy(4_096, 1),
+            "process_metrics": soak_storage.ArtifactStreamPolicy(1, 1),
+            "process_metrics_summary": soak_storage.ArtifactStreamPolicy(1, 1),
         },
     )
     monkeypatch.setattr(
