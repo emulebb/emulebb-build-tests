@@ -498,18 +498,21 @@ KAD_EXPECTED_ONLY_EMULE_OPCODES: dict[int, str] = {
 
 
 def kad_records(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Filters Kad packet records from a converged diag_event trace (or raw dump).
+    """Filters current Kad packet records from a converged diagnostic trace.
 
-    Kad packets have no standalone MFC ``udp_packet_v1`` dump — they live only in
-    the converged ``diag_event_v2`` stream (``family:"kad_udp"``) on both clients —
-    so the Kad opcode coverage is computed off the diag traces, not packet_trace_diff
-    input files.
+    Kad opcode coverage is computed only from the bilateral ``diag_event_v2``
+    ``kad_udp`` stream. Legacy standalone UDP dumps are rejected rather than
+    silently mixed into the current contract.
     """
 
+    for record in trace:
+        if record.get("schema") == "udp_packet_v1" or record.get("family") == "kad":
+            raise ValueError("Legacy Kad packet diagnostics are unsupported.")
     return [
         record
         for record in trace
-        if record.get("family") in ("kad", "kad_udp") or record.get("schema") == "udp_packet_v1"
+        if record.get("schema") == "diag_event_v2"
+        and record.get("family") == "kad_udp"
     ]
 
 
@@ -543,8 +546,6 @@ def kad_opcode_hex(opcode: Any) -> str:
 def kad_opcode_coverage(
     rust_records: list[dict[str, Any]],
     emule_records: list[dict[str, Any]],
-    *,
-    rust_supplementary_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Direction-combined Kad opcode-set coverage — which KADEMLIA2_* opcodes each
     client *exercises*, the live-meaningful Kad parity signal (the byte-level
@@ -569,13 +570,7 @@ def kad_opcode_coverage(
     network noise (whatever legacy peers happen to throw at it) and is reported
     separately (``onlyEmuleReceivedOnly``), never failing the verdict. Documented
     intentional divergences (:data:`KAD_EXPECTED_ONLY_EMULE_OPCODES`) are
-    annotated ``expected`` and excluded from the verdict too.
-
-    ``rust_supplementary_records`` (the rust ``udp_packet_v1`` kad dump) credits
-    rust receives the diag stream misses: rust diag stamps ``opcode: None`` for
-    unknown/legacy inbound opcodes, so without the dump rust is never credited
-    for receiving them. Supplementary records only add opcodes the primary rust
-    stream did not already carry (no double counting)."""
+    annotated ``expected`` and excluded from the verdict too."""
 
     by_dir: dict[str, dict[str, dict[Any, int]]] = {}
     rust_all: dict[Any, int] = {}
@@ -597,21 +592,6 @@ def kad_opcode_coverage(
             name = record.get("opcode_name") or (record.get("body") or {}).get("opcodeName")
             if name and opcode not in names:
                 names[opcode] = name
-
-    supplementary_counts: dict[Any, int] = {}
-    for record in rust_supplementary_records or []:
-        opcode = _kad_opcode(record)
-        if opcode is None:
-            continue
-        supplementary_counts[opcode] = supplementary_counts.get(opcode, 0) + 1
-        name = record.get("opcode_name")
-        if name and opcode not in names:
-            names[opcode] = name
-    supplementary_credited = sorted(
-        (op for op in supplementary_counts if op not in rust_all), key=str
-    )
-    for opcode in supplementary_credited:
-        rust_all[opcode] = supplementary_counts[opcode]
 
     def entry(opcode: Any, rust_n: int, emule_n: int) -> dict[str, Any]:
         static_name = KAD_OPCODE_NAMES.get(opcode) if isinstance(opcode, int) else None
@@ -675,7 +655,6 @@ def kad_opcode_coverage(
         "onlyEmuleSentGaps": sent_gaps,
         "onlyEmuleReceivedOnly": [row for row in only_emule_entries if not row["emuleSent"]],
         "expectedOnlyEmule": [row for row in only_emule_entries if row["expected"]],
-        "supplementaryCreditedOpcodes": [kad_opcode_hex(op) for op in supplementary_credited],
         "directions": directions,
     }
 
