@@ -25,6 +25,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import rust_native_fingerprint
+
 ED2K_PART_SIZE = 9_728_000
 RUST_PROFILE_METADATA_FILE = "emulebb-rust-metadata.db"
 
@@ -1282,8 +1284,12 @@ def _native_file_fingerprint(source_path: str | None) -> bytes | None:
         return None
 
     if current_platform() == "windows":
-        identity = _windows_file_identity(path)
-        changed_ns = None
+        try:
+            return rust_native_fingerprint.encode_fingerprint(
+                rust_native_fingerprint.windows_native_fingerprint(path)
+            )
+        except OSError:
+            return None
     else:
         identity = b"\x01" + int(metadata.st_dev).to_bytes(8, "little") + int(
             metadata.st_ino
@@ -1329,80 +1335,6 @@ def _fingerprint_modified_ms(fingerprint: bytes | None) -> int | None:
     if nanoseconds >= 1_000_000_000:
         return None
     return seconds * 1_000 + nanoseconds // 1_000_000
-
-
-def _windows_file_identity(path: Path) -> bytes | None:
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
-
-    class FileId128(ctypes.Structure):
-        _fields_ = [("identifier", ctypes.c_ubyte * 16)]
-
-    class FileIdInfo(ctypes.Structure):
-        _fields_ = [
-            ("volume_serial_number", ctypes.c_ulonglong),
-            ("file_id", FileId128),
-        ]
-
-    class ByHandleFileInformation(ctypes.Structure):
-        _fields_ = [
-            ("file_attributes", wintypes.DWORD),
-            ("creation_time", wintypes.FILETIME),
-            ("last_access_time", wintypes.FILETIME),
-            ("last_write_time", wintypes.FILETIME),
-            ("volume_serial_number", wintypes.DWORD),
-            ("file_size_high", wintypes.DWORD),
-            ("file_size_low", wintypes.DWORD),
-            ("number_of_links", wintypes.DWORD),
-            ("file_index_high", wintypes.DWORD),
-            ("file_index_low", wintypes.DWORD),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    get_high_resolution = kernel32.GetFileInformationByHandleEx
-    get_high_resolution.argtypes = [
-        wintypes.HANDLE,
-        ctypes.c_int,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-    ]
-    get_high_resolution.restype = wintypes.BOOL
-    get_low_resolution = kernel32.GetFileInformationByHandle
-    get_low_resolution.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ByHandleFileInformation),
-    ]
-    get_low_resolution.restype = wintypes.BOOL
-
-    try:
-        with path.open("rb") as source:
-            handle = wintypes.HANDLE(msvcrt.get_osfhandle(source.fileno()))
-            high_resolution = FileIdInfo()
-            if get_high_resolution(
-                handle, 18, ctypes.byref(high_resolution), ctypes.sizeof(high_resolution)
-            ):
-                return (
-                    b"\x03"
-                    + int(high_resolution.volume_serial_number).to_bytes(8, "little")
-                    + bytes(high_resolution.file_id.identifier)
-                )
-
-            # WHY: match Rust's low-resolution fallback so fingerprint identity
-            # remains comparable when FileIdInfo is unavailable on a volume.
-            low_resolution = ByHandleFileInformation()
-            if not get_low_resolution(handle, ctypes.byref(low_resolution)):
-                return None
-            file_index = (
-                int(low_resolution.file_index_high) << 32
-            ) | int(low_resolution.file_index_low)
-            return (
-                b"\x02"
-                + int(low_resolution.volume_serial_number).to_bytes(4, "little")
-                + file_index.to_bytes(8, "little")
-            )
-    except OSError:
-        return None
 
 
 def normalize_path_key(value: str) -> str:
