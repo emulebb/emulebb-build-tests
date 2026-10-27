@@ -122,7 +122,7 @@ class SessionConfig:
     inputs: Path
     vpn_guard_config: Path
     lan_bind_addr: str = DEFAULT_CONTROL_BIND
-    rest_timeout_seconds: float = 60.0
+    rest_timeout_seconds: float = soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
     connect_timeout_seconds: float = 240.0
     mfc_variant: str = clw.DEFAULT_MFC_VARIANT
     mfc_arch: str = clw.DEFAULT_MFC_ARCH
@@ -3165,7 +3165,15 @@ def add_session_config_arguments(parser: argparse.ArgumentParser) -> None:
         default=REPO_ROOT / "vpn-guard-live.local.json",
     )
     parser.add_argument("--lan-bind-addr", default=DEFAULT_CONTROL_BIND)
-    parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--rest-timeout-seconds",
+        type=float,
+        default=soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS,
+        help=(
+            "Maximum seconds to wait for each client's REST startup; this is a "
+            "ceiling, not a fixed delay, and covers cold MFC persisted-profile scans."
+        ),
+    )
     parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)

@@ -37,6 +37,7 @@ OPERATOR_SERVER_NAME = "operator-parity"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 VPN_TOPOLOGIES = hideme_vpn.VPN_TOPOLOGIES
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
+DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS = 300.0
 RUST_ED2K_PORT = 42662
 RUST_KAD_PORT = 42672
 MFC_ED2K_PORT = 43662
