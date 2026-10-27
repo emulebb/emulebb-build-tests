@@ -44,6 +44,8 @@ DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
 DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
 WATCH_FAILURE_GRACE_SECONDS = 15.0
+OBSERVER_REPORT_READ_ATTEMPTS = 8
+OBSERVER_REPORT_READ_RETRY_SECONDS = 0.25
 STORAGE_FAILURE_FINDING = "campaign-storage-enforcement-failed"
 DIAGNOSTIC_WRITER_FAILURE_FINDINGS = frozenset(
     {
@@ -2077,6 +2079,22 @@ def current_observer_report(
     return report
 
 
+def current_observer_report_with_retry(
+    manifest: dict[str, Any],
+    last_run: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Retries transient cross-file observer publication races strictly."""
+
+    for attempt in range(OBSERVER_REPORT_READ_ATTEMPTS):
+        try:
+            return current_observer_report(manifest, last_run)
+        except soak_report_summary.SoakReportSummaryError:
+            if attempt + 1 >= OBSERVER_REPORT_READ_ATTEMPTS:
+                raise
+            time.sleep(OBSERVER_REPORT_READ_RETRY_SECONDS)
+    raise AssertionError("observer report retry loop exhausted unexpectedly")
+
+
 def session_status(
     paths: ControlPaths,
     *,
@@ -2141,7 +2159,7 @@ def session_status(
     observer_report = None
     observer_report_error = None
     try:
-        observer_report = current_observer_report(manifest, last_run)
+        observer_report = current_observer_report_with_retry(manifest, last_run)
     except Exception as error:  # noqa: BLE001 - invalid evidence must remain visible in status
         observer_report_error = {
             "type": type(error).__name__[:128],
