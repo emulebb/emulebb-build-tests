@@ -15,6 +15,25 @@ from emule_test_harness import soak_run_layout, soak_storage
 CAMPAIGN_ID = "20261025T120000Z"
 
 
+@pytest.fixture(autouse=True)
+def connected_action_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        converged_observer,
+        "action_network_readiness",
+        lambda _clients, method: {
+            "ok": True,
+            "method": method,
+            "requiredField": "kadConnected"
+            if method == "kad"
+            else "ed2kConnected",
+            "clients": {
+                "rust": {"ready": True},
+                "mfc": {"ready": True},
+            },
+        },
+    )
+
+
 def storage_policy() -> soak_storage.SoakStoragePolicy:
     return soak_storage.SoakStoragePolicy(
         max_total_bytes=10 * 1024 * 1024,
@@ -702,6 +721,87 @@ def test_capture_action_cycle_records_diagnostic_connectivity_skip(
         )
         == updated
     )
+
+
+def test_action_network_readiness_is_method_specific() -> None:
+    stats = {
+        "rust": {"ed2kConnected": True, "kadConnected": False},
+        "mfc": {"ed2kConnected": True, "kadConnected": True},
+    }
+
+    server = converged_observer.classify_action_network_readiness("server", stats)
+    kad = converged_observer.classify_action_network_readiness("kad", stats)
+
+    assert server["ok"] is True
+    assert server["requiredField"] == "ed2kConnected"
+    assert kad["ok"] is False
+    assert kad["requiredField"] == "kadConnected"
+    assert kad["clients"]["rust"]["ready"] is False
+    assert kad["clients"]["mfc"]["ready"] is True
+
+
+def test_capture_action_cycle_skips_disconnected_selected_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        methods=("kad",),
+        search_interval_seconds=900,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    readiness = {
+        "ok": False,
+        "method": "kad",
+        "requiredField": "kadConnected",
+        "clients": {
+            "rust": {
+                "ed2kConnected": True,
+                "kadConnected": False,
+                "ready": False,
+            },
+            "mfc": {
+                "ed2kConnected": True,
+                "kadConnected": True,
+                "ready": True,
+            },
+        },
+    }
+    monkeypatch.setattr(
+        converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("diagnostic identity must follow network readiness")
+        ),
+    )
+    monkeypatch.setattr(
+        converged_observer.converged_action_driver,
+        "run_search_create_phase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("search must not start on a disconnected network")
+        ),
+    )
+
+    updated = converged_observer.capture_action_cycle(
+        subject,
+        new_state(config),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        now_ns=1_000_000_000,
+        readiness_probe=lambda _clients, _method: readiness,
+    )
+
+    assert updated["pendingAction"] is None
+    assert updated["driver"]["cycles"] == 0
+    assert updated["driver"]["connectivitySkips"] == 1
+    assert updated["driver"]["latestConnectivitySkip"] == {
+        "attemptedAtUtc": "2026-10-25T12:01:00+00:00",
+        "phase": "network_readiness",
+        "method": "kad",
+        "readiness": readiness,
+    }
 
 
 def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(
