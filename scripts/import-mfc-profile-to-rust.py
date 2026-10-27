@@ -51,6 +51,13 @@ def main() -> int:
     upsert.add_argument("--emule-profile-dir", type=Path, required=True)
     upsert.add_argument("--rust-profile-dir", type=Path, required=True)
     upsert.add_argument("--dry-run", action="store_true")
+
+    inspect_servers = subparsers.add_parser(
+        "inspect-servers",
+        help="List ordered eD2K server candidates from the persisted MFC profile.",
+    )
+    inspect_servers.add_argument("--emule-profile-dir", type=Path, required=True)
+    inspect_servers.add_argument("--limit", type=int, default=50)
     args = parser.parse_args()
 
     if args.command == "create":
@@ -69,12 +76,17 @@ def main() -> int:
             kad_port=args.kad_port,
             dry_run=args.dry_run,
         )
-    else:
+    elif args.command == "upsert-hashes":
         summary = mfc_profile_import.upsert_stock_mfc_profile_hashes(
             rust_repo=args.rust_repo,
             mfc_profile_dir=args.emule_profile_dir,
             rust_profile_dir=args.rust_profile_dir,
             dry_run=args.dry_run,
+        )
+    else:
+        summary = mfc_profile_import.inspect_stock_mfc_servers(
+            args.emule_profile_dir,
+            limit=args.limit,
         )
     print(mfc_known_met.summary_json(summary))
     return 0
