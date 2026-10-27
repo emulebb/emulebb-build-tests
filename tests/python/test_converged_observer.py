@@ -720,6 +720,7 @@ def test_capture_action_cycle_records_diagnostic_connectivity_skip(
             "type": "TimeoutError",
             "message": "diagnostics request timed out",
         },
+        "scheduleSlot": 1,
     }
     assert (
         converged_observer.load_json_object(
@@ -807,7 +808,59 @@ def test_capture_action_cycle_skips_disconnected_selected_network(
         "phase": "network_readiness",
         "method": "kad",
         "readiness": readiness,
+        "scheduleSlot": 1,
     }
+
+
+def test_connectivity_skip_advances_to_the_next_scheduled_method(
+    tmp_path: Path,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        source_profile="generic_open",
+        terms=("linux",),
+        methods=("server", "kad"),
+        search_interval_seconds=900,
+    )
+    subject = replace(runtime(tmp_path), action_config=config)
+    observed_methods: list[str] = []
+
+    def not_ready(_clients, method: str) -> dict[str, object]:
+        observed_methods.append(method)
+        required_field = "ed2kConnected" if method == "server" else "kadConnected"
+        return {
+            "ok": False,
+            "method": method,
+            "requiredField": required_field,
+            "clients": {
+                client: {required_field: False, "ready": False}
+                for client in ("rust", "mfc")
+            },
+        }
+
+    first = converged_observer.capture_action_cycle(
+        subject,
+        new_state(config),
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
+        now_ns=1_000_000_000,
+        readiness_probe=not_ready,
+    )
+    second = converged_observer.capture_action_cycle(
+        subject,
+        first,
+        config,
+        now_utc=lambda: datetime(2026, 10, 25, 12, 2, tzinfo=UTC),
+        now_ns=2_000_000_000,
+        readiness_probe=not_ready,
+    )
+
+    assert observed_methods == ["server", "kad"]
+    assert second["driver"]["cycles"] == 0
+    assert second["driver"]["connectivitySkips"] == 2
+    assert second["driver"]["latestConnectivitySkip"]["scheduleSlot"] == 2
+    assert second["scheduler"]["nextCycle"] == 1
+    assert second["scheduler"]["nextScheduleSlot"] == 3
 
 
 def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(

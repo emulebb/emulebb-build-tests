@@ -9,7 +9,7 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v7"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v8"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -107,6 +107,7 @@ def new_state(
         },
         "scheduler": {
             "nextCycle": 1,
+            "nextScheduleSlot": 1,
             "nextActionAtUtc": None,
         },
         "pendingAction": None,
@@ -227,11 +228,15 @@ def validate_state(
     scheduler = payload.get("scheduler")
     if not isinstance(scheduler, dict) or set(scheduler) != {
         "nextCycle",
+        "nextScheduleSlot",
         "nextActionAtUtc",
     }:
         raise RuntimeError("Converged observer scheduler state is invalid.")
     next_cycle = _require_positive_integer(
         scheduler["nextCycle"], "scheduler.nextCycle"
+    )
+    next_schedule_slot = _require_positive_integer(
+        scheduler["nextScheduleSlot"], "scheduler.nextScheduleSlot"
     )
     next_action_at_utc = scheduler["nextActionAtUtc"]
     _validate_optional_utc_timestamp(
@@ -242,6 +247,8 @@ def validate_state(
     if pending_action is None:
         if next_cycle != driver["cycles"] + 1:
             raise RuntimeError("Converged observer driver cycle is discontinuous.")
+        if next_schedule_slot != driver["cycles"] + driver["connectivitySkips"] + 1:
+            raise RuntimeError("Converged observer schedule slot is discontinuous.")
     else:
         if next_action_at_utc is not None:
             raise RuntimeError(
@@ -251,7 +258,9 @@ def validate_state(
             pending_action,
             next_action_seq=next_action_seq,
             driver_cycles=driver["cycles"],
+            connectivity_skips=driver["connectivitySkips"],
             next_cycle=next_cycle,
+            next_schedule_slot=next_schedule_slot,
         )
 
     retention = payload.get("retention")
@@ -414,13 +423,14 @@ def reserve_driver_cycle(
     _require_nonempty_string(reserved_at_utc, "reserved_at_utc")
     _validate_diagnostic_runs(diagnostic_runs)
     cycle = updated["scheduler"]["nextCycle"]
+    schedule_slot = updated["scheduler"]["nextScheduleSlot"]
     action_id = driver_action_id(updated["campaignId"], cycle)
     updated["scheduler"]["nextActionAtUtc"] = None
     updated["pendingAction"] = {
         "actionId": action_id,
         "reportSeq": updated["nextActionSeq"],
         "cycle": cycle,
-        "queryIndex": cycle - 1,
+        "queryIndex": schedule_slot - 1,
         "query": query,
         "method": method,
         "reservedAtUtc": reserved_at_utc,
@@ -433,6 +443,7 @@ def reserve_driver_cycle(
         "evidence": None,
     }
     updated["scheduler"]["nextCycle"] = cycle + 1
+    updated["scheduler"]["nextScheduleSlot"] = schedule_slot + 1
     return validate_state(updated)
 
 
@@ -779,6 +790,7 @@ def record_driver_cycle(state: dict[str, Any], cycle: dict[str, Any]) -> dict[st
         if updated["scheduler"]["nextCycle"] != cycle_number:
             raise RuntimeError("Converged observer driver cycle is discontinuous.")
         updated["scheduler"]["nextCycle"] = cycle_number + 1
+        updated["scheduler"]["nextScheduleSlot"] += 1
     else:
         if pending["cycle"] != cycle_number:
             raise RuntimeError("Converged observer pending cycle is inconsistent.")
@@ -808,9 +820,12 @@ def record_connectivity_skip(
     updated = validate_state(state)
     if not isinstance(skip, dict):
         raise RuntimeError("Converged observer connectivity skip is invalid.")
+    recorded_skip = copy.deepcopy(skip)
+    recorded_skip["scheduleSlot"] = updated["scheduler"]["nextScheduleSlot"]
     updated["driver"]["connectivitySkips"] += 1
-    updated["driver"]["latestConnectivitySkip"] = copy.deepcopy(skip)
-    return updated
+    updated["driver"]["latestConnectivitySkip"] = recorded_skip
+    updated["scheduler"]["nextScheduleSlot"] += 1
+    return validate_state(updated)
 
 
 def record_stream_retention(
@@ -859,7 +874,9 @@ def _validate_pending_action(
     *,
     next_action_seq: int,
     driver_cycles: int,
+    connectivity_skips: int,
     next_cycle: int,
+    next_schedule_slot: int,
 ) -> None:
     if not isinstance(value, dict) or set(value) != {
         "actionId",
@@ -885,7 +902,7 @@ def _validate_pending_action(
     query_index = _require_nonnegative_integer(
         value["queryIndex"], "pendingAction.queryIndex"
     )
-    if query_index != cycle - 1:
+    if query_index != next_schedule_slot - 2:
         raise RuntimeError("Converged observer pending query index is invalid.")
     _require_nonempty_string(value["query"], "pendingAction.query")
     if value["method"] not in {"server", "global", "kad"}:
@@ -902,6 +919,8 @@ def _validate_pending_action(
     if driver_outcome is None:
         if cycle != driver_cycles + 1 or next_cycle != cycle + 1:
             raise RuntimeError("Converged observer reserved cycle is discontinuous.")
+        if next_schedule_slot != driver_cycles + connectivity_skips + 2:
+            raise RuntimeError("Converged observer reserved schedule slot is discontinuous.")
     else:
         if not isinstance(driver_outcome, dict):
             raise RuntimeError("Converged observer pending driver outcome is invalid.")
@@ -914,6 +933,8 @@ def _validate_pending_action(
             )
         if cycle != driver_cycles or next_cycle != cycle + 1:
             raise RuntimeError("Converged observer completed cycle is discontinuous.")
+        if next_schedule_slot != driver_cycles + connectivity_skips + 1:
+            raise RuntimeError("Converged observer completed schedule slot is discontinuous.")
 
     evidence = value["evidence"]
     if evidence is not None:
