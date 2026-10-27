@@ -90,6 +90,17 @@ def _discover_diag_dir(run_dir: Path, *, client: str) -> Path | None:
     return candidates[0].parent if candidates else None
 
 
+def _validated_json_output(path: Path) -> Path:
+    output = path.resolve()
+    parent = output.parent
+    if parent.name.casefold() == "report" and (parent / "summary.json").is_file():
+        raise ValueError(
+            "--json-output cannot write into an observer-owned report root; "
+            "use the campaign's sibling analysis directory"
+        )
+    return output
+
+
 def _load_diagnostics(diagnostics_dir: Path, *, client: str) -> list[dict[str, Any]]:
     return diag_event_runs.load_latest_diag_records(
         diagnostics_dir.glob(f"emulebb-{client}-diag-*.jsonl"),
@@ -260,8 +271,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run", type=Path, help="A live-wire/converged run dir (auto-discovers diagnostics).")
     parser.add_argument("--rust-diagnostics-dir", type=Path, help="Directory holding Rust diag_event_v2 segments.")
     parser.add_argument("--mfc-diagnostics-dir", type=Path, help="Directory holding MFC diag_event_v2 segments.")
-    parser.add_argument("--json-output", type=Path, help="Optional machine-readable summary output path.")
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Optional machine-readable summary outside observer-owned report roots.",
+    )
     args = parser.parse_args(argv)
+    try:
+        json_output = _validated_json_output(args.json_output) if args.json_output else None
+    except ValueError as error:
+        parser.error(str(error))
 
     rust_diagnostics_dir = args.rust_diagnostics_dir
     mfc_diagnostics_dir = args.mfc_diagnostics_dir
@@ -279,9 +298,9 @@ def main(argv: list[str] | None = None) -> int:
     rust = diag_event_diff.ed2k_tcp_packet_views(rust_diagnostics)
     mfc = diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics)
     summary = build_summary(rust, mfc, rust_diagnostics, mfc_diagnostics)
-    if args.json_output:
-        args.json_output.parent.mkdir(parents=True, exist_ok=True)
-        args.json_output.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    if json_output:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
     records = summary["records"]
     print(

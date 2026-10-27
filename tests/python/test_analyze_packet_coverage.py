@@ -457,3 +457,19 @@ def test_main_writes_json_summary(tmp_path: Path) -> None:
     assert summary["kadOpcodeCoverage"]["oracleOk"] is True
     assert summary["serverUdpOpcodeCoverage"]["oracleOk"] is True
     assert summary["persistedSoakConformance"]["ok"] is True
+
+
+def test_main_rejects_output_in_observer_owned_report_root(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    module = load_script_module()
+    report_dir = tmp_path / "campaign" / "report"
+    report_dir.mkdir(parents=True)
+    (report_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as error:
+        module.main(["--json-output", str(report_dir / "packet-coverage.json")])
+
+    assert error.value.code == 2
+    assert "observer-owned report root" in capsys.readouterr().err

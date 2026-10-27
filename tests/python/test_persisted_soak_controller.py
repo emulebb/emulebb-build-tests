@@ -1516,8 +1516,9 @@ def test_session_status_reports_exact_dual_process_tree(
 
     result = controller.session_status(paths)
 
-    assert result["schema"] == "emulebb.persisted-soak-status.v2"
+    assert result["schema"] == "emulebb.persisted-soak-status.v3"
     assert result["observerReport"] is exact_observer_report
+    assert result["observerReportError"] is None
     assert result["ok"] is True
     assert result["launcher"]["alive"] is True
     assert result["observer"]["alive"] is True
@@ -1532,6 +1533,27 @@ def test_session_status_reports_exact_dual_process_tree(
         "mfc": None,
     }
     assert result["findings"] == []
+
+    def reject_observer_report(_manifest, _last_run):
+        raise controller.soak_report_summary.SoakReportSummaryError(
+            "exact retained-window integrity failure"
+        )
+
+    monkeypatch.setattr(
+        controller,
+        "current_observer_report",
+        reject_observer_report,
+    )
+
+    invalid = controller.session_status(paths)
+
+    assert invalid["observerReport"] is None
+    assert invalid["observerReportError"] == {
+        "type": "SoakReportSummaryError",
+        "message": "exact retained-window integrity failure",
+    }
+    assert invalid["ok"] is False
+    assert invalid["findings"] == ["observer-report-invalid"]
 
 
 def test_current_observer_report_loads_exact_current_campaign(
@@ -2316,6 +2338,20 @@ def test_dead_enabled_observer_is_terminal_only_after_readiness() -> None:
     sample["lastRun"]["status"] = "running"
     assert controller.watch_finding_annotation(sample, {})["terminalFindings"] == [
         "observer-not-running"
+    ]
+
+
+def test_invalid_observer_report_is_terminal_only_after_readiness() -> None:
+    sample = {
+        "campaignId": "campaign",
+        "lastRun": {"campaignId": "campaign", "status": "starting"},
+        "findings": ["observer-report-invalid"],
+    }
+
+    assert controller.watch_finding_annotation(sample, {})["terminalFindings"] == []
+    sample["lastRun"]["status"] = "running"
+    assert controller.watch_finding_annotation(sample, {})["terminalFindings"] == [
+        "observer-report-invalid"
     ]
 
 

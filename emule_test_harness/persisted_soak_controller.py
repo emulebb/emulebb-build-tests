@@ -37,7 +37,7 @@ LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
 MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v3"
-STATUS_SCHEMA = "emulebb.persisted-soak-status.v2"
+STATUS_SCHEMA = "emulebb.persisted-soak-status.v3"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
@@ -56,6 +56,7 @@ POST_READINESS_IMMEDIATE_FAILURE_FINDINGS = frozenset(
         *DIAGNOSTIC_WRITER_FAILURE_FINDINGS,
         "launcher-not-running",
         "observer-not-running",
+        "observer-report-invalid",
         "rust-process-count",
         "mfc-process-count",
         "rust-vpn-guard-unhealthy",
@@ -1971,6 +1972,8 @@ def status_findings(status: dict[str, Any]) -> list[str]:
         and not observer.get("alive")
     ):
         findings.append("observer-not-running")
+    if status.get("observerReportError") is not None:
+        findings.append("observer-report-invalid")
     heartbeat_health = watcher.get("heartbeatHealth") or {}
     if manifest.get("state") == "running" and heartbeat_health.get("state") == "stale":
         findings.append("watcher-heartbeat-stale")
@@ -2135,7 +2138,15 @@ def session_status(
     heartbeat = load_json(paths.watch_heartbeat)
     heartbeat_health = watch_heartbeat_health(manifest, heartbeat)
     heartbeat_storage = heartbeat.get("storage") if heartbeat_health.get("accepted") else None
-    observer_report = current_observer_report(manifest, last_run)
+    observer_report = None
+    observer_report_error = None
+    try:
+        observer_report = current_observer_report(manifest, last_run)
+    except Exception as error:  # noqa: BLE001 - invalid evidence must remain visible in status
+        observer_report_error = {
+            "type": type(error).__name__[:128],
+            "message": str(error)[:1024],
+        }
     result: dict[str, Any] = {
         "schema": STATUS_SCHEMA,
         "timestampUtc": datetime.now(UTC).isoformat(),
@@ -2158,6 +2169,7 @@ def session_status(
             "identity": observer_identity,
         },
         "observerReport": observer_report,
+        "observerReportError": observer_report_error,
         "watcher": {
             "alive": watcher is not None,
             "identity": watcher_identity,
