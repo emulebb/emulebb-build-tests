@@ -197,7 +197,10 @@ def test_shared_summary_requires_mfc_for_deep_compare_after_timeout(monkeypatch)
 def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -> None:
     control = _load_rust_soak_control()
 
+    calls: list[str] = []
+
     def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        calls.append(path)
         if path == "/shared-directories":
             return {
                 "hashingCount": 4,
@@ -220,6 +223,7 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
 
     assert summary["hashingCount"] == 4
     assert summary["sharedFilesTotal"] == 42
+    assert calls == ["/shared-directories", "/shared-files?limit=1"]
     assert summary["reload"] == {
         "phase": "hashing",
         "running": True,
@@ -233,6 +237,65 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
         "prunedCount": None,
         "staleHashCount": None,
     }
+
+
+def test_iter_shared_file_pages_uses_rust_keyset_cursor(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    calls: list[str] = []
+    cursor = '{"sortPath":"b","hash":"0123456789abcdef0123456789abcdef"}'
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        calls.append(path)
+        if len(calls) == 1:
+            return {"items": [{"hash": "a" * 32}], "total": 2, "nextCursor": cursor}
+        return {"items": [{"hash": "b" * 32}], "total": 2, "nextCursor": None}
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    pages = list(
+        control.iter_shared_file_pages(
+            "http://127.0.0.1:4731/api/v1",
+            "rust",
+            page_size=1,
+            timeout_seconds=1.0,
+            sleep_seconds=0.0,
+            pagination="cursor",
+        )
+    )
+
+    assert [len(page) for page, _total in pages] == [1, 1]
+    assert calls == [
+        "/shared-files?limit=1",
+        f"/shared-files?limit=1&cursor={control.quote(cursor, safe='')}",
+    ]
+
+
+def test_iter_shared_file_pages_uses_mfc_offsets(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    calls: list[str] = []
+
+    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+        calls.append(path)
+        if len(calls) == 1:
+            return {"items": [{"hash": "a" * 32}], "total": 2}
+        return {"items": [{"hash": "b" * 32}], "total": 2}
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    pages = list(
+        control.iter_shared_file_pages(
+            "http://127.0.0.1:4732/api/v1",
+            "mfc",
+            page_size=1,
+            timeout_seconds=1.0,
+            sleep_seconds=0.0,
+            pagination="offset",
+        )
+    )
+
+    assert [len(page) for page, _total in pages] == [1, 1]
+    assert calls == [
+        "/shared-files?offset=0&limit=1",
+        "/shared-files?offset=1&limit=1",
+    ]
 
 
 def test_sanitize_status_reads_shared_directory_reload_progress() -> None:
@@ -262,20 +325,19 @@ def test_shared_library_settled_check_requires_no_hashing_or_reload() -> None:
 
     check = control.shared_library_settled_check(
         {
-            "sharedFilesTotal": 100,
-            "roots": {"count": 2},
-            "items": {"count": 2},
-            "hashingCount": 12,
-            "reload": {"running": True, "pending": False, "phase": "hashing"},
+            "sharedFileCount": 100,
+            "sharedHashingActive": True,
+            "sharedHashingCount": 12,
+            "sharedReloadPhase": "hashing",
+            "sharedReloadFailedHashCount": 0,
+            "sharedReloadStatFailedCount": 0,
         },
-        min_root_count=1,
         min_shared_files=1,
     )
 
     assert check["ok"] is False
-    assert check["missing"] == ["hashingComplete", "reloadNotRunning"]
-    assert check["rootCount"] == 2
-    assert check["sharedFilesTotal"] == 100
+    assert check["missing"] == ["hashingInactive", "hashingComplete", "reloadIdle"]
+    assert check["sharedFileCount"] == 100
 
 
 def test_shared_library_settled_check_accepts_stable_shared_counts() -> None:
@@ -283,13 +345,13 @@ def test_shared_library_settled_check_accepts_stable_shared_counts() -> None:
 
     check = control.shared_library_settled_check(
         {
-            "sharedFilesTotal": 100,
-            "roots": {"count": 2},
-            "items": {"count": 2},
-            "hashingCount": 0,
-            "reload": {"running": False, "pending": False, "phase": "idle", "failedHashCount": 0},
+            "sharedFileCount": 100,
+            "sharedHashingActive": False,
+            "sharedHashingCount": 0,
+            "sharedReloadPhase": "idle",
+            "sharedReloadFailedHashCount": 0,
+            "sharedReloadStatFailedCount": 0,
         },
-        min_root_count=1,
         min_shared_files=1,
     )
 
@@ -302,30 +364,21 @@ def test_shared_reload_settled_proof_waits_for_consecutive_stable_samples(monkey
     samples = iter(
         [
             {
-                "sharedFilesTotal": 100,
-                "roots": {"count": 2},
-                "items": {"count": 2},
-                "hashingCount": 1,
-                "reload": {"running": True, "pending": False, "phase": "hashing"},
+                "stats": {"sharedHashingActive": True, "sharedHashingCount": 1},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing"}},
             },
             {
-                "sharedFilesTotal": 100,
-                "roots": {"count": 2},
-                "items": {"count": 2},
-                "hashingCount": 0,
-                "reload": {"running": False, "pending": False, "phase": "idle"},
+                "stats": {"sharedHashingActive": False, "sharedHashingCount": 0},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "failedHashCount": 0, "statFailedCount": 0}},
             },
             {
-                "sharedFilesTotal": 100,
-                "roots": {"count": 2},
-                "items": {"count": 2},
-                "hashingCount": 0,
-                "reload": {"running": False, "pending": False, "phase": "idle"},
+                "stats": {"sharedHashingActive": False, "sharedHashingCount": 0},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "failedHashCount": 0, "statFailedCount": 0}},
             },
         ]
     )
 
-    monkeypatch.setattr(control, "summarize_shared_directories", lambda *args, **kwargs: next(samples))
+    monkeypatch.setattr(control, "request_json", lambda *args, **kwargs: next(samples))
     result = control.rust_shared_reload_settled_proof(
         SimpleNamespace(
             base_url="http://192.0.2.10:4731/api/v1",
@@ -334,9 +387,7 @@ def test_shared_reload_settled_proof_waits_for_consecutive_stable_samples(monkey
             poll_seconds=0.0,
             request_timeout_seconds=1.0,
             stable_samples=2,
-            min_root_count=1,
             min_shared_files=1,
-            fingerprint_sample_limit=20,
             max_observations=20,
         )
     )
@@ -352,13 +403,10 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
 
     monkeypatch.setattr(
         control,
-        "summarize_shared_directories",
+        "request_json",
         lambda *args, **kwargs: {
-            "sharedFilesTotal": 100,
-            "roots": {"count": 2},
-            "items": {"count": 2},
-            "hashingCount": 12,
-            "reload": {"running": True, "pending": False, "phase": "hashing"},
+            "stats": {"sharedHashingActive": True, "sharedHashingCount": 12},
+            "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing"}},
         },
     )
     result = control.rust_shared_reload_settled_proof(
@@ -369,15 +417,13 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
             poll_seconds=0.0,
             request_timeout_seconds=1.0,
             stable_samples=2,
-            min_root_count=1,
             min_shared_files=1,
-            fingerprint_sample_limit=20,
             max_observations=20,
         )
     )
 
     assert result["ok"] is False
-    assert result["sample"]["missing"] == ["hashingComplete", "reloadNotRunning"]
+    assert result["sample"]["missing"] == ["hashingInactive", "hashingComplete", "reloadIdle"]
     assert "192.0.2.10" not in repr(result)
 
 

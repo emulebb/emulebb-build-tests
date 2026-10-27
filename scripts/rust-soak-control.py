@@ -2765,6 +2765,8 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "sharedReloadPhase": shared_reload.get("phase"),
         "sharedReloadScannedCount": shared_reload.get("scannedCount"),
         "sharedReloadPlannedHashCount": shared_reload.get("plannedHashCount"),
+        "sharedReloadHashedCount": shared_reload.get("hashedCount"),
+        "sharedReloadFailedHashCount": shared_reload.get("failedHashCount"),
         "sharedReloadReusedCount": shared_reload.get("reusedCount"),
         "sharedReloadNewCount": shared_reload.get("newCount"),
         "sharedReloadChangedCount": shared_reload.get("changedCount"),
@@ -3055,11 +3057,17 @@ def summarize_shared_directories(
     include_fingerprints: bool = False,
     sample_limit: int = 20,
     timeout_seconds: float = 120.0,
+    shared_files_pagination: str = "cursor",
 ) -> dict[str, object]:
     """Returns sanitized shared-directory and shared-file totals for one client."""
 
     directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
-    files = request_json(base_url, "/shared-files?offset=0&limit=1", api_key=api_key, timeout_seconds=timeout_seconds)
+    files = request_json(
+        base_url,
+        shared_file_page_path(page_size=1, pagination=shared_files_pagination),
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+    )
     root_fingerprints = shared_directory_fingerprints(directories.get("roots"))
     item_fingerprints = shared_directory_fingerprints(directories.get("items"))
     roots = summarize_shared_directory_rows(
@@ -3142,50 +3150,41 @@ def compare_shared_summaries(rust: dict[str, object], mfc: dict[str, object] | N
     }
 
 
-def shared_library_settled_check(
-    summary: dict[str, object],
-    *,
-    min_root_count: int,
-    min_shared_files: int,
-) -> dict[str, object]:
-    """Returns whether one sanitized shared-library sample is settled enough for restart proof."""
+def shared_library_settled_check(sample: dict[str, object], *, min_shared_files: int) -> dict[str, object]:
+    """Returns whether lightweight runtime counters prove shared hashing is settled."""
 
-    roots = summary.get("roots") if isinstance(summary.get("roots"), dict) else {}
-    items = summary.get("items") if isinstance(summary.get("items"), dict) else {}
-    reload_diag = summary.get("reload") if isinstance(summary.get("reload"), dict) else {}
-    shared_files_total = safe_int(summary.get("sharedFilesTotal"))
-    root_count = safe_int(roots.get("count")) or 0
-    item_count = safe_int(items.get("count")) or 0
-    hashing_count = safe_int(summary.get("hashingCount")) or 0
+    shared_file_count = safe_int(sample.get("sharedFileCount"))
+    hashing_count = safe_int(sample.get("sharedHashingCount"))
+    hashing_active = sample.get("sharedHashingActive")
+    reload_phase = sample.get("sharedReloadPhase")
+    failed_hash_count = safe_int(sample.get("sharedReloadFailedHashCount"))
+    stat_failed_count = safe_int(sample.get("sharedReloadStatFailedCount"))
     missing: list[str] = []
-    if root_count < min_root_count:
-        missing.append("minRootCount")
-    if item_count < min_root_count:
-        missing.append("minItemCount")
-    if shared_files_total is None or shared_files_total < min_shared_files:
+    if shared_file_count is None or shared_file_count < min_shared_files:
         missing.append("minSharedFiles")
+    if hashing_active is not False:
+        missing.append("hashingInactive")
     if hashing_count != 0:
         missing.append("hashingComplete")
-    if reload_diag.get("running") is True:
-        missing.append("reloadNotRunning")
-    if reload_diag.get("pending") is True:
-        missing.append("reloadNotPending")
-    if safe_int(reload_diag.get("failedHashCount")) not in (None, 0):
+    if reload_phase != "idle":
+        missing.append("reloadIdle")
+    if failed_hash_count not in (None, 0):
         missing.append("noFailedHashes")
+    if stat_failed_count not in (None, 0):
+        missing.append("noStatFailures")
     return {
         "ok": not missing,
         "missing": missing,
-        "rootCount": root_count,
-        "itemCount": item_count,
-        "sharedFilesTotal": shared_files_total,
+        "sharedFileCount": shared_file_count,
+        "hashingActive": hashing_active,
         "hashingCount": hashing_count,
-        "reloadRunning": reload_diag.get("running"),
-        "reloadPending": reload_diag.get("pending"),
-        "reloadPhase": reload_diag.get("phase"),
-        "plannedHashCount": reload_diag.get("plannedHashCount"),
-        "hashedCount": reload_diag.get("hashedCount"),
-        "failedHashCount": reload_diag.get("failedHashCount"),
-        "reusedCount": reload_diag.get("reusedCount"),
+        "reloadPhase": reload_phase,
+        "plannedHashCount": sample.get("sharedReloadPlannedHashCount"),
+        "hashedCount": sample.get("sharedReloadHashedCount"),
+        "failedHashCount": sample.get("sharedReloadFailedHashCount"),
+        "reusedCount": sample.get("sharedReloadReusedCount"),
+        "statFailedCount": sample.get("sharedReloadStatFailedCount"),
+        "skippedFailedCount": sample.get("sharedReloadSkippedFailedCount"),
     }
 
 
@@ -3194,7 +3193,16 @@ def shared_library_stability_check(checks: list[dict[str, object]]) -> dict[str,
 
     if len(checks) < 2:
         return {"ok": True, "sampleCount": len(checks)}
-    keys = ("rootCount", "itemCount", "sharedFilesTotal", "hashingCount")
+    keys = (
+        "sharedFileCount",
+        "hashingActive",
+        "hashingCount",
+        "reloadPhase",
+        "plannedHashCount",
+        "hashedCount",
+        "failedHashCount",
+        "reusedCount",
+    )
     first = checks[0]
     deltas = {
         key: {
@@ -3212,7 +3220,7 @@ def shared_library_stability_check(checks: list[dict[str, object]]) -> dict[str,
 
 
 def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, object]:
-    """Waits for a sanitized Rust shared-library sample to be stable and reload-free."""
+    """Waits for lightweight Rust runtime counters to prove hashing is settled."""
 
     observations: list[dict[str, object]] = []
     settled_checks: list[dict[str, object]] = []
@@ -3221,17 +3229,16 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
     while True:
         elapsed = round(time.monotonic() - started, 3)
         try:
-            summary = summarize_shared_directories(
-                args.base_url,
-                args.api_key,
-                "rust",
-                include_fingerprints=False,
-                sample_limit=args.fingerprint_sample_limit,
-                timeout_seconds=args.request_timeout_seconds,
+            runtime_sample = sanitize_status(
+                request_json(
+                    args.base_url,
+                    "/status",
+                    api_key=args.api_key,
+                    timeout_seconds=args.request_timeout_seconds,
+                )
             )
             check = shared_library_settled_check(
-                summary,
-                min_root_count=args.min_root_count,
+                runtime_sample,
                 min_shared_files=args.min_shared_files,
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
@@ -3248,13 +3255,12 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
                 if stability["ok"]:
                     return {
                         "ok": True,
-                        "schema": "emulebb.rust-shared-reload-settled-proof.v1",
+                        "schema": "emulebb.rust-shared-reload-settled-proof.v2",
                         "baseUrlFingerprint": text_fingerprint(args.base_url),
                         "elapsedSeconds": round(time.monotonic() - started, 3),
                         "stableSamplesRequired": args.stable_samples,
                         "pollSeconds": args.poll_seconds,
                         "requestTimeoutSeconds": args.request_timeout_seconds,
-                        "minRootCount": args.min_root_count,
                         "minSharedFiles": args.min_shared_files,
                         "observations": observations[-args.max_observations :],
                         "stability": stability,
@@ -3266,13 +3272,12 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
             stability = shared_library_stability_check(settled_checks[-args.stable_samples :])
             return {
                 "ok": False,
-                "schema": "emulebb.rust-shared-reload-settled-proof.v1",
+                "schema": "emulebb.rust-shared-reload-settled-proof.v2",
                 "baseUrlFingerprint": text_fingerprint(args.base_url),
                 "elapsedSeconds": round(time.monotonic() - started, 3),
                 "stableSamplesRequired": args.stable_samples,
                 "pollSeconds": args.poll_seconds,
                 "requestTimeoutSeconds": args.request_timeout_seconds,
-                "minRootCount": args.min_root_count,
                 "minSharedFiles": args.min_shared_files,
                 "observations": observations[-args.max_observations :],
                 "stability": stability,
@@ -3333,6 +3338,76 @@ def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, o
     return [item for item in items if isinstance(item, dict)], total
 
 
+def shared_file_page_path(*, page_size: int, pagination: str, offset: int = 0, cursor: str | None = None) -> str:
+    """Builds one client-specific shared-files page path."""
+
+    if pagination == "cursor":
+        cursor_query = "" if cursor is None else f"&cursor={quote(cursor, safe='')}"
+        return f"/shared-files?limit={page_size}{cursor_query}"
+    if pagination == "offset":
+        return f"/shared-files?offset={offset}&limit={page_size}"
+    raise ValueError(f"unsupported shared-files pagination mode: {pagination}")
+
+
+def iter_shared_file_pages(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int,
+    timeout_seconds: float,
+    sleep_seconds: float,
+    pagination: str,
+):
+    """Yields complete shared-file pages using one explicit client contract."""
+
+    offset = 0
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    observed_rows = 0
+    expected_total: int | None = None
+    while True:
+        payload = request_json(
+            base_url,
+            shared_file_page_path(
+                page_size=page_size,
+                pagination=pagination,
+                offset=offset,
+                cursor=cursor,
+            ),
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
+        page, page_total = shared_file_page_items(payload)
+        if expected_total is None:
+            expected_total = page_total
+        elif page_total != expected_total:
+            raise RuntimeError("shared-files total changed during paging")
+        observed_rows += len(page)
+        yield page, expected_total
+        if pagination == "cursor":
+            next_cursor = payload.get("nextCursor")
+            if next_cursor is None:
+                if expected_total is not None and observed_rows != expected_total:
+                    raise RuntimeError("shared-files cursor ended before the reported total")
+                break
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                raise RuntimeError("shared-files response contained an invalid nextCursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            if not page:
+                if expected_total is not None and observed_rows != expected_total:
+                    raise RuntimeError("shared-files offset paging ended before the reported total")
+                break
+            offset += len(page)
+            if expected_total is not None and observed_rows >= expected_total:
+                if observed_rows != expected_total:
+                    raise RuntimeError("shared-files offset paging exceeded the reported total")
+                break
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+
 def fetch_shared_file_hashes(
     base_url: str,
     api_key: str,
@@ -3340,31 +3415,23 @@ def fetch_shared_file_hashes(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
+    pagination: str = "cursor",
 ) -> dict[str, object]:
     """Fetches all shared-file hashes without retaining names or paths."""
 
     hashes: list[str] = []
-    offset = 0
     total: int | None = None
-    while total is None or len(hashes) < total:
-        page, page_total = shared_file_page_items(
-            request_json(
-                base_url,
-                f"/shared-files?offset={offset}&limit={page_size}",
-                api_key=api_key,
-                timeout_seconds=timeout_seconds,
-            )
-        )
-        if total is None:
-            total = page_total
+    for page, total in iter_shared_file_pages(
+        base_url,
+        api_key,
+        page_size=page_size,
+        timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds,
+        pagination=pagination,
+    ):
         page_hashes = [shared_file_row_hash(row) for row in page]
         page_hashes = [file_hash for file_hash in page_hashes if file_hash]
         hashes.extend(page_hashes)
-        if not page:
-            break
-        offset += len(page)
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
     counts = Counter(hashes)
     duplicate_hashes = sorted(file_hash for file_hash, count in counts.items() if count > 1)
     return {
@@ -3397,25 +3464,22 @@ def fetch_shared_file_catalog(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
+    pagination: str = "cursor",
 ) -> dict[str, object]:
     """Fetches all shared-file rows as path fingerprints and hashes only."""
 
     by_path: dict[str, str] = {}
     path_duplicates = 0
     row_count = 0
-    offset = 0
     total: int | None = None
-    while total is None or row_count < total:
-        page, page_total = shared_file_page_items(
-            request_json(
-                base_url,
-                f"/shared-files?offset={offset}&limit={page_size}",
-                api_key=api_key,
-                timeout_seconds=timeout_seconds,
-            )
-        )
-        if total is None:
-            total = page_total
+    for page, total in iter_shared_file_pages(
+        base_url,
+        api_key,
+        page_size=page_size,
+        timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds,
+        pagination=pagination,
+    ):
         for row in page:
             file_hash = shared_file_row_hash(row)
             path = shared_file_row_path(row)
@@ -3426,11 +3490,6 @@ def fetch_shared_file_catalog(
                 path_duplicates += 1
             by_path[path_fingerprint] = file_hash
         row_count += len(page)
-        if not page:
-            break
-        offset += len(page)
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
     return {
         "total": total,
         "rowCount": row_count,
@@ -3525,6 +3584,7 @@ def fetch_shared_file_catalog_by_root(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
+    pagination: str = "cursor",
 ) -> dict[str, object]:
     """Fetches shared-file catalog counts grouped by sanitized shared root."""
 
@@ -3533,19 +3593,15 @@ def fetch_shared_file_catalog_by_root(
     groups: dict[str, dict[str, object]] = {}
     unmatched_prefix_groups: dict[int, dict[str, dict[str, object]]] = {}
     row_count = 0
-    offset = 0
     total: int | None = None
-    while total is None or row_count < total:
-        page, page_total = shared_file_page_items(
-            request_json(
-                base_url,
-                f"/shared-files?offset={offset}&limit={page_size}",
-                api_key=api_key,
-                timeout_seconds=timeout_seconds,
-            )
-        )
-        if total is None:
-            total = page_total
+    for page, total in iter_shared_file_pages(
+        base_url,
+        api_key,
+        page_size=page_size,
+        timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds,
+        pagination=pagination,
+    ):
         for row in page:
             file_hash = shared_file_row_hash(row)
             path = shared_file_row_path(row)
@@ -3571,11 +3627,6 @@ def fetch_shared_file_catalog_by_root(
             path_fingerprints.add(private_path_fingerprint(path))
             hashes.add(file_hash)
         row_count += len(page)
-        if not page:
-            break
-        offset += len(page)
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
     compact_groups = []
     for group in groups.values():
         path_fingerprints = group["pathFingerprints"]
@@ -3608,29 +3659,20 @@ def fetch_shared_file_rows(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
+    pagination: str,
 ) -> list[dict[str, object]]:
     """Fetches all shared-file rows from one REST endpoint."""
 
     rows: list[dict[str, object]] = []
-    offset = 0
-    total: int | None = None
-    while total is None or len(rows) < total:
-        page, page_total = shared_file_page_items(
-            request_json(
-                base_url,
-                f"/shared-files?offset={offset}&limit={page_size}",
-                api_key=api_key,
-                timeout_seconds=timeout_seconds,
-            )
-        )
-        if total is None:
-            total = page_total
+    for page, _total in iter_shared_file_pages(
+        base_url,
+        api_key,
+        page_size=page_size,
+        timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds,
+        pagination=pagination,
+    ):
         rows.extend(row for row in page if isinstance(row, dict))
-        if not page:
-            break
-        offset += len(page)
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
     return rows
 
 
@@ -3797,6 +3839,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
                 include_fingerprints=True,
                 sample_limit=args.fingerprint_sample_limit,
                 timeout_seconds=args.shared_file_timeout_seconds,
+                shared_files_pagination="offset",
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
             mfc = unavailable_shared_endpoint_summary("mfc", exc)
@@ -3823,6 +3866,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
+            pagination="offset",
         )
         result["sharedFileHashes"] = {
             "rust": compact_shared_hash_summary(rust_hashes),
@@ -3847,6 +3891,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
+            pagination="offset",
         )
         result["sharedFilePaths"] = {
             "rust": compact_shared_catalog_summary(rust_catalog),
@@ -3871,6 +3916,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
+            pagination="offset",
         )
         result["sharedFileRootGroups"] = {
             "rust": rust_root_catalog
@@ -4156,6 +4202,7 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
         page_size=args.shared_file_page_size,
         timeout_seconds=args.shared_file_timeout_seconds,
         sleep_seconds=args.shared_file_sleep_seconds,
+        pagination="offset",
     )
     root_entries = mfc_rest_shared_root_entries(
         args.mfc_base_url,
@@ -6995,9 +7042,7 @@ def build_parser() -> argparse.ArgumentParser:
     shared_settled_parser.add_argument("--poll-seconds", type=float, default=30.0)
     shared_settled_parser.add_argument("--request-timeout-seconds", type=float, default=120.0)
     shared_settled_parser.add_argument("--stable-samples", type=int, default=3)
-    shared_settled_parser.add_argument("--min-root-count", type=int, default=1)
     shared_settled_parser.add_argument("--min-shared-files", type=int, default=1)
-    shared_settled_parser.add_argument("--fingerprint-sample-limit", type=int, default=20)
     shared_settled_parser.add_argument("--max-observations", type=int, default=20)
     shared_settled_parser.add_argument(
         "--json-output",
