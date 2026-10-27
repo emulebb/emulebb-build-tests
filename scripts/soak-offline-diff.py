@@ -319,7 +319,7 @@ def _diff_one_action(
     settle: float,
     method: str | None = None,
     search_ids: dict[str, str] | None = None,
-    search_result_counts: dict[str, int] | None = None,
+    search_result_totals: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     import datetime
 
@@ -375,7 +375,7 @@ def _diff_one_action(
         packet_diff or {},
         method=method,
         search_ids=search_ids,
-        search_result_counts=search_result_counts,
+        search_result_totals=search_result_totals,
         rust_kad_records=soak_action_diff.diagnostic_family_records(
             rust_diag, soak_action_diff.KAD_UDP_FAMILY
         ),
@@ -816,14 +816,14 @@ def main(argv: list[str] | None = None) -> int:
         rust_search = _search_action_evidence(rust, action_id) if kind == "search" else None
         mfc_search = _search_action_evidence(mfc, action_id) if kind == "search" else None
         search_ids = None
-        search_result_counts = None
+        search_result_totals = None
         if rust_search is not None and mfc_search is not None:
             search_ids = {"rust": rust_search[0], "mfc": mfc_search[0]}
-            search_result_counts = {"rust": rust_search[1], "mfc": mfc_search[1]}
+            search_result_totals = {"rust": rust_search[1], "mfc": mfc_search[1]}
         result = _diff_one_action(
             kind, rust, mfc, rust_windows[action_id], mfc_windows[action_id],
             lead=args.lead_seconds, settle=args.settle_seconds, method=method,
-            search_ids=search_ids, search_result_counts=search_result_counts,
+            search_ids=search_ids, search_result_totals=search_result_totals,
         )
         per_action.append({"actionId": action_id, **result})
         viol = result.get("conformanceViolations") or []

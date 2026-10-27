@@ -9,7 +9,7 @@ from typing import Any
 
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v6"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v7"
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -557,7 +557,8 @@ def start_search_results_poll(
         "attempts": 0,
         "errorCount": 0,
         "latestAttemptAtUtc": None,
-        "lastObservedResultCount": None,
+        "lastObservedReturnedCount": None,
+        "lastObservedTotalCount": None,
         "lastAttemptError": None,
         "latestError": None,
     }
@@ -571,7 +572,8 @@ def record_search_results_poll_attempt(
     attempted_at_utc: str,
     next_attempt_at_utc: str | None,
     completed: bool,
-    result_count: int | None,
+    returned_count: int | None,
+    total_count: int | None,
     error: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Records one GET outcome and either reschedules or closes its poll."""
@@ -589,10 +591,19 @@ def record_search_results_poll_attempt(
         raise RuntimeError("Converged observer search result poll attempt is premature.")
     if not isinstance(completed, bool):
         raise RuntimeError("Converged observer search result completion is invalid.")
-    if result_count is not None:
-        _require_nonnegative_integer(result_count, "result_count")
+    if (returned_count is None) != (total_count is None):
+        raise RuntimeError(
+            "Converged observer search result page requires both returned and total counts."
+        )
+    if returned_count is not None:
+        _require_nonnegative_integer(returned_count, "returned_count")
+        _require_nonnegative_integer(total_count, "total_count")
+        if total_count < returned_count:
+            raise RuntimeError(
+                "Converged observer search result total cannot be smaller than its page."
+            )
     _validate_optional_error(error)
-    if (result_count is None) == (error is None):
+    if (total_count is None) == (error is None):
         raise RuntimeError(
             "Converged observer search result poll requires exactly one result or error."
         )
@@ -601,8 +612,9 @@ def record_search_results_poll_attempt(
 
     poll["attempts"] += 1
     poll["latestAttemptAtUtc"] = attempted_at_utc
-    if result_count is not None:
-        poll["lastObservedResultCount"] = result_count
+    if total_count is not None:
+        poll["lastObservedReturnedCount"] = returned_count
+        poll["lastObservedTotalCount"] = total_count
     poll["lastAttemptError"] = copy.deepcopy(error)
     if error is not None:
         poll["errorCount"] += 1
@@ -617,7 +629,8 @@ def record_search_results_poll_attempt(
             poll,
             completed_at_utc=attempted_at_utc,
             completed=completed,
-            result_count=poll["lastObservedResultCount"],
+            returned_count=poll["lastObservedReturnedCount"],
+            total_count=poll["lastObservedTotalCount"],
             error=error,
             termination="completed" if completed else "deadline",
         )
@@ -661,15 +674,16 @@ def expire_search_results_poll(
         raise RuntimeError("Converged observer search result poll has not expired.")
     _validate_optional_error(error)
     terminal_error = error if error is not None else poll["lastAttemptError"]
-    if poll["lastObservedResultCount"] is None and terminal_error is None:
+    if poll["lastObservedTotalCount"] is None and terminal_error is None:
         raise RuntimeError(
-            "Expired observer search result poll requires a count or exact error."
+            "Expired observer search result poll requires counts or an exact error."
         )
     client_state["results"] = _terminal_search_results(
         poll,
         completed_at_utc=completed_at_utc,
         completed=False,
-        result_count=poll["lastObservedResultCount"],
+        returned_count=poll["lastObservedReturnedCount"],
+        total_count=poll["lastObservedTotalCount"],
         error=terminal_error,
         termination="expired",
     )
@@ -682,7 +696,8 @@ def _terminal_search_results(
     *,
     completed_at_utc: str,
     completed: bool,
-    result_count: int | None,
+    returned_count: int | None,
+    total_count: int | None,
     error: dict[str, Any] | None,
     termination: str,
 ) -> dict[str, Any]:
@@ -691,7 +706,8 @@ def _terminal_search_results(
     return {
         "completedAtUtc": completed_at_utc,
         "completed": completed,
-        "resultCount": result_count,
+        "returnedCount": returned_count,
+        "totalCount": total_count,
         "error": copy.deepcopy(error),
         "poll": {
             "startedAtUtc": poll["startedAtUtc"],
@@ -1048,7 +1064,8 @@ def _validate_pending_client(value: object, client: str) -> None:
     if not isinstance(results, dict) or set(results) != {
         "completedAtUtc",
         "completed",
-        "resultCount",
+        "returnedCount",
+        "totalCount",
         "error",
         "poll",
     }:
@@ -1075,15 +1092,27 @@ def _validate_pending_client(value: object, client: str) -> None:
         raise RuntimeError(
             f"Converged observer pending {client} completion is invalid."
         )
-    result_count = results["resultCount"]
-    if result_count is not None:
-        _require_nonnegative_integer(
-            result_count, f"pendingAction.clients.{client}.resultCount"
+    returned_count = results["returnedCount"]
+    total_count = results["totalCount"]
+    if (returned_count is None) != (total_count is None):
+        raise RuntimeError(
+            f"Converged observer pending {client} result counts are incomplete."
         )
+    if total_count is not None:
+        _require_nonnegative_integer(
+            returned_count, f"pendingAction.clients.{client}.returnedCount"
+        )
+        _require_nonnegative_integer(
+            total_count, f"pendingAction.clients.{client}.totalCount"
+        )
+        if total_count < returned_count:
+            raise RuntimeError(
+                f"Converged observer pending {client} result total is invalid."
+            )
     _validate_optional_error(results["error"])
-    if result_count is None and results["error"] is None:
+    if total_count is None and results["error"] is None:
         raise RuntimeError(f"Converged observer pending {client} results are empty.")
-    if results["completed"] and (result_count is None or results["error"] is not None):
+    if results["completed"] and (total_count is None or results["error"] is not None):
         raise RuntimeError(
             f"Converged observer pending {client} completion is inconsistent."
         )
@@ -1093,7 +1122,7 @@ def _validate_pending_client(value: object, client: str) -> None:
         completed=results["completed"],
         completed_at=completed_at,
         create_completed_at=create_completed,
-        result_count=result_count,
+        total_count=total_count,
         terminal_error=results["error"],
     )
 
@@ -1106,7 +1135,8 @@ def _validate_search_results_poll(value: object, client: str) -> None:
         "attempts",
         "errorCount",
         "latestAttemptAtUtc",
-        "lastObservedResultCount",
+        "lastObservedReturnedCount",
+        "lastObservedTotalCount",
         "lastAttemptError",
         "latestError",
     }:
@@ -1142,14 +1172,27 @@ def _validate_search_results_poll(value: object, client: str) -> None:
             f"Converged observer pending {client} result poll errors are invalid."
         )
     latest_attempt_at_utc = value["latestAttemptAtUtc"]
-    last_observed_result_count = value["lastObservedResultCount"]
+    last_observed_returned_count = value["lastObservedReturnedCount"]
+    last_observed_total_count = value["lastObservedTotalCount"]
     last_attempt_error = value["lastAttemptError"]
     latest_error = value["latestError"]
-    if last_observed_result_count is not None:
-        _require_nonnegative_integer(
-            last_observed_result_count,
-            f"pendingAction.clients.{client}.resultPoll.lastObservedResultCount",
+    if (last_observed_returned_count is None) != (last_observed_total_count is None):
+        raise RuntimeError(
+            f"Converged observer pending {client} result poll counts are incomplete."
         )
+    if last_observed_total_count is not None:
+        _require_nonnegative_integer(
+            last_observed_returned_count,
+            f"pendingAction.clients.{client}.resultPoll.lastObservedReturnedCount",
+        )
+        _require_nonnegative_integer(
+            last_observed_total_count,
+            f"pendingAction.clients.{client}.resultPoll.lastObservedTotalCount",
+        )
+        if last_observed_total_count < last_observed_returned_count:
+            raise RuntimeError(
+                f"Converged observer pending {client} result poll total is invalid."
+            )
     _validate_optional_error(last_attempt_error)
     _validate_optional_error(latest_error)
     if (error_count == 0) != (latest_error is None):
@@ -1164,7 +1207,7 @@ def _validate_search_results_poll(value: object, client: str) -> None:
         if (
             error_count != 0
             or latest_attempt_at_utc is not None
-            or last_observed_result_count is not None
+            or last_observed_total_count is not None
             or last_attempt_error is not None
             or latest_error is not None
             or next_attempt != started
@@ -1174,7 +1217,7 @@ def _validate_search_results_poll(value: object, client: str) -> None:
             )
         return
     if attempts == error_count and (
-        last_observed_result_count is not None or last_attempt_error is None
+        last_observed_total_count is not None or last_attempt_error is None
     ):
         raise RuntimeError(
             f"Converged observer pending {client} result poll success history is invalid."
@@ -1187,7 +1230,7 @@ def _validate_search_results_poll(value: object, client: str) -> None:
         latest_attempt < started
         or latest_attempt >= next_attempt
         or latest_attempt >= deadline
-        or (last_observed_result_count is None and last_attempt_error is None)
+        or (last_observed_total_count is None and last_attempt_error is None)
     ):
         raise RuntimeError(
             f"Converged observer pending {client} result poll progress is invalid."
@@ -1201,7 +1244,7 @@ def _validate_terminal_search_results_poll(
     completed: bool,
     completed_at: datetime,
     create_completed_at: datetime,
-    result_count: int | None,
+    total_count: int | None,
     terminal_error: object,
 ) -> None:
     if not isinstance(value, dict) or set(value) != {
@@ -1275,7 +1318,7 @@ def _validate_terminal_search_results_poll(
         raise RuntimeError(
             f"Converged observer pending {client} terminal result poll reason is invalid."
         )
-    if result_count is not None and attempts == error_count:
+    if total_count is not None and attempts == error_count:
         raise RuntimeError(
             f"Converged observer pending {client} terminal poll success history is invalid."
         )

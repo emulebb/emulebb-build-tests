@@ -72,7 +72,7 @@ def test_read_search_results_performs_one_bounded_read_without_sleep(
 
     def fake_retry(*args: object, **kwargs: object) -> dict[str, object]:
         calls.append((*args, kwargs))
-        return {"data": {"status": "running", "items": rows}}
+        return {"data": {"status": "running", "total": 7, "items": rows}}
 
     monkeypatch.setattr(driver, "retry_http_json", fake_retry)
     monkeypatch.setattr(
@@ -87,6 +87,7 @@ def test_read_search_results_performs_one_bounded_read_without_sleep(
 
     assert list(result) == rows
     assert result.completed is False
+    assert result.total == 7
     assert calls == [
         (
             "rust soak search poll",
@@ -105,7 +106,7 @@ def test_read_search_results_recognizes_completed_status(
         driver,
         "retry_http_json",
         lambda *_args, **_kwargs: {
-            "data": {"status": "COMPLETED", "items": []}
+            "data": {"status": "COMPLETED", "total": 0, "items": []}
         },
     )
 
@@ -122,7 +123,7 @@ def test_read_search_results_passes_custom_request_timeout(
 
     def fake_retry(*_args: object, **kwargs: object) -> dict[str, object]:
         observed.append(float(kwargs["timeout_seconds"]))
-        return {"data": {"status": "running", "items": []}}
+        return {"data": {"status": "running", "total": 0, "items": []}}
 
     monkeypatch.setattr(driver, "retry_http_json", fake_retry)
 
@@ -185,6 +186,7 @@ def test_search_results_poll_phase_preserves_exact_rest_error(
     )
 
     assert phase.rows == ()
+    assert phase.total is None
     assert phase.completed is False
     assert phase.error == {
         "client": "rust",
@@ -201,7 +203,9 @@ def test_search_results_poll_phase_preserves_incomplete_snapshot(
     monkeypatch.setattr(
         driver,
         "read_search_results",
-        lambda *_args, **_kwargs: driver.SearchResults(rows, completed=False),
+        lambda *_args, **_kwargs: driver.SearchResults(
+            rows, completed=False, total=9
+        ),
     )
 
     phase = driver.run_search_results_poll_phase(
@@ -210,11 +214,13 @@ def test_search_results_poll_phase_preserves_incomplete_snapshot(
     )
 
     assert list(phase.rows) == rows
+    assert phase.total == 9
     assert phase.completed is False
     assert phase.error is None
     assert phase.cycle_record() == {
         "ok": True,
-        "count": 2,
+        "returnedCount": 2,
+        "totalCount": 9,
         "completed": False,
     }
 
@@ -224,8 +230,10 @@ def test_blocking_search_results_poll_retains_last_rows_at_timeout(
 ) -> None:
     snapshots = iter(
         [
-            driver.SearchResults([{"hash": "a" * 32}], completed=False),
-            driver.SearchResults([], completed=False),
+            driver.SearchResults(
+                [{"hash": "a" * 32}], completed=False, total=5
+            ),
+            driver.SearchResults([], completed=False, total=5),
         ]
     )
     monotonic = iter([0.0, 0.0, 1.0, 2.0])
@@ -246,6 +254,7 @@ def test_blocking_search_results_poll_retains_last_rows_at_timeout(
 
     assert list(result) == [{"hash": "a" * 32}]
     assert result.completed is False
+    assert result.total == 5
     assert sleeps == [2.0, 2.0]
 
 
@@ -256,7 +265,9 @@ def test_search_results_phase_preserves_incomplete_rows(
     monkeypatch.setattr(
         driver,
         "poll_search_results",
-        lambda *_args, **_kwargs: driver.SearchResults(rows, completed=False),
+        lambda *_args, **_kwargs: driver.SearchResults(
+            rows, completed=False, total=11
+        ),
     )
 
     phase = driver.run_search_results_phase(
@@ -266,11 +277,13 @@ def test_search_results_phase_preserves_incomplete_rows(
     )
 
     assert list(phase.rows) == rows
+    assert phase.total == 11
     assert phase.completed is False
     assert phase.error is None
     assert phase.cycle_record() == {
         "ok": True,
-        "count": 2,
+        "returnedCount": 2,
+        "totalCount": 11,
         "completed": False,
     }
 
@@ -348,14 +361,18 @@ def test_automatic_cycle_schedules_without_triggering_download(
     monkeypatch.setattr(
         driver,
         "poll_search_results",
-        lambda *_args, **_kwargs: [
-            {
-                "hash": candidate_hash,
-                "name": "fixture.iso",
-                "sources": 3,
-                "sizeBytes": 2048,
-            }
-        ],
+        lambda *_args, **_kwargs: driver.SearchResults(
+            [
+                {
+                    "hash": candidate_hash,
+                    "name": "fixture.iso",
+                    "sources": 3,
+                    "sizeBytes": 2048,
+                }
+            ],
+            completed=True,
+            total=1,
+        ),
     )
     monkeypatch.setattr(driver, "get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(driver, "transfer_exists", lambda *_args, **_kwargs: False)
@@ -403,7 +420,9 @@ def test_search_only_cycle_does_not_require_download_safety(
     monkeypatch.setattr(
         driver,
         "poll_search_results",
-        lambda *_args, **_kwargs: [{"hash": "a" * 32}],
+        lambda *_args, **_kwargs: driver.SearchResults(
+            [{"hash": "a" * 32}], completed=True, total=3
+        ),
     )
 
     cycle = driver.drive_automatic_cycle(
@@ -427,15 +446,26 @@ def test_search_only_cycle_does_not_require_download_safety(
         "searches": {
             "rust": {
                 "create": {"ok": True, "searchId": "rust-search"},
-                "results": {"ok": True, "count": 1, "completed": True},
+                "results": {
+                    "ok": True,
+                    "returnedCount": 1,
+                    "totalCount": 3,
+                    "completed": True,
+                },
             },
             "mfc": {
                 "create": {"ok": True, "searchId": "mfc-search"},
-                "results": {"ok": True, "count": 1, "completed": True},
+                "results": {
+                    "ok": True,
+                    "returnedCount": 1,
+                    "totalCount": 3,
+                    "completed": True,
+                },
             },
         },
         "searchIds": {"rust": "rust-search", "mfc": "mfc-search"},
-        "resultCounts": {"rust": 1, "mfc": 1},
+        "returnedCounts": {"rust": 1, "mfc": 1},
+        "resultTotals": {"rust": 3, "mfc": 3},
         "errors": [],
     }
 
@@ -453,7 +483,9 @@ def test_search_cycle_preserves_one_sided_create_failure(
 
     def fake_poll(client: driver.ClientEndpoint, *_args, **_kwargs):
         events.append(("poll", client.name))
-        return [{"hash": "a" * 32}]
+        return driver.SearchResults(
+            [{"hash": "a" * 32}], completed=True, total=5
+        )
 
     monkeypatch.setattr(driver, "create_search", fake_create)
     monkeypatch.setattr(driver, "poll_search_results", fake_poll)
@@ -473,7 +505,8 @@ def test_search_cycle_preserves_one_sided_create_failure(
     assert cycle["ok"] is False
     assert cycle["query"] == "Exact Local Term"
     assert cycle["searchIds"] == {"rust": "rust-search"}
-    assert cycle["resultCounts"] == {"rust": 1}
+    assert cycle["returnedCounts"] == {"rust": 1}
+    assert cycle["resultTotals"] == {"rust": 5}
     assert cycle["searches"]["mfc"] == {
         "create": {
             "ok": False,
@@ -502,7 +535,11 @@ def test_search_cycle_preserves_one_sided_result_failure(
         events.append(("poll", client.name))
         if client.name == "rust":
             raise RuntimeError("Rust poll failed exactly")
-        return [{"hash": "a" * 32}, {"hash": "b" * 32}]
+        return driver.SearchResults(
+            [{"hash": "a" * 32}, {"hash": "b" * 32}],
+            completed=True,
+            total=8,
+        )
 
     monkeypatch.setattr(driver, "create_search", fake_create)
     monkeypatch.setattr(driver, "poll_search_results", fake_poll)
@@ -524,7 +561,8 @@ def test_search_cycle_preserves_one_sided_result_failure(
         "rust": "rust-search",
         "mfc": "mfc-search",
     }
-    assert cycle["resultCounts"] == {"mfc": 2}
+    assert cycle["returnedCounts"] == {"mfc": 2}
+    assert cycle["resultTotals"] == {"mfc": 8}
     assert cycle["searches"]["rust"]["results"]["error"] == {
         "client": "rust",
         "phase": "search-results",
@@ -547,6 +585,7 @@ def test_search_cycle_records_bounded_poll_timeout_without_losing_rows(
         lambda *_args, **_kwargs: driver.SearchResults(
             [{"hash": "a" * 32}],
             completed=False,
+            total=9,
         ),
     )
 
@@ -562,10 +601,12 @@ def test_search_cycle_records_bounded_poll_timeout_without_losing_rows(
     )
 
     assert cycle["ok"] is True
-    assert cycle["resultCounts"] == {"rust": 1, "mfc": 1}
+    assert cycle["returnedCounts"] == {"rust": 1, "mfc": 1}
+    assert cycle["resultTotals"] == {"rust": 9, "mfc": 9}
     assert cycle["searches"]["rust"]["results"] == {
         "ok": True,
-        "count": 1,
+        "returnedCount": 1,
+        "totalCount": 9,
         "completed": False,
     }
     assert cycle["searches"]["mfc"]["results"]["completed"] is False

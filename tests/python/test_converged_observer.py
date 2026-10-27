@@ -149,7 +149,8 @@ def reportable_state(
             attempted_at_utc="2026-10-25T12:00:03+00:00",
             next_attempt_at_utc=None,
             completed=True,
-            result_count=1,
+            returned_count=1,
+            total_count=4,
             error=None,
         )
     pending = state["pendingAction"]
@@ -575,6 +576,7 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
         rows = tuple({"hash": str(index) * 32} for index in range(1, 3))
         return converged_observer.converged_action_driver.SearchResultsPhase(
             rows=rows,
+            total=7,
             completed=True,
             error=None,
         )
@@ -640,9 +642,13 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
     ]
     assert updated["driver"]["cycles"] == 1
     assert updated["driver"]["latestCycle"]["query"] == "Exact Local Search Term"
-    assert updated["driver"]["latestCycle"]["resultCounts"] == {
+    assert updated["driver"]["latestCycle"]["returnedCounts"] == {
         "rust": 2,
         "mfc": 2,
+    }
+    assert updated["driver"]["latestCycle"]["resultTotals"] == {
+        "rust": 7,
+        "mfc": 7,
     }
     assert updated["driver"]["latestCycle"]["searches"]["rust"]["results"][
         "poll"
@@ -900,6 +906,7 @@ def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
         polled.append((client.name, search_id))
         return converged_observer.converged_action_driver.SearchResultsPhase(
             rows=({"hash": "a" * 32},),
+            total=5,
             completed=True,
             error=None,
         )
@@ -1046,6 +1053,7 @@ def test_capture_action_cycle_reclassifies_get_finishing_after_deadline(
         )
         return converged_observer.converged_action_driver.SearchResultsPhase(
             rows=({"hash": "a" * 32},),
+            total=4,
             completed=True,
             error=None,
         )
@@ -1066,7 +1074,8 @@ def test_capture_action_cycle_reclassifies_get_finishing_after_deadline(
 
     rust_results = updated["pendingAction"]["clients"]["rust"]["results"]
     assert rust_results["completed"] is False
-    assert rust_results["resultCount"] == 1
+    assert rust_results["returnedCount"] == 1
+    assert rust_results["totalCount"] == 4
     assert rust_results["completedAtUtc"] == "2026-10-25T12:00:05.250000+00:00"
     assert rust_results["poll"]["termination"] == "deadline"
     assert updated["pendingAction"]["clients"]["mfc"]["resultPoll"] is not None
@@ -1115,7 +1124,8 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
             attempted_at_utc="2026-10-25T12:00:03+00:00",
             next_attempt_at_utc=None,
             completed=True,
-            result_count=1,
+            returned_count=1,
+            total_count=4,
             error=None,
         )
     cycle = converged_observer.pending_cycle_payload(
@@ -1558,7 +1568,8 @@ def test_run_observer_services_checkpoints_between_result_attempts(
             if completed
             else (started_at + timedelta(seconds=2)).isoformat(),
             completed=completed,
-            result_count=attempts[0],
+            returned_count=attempts[0],
+            total_count=attempts[0] + 4,
             error=None,
         )
         if completed:

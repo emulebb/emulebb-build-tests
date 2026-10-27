@@ -432,7 +432,7 @@ def test_diff_action_zero_result_server_search_makes_response_optional() -> None
         pair,
         rust_packets=rust_packets,
         mfc_packets=mfc_packets,
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
 
     assert report["verdict"] == "coverage-parity"
@@ -707,7 +707,7 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
         rust_diag=rust_kad,
         mfc_diag=mfc_kad,
         search_ids={"rust": "rust-1", "mfc": "mfc-1"},
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
     assert report["method"] == "kad"
     assert report["actionCoverage"]["mode"] == "search-kad-stream"
@@ -738,7 +738,7 @@ def test_search_gate_kad_method_fails_without_kad_request_on_both() -> None:
             _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
         ],
         search_ids={"rust": "rust-1", "mfc": "mfc-1"},
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
     assert report["coverageOk"] is False
     assert report["actionCoverage"]["required"][0]["mfcPresent"] is False
@@ -761,7 +761,7 @@ def test_search_gate_kad_rejects_wrong_search_identity() -> None:
             _kad_lookup("different-mfc-search", "lookup_complete", 0, _ts(3)),
         ],
         search_ids={"rust": "rust-1", "mfc": "mfc-1"},
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
 
     assert report["coverageOk"] is False
@@ -787,7 +787,7 @@ def test_search_gate_kad_rejects_wrong_terminal_result_count() -> None:
             _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
         ],
         search_ids={"rust": "rust-1", "mfc": "mfc-1"},
-        search_result_counts={"rust": 1, "mfc": 0},
+        search_result_totals={"rust": 1, "mfc": 0},
     )
 
     assert report["coverageOk"] is False
@@ -811,7 +811,7 @@ def test_search_gate_kad_requires_result_packet_only_for_nonzero_side() -> None:
         "mfc_packets": [],
         "mfc_diag": mfc_diag,
         "search_ids": {"rust": "rust-1", "mfc": "mfc-1"},
-        "search_result_counts": {"rust": 1, "mfc": 0},
+        "search_result_totals": {"rust": 1, "mfc": 0},
     }
 
     missing_result = sad.diff_action(pair, rust_diag=common_rust, **arguments)
@@ -845,7 +845,7 @@ def test_search_gate_kad_rejects_request_opcode_in_wrong_direction() -> None:
             _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
         ],
         search_ids={"rust": "rust-1", "mfc": "mfc-1"},
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
 
     assert report["coverageOk"] is False

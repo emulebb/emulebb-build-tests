@@ -1772,7 +1772,11 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
     monkeypatch.setattr(
         runner,
         "poll_search_results",
-        lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+        lambda *_args, **_kwargs: runner.SearchResults(
+            [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+            completed=True,
+            total=1,
+        ),
     )
     monkeypatch.setattr(runner, "get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(runner, "transfer_exists", lambda *_args, **_kwargs: False)
@@ -1816,9 +1820,18 @@ def test_automatic_cycle_download_hash_forces_repeatable_candidate(
     monkeypatch.setattr(
         runner,
         "poll_search_results",
-        lambda *_a, **_k: [
-            {"hash": want, "name": "synthetic-test-file.iso", "sources": 30, "sizeBytes": 629 * 1024 * 1024}
-        ],
+        lambda *_a, **_k: runner.SearchResults(
+            [
+                {
+                    "hash": want,
+                    "name": "synthetic-test-file.iso",
+                    "sources": 30,
+                    "sizeBytes": 629 * 1024 * 1024,
+                }
+            ],
+            completed=True,
+            total=1,
+        ),
     )
     # Both clients ALREADY hold the file: download_hash must ignore the existing skip.
     monkeypatch.setattr(runner, "get_list", lambda *_a, **_k: [{"hash": want}])
@@ -1859,7 +1872,11 @@ def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
     monkeypatch.setattr(
         runner,
         "poll_search_results",
-        lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+        lambda *_args, **_kwargs: runner.SearchResults(
+            [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+            completed=True,
+            total=1,
+        ),
     )
 
     def fake_get_list(
@@ -1911,7 +1928,11 @@ def test_automatic_cycle_does_not_schedule_probe_existing_hash(
     monkeypatch.setattr(
         runner,
         "poll_search_results",
-        lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+        lambda *_args, **_kwargs: runner.SearchResults(
+            [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+            completed=True,
+            total=1,
+        ),
     )
     monkeypatch.setattr(runner, "get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(

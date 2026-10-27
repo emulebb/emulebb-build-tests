@@ -94,8 +94,8 @@ def build_observer_action_report(
         rust_diag=rust_diagnostics,
         mfc_diag=mfc_diagnostics,
         search_ids=copy.deepcopy(pending_action["driverOutcome"]["searchIds"]),
-        search_result_counts=copy.deepcopy(
-            pending_action["driverOutcome"]["resultCounts"]
+        search_result_totals=copy.deepcopy(
+            pending_action["driverOutcome"]["resultTotals"]
         ),
         action_window=evidence.window,
     )

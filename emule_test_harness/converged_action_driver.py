@@ -32,11 +32,20 @@ class ClientEndpoint:
 
 
 class SearchResults(list[dict[str, Any]]):
-    """List-compatible search results with explicit completion state."""
+    """List-compatible search page with explicit completion and total state."""
 
-    def __init__(self, rows: list[dict[str, Any]], *, completed: bool) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        completed: bool,
+        total: int,
+    ) -> None:
+        if isinstance(total, bool) or not isinstance(total, int) or total < len(rows):
+            raise ValueError("search result total must cover the returned page")
         super().__init__(rows)
         self.completed = completed
+        self.total = total
 
 
 @dataclass(frozen=True)
@@ -73,12 +82,23 @@ class SearchResultsPhase:
     """Terminal result of one bounded search-results phase."""
 
     rows: tuple[dict[str, Any], ...]
+    total: int | None
     completed: bool
     error: dict[str, str] | None
 
     def __post_init__(self) -> None:
         if self.completed and self.error is not None:
             raise ValueError("completed search-results phase cannot contain an error")
+        if self.error is not None:
+            if self.total is not None:
+                raise ValueError("failed search-results phase cannot contain a total")
+            return
+        if (
+            isinstance(self.total, bool)
+            or not isinstance(self.total, int)
+            or self.total < len(self.rows)
+        ):
+            raise ValueError("search-results phase total must cover the returned page")
 
     @property
     def ok(self) -> bool:
@@ -91,7 +111,8 @@ class SearchResultsPhase:
             return {"ok": False, "error": self.error}
         return {
             "ok": True,
-            "count": len(self.rows),
+            "returnedCount": len(self.rows),
+            "totalCount": self.total,
             "completed": self.completed,
         }
 
@@ -294,10 +315,14 @@ def read_search_results(
         timeout_seconds=timeout_seconds,
     )
     data = api_data(page)
+    total = data.get("total")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        raise RuntimeError(f"{client.name} search result total is invalid")
     return SearchResults(
         extract_items(data, "items"),
         completed=str(data.get("status") or "").casefold()
         in {"complete", "completed"},
+        total=total,
     )
 
 
@@ -311,14 +336,20 @@ def poll_search_results(
 
     deadline = time.monotonic() + timeout_seconds
     last_rows: list[dict[str, Any]] = []
+    last_total = 0
     while time.monotonic() < deadline:
         rows = read_search_results(client, search_id)
         if rows:
             last_rows = list(rows)
+        last_total = rows.total
         if rows.completed:
             return rows
         time.sleep(2.0)
-    return SearchResults(last_rows, completed=False)
+    return SearchResults(
+        last_rows,
+        completed=False,
+        total=last_total,
+    )
 
 
 def run_search_create_phase(
@@ -376,6 +407,7 @@ def run_search_results_phase(
     except RuntimeError as error:
         return SearchResultsPhase(
             rows=(),
+            total=None,
             completed=False,
             error={
                 "client": client.name,
@@ -386,6 +418,7 @@ def run_search_results_phase(
         )
     return SearchResultsPhase(
         rows=tuple(rows),
+        total=rows.total,
         completed=bool(getattr(rows, "completed", True)),
         error=None,
     )
@@ -410,6 +443,7 @@ def run_search_results_poll_phase(
     except RuntimeError as error:
         return SearchResultsPhase(
             rows=(),
+            total=None,
             completed=False,
             error={
                 "client": client.name,
@@ -420,6 +454,7 @@ def run_search_results_poll_phase(
         )
     return SearchResultsPhase(
         rows=tuple(rows),
+        total=rows.total,
         completed=rows.completed,
         error=None,
     )
@@ -487,6 +522,7 @@ def drive_automatic_cycle(
     clients = (rust, mfc)
     search_ids: dict[str, str] = {}
     search_rows: dict[str, list[dict[str, Any]]] = {}
+    search_totals: dict[str, int] = {}
     searches: dict[str, dict[str, Any]] = {}
     errors: list[dict[str, str]] = []
     for client in clients:
@@ -517,11 +553,16 @@ def drive_automatic_cycle(
             errors.append(phase.error)
             continue
         search_rows[client.name] = list(phase.rows)
+        assert phase.total is not None
+        search_totals[client.name] = phase.total
 
     cycle["ok"] = not errors
     cycle["searches"] = searches
     cycle["searchIds"] = search_ids
-    cycle["resultCounts"] = {client: len(rows) for client, rows in search_rows.items()}
+    cycle["returnedCounts"] = {
+        client: len(rows) for client, rows in search_rows.items()
+    }
+    cycle["resultTotals"] = search_totals
     cycle["errors"] = errors
     if errors:
         if download:
