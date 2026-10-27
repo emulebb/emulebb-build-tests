@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import closing
 import hashlib
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -21,6 +24,7 @@ from . import (
     diag_event_runs,
     diagnostic_run_scan,
     hideme_vpn,
+    mfc_known_met,
     soak_launch,
     soak_report_summary,
     soak_run_layout,
@@ -77,6 +81,9 @@ CONSECUTIVE_FAILURE_THRESHOLDS = {
 }
 WATCH_HEARTBEAT_MIN_STALE_SECONDS = 30.0
 DIAGNOSTIC_INDEX_FILE_NAME = "diagnostic-run-index.json"
+HASH_BACKUP_SCHEMA = "emulebb.persisted-shared-hash-backup.v1"
+MFC_HASH_STATE_FILES = ("known.met", "known2_64.met")
+RUST_HASH_STATE_FILE = "emulebb-rust-metadata.db"
 _EVIDENCE_PIN_FIELDS = frozenset(
     {
         "segmentId",
@@ -200,6 +207,151 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError(f"Expected a JSON object: {path}")
     return parsed
+
+
+def file_sha256(path: Path) -> str:
+    """Returns the SHA-256 digest for one file without loading it whole."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def copy_hash_state_file(source: Path, destination: Path, *, kind: str) -> dict[str, Any]:
+    """Copies one stopped-profile hash-state file and verifies its digest."""
+
+    if not source.is_file():
+        raise RuntimeError(f"Required {kind} hash-state file is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    source_digest = file_sha256(source)
+    destination_digest = file_sha256(destination)
+    if destination_digest != source_digest:
+        raise RuntimeError(f"Hash-state backup digest mismatch for {kind}: {destination}")
+    return {
+        "kind": kind,
+        "source": str(source.resolve()),
+        "backup": str(destination.resolve()),
+        "bytes": destination.stat().st_size,
+        "sha256": destination_digest,
+    }
+
+
+def backup_rust_hash_database(source: Path, destination: Path) -> dict[str, Any]:
+    """Creates and validates one consistent SQLite backup of Rust hash state."""
+
+    if not source.is_file():
+        raise RuntimeError(f"Required Rust hash-state database is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True)) as source_db:
+        with closing(sqlite3.connect(destination)) as backup_db:
+            source_db.backup(backup_db)
+            integrity = backup_db.execute("PRAGMA quick_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise RuntimeError(f"Rust hash-state backup failed SQLite quick_check: {integrity!r}")
+            known_file_count = int(backup_db.execute("SELECT COUNT(*) FROM known_files").fetchone()[0])
+            if known_file_count <= 0:
+                raise RuntimeError("Rust hash-state backup contains no known_files rows.")
+    return {
+        "kind": "rust-metadata-db",
+        "source": str(source.resolve()),
+        "backup": str(destination.resolve()),
+        "bytes": destination.stat().st_size,
+        "sha256": file_sha256(destination),
+        "knownFileCount": known_file_count,
+        "sqliteQuickCheck": "ok",
+    }
+
+
+def backup_stopped_hash_state(
+    paths: ControlPaths,
+    output_root: Path,
+    *,
+    destination_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Backs up both clients' persisted hash caches after a verified clean stop."""
+
+    manifest = load_json(paths.manifest)
+    if manifest.get("state") != "stopped":
+        raise RuntimeError("Hash-state backup requires a successfully stopped persisted soak session.")
+    stop = manifest.get("stop") if isinstance(manifest.get("stop"), dict) else {}
+    finalization = stop.get("diagnosticFinalization") if isinstance(stop.get("diagnosticFinalization"), dict) else {}
+    if finalization.get("ok") is not True:
+        raise RuntimeError("Hash-state backup requires successful diagnostic finalization.")
+    status = session_status(paths, check_rest=False, check_vpn=False)
+    if status["launcher"]["alive"] or status["observer"]["alive"] or status["watcher"]["alive"]:
+        raise RuntimeError("Hash-state backup requires all persisted soak controller processes to be stopped.")
+
+    preflight = manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
+    profiles = preflight.get("profiles") if isinstance(preflight.get("profiles"), dict) else {}
+    mfc_profile = Path(str(profiles.get("mfc") or "")).resolve()
+    rust_profile = Path(str(profiles.get("rust") or "")).resolve()
+    if not mfc_profile.is_dir() or not rust_profile.is_dir():
+        raise RuntimeError("Hash-state backup requires the stopped session's MFC and Rust profiles.")
+
+    campaign_id = str(manifest.get("campaignId") or "unknown-campaign")
+    resolved_output_root = output_root.resolve()
+    final_dir = (
+        destination_dir.resolve()
+        if destination_dir is not None
+        else (resolved_output_root / "soak" / "profile-hash-backups" / f"{campaign_id}-{utc_timestamp()}").resolve()
+    )
+    if not path_is_relative_to(final_dir, resolved_output_root):
+        raise RuntimeError(f"Hash-state backups must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {final_dir}")
+    if final_dir.exists():
+        raise RuntimeError(f"Hash-state backup destination already exists: {final_dir}")
+    temporary_dir = final_dir.with_name(f".{final_dir.name}.{os.getpid()}.tmp")
+    if temporary_dir.exists():
+        raise RuntimeError(f"Hash-state backup temporary destination already exists: {temporary_dir}")
+
+    try:
+        temporary_dir.mkdir(parents=True)
+        files: list[dict[str, Any]] = []
+        mfc_config = mfc_profile / "config"
+        known_met_source = mfc_config / MFC_HASH_STATE_FILES[0]
+        known_met_backup = temporary_dir / f"mfc-{MFC_HASH_STATE_FILES[0]}"
+        known_met_summary = copy_hash_state_file(
+            known_met_source,
+            known_met_backup,
+            kind="mfc-known-met",
+        )
+        known_met_summary["entryCount"] = len(mfc_known_met.parse_known_met(known_met_backup))
+        if known_met_summary["entryCount"] <= 0:
+            raise RuntimeError("MFC known.met backup contains no hash records.")
+        files.append(known_met_summary)
+        known2_source = mfc_config / MFC_HASH_STATE_FILES[1]
+        if known2_source.is_file():
+            files.append(
+                copy_hash_state_file(
+                    known2_source,
+                    temporary_dir / f"mfc-{MFC_HASH_STATE_FILES[1]}",
+                    kind="mfc-known2-64-met",
+                )
+            )
+        files.append(
+            backup_rust_hash_database(
+                rust_profile / RUST_HASH_STATE_FILE,
+                temporary_dir / f"rust-{RUST_HASH_STATE_FILE}",
+            )
+        )
+        for file_summary in files:
+            file_summary["backup"] = str((final_dir / Path(str(file_summary["backup"])).name).resolve())
+        report = {
+            "schema": HASH_BACKUP_SCHEMA,
+            "ok": True,
+            "createdUtc": datetime.now(UTC).isoformat(),
+            "campaignId": campaign_id,
+            "backupDir": str(final_dir),
+            "files": files,
+        }
+        write_json_atomic(temporary_dir / "manifest.json", report)
+        temporary_dir.replace(final_dir)
+        return report
+    except Exception:
+        shutil.rmtree(temporary_dir, ignore_errors=True)
+        raise
 
 
 def campaign_storage_root(output_root: Path) -> Path:
@@ -3180,6 +3332,16 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--launcher-pid", type=int)
     watch.add_argument("--launcher-creation-date")
 
+    backup = subparsers.add_parser(
+        "backup-hash-state",
+        help="Back up validated MFC and Rust persisted hash caches after a clean stop.",
+    )
+    backup.add_argument(
+        "--destination-dir",
+        type=Path,
+        help="Optional new backup directory below EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+    )
+
     stop = subparsers.add_parser("stop", help="Gracefully stop the detached soak and health watcher.")
     stop.add_argument("--graceful-timeout-seconds", type=float, default=90.0)
     return parser
@@ -3277,6 +3439,12 @@ def main(argv: list[str] | None = None) -> int:
             max_samples=args.max_samples,
             emit=lambda record: print(json.dumps(record, sort_keys=True), flush=True),
             launcher_fallback=launcher_fallback,
+        )
+    elif args.command == "backup-hash-state":
+        result = backup_stopped_hash_state(
+            paths,
+            output_root,
+            destination_dir=args.destination_dir,
         )
     else:
         result = stop_session(paths, graceful_timeout_seconds=args.graceful_timeout_seconds)
