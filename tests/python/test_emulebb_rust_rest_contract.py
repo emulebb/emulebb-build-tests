@@ -20,7 +20,6 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("GET", "/api/v1/app/settings"),
     ("GET", "/api/v1/app/settings/surface"),
     ("GET", "/api/v1/capabilities"),
-    ("GET", "/api/v1/diagnostics"),
     ("GET", "/api/v1/events"),
     ("GET", "/api/v1/events/status"),
     ("GET", "/api/v1/ip-filter"),
