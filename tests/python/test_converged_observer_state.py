@@ -263,6 +263,7 @@ def test_observer_state_reduces_driver_activity_without_history_growth() -> None
         "latestConnectivitySkip": {
             "ts": "2026-10-01T00:05:00+00:00",
             "reason": "server-disconnected",
+            "scheduleSlot": 2,
         },
     }
 
@@ -433,6 +434,7 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
 
     assert reloaded["scheduler"] == {
         "nextCycle": 2,
+        "nextScheduleSlot": 2,
         "nextActionAtUtc": None,
     }
     assert reloaded["pendingAction"]["reportSeq"] == 1
@@ -459,7 +461,7 @@ def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None
         configuration_digest=CONFIGURATION_DIGEST,
     )
 
-    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v7"
+    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v8"
     assert reloaded["pendingAction"]["clients"]["rust"]["resultPoll"] == {
         "startedAtUtc": "2026-10-01T00:00:03+00:00",
         "deadlineUtc": "2026-10-01T00:03:03+00:00",
@@ -787,7 +789,7 @@ def test_pending_action_cannot_restore_a_consumed_deadline() -> None:
         diagnostic_runs=diagnostic_runs(),
     )
 
-    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v7"
+    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v8"
     assert state["scheduler"]["nextActionAtUtc"] is None
     with pytest.raises(RuntimeError, match="cannot set a scheduler deadline"):
         observer_state.set_next_action_deadline(

@@ -784,14 +784,14 @@ def action_due_in_seconds(
     return max((deadline - utc_datetime(now_utc)).total_seconds(), 0.0)
 
 
-def scheduled_action(config: ObserverActionConfig, cycle_index: int) -> tuple[str, str]:
-    """Returns the query and method for one positive observer cycle."""
+def scheduled_action(config: ObserverActionConfig, schedule_slot: int) -> tuple[str, str]:
+    """Returns the query and method for one positive observer schedule slot."""
 
-    if cycle_index <= 0:
-        raise ValueError("observer action cycle index must be positive")
+    if schedule_slot <= 0:
+        raise ValueError("observer action schedule slot must be positive")
     if not config.terms or not config.methods:
         raise ValueError("observer action schedule must contain terms and methods")
-    offset = cycle_index - 1
+    offset = schedule_slot - 1
     method_count = len(config.methods)
     query = config.terms[(offset // method_count) % len(config.terms)]
     method = config.methods[offset % method_count]
@@ -922,8 +922,8 @@ def capture_action_cycle(
     clients = action_clients(runtime)
     resumed = validated["pendingAction"] is not None
     if not resumed:
-        cycle_index = int(validated["scheduler"]["nextCycle"])
-        query, method = scheduled_action(config, cycle_index)
+        schedule_slot = int(validated["scheduler"]["nextScheduleSlot"])
+        query, method = scheduled_action(config, schedule_slot)
         probe = readiness_probe or action_network_readiness
         try:
             readiness = probe(clients, method)
