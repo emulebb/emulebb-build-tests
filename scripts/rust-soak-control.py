@@ -3286,6 +3286,30 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
         time.sleep(args.poll_seconds)
 
 
+def reload_shared_directories(args: argparse.Namespace) -> dict[str, object]:
+    """Queues one explicit Rust shared-directory scan and hash reconciliation."""
+
+    response = request_json(
+        args.base_url,
+        "/shared-directories/operations/reload",
+        api_key=args.api_key,
+        method="POST",
+        body={},
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    if response.get("ok") is not True or response.get("started") is not True:
+        raise RuntimeError("shared-directory reload was not accepted")
+    queued = safe_int(response.get("queued"))
+    if queued is None or queued < 0:
+        raise RuntimeError("shared-directory reload response did not contain a valid queued count")
+    return {
+        "schema": "emulebb.rust-shared-directory-reload.v1",
+        "accepted": True,
+        "queued": queued,
+        "baseUrlFingerprint": text_fingerprint(args.base_url),
+    }
+
+
 def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: int) -> dict[str, object]:
     """Drops full fingerprint lists from one endpoint summary."""
 
@@ -7054,6 +7078,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the final sanitized shared-reload settled proof report to this JSON path.",
     )
     shared_settled_parser.set_defaults(func=rust_shared_reload_settled_proof)
+
+    shared_reload_parser = sub.add_parser(
+        "reload-shared-directories",
+        help="Queue one explicit Rust shared-directory scan and hash reconciliation.",
+    )
+    shared_reload_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    shared_reload_parser.set_defaults(func=reload_shared_directories)
 
     apply_roots_parser = sub.add_parser(
         "apply-mfc-shared-roots",
