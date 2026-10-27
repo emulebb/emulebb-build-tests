@@ -1700,6 +1700,52 @@ def test_current_observer_report_rejects_stale_or_misdirected_evidence(
         )
 
 
+def test_current_observer_report_retry_accepts_completed_publication(monkeypatch) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    expected = {"campaignId": "campaign", "schema": "report"}
+
+    def read_report(_manifest, _last_run):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 4:
+            raise controller.soak_report_summary.SoakReportSummaryError(
+                "checkpoint count does not match retained files"
+            )
+        return expected
+
+    monkeypatch.setattr(controller, "current_observer_report", read_report)
+    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+
+    result = controller.current_observer_report_with_retry({}, {})
+
+    assert result is expected
+    assert attempts == 4
+    assert sleeps == [controller.OBSERVER_REPORT_READ_RETRY_SECONDS] * 3
+
+
+def test_current_observer_report_retry_rejects_persistent_corruption(monkeypatch) -> None:
+    attempts = 0
+
+    def reject_report(_manifest, _last_run):
+        nonlocal attempts
+        attempts += 1
+        raise controller.soak_report_summary.SoakReportSummaryError(
+            "exact retained-window integrity failure"
+        )
+
+    monkeypatch.setattr(controller, "current_observer_report", reject_report)
+    monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(
+        controller.soak_report_summary.SoakReportSummaryError,
+        match="exact retained-window integrity failure",
+    ):
+        controller.current_observer_report_with_retry({}, {})
+
+    assert attempts == controller.OBSERVER_REPORT_READ_ATTEMPTS
+
+
 def test_diagnostic_writer_health_retains_complete_strict_payload(
     monkeypatch,
 ) -> None:
