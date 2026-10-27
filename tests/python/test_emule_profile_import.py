@@ -259,6 +259,7 @@ def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
     assert summary["hashes"]["manifestImport"]["writeMode"] == "refresh-existing"
     assert summary["hashes"]["manifestImport"]["importedSourcePaths"] == 1
     assert summary["hashes"]["manifestImport"]["matchedSourcePaths"] == 1
+    assert summary["hashes"]["fingerprintRefresh"]["sharedSourceCount"] == 1
     with sqlite3.connect(metadata_db) as connection:
         uploaded = connection.execute(
             "SELECT all_time_uploaded_bytes FROM known_files"

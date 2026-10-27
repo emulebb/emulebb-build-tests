@@ -318,6 +318,10 @@ def upsert_stock_mfc_profile_hashes(
         dry_run=dry_run,
     )
     cache_summary["manifestImport"] = manifest_summary
+    if not dry_run:
+        cache_summary["fingerprintRefresh"] = (
+            rust_metadata.refresh_matching_share_source_fingerprints(metadata_db)
+        )
 
     return {
         "schemaVersion": 1,

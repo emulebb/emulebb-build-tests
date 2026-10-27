@@ -732,6 +732,88 @@ def upsert_share_in_place_hash_manifests(
         conn.commit()
 
 
+def refresh_matching_share_source_fingerprints(db_path: Path) -> dict[str, int]:
+    """Add the current change timestamp to trustworthy persisted share hashes."""
+
+    summary = {
+        "sharedSourceCount": 0,
+        "alreadyCurrentCount": 0,
+        "upgradedCount": 0,
+        "missingFingerprintCount": 0,
+        "invalidFingerprintCount": 0,
+        "unavailableSourceCount": 0,
+        "baseMismatchCount": 0,
+        "missingChangeTimestampCount": 0,
+    }
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows = conn.execute(
+            """
+            SELECT shared_file_sources.path_id, local_paths.display_path,
+                   shared_file_sources.source_fingerprint
+            FROM shared_file_sources
+            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            ORDER BY shared_file_sources.path_id
+            """
+        ).fetchall()
+        summary["sharedSourceCount"] = len(rows)
+        for path_id, display_path, persisted_payload in rows:
+            if persisted_payload is None:
+                summary["missingFingerprintCount"] += 1
+                continue
+            try:
+                persisted = rust_native_fingerprint.decode_fingerprint(
+                    bytes(persisted_payload)
+                )
+            except ValueError:
+                summary["invalidFingerprintCount"] += 1
+                continue
+            current_payload = _native_file_fingerprint(str(display_path))
+            if current_payload is None:
+                summary["unavailableSourceCount"] += 1
+                continue
+            try:
+                current = rust_native_fingerprint.decode_fingerprint(current_payload)
+            except ValueError:
+                summary["invalidFingerprintCount"] += 1
+                continue
+            if (
+                persisted.identity_kind != current.identity_kind
+                or persisted.identity_bytes != current.identity_bytes
+                or persisted.size_bytes != current.size_bytes
+                or persisted.modified != current.modified
+            ):
+                summary["baseMismatchCount"] += 1
+                continue
+            if current.changed is None:
+                summary["missingChangeTimestampCount"] += 1
+                continue
+            if persisted.changed == current.changed:
+                summary["alreadyCurrentCount"] += 1
+                continue
+            if persisted.changed is not None:
+                summary["baseMismatchCount"] += 1
+                continue
+            conn.execute(
+                """
+                UPDATE shared_file_sources
+                SET source_fingerprint = ?, updated_at_ms = ?
+                WHERE path_id = ? AND source_fingerprint = ?
+                """,
+                (current_payload, _now_ms(), path_id, persisted_payload),
+            )
+            conn.execute(
+                """
+                UPDATE transfers
+                SET source_fingerprint = ?, updated_at_ms = ?
+                WHERE source_path_id = ? AND source_fingerprint = ?
+                """,
+                (current_payload, _now_ms(), path_id, persisted_payload),
+            )
+            summary["upgradedCount"] += 1
+        conn.commit()
+    return summary
+
+
 def _seed_share_in_place_manifests_fast_conn(
     conn: sqlite3.Connection,
     *,
