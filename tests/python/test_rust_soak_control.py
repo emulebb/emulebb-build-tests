@@ -427,6 +427,51 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
     assert "192.0.2.10" not in repr(result)
 
 
+def test_reload_shared_directories_requires_accepted_queue(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
+        calls.append((path, kwargs["method"], kwargs["body"]))
+        return {"ok": True, "started": True, "queued": 42}
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    result = control.reload_shared_directories(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            request_timeout_seconds=5.0,
+        )
+    )
+
+    assert calls == [("/shared-directories/operations/reload", "POST", {})]
+    assert result == {
+        "schema": "emulebb.rust-shared-directory-reload.v1",
+        "accepted": True,
+        "queued": 42,
+        "baseUrlFingerprint": control.text_fingerprint("http://192.0.2.10:4731/api/v1"),
+    }
+    assert "192.0.2.10" not in repr(result)
+
+
+def test_reload_shared_directories_rejects_invalid_response(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    monkeypatch.setattr(
+        control,
+        "request_json",
+        lambda *args, **kwargs: {"ok": True, "started": True, "queued": -1},
+    )
+
+    with pytest.raises(RuntimeError, match="valid queued count"):
+        control.reload_shared_directories(
+            SimpleNamespace(
+                base_url="http://127.0.0.1:4731/api/v1",
+                api_key="rust",
+                request_timeout_seconds=5.0,
+            )
+        )
+
+
 def test_publish_visibility_check_requires_ed2k_and_kad_maturity() -> None:
     control = _load_rust_soak_control()
 
