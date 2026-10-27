@@ -211,6 +211,61 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     rust_metadata.require_current_profile_database(_rust_repo(), db_path)
 
 
+def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+    mfc_profile = tmp_path / "mfc-profile"
+    config = mfc_profile / "config"
+    shared = tmp_path / "shared"
+    rust_profile = tmp_path / "rust-profile"
+    config.mkdir(parents=True)
+    shared.mkdir()
+    payload = shared / "Shared.bin"
+    payload.write_bytes(b"payload")
+    modified_s = 1_700_000_000
+    os.utime(payload, (modified_s, modified_s))
+    (config / "shareddir.dat").write_text(str(shared) + "\r\n", encoding="utf-16")
+    _write_known_met(
+        config / "known.met",
+        [
+            _known_record(
+                modified_s=modified_s,
+                ed2k_hash="00112233445566778899aabbccddeeff",
+                name=payload.name,
+                size_bytes=payload.stat().st_size,
+            )
+        ],
+    )
+    mfc_profile_import.import_stock_mfc_profile(
+        rust_repo=_rust_repo(),
+        emule_config_dir=config,
+        rust_profile_dir=rust_profile,
+    )
+    metadata_db = rust_profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+    with sqlite3.connect(metadata_db) as connection:
+        connection.execute(
+            "UPDATE known_files SET all_time_uploaded_bytes = 987654321"
+        )
+
+    summary = mfc_profile_import.upsert_stock_mfc_profile_hashes(
+        rust_repo=_rust_repo(),
+        mfc_profile_dir=mfc_profile,
+        rust_profile_dir=rust_profile,
+    )
+
+    assert summary["operation"] == "upsert-hashes"
+    assert summary["hashes"]["manifestImport"]["writeMode"] == "refresh-existing"
+    assert summary["hashes"]["manifestImport"]["importedSourcePaths"] == 1
+    assert summary["hashes"]["manifestImport"]["matchedSourcePaths"] == 1
+    with sqlite3.connect(metadata_db) as connection:
+        uploaded = connection.execute(
+            "SELECT all_time_uploaded_bytes FROM known_files"
+        ).fetchone()[0]
+    assert uploaded == 987654321
+
+
 def test_import_stock_mfc_profile_requires_rest_lan_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("X_LOCAL_IP", raising=False)
     config = tmp_path / "stock-config"

@@ -271,6 +271,7 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
     )
 
     assert summary["importedRecords"] == 1
+    assert summary["matchedSourcePaths"] == 1
     manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
     assert manifest is not None
     assert manifest["completed"] is True

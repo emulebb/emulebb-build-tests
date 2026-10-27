@@ -271,6 +271,66 @@ def import_stock_mfc_profile(
     }
 
 
+def upsert_stock_mfc_profile_hashes(
+    *,
+    rust_repo: Path,
+    mfc_profile_dir: Path,
+    rust_profile_dir: Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Refresh an existing persisted Rust profile from stock MFC hash metadata."""
+
+    mfc_profile_dir = mfc_profile_dir.resolve()
+    rust_profile_dir = rust_profile_dir.resolve()
+    emule_config_dir = resolve_mfc_config_dir(mfc_profile_dir)
+    _require_persisted_rust_profile(rust_repo, rust_profile_dir)
+
+    known_met = emule_config_dir / "known.met"
+    known2_64_met = emule_config_dir / "known2_64.met"
+    root_entries = _load_recursive_root_entries(emule_config_dir / "shareddir.dat")
+    shared_roots = [
+        {
+            "path": mfc_known_met.normal_windows_display_path(
+                soak_launch.shared_root_path(root)
+            ),
+            "recursive": True,
+        }
+        for root in root_entries
+        if soak_launch.shared_root_path(root).strip("\\/")
+    ]
+    metadata_db = rust_profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+
+    cache_summary = mfc_known_met.import_mfc_known_met_cache(
+        rust_repo=rust_repo,
+        metadata_db=metadata_db,
+        known_met=known_met,
+        known2_64_met=known2_64_met if known2_64_met.is_file() else None,
+        dry_run=dry_run,
+    )
+    manifest_summary = mfc_known_met.import_mfc_known_met_hashes(
+        rust_repo=rust_repo,
+        metadata_db=metadata_db,
+        known_met=known_met,
+        known2_64_met=known2_64_met if known2_64_met.is_file() else None,
+        shared_roots=shared_roots,
+        scan_shared_roots=True,
+        preserve_existing_runtime_state=True,
+        dry_run=dry_run,
+    )
+    cache_summary["manifestImport"] = manifest_summary
+
+    return {
+        "schemaVersion": 1,
+        "operation": "upsert-hashes",
+        "dryRun": dry_run,
+        "emuleConfigDir": str(emule_config_dir),
+        "rustProfileDir": str(rust_profile_dir),
+        "metadataDb": str(metadata_db),
+        "sharedRoots": len(shared_roots),
+        "hashes": cache_summary,
+    }
+
+
 def parse_server_met(path: Path) -> list[dict[str, object]]:
     """Parse stock ``server.met`` into Rust metadata seed rows."""
 
