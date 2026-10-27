@@ -714,11 +714,30 @@ def seed_share_in_place_manifests(
         conn.commit()
 
 
+def upsert_share_in_place_hash_manifests(
+    db_path: Path,
+    manifests: list[dict[str, object]],
+) -> None:
+    """Refresh share hash metadata without replacing persisted Rust runtime state."""
+
+    now = _now_ms()
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _seed_share_in_place_manifests_fast_conn(
+            conn,
+            now=now,
+            manifests=manifests,
+            preserve_existing_runtime_state=True,
+        )
+        conn.commit()
+
+
 def _seed_share_in_place_manifests_fast_conn(
     conn: sqlite3.Connection,
     *,
     now: int,
     manifests: list[dict[str, object]],
+    preserve_existing_runtime_state: bool = False,
 ) -> None:
     """Bulk seed completed share-in-place manifests for fresh migration profiles."""
 
@@ -730,6 +749,11 @@ def _seed_share_in_place_manifests_fast_conn(
     range_rows = []
     md4_rows = []
     aich_rows = []
+    existing_transfer_known_ids = (
+        {row[0] for row in conn.execute("SELECT known_file_id FROM transfers")}
+        if preserve_existing_runtime_state
+        else set()
+    )
 
     for manifest in manifests:
         source_path = str(manifest["source_path"])
@@ -787,7 +811,7 @@ def _seed_share_in_place_manifests_fast_conn(
                 now,
             )
         )
-    conn.executemany(
+    known_file_upsert = (
         """
         INSERT INTO known_files(
             ed2k_hash, size_bytes, display_name, part_size, part_count,
@@ -814,9 +838,31 @@ def _seed_share_in_place_manifests_fast_conn(
             last_upload_request_ms = excluded.last_upload_request_ms,
             last_seen_ms = excluded.last_seen_ms,
             updated_at_ms = excluded.updated_at_ms
-        """,
-        known_rows,
+        """
+        if not preserve_existing_runtime_state
+        else """
+        INSERT INTO known_files(
+            ed2k_hash, size_bytes, display_name, part_size, part_count,
+            completed, md4_hashset_acquired, aich_hashset_acquired, aich_root,
+            upload_priority, auto_upload_priority, all_time_uploaded_bytes,
+            all_time_upload_requests, all_time_upload_accepts,
+            last_upload_request_ms, first_seen_ms, last_seen_ms, updated_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ed2k_hash) DO UPDATE SET
+            size_bytes = excluded.size_bytes,
+            display_name = excluded.display_name,
+            part_size = excluded.part_size,
+            part_count = excluded.part_count,
+            completed = excluded.completed,
+            md4_hashset_acquired = excluded.md4_hashset_acquired,
+            aich_hashset_acquired = excluded.aich_hashset_acquired,
+            aich_root = excluded.aich_root,
+            last_seen_ms = excluded.last_seen_ms,
+            updated_at_ms = excluded.updated_at_ms
+        """
     )
+    conn.executemany(known_file_upsert, known_rows)
     known_ids = {row[1]: row[0] for row in conn.execute("SELECT id, lower(hex(ed2k_hash)) FROM known_files")}
 
     for manifest in manifests:
@@ -829,13 +875,14 @@ def _seed_share_in_place_manifests_fast_conn(
             (known_file_id, ed2k_hash, path_id, source_fingerprint, now, now, now, now)
         )
         source_rows.append((known_file_id, path_id, size_bytes, source_fingerprint, now, now))
-        range_rows.append((known_file_id, size_bytes, now))
+        if known_file_id not in existing_transfer_known_ids:
+            range_rows.append((known_file_id, size_bytes, now))
         for index, part_hash in enumerate(manifest.get("md4_hashset", []) or []):
             md4_rows.append((known_file_id, index, bytes.fromhex(str(part_hash))))
         for index, part_hash in enumerate(manifest.get("aich_hashset", []) or []):
             aich_rows.append((known_file_id, index, bytes.fromhex(str(part_hash))))
 
-    conn.executemany(
+    transfer_upsert = (
         """
         INSERT INTO transfers(
             known_file_id, visible_state, download_priority, payload_directory,
@@ -854,14 +901,42 @@ def _seed_share_in_place_manifests_fast_conn(
             updated_at_ms = excluded.updated_at_ms,
             completed_at_ms = excluded.completed_at_ms,
             removed_at_ms = excluded.removed_at_ms
-        """,
-        transfer_rows,
+        """
+        if not preserve_existing_runtime_state
+        else """
+        INSERT INTO transfers(
+            known_file_id, visible_state, download_priority, payload_directory,
+            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
+            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
+        )
+        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(known_file_id) DO UPDATE SET
+            source_path_id = excluded.source_path_id,
+            source_fingerprint = excluded.source_fingerprint,
+            updated_at_ms = excluded.updated_at_ms
+        WHERE transfers.source_path_id IS NOT NULL
+        """
     )
-    for known_file_id, *_rest in transfer_rows:
+    conn.executemany(transfer_upsert, transfer_rows)
+    transfer_ids = []
+    for known_file_id in {row[0] for row in transfer_rows}:
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
-        _replace_transfer_name_state(conn, transfer_id)
+        transfer_ids.append(transfer_id)
+    if preserve_existing_runtime_state:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO transfer_name_state(
+                transfer_id, display_name_pinned, follow_majority_filename
+            )
+            VALUES (?, 0, 0)
+            """,
+            [(transfer_id,) for transfer_id in transfer_ids],
+        )
+    else:
+        for transfer_id in transfer_ids:
+            _replace_transfer_name_state(conn, transfer_id)
     conn.executemany(
         """
         INSERT INTO shared_file_sources(
@@ -881,6 +956,20 @@ def _seed_share_in_place_manifests_fast_conn(
         "DELETE FROM shared_file_scan_failures WHERE path_id = ?",
         [(row[1],) for row in source_rows],
     )
+    known_file_ids = sorted({row[0] for row in source_rows})
+    conn.executemany(
+        "DELETE FROM ed2k_part_hashes WHERE known_file_id = ?",
+        [(known_file_id,) for known_file_id in known_file_ids],
+    )
+    conn.executemany(
+        "DELETE FROM aich_part_hashes WHERE known_file_id = ?",
+        [(known_file_id,) for known_file_id in known_file_ids],
+    )
+    if not preserve_existing_runtime_state:
+        conn.executemany(
+            "DELETE FROM verified_ranges WHERE known_file_id = ?",
+            [(known_file_id,) for known_file_id in known_file_ids],
+        )
     if md4_rows:
         conn.executemany(
             "INSERT OR REPLACE INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
@@ -891,13 +980,14 @@ def _seed_share_in_place_manifests_fast_conn(
             "INSERT OR REPLACE INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
             aich_rows,
         )
-    conn.executemany(
-        """
-        INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
-        VALUES (?, 0, ?, ?)
-        """,
-        range_rows,
-    )
+    if range_rows:
+        conn.executemany(
+            """
+            INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
+            VALUES (?, 0, ?, ?)
+            """,
+            {row[0]: row for row in range_rows}.values(),
+        )
 
 
 def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:

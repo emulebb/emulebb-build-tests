@@ -284,6 +284,7 @@ def import_mfc_known_met_hashes(
     shared_roots: list[object],
     shared_file_candidates: list[SharedFileCandidate] | None = None,
     scan_shared_roots: bool = True,
+    preserve_existing_runtime_state: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if not dry_run and not metadata_db.exists():
@@ -328,6 +329,7 @@ def import_mfc_known_met_hashes(
         "aich_count_mismatch": 0,
     }
     matched = 0
+    matched_source_paths = 0
     duplicate_records = 0
     known2_aich_used = 0
     stats_records = 0
@@ -361,6 +363,7 @@ def import_mfc_known_met_hashes(
         # sharing that identity) is caught by the downloader's AICH/hash verification
         # and self-corrects on the next share scan.
         matched += 1
+        matched_source_paths += len(matches)
         if len(matches) > 1:
             duplicate_records += 1
         has_stats = (
@@ -393,17 +396,21 @@ def import_mfc_known_met_hashes(
                     }
                 )
     if manifests:
-        rust_metadata.seed_share_in_place_manifests(
-            metadata_db,
-            manifests,
-            seed_piece_rows=False,
-        )
+        if preserve_existing_runtime_state:
+            rust_metadata.upsert_share_in_place_hash_manifests(metadata_db, manifests)
+        else:
+            rust_metadata.seed_share_in_place_manifests(
+                metadata_db,
+                manifests,
+                seed_piece_rows=False,
+            )
 
     return {
         "knownMetRecords": len(entries),
         "sharedFilesScanned": len(candidates),
         "sharedFileCandidateSource": "scan" if scan_shared_roots else ("startup-cache" if shared_file_candidates is not None else "none"),
         "matchedRecords": matched,
+        "matchedSourcePaths": matched_source_paths,
         "duplicateRecords": duplicate_records,
         "known2AichRecords": len(known2_aich),
         "known2AichUsed": known2_aich_used,
@@ -411,6 +418,7 @@ def import_mfc_known_met_hashes(
         "statsSourcePaths": stats_source_paths,
         "importedRecords": matched,
         "importedSourcePaths": len(manifests),
+        "writeMode": "refresh-existing" if preserve_existing_runtime_state else "seed-profile",
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),
