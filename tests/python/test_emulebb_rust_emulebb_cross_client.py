@@ -713,6 +713,7 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                 "direction": "send",
                 "sendAttemptId": attempt_id,
                 "role": "reask_request",
+                "protocolMarker": 0xC5,
                 "opcode": 0x90,
             }
             event = "packet" if segment_id == 0 else "send_outcome"

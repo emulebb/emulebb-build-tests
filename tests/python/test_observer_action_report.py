@@ -47,8 +47,12 @@ def _kad_record(
         "family": soak_action_diff.KAD_UDP_FAMILY,
         "event": "packet",
         "severity": "info",
-        "keys": {"opcode": opcode},
-        "body": {"direction": direction, "opcode": opcode},
+        "keys": {"protocolMarker": 0xE4, "opcode": opcode},
+        "body": {
+            "direction": direction,
+            "protocolMarker": 0xE4,
+            "opcode": opcode,
+        },
     }
 
 
