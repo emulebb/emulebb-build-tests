@@ -1228,6 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
             "mfcArtifactsDir": str(mfc_artifacts),
             "rustExe": str(rust_exe),
             "rustServer": args.rust_server,
+            "mfcServer": args.mfc_server if not args.no_mfc else None,
             "rustFallbackServers": list(args.rust_fallback_server),
             "durationSeconds": args.duration_seconds,
             "stopFile": str(stop_file) if stop_file is not None else None,
