@@ -306,8 +306,11 @@ def test_sanitize_status_reads_shared_directory_reload_progress() -> None:
             "runtimeDiagnostics": {
                 "sharedDirectoryReloadProgress": {
                     "phase": "queued",
+                    "running": True,
+                    "pending": True,
                     "scannedCount": 100,
                     "plannedHashCount": 5,
+                    "missingFingerprintCount": 3,
                     "reusedCount": 95,
                 }
             }
@@ -315,8 +318,11 @@ def test_sanitize_status_reads_shared_directory_reload_progress() -> None:
     )
 
     assert sample["sharedReloadPhase"] == "queued"
+    assert sample["sharedReloadRunning"] is True
+    assert sample["sharedReloadPending"] is True
     assert sample["sharedReloadScannedCount"] == 100
     assert sample["sharedReloadPlannedHashCount"] == 5
+    assert sample["sharedReloadMissingFingerprintCount"] == 3
     assert sample["sharedReloadReusedCount"] == 95
 
 
@@ -329,6 +335,8 @@ def test_shared_library_settled_check_requires_no_hashing_or_reload() -> None:
             "sharedHashingActive": True,
             "sharedHashingCount": 12,
             "sharedReloadPhase": "hashing",
+            "sharedReloadRunning": True,
+            "sharedReloadPending": True,
             "sharedReloadFailedHashCount": 0,
             "sharedReloadStatFailedCount": 0,
         },
@@ -336,7 +344,13 @@ def test_shared_library_settled_check_requires_no_hashing_or_reload() -> None:
     )
 
     assert check["ok"] is False
-    assert check["missing"] == ["hashingInactive", "hashingComplete", "reloadIdle"]
+    assert check["missing"] == [
+        "hashingInactive",
+        "hashingComplete",
+        "reloadNotRunning",
+        "reloadNotPending",
+        "reloadIdle",
+    ]
     assert check["sharedFileCount"] == 100
 
 
@@ -349,10 +363,16 @@ def test_shared_library_settled_check_accepts_stable_shared_counts() -> None:
             "sharedHashingActive": False,
             "sharedHashingCount": 0,
             "sharedReloadPhase": "idle",
+            "sharedReloadRunning": False,
+            "sharedReloadPending": False,
+            "sharedReloadPlannedHashCount": 0,
+            "sharedReloadMissingFingerprintCount": 0,
             "sharedReloadFailedHashCount": 0,
             "sharedReloadStatFailedCount": 0,
         },
         min_shared_files=1,
+        max_planned_hashes=0,
+        max_missing_fingerprints=0,
     )
 
     assert check["ok"] is True
@@ -365,15 +385,15 @@ def test_shared_reload_settled_proof_waits_for_consecutive_stable_samples(monkey
         [
             {
                 "stats": {"sharedHashingActive": True, "sharedHashingCount": 1},
-                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing"}},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing", "running": True, "pending": False}},
             },
             {
                 "stats": {"sharedHashingActive": False, "sharedHashingCount": 0},
-                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "failedHashCount": 0, "statFailedCount": 0}},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "running": False, "pending": False, "failedHashCount": 0, "statFailedCount": 0}},
             },
             {
                 "stats": {"sharedHashingActive": False, "sharedHashingCount": 0},
-                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "failedHashCount": 0, "statFailedCount": 0}},
+                "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "idle", "running": False, "pending": False, "failedHashCount": 0, "statFailedCount": 0}},
             },
         ]
     )
@@ -388,6 +408,8 @@ def test_shared_reload_settled_proof_waits_for_consecutive_stable_samples(monkey
             request_timeout_seconds=1.0,
             stable_samples=2,
             min_shared_files=1,
+            max_planned_hashes=None,
+            max_missing_fingerprints=None,
             max_observations=20,
         )
     )
@@ -406,7 +428,7 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
         "request_json",
         lambda *args, **kwargs: {
             "stats": {"sharedHashingActive": True, "sharedHashingCount": 12},
-            "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing"}},
+            "runtimeDiagnostics": {"sharedFileCount": 100, "sharedDirectoryReloadProgress": {"phase": "hashing", "running": True, "pending": False}},
         },
     )
     result = control.rust_shared_reload_settled_proof(
@@ -418,12 +440,19 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
             request_timeout_seconds=1.0,
             stable_samples=2,
             min_shared_files=1,
+            max_planned_hashes=None,
+            max_missing_fingerprints=None,
             max_observations=20,
         )
     )
 
     assert result["ok"] is False
-    assert result["sample"]["missing"] == ["hashingInactive", "hashingComplete", "reloadIdle"]
+    assert result["sample"]["missing"] == [
+        "hashingInactive",
+        "hashingComplete",
+        "reloadNotRunning",
+        "reloadIdle",
+    ]
     assert "192.0.2.10" not in repr(result)
 
 

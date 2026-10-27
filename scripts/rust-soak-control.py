@@ -2763,6 +2763,8 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "knownFileCount": runtime.get("knownFileCount"),
         "sharedFileCount": runtime.get("sharedFileCount"),
         "sharedReloadPhase": shared_reload.get("phase"),
+        "sharedReloadRunning": shared_reload.get("running"),
+        "sharedReloadPending": shared_reload.get("pending"),
         "sharedReloadScannedCount": shared_reload.get("scannedCount"),
         "sharedReloadPlannedHashCount": shared_reload.get("plannedHashCount"),
         "sharedReloadHashedCount": shared_reload.get("hashedCount"),
@@ -2770,7 +2772,7 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "sharedReloadReusedCount": shared_reload.get("reusedCount"),
         "sharedReloadNewCount": shared_reload.get("newCount"),
         "sharedReloadChangedCount": shared_reload.get("changedCount"),
-        "sharedReloadMissingMtimeCount": shared_reload.get("missingMtimeCount"),
+        "sharedReloadMissingFingerprintCount": shared_reload.get("missingFingerprintCount"),
         "sharedReloadStatFailedCount": shared_reload.get("statFailedCount"),
         "sharedReloadSkippedFailedCount": shared_reload.get("skippedFailedCount"),
         "sharedReloadSkippedIntakeCount": shared_reload.get("skippedIntakeCount"),
@@ -3150,13 +3152,25 @@ def compare_shared_summaries(rust: dict[str, object], mfc: dict[str, object] | N
     }
 
 
-def shared_library_settled_check(sample: dict[str, object], *, min_shared_files: int) -> dict[str, object]:
+def shared_library_settled_check(
+    sample: dict[str, object],
+    *,
+    min_shared_files: int,
+    max_planned_hashes: int | None = None,
+    max_missing_fingerprints: int | None = None,
+) -> dict[str, object]:
     """Returns whether lightweight runtime counters prove shared hashing is settled."""
 
     shared_file_count = safe_int(sample.get("sharedFileCount"))
     hashing_count = safe_int(sample.get("sharedHashingCount"))
     hashing_active = sample.get("sharedHashingActive")
     reload_phase = sample.get("sharedReloadPhase")
+    reload_running = sample.get("sharedReloadRunning")
+    reload_pending = sample.get("sharedReloadPending")
+    planned_hash_count = safe_int(sample.get("sharedReloadPlannedHashCount"))
+    missing_fingerprint_count = safe_int(
+        sample.get("sharedReloadMissingFingerprintCount")
+    )
     failed_hash_count = safe_int(sample.get("sharedReloadFailedHashCount"))
     stat_failed_count = safe_int(sample.get("sharedReloadStatFailedCount"))
     missing: list[str] = []
@@ -3166,8 +3180,21 @@ def shared_library_settled_check(sample: dict[str, object], *, min_shared_files:
         missing.append("hashingInactive")
     if hashing_count != 0:
         missing.append("hashingComplete")
+    if reload_running is not False:
+        missing.append("reloadNotRunning")
+    if reload_pending is not False:
+        missing.append("reloadNotPending")
     if reload_phase != "idle":
         missing.append("reloadIdle")
+    if max_planned_hashes is not None and (
+        planned_hash_count is None or planned_hash_count > max_planned_hashes
+    ):
+        missing.append("plannedHashLimit")
+    if max_missing_fingerprints is not None and (
+        missing_fingerprint_count is None
+        or missing_fingerprint_count > max_missing_fingerprints
+    ):
+        missing.append("missingFingerprintLimit")
     if failed_hash_count not in (None, 0):
         missing.append("noFailedHashes")
     if stat_failed_count not in (None, 0):
@@ -3179,7 +3206,10 @@ def shared_library_settled_check(sample: dict[str, object], *, min_shared_files:
         "hashingActive": hashing_active,
         "hashingCount": hashing_count,
         "reloadPhase": reload_phase,
-        "plannedHashCount": sample.get("sharedReloadPlannedHashCount"),
+        "reloadRunning": reload_running,
+        "reloadPending": reload_pending,
+        "plannedHashCount": planned_hash_count,
+        "missingFingerprintCount": missing_fingerprint_count,
         "hashedCount": sample.get("sharedReloadHashedCount"),
         "failedHashCount": sample.get("sharedReloadFailedHashCount"),
         "reusedCount": sample.get("sharedReloadReusedCount"),
@@ -3198,7 +3228,10 @@ def shared_library_stability_check(checks: list[dict[str, object]]) -> dict[str,
         "hashingActive",
         "hashingCount",
         "reloadPhase",
+        "reloadRunning",
+        "reloadPending",
         "plannedHashCount",
+        "missingFingerprintCount",
         "hashedCount",
         "failedHashCount",
         "reusedCount",
@@ -3240,6 +3273,8 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
             check = shared_library_settled_check(
                 runtime_sample,
                 min_shared_files=args.min_shared_files,
+                max_planned_hashes=args.max_planned_hashes,
+                max_missing_fingerprints=args.max_missing_fingerprints,
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
             check = {
@@ -3255,13 +3290,15 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
                 if stability["ok"]:
                     return {
                         "ok": True,
-                        "schema": "emulebb.rust-shared-reload-settled-proof.v2",
+                        "schema": "emulebb.rust-shared-reload-settled-proof.v3",
                         "baseUrlFingerprint": text_fingerprint(args.base_url),
                         "elapsedSeconds": round(time.monotonic() - started, 3),
                         "stableSamplesRequired": args.stable_samples,
                         "pollSeconds": args.poll_seconds,
                         "requestTimeoutSeconds": args.request_timeout_seconds,
                         "minSharedFiles": args.min_shared_files,
+                        "maxPlannedHashes": args.max_planned_hashes,
+                        "maxMissingFingerprints": args.max_missing_fingerprints,
                         "observations": observations[-args.max_observations :],
                         "stability": stability,
                         "sample": check,
@@ -3272,13 +3309,15 @@ def rust_shared_reload_settled_proof(args: argparse.Namespace) -> dict[str, obje
             stability = shared_library_stability_check(settled_checks[-args.stable_samples :])
             return {
                 "ok": False,
-                "schema": "emulebb.rust-shared-reload-settled-proof.v2",
+                "schema": "emulebb.rust-shared-reload-settled-proof.v3",
                 "baseUrlFingerprint": text_fingerprint(args.base_url),
                 "elapsedSeconds": round(time.monotonic() - started, 3),
                 "stableSamplesRequired": args.stable_samples,
                 "pollSeconds": args.poll_seconds,
                 "requestTimeoutSeconds": args.request_timeout_seconds,
                 "minSharedFiles": args.min_shared_files,
+                "maxPlannedHashes": args.max_planned_hashes,
+                "maxMissingFingerprints": args.max_missing_fingerprints,
                 "observations": observations[-args.max_observations :],
                 "stability": stability,
                 "sample": check,
@@ -7067,6 +7106,8 @@ def build_parser() -> argparse.ArgumentParser:
     shared_settled_parser.add_argument("--request-timeout-seconds", type=float, default=120.0)
     shared_settled_parser.add_argument("--stable-samples", type=int, default=3)
     shared_settled_parser.add_argument("--min-shared-files", type=int, default=1)
+    shared_settled_parser.add_argument("--max-planned-hashes", type=int)
+    shared_settled_parser.add_argument("--max-missing-fingerprints", type=int)
     shared_settled_parser.add_argument("--max-observations", type=int, default=20)
     shared_settled_parser.add_argument(
         "--json-output",
