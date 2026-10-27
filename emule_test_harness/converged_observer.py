@@ -591,11 +591,19 @@ def finalize_pending_action(
             campaign_id=runtime.run_paths.campaign_id,
             pending_action=pending_action,
             evidence=evidence,
+            server_endpoints={
+                "rust": runtime.rust_server_endpoint,
+                "mfc": runtime.mfc_server_endpoint,
+            },
         )
     else:
         report = observer_action_report.validate_observer_action_report_for_pending(
             report_candidate,
             pending_action,
+            server_endpoints={
+                "rust": runtime.rust_server_endpoint,
+                "mfc": runtime.mfc_server_endpoint,
+            },
         )
     persisted = soak_run_layout.persist_observer_action_report(
         paths=runtime.run_paths,

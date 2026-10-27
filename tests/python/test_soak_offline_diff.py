@@ -18,6 +18,10 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 OFFLINE_DIFF = REPO_ROOT / "scripts" / "soak-offline-diff.py"
+SERVER_ENDPOINTS = {
+    "rust": "198.51.100.2:4661",
+    "mfc": "198.51.100.2:4661",
+}
 
 
 def _load_offline_diff() -> ModuleType:
@@ -400,7 +404,16 @@ def test_diag_family_gate_passes_across_independent_sessions() -> None:
     mfc_diag = [_diag("kad_event", "lookup", 1.2, body={"milestone": "lookup_complete", "resultCount": 9})]
     rust, mfc = _sides(rust_pkt, mfc_pkt, rust_diag, mfc_diag)
 
-    result = mod._diff_one_action("search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0)
+    result = mod._diff_one_action(
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=2.0,
+        settle=5.0,
+        server_endpoints=SERVER_ENDPOINTS,
+    )
 
     assert result["diagFamilyOk"] is True
     assert result["diagStrictMatchOk"] is False  # informational: never true live
@@ -420,7 +433,16 @@ def test_diag_family_gate_fails_on_missing_oracle_body_key() -> None:
         mfc_diag,
     )
 
-    result = mod._diff_one_action("search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0)
+    result = mod._diff_one_action(
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=2.0,
+        settle=5.0,
+        server_endpoints=SERVER_ENDPOINTS,
+    )
 
     assert result["diagFamilyOk"] is False
     assert result["verdict"] == "divergence"
@@ -435,7 +457,16 @@ def test_packet_only_action_window_fails_for_missing_diagnostics() -> None:
         [],
     )
 
-    result = mod._diff_one_action("search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0)
+    result = mod._diff_one_action(
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=2.0,
+        settle=5.0,
+        server_endpoints=SERVER_ENDPOINTS,
+    )
 
     assert result["verdict"] == "missing-diagnostics"
     assert result["conformant"] is False
@@ -467,7 +498,15 @@ def test_global_search_action_is_not_assessable_without_mfc_udp_evidence() -> No
     mfc_pkt = [_pkt("server", "send", 0x14, "bb", 1.0)]
     rust, mfc = _sides(rust_pkt, mfc_pkt)
     result = mod._diff_one_action(
-        "search", rust, mfc, _window(), _window(), lead=2.0, settle=5.0, method="global"
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=2.0,
+        settle=5.0,
+        server_endpoints=SERVER_ENDPOINTS,
+        method="global",
     )
     assert result["method"] == "global"
     assert result["coverageOk"] is False
@@ -525,6 +564,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
         lead=2.0,
         settle=5.0,
         method="kad",
+        server_endpoints=SERVER_ENDPOINTS,
         search_ids={"rust": "rust-search", "mfc": "mfc-search"},
         search_result_totals={"rust": 0, "mfc": 0},
     )
@@ -554,7 +594,8 @@ def test_no_window_result_carries_gate_keys() -> None:
     rust, mfc = _sides([], [])
     incomplete = {"kind": "search", "t0": _window()["t0"]}
     result = mod._diff_one_action(
-        "search", rust, mfc, incomplete, _window(), lead=1.0, settle=1.0
+        "search", rust, mfc, incomplete, _window(), lead=1.0, settle=1.0,
+        server_endpoints=SERVER_ENDPOINTS,
     )
     assert result["verdict"] == "no-window"
     assert result["diagFamilyOk"] is False
@@ -566,7 +607,8 @@ def test_no_traffic_is_not_conformant() -> None:
     rust, mfc = _sides([], [])
 
     result = mod._diff_one_action(
-        "search", rust, mfc, _window(), _window(), lead=1.0, settle=1.0
+        "search", rust, mfc, _window(), _window(), lead=1.0, settle=1.0,
+        server_endpoints=SERVER_ENDPOINTS,
     )
 
     assert result["verdict"] == "no-traffic"
@@ -579,7 +621,8 @@ def test_end_marker_action_error_fails_action_without_diffing() -> None:
     rust_window = {**_window(), "status": "error"}
 
     result = mod._diff_one_action(
-        "search", rust, mfc, rust_window, _window(), lead=1.0, settle=1.0
+        "search", rust, mfc, rust_window, _window(), lead=1.0, settle=1.0,
+        server_endpoints=SERVER_ENDPOINTS,
     )
 
     assert result["verdict"] == "action-error"

@@ -531,3 +531,35 @@ def test_summarize_actions_keeps_unpaired_separate_from_coverage_failure() -> No
     assert summary["actionVerdictCounts"] == {"unpaired": 1}
     assert summary["actionCoverageFailures"] == 0
     assert summary["actionDivergenceSamples"][0]["verdict"] == "unpaired"
+
+
+def test_summarize_actions_counts_noncomparable_server_responses() -> None:
+    summary = soak_report_summary.summarize_actions(
+        [
+            {
+                "seq": 1,
+                "kind": "search",
+                "verdict": "coverage-parity",
+                "coverageOk": True,
+                "diagOk": True,
+                "assessment": {
+                    "packets": {"rust": 1, "mfc": 2},
+                    "actionCoverage": {
+                        "ok": True,
+                        "mode": "action-required-opcodes",
+                        "required": [],
+                        "responseAssessment": {
+                            "status": "not-assessable",
+                            "reason": "distinct-server-endpoints",
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    assert summary["actionCoverageFailures"] == 0
+    assert summary["serverResponseAssessment"] == {
+        "statusCounts": {"not-assessable": 1},
+        "reasonCounts": {"distinct-server-endpoints": 1},
+    }

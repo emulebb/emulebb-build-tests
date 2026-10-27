@@ -196,11 +196,11 @@ def _action_coverage(report: dict[str, Any]) -> dict[str, Any]:
     if report.get("verdict") == "unpaired":
         return {"ok": None, "mode": "unpaired", "required": []}
     coverage = _assessment(report).get("actionCoverage")
-    if isinstance(coverage, dict):
-        return coverage
-    packet_diff = _assessment(report).get("packetDiff")
-    packet_diff = packet_diff if isinstance(packet_diff, dict) else {}
-    return soak_action_diff.build_action_coverage(str(report.get("kind") or ""), packet_diff)
+    if not isinstance(coverage, dict):
+        raise SoakReportSummaryError(
+            "Observer action report is missing current action coverage."
+        )
+    return coverage
 
 
 def _action_verdict(report: dict[str, Any], action_coverage: dict[str, Any]) -> str:
@@ -234,6 +234,8 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
     download_payload_missing = 0
     divergence_samples: list[dict[str, Any]] = []
     action_divergence_samples: list[dict[str, Any]] = []
+    response_status_counts: Counter[str] = Counter()
+    response_reason_counts: Counter[str] = Counter()
     result_polls: dict[str, dict[str, Any]] = {
         client: {
             "polls": 0,
@@ -248,6 +250,14 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
         kind = str(report.get("kind") or "unknown")
         verdict = str(report.get("verdict") or "unknown")
         action_coverage = _action_coverage(report)
+        response_assessment = action_coverage.get("responseAssessment")
+        if isinstance(response_assessment, dict):
+            response_status_counts[
+                str(response_assessment.get("status") or "invalid")
+            ] += 1
+            response_reason_counts[
+                str(response_assessment.get("reason") or "invalid")
+            ] += 1
         action_verdict = _action_verdict(report, action_coverage)
         kind_counts[kind] += 1
         verdict_counts[verdict] += 1
@@ -338,6 +348,10 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "payloadMissingAfterStartParity": download_payload_missing,
         },
         "diagFailures": diag_failures,
+        "serverResponseAssessment": {
+            "statusCounts": _counter_dict(response_status_counts),
+            "reasonCounts": _counter_dict(response_reason_counts),
+        },
         "divergenceSamples": divergence_samples,
         "actionDivergenceSamples": action_divergence_samples,
         "resultPolls": {

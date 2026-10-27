@@ -9,6 +9,15 @@ from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 
 pytestmark = pytest.mark.unit
 
+SAME_SERVER_ENDPOINTS = {
+    "rust": "198.51.100.2:4661",
+    "mfc": "198.51.100.2:4661",
+}
+DISTINCT_SERVER_ENDPOINTS = {
+    "rust": "198.51.100.2:4661",
+    "mfc": "203.0.113.3:5687",
+}
+
 
 def _ts(seconds: float) -> datetime:
     return datetime(2026, 6, 24, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds)
@@ -354,7 +363,12 @@ def test_diff_action_coverage_parity_when_same_opcodes() -> None:
         _pkt("server", "send", 0x16, "ccdd", _ts(3), marker=0xE3),
         _pkt("server", "recv", 0x33, "ff", _ts(4), marker=0xE3),
     ]
-    report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+    )
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["actionCoverage"]["mode"] == "action-required-opcodes"
@@ -382,6 +396,7 @@ def test_diff_action_uses_authoritative_action_window() -> None:
         pair,
         rust_packets=rust_packets,
         mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         action_window=action_window,
     )
 
@@ -406,7 +421,12 @@ def test_diff_action_search_gate_ignores_unrelated_background_opcodes() -> None:
         _pkt("server", "send", 0x16, "dd", _ts(3), marker=0xE3),
         _pkt("server", "recv", 0x33, "ee", _ts(4), marker=0xE3),
     ]
-    report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+    )
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["fullCoverageOk"] is False
@@ -432,6 +452,7 @@ def test_diff_action_zero_result_server_search_makes_response_optional() -> None
         pair,
         rust_packets=rust_packets,
         mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         search_result_totals={"rust": 0, "mfc": 0},
     )
 
@@ -443,6 +464,91 @@ def test_diff_action_zero_result_server_search_makes_response_optional() -> None
         "server-search-result"
     ]
     assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is False
+
+
+def test_diff_action_distinct_server_responses_are_observed_not_compared() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "bb", _ts(4), marker=0xE3),
+    ]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=DISTINCT_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 13},
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert report["coverageOk"] is True
+    assert [row["label"] for row in report["actionCoverage"]["required"]] == [
+        "server-search-request"
+    ]
+    response = report["actionCoverage"]["responseAssessment"]
+    assert response["comparable"] is False
+    assert response["mode"] == "distinct-endpoints"
+    assert response["reason"] == "distinct-server-endpoints"
+    assert response["requiredForParity"] is False
+    assert response["wire"] == {
+        "rustCount": 0,
+        "mfcCount": 1,
+        "rustPresent": False,
+        "mfcPresent": True,
+        "presentOnBoth": False,
+    }
+
+
+def test_diff_action_same_server_responses_remain_a_parity_gate() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "bb", _ts(4), marker=0xE3),
+    ]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 13},
+    )
+
+    assert report["verdict"] == "divergence"
+    assert report["coverageOk"] is False
+    response = report["actionCoverage"]["responseAssessment"]
+    assert response["comparable"] is True
+    assert response["mode"] == "same-endpoint"
+    assert response["requiredForParity"] is True
+
+
+def test_diff_action_server_search_requires_endpoint_authority() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+
+    with pytest.raises(sad.ActionTraceError, match="server_endpoints"):
+        sad.diff_action(pair, rust_packets=[], mfc_packets=[])
 
 
 def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:
@@ -467,6 +573,7 @@ def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:
         pair,
         rust_packets=rust_packets,
         mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         rust_diag=rust_diag,
         mfc_diag=mfc_diag,
     )
@@ -499,6 +606,7 @@ def test_diff_action_fails_on_diag_oracle_body_key_gap() -> None:
         pair,
         rust_packets=rust_packets,
         mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         rust_diag=rust_diag,
         mfc_diag=mfc_diag,
     )
@@ -520,7 +628,12 @@ def test_diff_action_divergence_when_required_search_result_is_missing() -> None
         _pkt("server", "send", 0x98, "bb", _ts(1), marker=0xE3),  # opcode only rust uses
     ]
     mfc_packets = [_pkt("server", "send", 0x16, "cc", _ts(3), marker=0xE3)]
-    report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+    )
     assert report["verdict"] == "divergence"
     assert report["coverageOk"] is False
 
@@ -916,6 +1029,7 @@ def test_search_gate_server_requires_ed2k_tcp_diagnostic_family() -> None:
         pair,
         rust_packets=packets,
         mfc_packets=packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         rust_diag=[_diag("sched", "tick", _ts(1))],
         mfc_diag=[_diag("sched", "tick", _ts(2))],
     )
@@ -931,6 +1045,7 @@ def test_search_gate_automatic_method_rejects_uncorrelated_kad_packets() -> None
         pair,
         rust_packets=[_pkt("client", "send", 0x99, "aa", _ts(1))],
         mfc_packets=[_pkt("client", "send", 0x99, "bb", _ts(2))],
+        server_endpoints=SAME_SERVER_ENDPOINTS,
         rust_diag=[_kad_diag(0x33, "send", _ts(1))],
         mfc_diag=[_kad_diag(0x33, "send", _ts(2))],
     )
@@ -954,9 +1069,20 @@ def test_diff_action_no_traffic_and_one_sided() -> None:
         rust=_action("rust", "ubuntu", _ts(0)),
         mfc=_action("mfc", "ubuntu", _ts(2)),
     )
-    assert sad.diff_action(pair, rust_packets=[], mfc_packets=[])["verdict"] == "no-traffic"
+    assert (
+        sad.diff_action(
+            pair,
+            rust_packets=[],
+            mfc_packets=[],
+            server_endpoints=SAME_SERVER_ENDPOINTS,
+        )["verdict"]
+        == "no-traffic"
+    )
     one = sad.diff_action(
-        pair, rust_packets=[_pkt("server", "send", 0x16, "aa", _ts(1))], mfc_packets=[]
+        pair,
+        rust_packets=[_pkt("server", "send", 0x16, "aa", _ts(1))],
+        mfc_packets=[],
+        server_endpoints=SAME_SERVER_ENDPOINTS,
     )
     assert one["verdict"] == "one-sided"
 

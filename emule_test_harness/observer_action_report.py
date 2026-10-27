@@ -9,7 +9,7 @@ from typing import Any
 
 from . import diag_event_diff, observer_action_evidence, soak_action_diff
 
-SCHEMA = "emulebb-build-tests.observer-action-report.v1"
+SCHEMA = "emulebb-build-tests.observer-action-report.v2"
 _CLIENTS = ("rust", "mfc")
 _VERDICTS = {
     "coverage-parity",
@@ -38,6 +38,7 @@ _REPORT_FIELDS = {
     "byteMatch",
     "diagOk",
     "diagStrictOk",
+    "serverEndpoints",
     "driverOutcome",
     "diagnosticEvidence",
     "assessment",
@@ -73,6 +74,7 @@ def build_observer_action_report(
     campaign_id: str,
     pending_action: dict[str, Any],
     evidence: observer_action_evidence.ActionDiagnosticEvidence,
+    server_endpoints: dict[str, str],
 ) -> dict[str, Any]:
     """Combines one terminal driver action with its exact diagnostic evidence."""
 
@@ -83,6 +85,9 @@ def build_observer_action_report(
             "evidence must be an ActionDiagnosticEvidence instance"
         )
     _validate_evidence_authority(pending_action, evidence)
+    normalized_server_endpoints = soak_action_diff.normalize_server_endpoints(
+        server_endpoints
+    )
 
     pair = _action_pair(pending_action)
     rust_diagnostics = list(evidence.rust.window_records)
@@ -93,6 +98,7 @@ def build_observer_action_report(
         mfc_packets=diag_event_diff.ed2k_tcp_packet_views(mfc_diagnostics),
         rust_diag=rust_diagnostics,
         mfc_diag=mfc_diagnostics,
+        server_endpoints=copy.deepcopy(server_endpoints),
         search_ids=copy.deepcopy(pending_action["driverOutcome"]["searchIds"]),
         search_result_totals=copy.deepcopy(
             pending_action["driverOutcome"]["resultTotals"]
@@ -123,11 +129,16 @@ def build_observer_action_report(
         "byteMatch": assessment["byteMatch"],
         "diagOk": assessment["diagOk"],
         "diagStrictOk": assessment["diagStrictOk"],
+        "serverEndpoints": normalized_server_endpoints,
         "driverOutcome": copy.deepcopy(pending_action["driverOutcome"]),
         "diagnosticEvidence": evidence.report_payload(),
         "assessment": copy.deepcopy(assessment),
     }
-    return validate_observer_action_report_for_pending(report, pending_action)
+    return validate_observer_action_report_for_pending(
+        report,
+        pending_action,
+        server_endpoints=server_endpoints,
+    )
 
 
 def validate_observer_action_report(report: object) -> dict[str, Any]:
@@ -164,6 +175,7 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
             raise ObserverActionReportError(
                 f"Observer action report {field} must be boolean."
             )
+    server_endpoints = _validate_server_endpoints_payload(report.get("serverEndpoints"))
 
     window = _validate_window(report.get("window"), "window")
     observed = report.get("observed")
@@ -237,6 +249,15 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
     )
     if report["verdict"] != expected_verdict:
         raise ObserverActionReportError("Observer action report verdict is inconsistent.")
+    response_assessment = assessment.get("actionCoverage", {}).get("responseAssessment")
+    if report["method"] == soak_action_diff.SEARCH_METHOD_SERVER:
+        if (
+            not isinstance(response_assessment, dict)
+            or response_assessment.get("endpoints") != server_endpoints
+        ):
+            raise ObserverActionReportError(
+                "Observer server response assessment authority is inconsistent."
+            )
 
     try:
         json.dumps(report, allow_nan=False, ensure_ascii=False, sort_keys=True)
@@ -250,11 +271,20 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
 def validate_observer_action_report_for_pending(
     report: object,
     pending_action: dict[str, Any],
+    *,
+    server_endpoints: dict[str, str],
 ) -> dict[str, Any]:
     """Validates one persisted report against its exact pending action."""
 
     _validate_pending_action(pending_action)
     validated = validate_observer_action_report(report)
+    expected_server_endpoints = soak_action_diff.normalize_server_endpoints(
+        server_endpoints
+    )
+    if validated["serverEndpoints"] != expected_server_endpoints:
+        raise ObserverActionReportError(
+            "Observer action report server authority does not match the campaign."
+        )
     if (
         validated["actionId"] != pending_action["actionId"]
         or validated["seq"] != pending_action["reportSeq"]
@@ -295,6 +325,36 @@ def validate_observer_action_report_for_pending(
                 f"Observer action report {client} diagnostic identity does not match "
                 "the pending action."
             )
+    return validated
+
+
+def _validate_server_endpoints_payload(value: object) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict) or set(value) != set(_CLIENTS):
+        raise ObserverActionReportError(
+            "Observer action report server endpoints are invalid."
+        )
+    validated: dict[str, dict[str, Any]] = {}
+    for client in _CLIENTS:
+        endpoint = value[client]
+        if not isinstance(endpoint, dict) or set(endpoint) != {"host", "port"}:
+            raise ObserverActionReportError(
+                f"Observer action report {client} server endpoint is invalid."
+            )
+        host = endpoint.get("host")
+        port = endpoint.get("port")
+        if (
+            not isinstance(host, str)
+            or not host
+            or host != host.casefold()
+            or isinstance(port, bool)
+            or not isinstance(port, int)
+            or port < 1
+            or port > 65535
+        ):
+            raise ObserverActionReportError(
+                f"Observer action report {client} server endpoint is invalid."
+            )
+        validated[client] = {"host": host, "port": port}
     return validated
 
 

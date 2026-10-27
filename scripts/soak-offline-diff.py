@@ -317,6 +317,7 @@ def _diff_one_action(
     *,
     lead: float,
     settle: float,
+    server_endpoints: dict[str, str],
     method: str | None = None,
     search_ids: dict[str, str] | None = None,
     search_result_totals: dict[str, int] | None = None,
@@ -374,6 +375,7 @@ def _diff_one_action(
         kind,
         packet_diff or {},
         method=method,
+        server_endpoints=server_endpoints,
         search_ids=search_ids,
         search_result_totals=search_result_totals,
         rust_kad_records=soak_action_diff.diagnostic_family_records(
@@ -796,6 +798,15 @@ def main(argv: list[str] | None = None) -> int:
         return CAMPAIGN_EXIT_CODES["harness-failure"]
     print(f"rust recording: {rust_zip.name}  obf={rust['meta'].get('obfuscation')}  diag={len(rust['diag'])} pkt={len(rust['packets'])}")
     print(f"mfc  recording: {mfc_zip.name}  obf={mfc['meta'].get('obfuscation')}  diag={len(mfc['diag'])} pkt={len(mfc['packets'])}")
+    server_endpoints = {
+        "rust": rust["meta"].get("rustServer"),
+        "mfc": mfc["meta"].get("mfcServer"),
+    }
+    try:
+        soak_action_diff.normalize_server_endpoints(server_endpoints)
+    except soak_action_diff.ActionTraceError as error:
+        print(f"harness-failure: recording server authority is invalid ({error})")
+        return CAMPAIGN_EXIT_CODES["harness-failure"]
     scenario_mismatch = any(
         rust["meta"].get(key) != mfc["meta"].get(key)
         for key in ("obfuscation", "scenario")
@@ -822,7 +833,8 @@ def main(argv: list[str] | None = None) -> int:
             search_result_totals = {"rust": rust_search[1], "mfc": mfc_search[1]}
         result = _diff_one_action(
             kind, rust, mfc, rust_windows[action_id], mfc_windows[action_id],
-            lead=args.lead_seconds, settle=args.settle_seconds, method=method,
+            lead=args.lead_seconds, settle=args.settle_seconds,
+            server_endpoints=server_endpoints, method=method,
             search_ids=search_ids, search_result_totals=search_result_totals,
         )
         per_action.append({"actionId": action_id, **result})
