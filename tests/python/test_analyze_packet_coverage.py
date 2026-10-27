@@ -189,6 +189,36 @@ def _server_udp_diag(*, client: str, sequence: int) -> dict[str, object]:
     )
 
 
+def _server_connection_diag(
+    *,
+    client: str,
+    sequence: int,
+    previous_state: str,
+    state: str,
+    outcome: str,
+) -> dict[str, object]:
+    peer = "198.51.100.1:4661"
+    return _diag_envelope(
+        client=client,
+        sequence=sequence,
+        family="ed2k_tcp",
+        event="connection_state",
+        keys={"peer": peer, "flow": "server", "traceId": 1},
+        body={
+            "flow": "server",
+            "phase": "connection",
+            "traceKey": f"server:tcp:{peer}",
+            "traceId": 1,
+            "previousState": previous_state,
+            "state": state,
+            "outcome": outcome,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "error": None,
+        },
+    )
+
+
 def _complete_diagnostics(client: str) -> list[dict[str, object]]:
     return [
         _ed2k_diag(client=client, sequence=1, flow="client", direction="recv"),
@@ -197,6 +227,27 @@ def _complete_diagnostics(client: str) -> list[dict[str, object]]:
         _kad_diag(client=client, sequence=4),
         _kad_event_diag(client=client, sequence=5),
         _server_udp_diag(client=client, sequence=6),
+        _server_connection_diag(
+            client=client,
+            sequence=7,
+            previous_state="not_connected",
+            state="connecting",
+            outcome="attempt_started",
+        ),
+        _server_connection_diag(
+            client=client,
+            sequence=8,
+            previous_state="connecting",
+            state="awaiting_idchange",
+            outcome="transport_connected",
+        ),
+        _server_connection_diag(
+            client=client,
+            sequence=9,
+            previous_state="awaiting_idchange",
+            state="connected",
+            outcome="login_accepted",
+        ),
     ]
 
 
@@ -224,8 +275,8 @@ def test_build_summary_reports_opcode_and_upload_coverage() -> None:
 
     assert summary["schema"] == "packet_coverage_summary_v2"
     assert summary["records"] == {
-        "rustDiagnosticEvents": 6,
-        "mfcDiagnosticEvents": 6,
+        "rustDiagnosticEvents": 9,
+        "mfcDiagnosticEvents": 9,
         "rustEd2k": 2,
         "mfcEd2k": 1,
         "rustKadUdp": 1,
@@ -393,8 +444,8 @@ def test_main_writes_json_summary(tmp_path: Path) -> None:
 
     summary = json.loads(json_output.read_text(encoding="utf-8"))
     assert summary["records"] == {
-        "rustDiagnosticEvents": 6,
-        "mfcDiagnosticEvents": 6,
+        "rustDiagnosticEvents": 9,
+        "mfcDiagnosticEvents": 9,
         "rustEd2k": 1,
         "mfcEd2k": 1,
         "rustKadUdp": 1,

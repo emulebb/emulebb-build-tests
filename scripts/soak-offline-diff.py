@@ -859,7 +859,11 @@ def main(argv: list[str] | None = None) -> int:
         f"{'PASS' if full_diag_gate['ok'] else 'FAIL'} "
         f"required={full_diag_gate['familyConformance']['requiredFamilies']} "
         f"rustLifecycleViolations={len(full_diag_gate['clientUdpLifecycle']['rust']['violations'])} "
-        f"mfcLifecycleViolations={len(full_diag_gate['clientUdpLifecycle']['mfc']['violations'])}"
+        f"mfcLifecycleViolations={len(full_diag_gate['clientUdpLifecycle']['mfc']['violations'])} "
+        f"rustServerLifecycleViolations="
+        f"{len(full_diag_gate['serverConnectionLifecycle']['rust']['violations'])} "
+        f"mfcServerLifecycleViolations="
+        f"{len(full_diag_gate['serverConnectionLifecycle']['mfc']['violations'])}"
     )
     print(
         f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "

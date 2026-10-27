@@ -105,7 +105,7 @@ def _assessment(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def summarize_full_run_diagnostics(gate: dict[str, Any]) -> dict[str, Any]:
-    """Compacts required-family and client-UDP lifecycle gate evidence."""
+    """Compacts required-family and transport lifecycle gate evidence."""
 
     family_gate = (
         gate.get("familyConformance")
@@ -141,11 +141,32 @@ def summarize_full_run_diagnostics(gate: dict[str, Any]) -> dict[str, Any]:
             "outcomes": audit.get("outcomes") if isinstance(audit.get("outcomes"), dict) else {},
             "violationCounts": _counter_dict(violation_counts),
         }
+    server_gate = (
+        gate.get("serverConnectionLifecycle")
+        if isinstance(gate.get("serverConnectionLifecycle"), dict)
+        else {}
+    )
+    server_lifecycle: dict[str, Any] = {}
+    for side in ("rust", "mfc"):
+        audit = server_gate.get(side) if isinstance(server_gate.get(side), dict) else {}
+        violation_counts = Counter(
+            str(violation.get("kind") or "unknown")
+            for violation in audit.get("violations") or []
+            if isinstance(violation, dict)
+        )
+        server_lifecycle[side] = {
+            "ok": audit.get("ok"),
+            "attempts": int(audit.get("attemptCount") or 0),
+            "events": int(audit.get("eventCount") or 0),
+            "outcomes": audit.get("outcomes") if isinstance(audit.get("outcomes"), dict) else {},
+            "violationCounts": _counter_dict(violation_counts),
+        }
     return {
         "ok": gate.get("ok"),
         "requiredFamiliesOk": family_gate.get("requiredFamiliesOk"),
         "missingRequiredFamilies": required_failures,
         "clientUdpLifecycle": lifecycle,
+        "serverConnectionLifecycle": server_lifecycle,
     }
 
 

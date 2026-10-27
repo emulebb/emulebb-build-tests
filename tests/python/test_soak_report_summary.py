@@ -417,6 +417,31 @@ def test_summarize_full_run_diagnostics_exposes_missing_family_and_lifecycle_cou
                     ],
                 },
             },
+            "serverConnectionLifecycle": {
+                "rust": {
+                    "ok": True,
+                    "attemptCount": 1,
+                    "eventCount": 3,
+                    "outcomes": {
+                        "attempt_started": 1,
+                        "transport_connected": 1,
+                        "login_accepted": 1,
+                    },
+                    "violations": [],
+                },
+                "mfc": {
+                    "ok": False,
+                    "attemptCount": 2,
+                    "eventCount": 3,
+                    "outcomes": {
+                        "attempt_started": 2,
+                        "connection_failed": 1,
+                    },
+                    "violations": [
+                        {"kind": "missing_attempt_start", "traceId": 4}
+                    ],
+                },
+            },
         }
     )
 
@@ -440,6 +465,29 @@ def test_summarize_full_run_diagnostics_exposes_missing_family_and_lifecycle_cou
                 "terminals": 2,
                 "outcomes": {"send_cancelled": 2},
                 "violationCounts": {"orphan_terminal": 1},
+            },
+        },
+        "serverConnectionLifecycle": {
+            "rust": {
+                "ok": True,
+                "attempts": 1,
+                "events": 3,
+                "outcomes": {
+                    "attempt_started": 1,
+                    "transport_connected": 1,
+                    "login_accepted": 1,
+                },
+                "violationCounts": {},
+            },
+            "mfc": {
+                "ok": False,
+                "attempts": 2,
+                "events": 3,
+                "outcomes": {
+                    "attempt_started": 2,
+                    "connection_failed": 1,
+                },
+                "violationCounts": {"missing_attempt_start": 1},
             },
         },
     }
