@@ -183,6 +183,7 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
                 f"{side} unified diagnostics contain no valid peer packet/event records"
             )
         lifecycle = diag_event_diff.audit_client_udp_lifecycle(records)
+        server_lifecycle = diag_event_diff.audit_server_connection_lifecycle(records)
         client_udp_records = [
             record for record in records if record.get("family") == "ed2k_client_udp"
         ]
@@ -198,6 +199,11 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
                 "sendTerminals": lifecycle["terminalCount"],
                 "outcomes": lifecycle["outcomes"],
             },
+            "serverConnection": {
+                "attempts": server_lifecycle["attemptCount"],
+                "events": server_lifecycle["eventCount"],
+                "outcomes": server_lifecycle["outcomes"],
+            },
         }
     full_gate = diag_event_diff.full_run_conformance(
         diag_records["rust"],
@@ -208,6 +214,12 @@ def require_diagnostics(rust_dir: Path, mfc_dir: Path, *, kad_required: bool) ->
             "requiredFamilies": full_gate["familyConformance"]["requiredFamilies"],
             "rustLifecycleViolations": full_gate["clientUdpLifecycle"]["rust"]["violations"],
             "mfcLifecycleViolations": full_gate["clientUdpLifecycle"]["mfc"]["violations"],
+            "rustServerLifecycleViolations": full_gate["serverConnectionLifecycle"]["rust"][
+                "violations"
+            ],
+            "mfcServerLifecycleViolations": full_gate["serverConnectionLifecycle"]["mfc"][
+                "violations"
+            ],
         }
         raise RuntimeError(
             "complete diagnostics capture failed required-family/lifecycle validation: "

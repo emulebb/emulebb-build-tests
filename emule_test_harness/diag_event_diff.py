@@ -696,6 +696,160 @@ def audit_client_udp_lifecycle(trace: list[dict[str, Any]]) -> dict[str, Any]:
     return _client_udp_lifecycle_audit(_by_family(trace, ED2K_CLIENT_UDP_FAMILY))
 
 
+_SERVER_CONNECTION_KEYS = frozenset({"peer", "flow", "traceId"})
+_SERVER_CONNECTION_BODY = frozenset(
+    {
+        "flow",
+        "phase",
+        "traceKey",
+        "traceId",
+        "previousState",
+        "state",
+        "outcome",
+        "transportMode",
+        "obfuscated",
+        "error",
+    }
+)
+_SERVER_CONNECTION_TRANSITIONS = {
+    "attempt_started": frozenset({("not_connected", "connecting")}),
+    "transport_connected": frozenset({("connecting", "awaiting_idchange")}),
+    "login_accepted": frozenset({("awaiting_idchange", "connected")}),
+    "connection_failed": frozenset(
+        {
+            (previous, state)
+            for previous in (
+                "not_connected",
+                "connecting",
+                "awaiting_idchange",
+                "connected",
+            )
+            for state in ("server_dead", "server_full", "fatal_error", "error")
+        }
+    ),
+    "connection_closed": frozenset(
+        {
+            (previous, state)
+            for previous in (
+                "connecting",
+                "awaiting_idchange",
+                "connected",
+                "server_dead",
+                "server_full",
+                "fatal_error",
+                "error",
+            )
+            for state in ("disconnected", "not_connected")
+        }
+    ),
+}
+
+
+def audit_server_connection_lifecycle(trace: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validates complete-run ED2K server connection state evidence."""
+
+    _require_current_trace(trace, side="diagnostic")
+    records = [
+        record
+        for record in _by_family(trace, "ed2k_tcp")
+        if record.get("event") == "connection_state"
+    ]
+    attempts: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    violations: list[dict[str, Any]] = []
+    violation_count = 0
+
+    def add_violation(violation: dict[str, Any]) -> None:
+        nonlocal violation_count
+        violation_count += 1
+        if len(violations) < DIFF_DETAIL_LIMIT:
+            violations.append(violation)
+
+    for index, record in enumerate(records):
+        keys = record.get("keys")
+        body = record.get("body")
+        if not isinstance(keys, dict) or set(keys) != _SERVER_CONNECTION_KEYS:
+            add_violation({"kind": "invalid_keys", "index": index})
+            continue
+        if not isinstance(body, dict) or set(body) != _SERVER_CONNECTION_BODY:
+            add_violation({"kind": "invalid_body", "index": index})
+            continue
+        trace_id = keys.get("traceId")
+        peer = keys.get("peer")
+        if not isinstance(trace_id, int) or isinstance(trace_id, bool) or trace_id <= 0:
+            add_violation({"kind": "invalid_trace_id", "index": index})
+            continue
+        if not isinstance(peer, str) or not peer:
+            add_violation({"kind": "invalid_peer", "index": index})
+            continue
+        if keys.get("flow") != "server" or body.get("flow") != "server":
+            add_violation({"kind": "invalid_flow", "index": index, "traceId": trace_id})
+        if body.get("phase") != "connection":
+            add_violation({"kind": "invalid_phase", "index": index, "traceId": trace_id})
+        if body.get("traceId") != trace_id:
+            add_violation({"kind": "trace_id_mismatch", "index": index, "traceId": trace_id})
+        if body.get("traceKey") != f"server:tcp:{peer}":
+            add_violation({"kind": "trace_key_mismatch", "index": index, "traceId": trace_id})
+        transport_mode = body.get("transportMode")
+        if transport_mode not in {"plaintext", "obfuscated"}:
+            add_violation({"kind": "invalid_transport_mode", "index": index, "traceId": trace_id})
+        if body.get("obfuscated") is not (transport_mode == "obfuscated"):
+            add_violation({"kind": "obfuscation_mismatch", "index": index, "traceId": trace_id})
+        error = body.get("error")
+        if error is not None and not isinstance(error, str):
+            add_violation({"kind": "invalid_error", "index": index, "traceId": trace_id})
+        outcome = body.get("outcome")
+        transition = (body.get("previousState"), body.get("state"))
+        if transition not in _SERVER_CONNECTION_TRANSITIONS.get(outcome, frozenset()):
+            add_violation(
+                {
+                    "kind": "invalid_transition",
+                    "index": index,
+                    "traceId": trace_id,
+                    "previousState": transition[0],
+                    "state": transition[1],
+                    "outcome": outcome,
+                }
+            )
+        expected_severity = "warning" if outcome == "connection_failed" else "info"
+        if record.get("severity") != expected_severity:
+            add_violation({"kind": "invalid_severity", "index": index, "traceId": trace_id})
+        attempts.setdefault(trace_id, []).append((index, body))
+
+    for trace_id, transitions in sorted(attempts.items()):
+        first_index, first_body = transitions[0]
+        if first_body.get("outcome") != "attempt_started":
+            add_violation({"kind": "missing_attempt_start", "index": first_index, "traceId": trace_id})
+        previous_state = first_body.get("state")
+        for index, body in transitions[1:]:
+            if body.get("previousState") != previous_state:
+                add_violation(
+                    {
+                        "kind": "state_discontinuity",
+                        "index": index,
+                        "traceId": trace_id,
+                        "expectedPreviousState": previous_state,
+                        "previousState": body.get("previousState"),
+                    }
+                )
+            previous_state = body.get("state")
+
+    outcome_counts: dict[str, int] = {}
+    for record in records:
+        outcome = (record.get("body") or {}).get("outcome")
+        if isinstance(outcome, str):
+            outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+    if not records:
+        add_violation({"kind": "missing_connection_lifecycle"})
+    return {
+        "ok": violation_count == 0,
+        "attemptCount": len(attempts),
+        "eventCount": len(records),
+        "violationCount": violation_count,
+        "violations": violations,
+        "outcomes": dict(sorted(outcome_counts.items())),
+    }
+
+
 def _diff_client_udp_family(
     rust_recs: list[dict[str, Any]],
     mfc_recs: list[dict[str, Any]],
@@ -1176,12 +1330,24 @@ def full_run_conformance(
     )
     rust_lifecycle = audit_client_udp_lifecycle(rust_trace)
     mfc_lifecycle = audit_client_udp_lifecycle(mfc_trace)
+    rust_server_lifecycle = audit_server_connection_lifecycle(rust_trace)
+    mfc_server_lifecycle = audit_server_connection_lifecycle(mfc_trace)
     return {
-        "ok": family_gate["ok"] and rust_lifecycle["ok"] and mfc_lifecycle["ok"],
+        "ok": (
+            family_gate["ok"]
+            and rust_lifecycle["ok"]
+            and mfc_lifecycle["ok"]
+            and rust_server_lifecycle["ok"]
+            and mfc_server_lifecycle["ok"]
+        ),
         "familyConformance": family_gate,
         "clientUdpLifecycle": {
             "rust": rust_lifecycle,
             "mfc": mfc_lifecycle,
+        },
+        "serverConnectionLifecycle": {
+            "rust": rust_server_lifecycle,
+            "mfc": mfc_server_lifecycle,
         },
     }
 

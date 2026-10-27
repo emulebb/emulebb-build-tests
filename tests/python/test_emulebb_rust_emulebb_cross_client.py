@@ -777,8 +777,42 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                         },
                     }
                 )
+                peer = "192.0.2.1:4661"
+                for seq, previous_state, state, outcome in (
+                    (3, "not_connected", "connecting", "attempt_started"),
+                    (4, "connecting", "awaiting_idchange", "transport_connected"),
+                    (5, "awaiting_idchange", "connected", "login_accepted"),
+                ):
+                    records.append(
+                        {
+                            "schema": "diag_event_v2",
+                            "client": client,
+                            "processId": process_id,
+                            "runId": run_id,
+                            "segmentId": segment_id,
+                            "seq": seq,
+                            "streamSeq": seq - 1,
+                            "family": "ed2k_tcp",
+                            "event": "connection_state",
+                            "severity": "info",
+                            "ts": "2026-10-24T00:00:00.000Z",
+                            "keys": {"peer": peer, "flow": "server", "traceId": 1},
+                            "body": {
+                                "flow": "server",
+                                "phase": "connection",
+                                "traceKey": f"server:tcp:{peer}",
+                                "traceId": 1,
+                                "previousState": previous_state,
+                                "state": state,
+                                "outcome": outcome,
+                                "transportMode": "plaintext",
+                                "obfuscated": False,
+                                "error": None,
+                            },
+                        }
+                    )
             if segment_id == 1:
-                records[0]["seq"] = 3
+                records[0]["seq"] = 6
             path.write_text(
                 "".join(json.dumps(record) + "\n" for record in records),
                 encoding="utf-8",
@@ -801,7 +835,7 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
     assert module.require_diagnostics(rust, mfc, kad_required=False) == {
         "rust": {
             "packetRecords": 1,
-            "eventRecords": 3,
+            "eventRecords": 6,
             "clientUdp": {
                 "records": 2,
                 "packets": 1,
@@ -809,16 +843,34 @@ def test_cross_client_diagnostics_load_all_segments_and_mfc_health(tmp_path: Pat
                 "sendTerminals": 1,
                 "outcomes": {"send_succeeded": 1},
             },
+            "serverConnection": {
+                "attempts": 1,
+                "events": 3,
+                "outcomes": {
+                    "attempt_started": 1,
+                    "login_accepted": 1,
+                    "transport_connected": 1,
+                },
+            },
         },
         "emule": {
             "packetRecords": 1,
-            "eventRecords": 3,
+            "eventRecords": 6,
             "clientUdp": {
                 "records": 2,
                 "packets": 1,
                 "sendAttempts": 1,
                 "sendTerminals": 1,
                 "outcomes": {"send_succeeded": 1},
+            },
+            "serverConnection": {
+                "attempts": 1,
+                "events": 3,
+                "outcomes": {
+                    "attempt_started": 1,
+                    "login_accepted": 1,
+                    "transport_connected": 1,
+                },
             },
         },
         "mfcSecureIdent": {"failureLines": 0},

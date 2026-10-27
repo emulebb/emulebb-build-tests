@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness.diag_event_diff import (
+    audit_server_connection_lifecycle,
     diff_traces,
     ed2k_tcp_packet_view,
     ed2k_tcp_packet_views,
@@ -126,6 +127,52 @@ def _peer_tcp_packet_event(event: str = "packet") -> dict:
     )
     record["streamSeq"] = 23
     return record
+
+
+def _server_connection_event(
+    previous_state: str,
+    state: str,
+    outcome: str,
+    *,
+    trace_id: int = 1,
+    severity: str | None = None,
+    error: str | None = None,
+) -> dict:
+    peer = "198.51.100.2:4661"
+    return _env(
+        "ed2k_tcp",
+        "connection_state",
+        severity=severity or ("warning" if outcome == "connection_failed" else "info"),
+        keys={"peer": peer, "flow": "server", "traceId": trace_id},
+        body={
+            "flow": "server",
+            "phase": "connection",
+            "traceKey": f"server:tcp:{peer}",
+            "traceId": trace_id,
+            "previousState": previous_state,
+            "state": state,
+            "outcome": outcome,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "error": error,
+        },
+    )
+
+
+def _connected_server_lifecycle() -> list[dict]:
+    return [
+        _server_connection_event("not_connected", "connecting", "attempt_started"),
+        _server_connection_event(
+            "connecting",
+            "awaiting_idchange",
+            "transport_connected",
+        ),
+        _server_connection_event(
+            "awaiting_idchange",
+            "connected",
+            "login_accepted",
+        ),
+    ]
 
 
 def _client_udp_packet(
@@ -747,6 +794,7 @@ def test_family_conformance_can_require_full_run_family_presence() -> None:
 
 def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
     rust = [
+        *_connected_server_lifecycle(),
         _peer_tcp_packet_event(),
         _client_udp_packet(
             "send",
@@ -757,6 +805,7 @@ def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
         )
     ]
     mfc = [
+        *_connected_server_lifecycle(),
         _peer_tcp_packet_event(),
         _client_udp_packet(
             "send",
@@ -775,6 +824,58 @@ def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
     assert gate["clientUdpLifecycle"]["rust"]["violations"] == [
         {"kind": "missing_terminal", "sendAttemptId": 4}
     ]
+
+
+def test_server_connection_lifecycle_accepts_connected_attempt() -> None:
+    audit = audit_server_connection_lifecycle(_connected_server_lifecycle())
+
+    assert audit == {
+        "ok": True,
+        "attemptCount": 1,
+        "eventCount": 3,
+        "violationCount": 0,
+        "violations": [],
+        "outcomes": {
+            "attempt_started": 1,
+            "login_accepted": 1,
+            "transport_connected": 1,
+        },
+    }
+
+
+def test_server_connection_lifecycle_rejects_state_discontinuity() -> None:
+    trace = _connected_server_lifecycle()
+    trace[2]["body"]["previousState"] = "connecting"
+
+    audit = audit_server_connection_lifecycle(trace)
+
+    assert audit["ok"] is False
+    assert audit["violations"] == [
+        {
+            "kind": "invalid_transition",
+            "index": 2,
+            "traceId": 1,
+            "previousState": "connecting",
+            "state": "connected",
+            "outcome": "login_accepted",
+        },
+        {
+            "kind": "state_discontinuity",
+            "index": 2,
+            "traceId": 1,
+            "expectedPreviousState": "awaiting_idchange",
+            "previousState": "connecting",
+        },
+    ]
+
+
+def test_server_connection_lifecycle_requires_attempt_evidence() -> None:
+    audit = audit_server_connection_lifecycle([])
+
+    assert audit["ok"] is False
+    assert audit["attemptCount"] == 0
+    assert audit["eventCount"] == 0
+    assert audit["violations"] == [{"kind": "missing_connection_lifecycle"}]
 
 
 def test_family_conformance_oracle_only_event_is_reported_not_failed() -> None:

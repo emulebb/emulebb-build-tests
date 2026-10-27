@@ -350,6 +350,14 @@ def main(argv: list[str] | None = None) -> int:
             f"  {row['family']}: rust={row['rustPresent']} "
             f"mfc={row['mfcPresent']} ok={row['ok']}"
         )
+    print("\n=== ED2K server connection lifecycle ===")
+    for side in ("rust", "mfc"):
+        lifecycle = conformance["serverConnectionLifecycle"][side]
+        print(
+            f"  {side}: ok={lifecycle['ok']} attempts={lifecycle['attemptCount']} "
+            f"events={lifecycle['eventCount']} outcomes={lifecycle['outcomes']} "
+            f"violations={lifecycle['violations']}"
+        )
 
     return 0 if conformance["ok"] and join_coverage["ok"] else 1
 
