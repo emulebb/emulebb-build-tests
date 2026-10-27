@@ -320,7 +320,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replace the Rust profile server list with only --rust-server before launch.",
     )
     parser.add_argument("--bootstrap-limit", type=int, default=40)
-    parser.add_argument("--rest-timeout-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--rest-timeout-seconds",
+        type=float,
+        default=soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS,
+        help=(
+            "Maximum seconds to wait for each client's REST startup; this is a "
+            "ceiling, not a fixed delay, and covers cold MFC persisted-profile scans."
+        ),
+    )
     parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
     parser.add_argument(
         "--reuse-rust-shared-profile",

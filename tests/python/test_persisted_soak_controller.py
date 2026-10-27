@@ -899,6 +899,7 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert command[command.index("--duration-seconds") + 1] == "0"
     assert command[command.index("--campaign-id") + 1] == "20261025T120000Z"
     assert command[command.index("--stop-file") + 1] == str(paths.stop_file)
+    assert command[command.index("--rest-timeout-seconds") + 1] == "300.0"
     assert "--vpn-guard-scenario" in command
     assert "success" in command
     assert "--reuse-rust-shared-profile" in command
@@ -1400,6 +1401,10 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
     assert args.observer_action_search_interval_seconds == 900
     assert args.observer_action_search_timeout_seconds == 120
     assert args.observer_action_max_cycles == 12
+    assert (
+        args.rest_timeout_seconds
+        == controller.soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
+    )
 
 
 def test_preflight_parser_uses_shared_session_selection() -> None:

@@ -82,6 +82,10 @@ def test_launch_soak_parser_accepts_lan_bind_addr() -> None:
     args = module.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.lan_bind_addr == "192.0.2.10"
+    assert (
+        args.rest_timeout_seconds
+        == module.soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
+    )
 
 
 def test_launch_soak_parser_accepts_profile_and_vpn_guard_options() -> None:
