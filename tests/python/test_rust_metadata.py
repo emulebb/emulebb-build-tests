@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import rust_metadata
+from emule_test_harness import rust_metadata, rust_native_fingerprint
 
 
 def rust_repo() -> Path:
@@ -210,3 +210,57 @@ def test_hash_manifest_upsert_preserves_existing_runtime_state(tmp_path: Path) -
     assert part_hashes == [("22" * 16,)]
     assert verified_ranges == 1
     assert shared_sources == 2
+
+
+@pytest.mark.unit
+def test_refresh_matching_share_source_fingerprints_upgrades_missing_change_time(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "payload.bin"
+    source.write_bytes(b"payload")
+    metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.create_metadata_db(rust_repo(), metadata_db)
+    rust_metadata.seed_share_in_place_manifest(
+        metadata_db,
+        ed2k_hash="00112233445566778899aabbccddeeff",
+        name=source.name,
+        size_bytes=source.stat().st_size,
+        source_path=str(source),
+        source_mtime_ms=source.stat().st_mtime_ns // 1_000_000,
+    )
+    current_payload = rust_metadata._native_file_fingerprint(str(source))
+    assert current_payload is not None
+    current = rust_native_fingerprint.decode_fingerprint(current_payload)
+    legacy_payload = rust_native_fingerprint.encode_fingerprint(
+        rust_native_fingerprint.NativeFingerprint(
+            identity_kind=current.identity_kind,
+            identity_bytes=current.identity_bytes,
+            size_bytes=current.size_bytes,
+            modified=current.modified,
+            changed=None,
+        )
+    )
+    with sqlite3.connect(metadata_db) as connection:
+        connection.execute(
+            "UPDATE shared_file_sources SET source_fingerprint = ?",
+            (legacy_payload,),
+        )
+        connection.execute(
+            "UPDATE transfers SET source_fingerprint = ?",
+            (legacy_payload,),
+        )
+
+    summary = rust_metadata.refresh_matching_share_source_fingerprints(metadata_db)
+
+    assert summary["sharedSourceCount"] == 1
+    assert summary["upgradedCount"] == 1
+    assert summary["baseMismatchCount"] == 0
+    with sqlite3.connect(metadata_db) as connection:
+        fingerprints = connection.execute(
+            """
+            SELECT source_fingerprint FROM shared_file_sources
+            UNION ALL
+            SELECT source_fingerprint FROM transfers
+            """
+        ).fetchall()
+    assert [bytes(row[0]) for row in fingerprints] == [current_payload, current_payload]
