@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
+import struct
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -17,6 +19,49 @@ from emule_test_harness.windows_processes import WindowsProcessInfo
 
 def make_paths(tmp_path: Path) -> controller.ControlPaths:
     return controller.build_control_paths(tmp_path / "output")
+
+
+def write_minimal_known_met(path: Path) -> None:
+    """Writes one parseable MFC hash-cache record for backup tests."""
+
+    path.write_bytes(
+        bytes([controller.mfc_known_met.MET_HEADER_I64TAGS])
+        + struct.pack("<I", 1)
+        + struct.pack("<I", 1_700_000_000)
+        + bytes.fromhex("00112233445566778899aabbccddeeff")
+        + struct.pack("<H", 0)
+        + struct.pack("<I", 0)
+    )
+
+
+def stopped_hash_backup_fixture(tmp_path: Path) -> tuple[controller.ControlPaths, Path, Path, Path]:
+    """Creates stopped-session MFC and Rust hash state beneath temporary profiles."""
+
+    output_root = tmp_path / "output"
+    paths = controller.build_control_paths(output_root)
+    mfc_profile = tmp_path / "mfc"
+    rust_profile = tmp_path / "rust"
+    mfc_config = mfc_profile / "config"
+    mfc_config.mkdir(parents=True)
+    rust_profile.mkdir()
+    write_minimal_known_met(mfc_config / "known.met")
+    (mfc_config / "known2_64.met").write_bytes(b"aich-cache")
+    metadata_db = rust_profile / controller.RUST_HASH_STATE_FILE
+    with sqlite3.connect(metadata_db) as connection:
+        connection.execute("CREATE TABLE known_files (id INTEGER PRIMARY KEY)")
+        connection.executemany("INSERT INTO known_files (id) VALUES (?)", [(1,), (2,)])
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "state": "stopped",
+            "campaignId": "campaign-1",
+            "preflight": {
+                "profiles": {"mfc": str(mfc_profile), "rust": str(rust_profile)},
+            },
+            "stop": {"diagnosticFinalization": {"ok": True}},
+        },
+    )
+    return paths, output_root, mfc_profile, rust_profile
 
 
 def storage_policy(
@@ -89,6 +134,78 @@ def live_inputs(
 def test_control_paths_must_stay_under_output_root(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="must stay below"):
         controller.build_control_paths(tmp_path / "output", tmp_path / "elsewhere")
+
+
+def test_backup_stopped_hash_state_copies_and_validates_both_clients(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, output_root, _, _ = stopped_hash_backup_fixture(tmp_path)
+    monkeypatch.setattr(
+        controller,
+        "session_status",
+        lambda *_args, **_kwargs: {
+            "launcher": {"alive": False},
+            "observer": {"alive": False},
+            "watcher": {"alive": False},
+        },
+    )
+    destination = output_root / "backups" / "hashes"
+
+    result = controller.backup_stopped_hash_state(
+        paths,
+        output_root,
+        destination_dir=destination,
+    )
+
+    assert result["ok"] is True
+    assert result["schema"] == controller.HASH_BACKUP_SCHEMA
+    assert result["campaignId"] == "campaign-1"
+    assert destination.is_dir()
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest == result
+    files = {row["kind"]: row for row in result["files"]}
+    assert files["mfc-known-met"]["entryCount"] == 1
+    assert files["mfc-known2-64-met"]["bytes"] == len(b"aich-cache")
+    assert files["rust-metadata-db"]["knownFileCount"] == 2
+    assert files["rust-metadata-db"]["sqliteQuickCheck"] == "ok"
+    for row in files.values():
+        backup = Path(row["backup"])
+        assert backup.is_file()
+        assert hashlib.sha256(backup.read_bytes()).hexdigest() == row["sha256"]
+
+
+def test_backup_stopped_hash_state_requires_successful_stop(tmp_path: Path) -> None:
+    paths, output_root, _, _ = stopped_hash_backup_fixture(tmp_path)
+    manifest = controller.load_json(paths.manifest)
+    manifest["state"] = "running"
+    controller.write_json_atomic(paths.manifest, manifest)
+
+    with pytest.raises(RuntimeError, match="successfully stopped"):
+        controller.backup_stopped_hash_state(paths, output_root)
+
+
+def test_backup_stopped_hash_state_stays_below_output_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, output_root, _, _ = stopped_hash_backup_fixture(tmp_path)
+    monkeypatch.setattr(
+        controller,
+        "session_status",
+        lambda *_args, **_kwargs: {
+            "launcher": {"alive": False},
+            "observer": {"alive": False},
+            "watcher": {"alive": False},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="must stay below"):
+        controller.backup_stopped_hash_state(
+            paths,
+            output_root,
+            destination_dir=tmp_path / "outside",
+        )
 
 
 def test_persisted_storage_policy_is_mandatory(tmp_path: Path) -> None:
