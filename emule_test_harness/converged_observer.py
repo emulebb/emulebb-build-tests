@@ -623,6 +623,59 @@ def action_diagnostic_runs(
     return identities
 
 
+def classify_action_network_readiness(
+    method: str,
+    stats_by_client: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Requires both clients to be connected on the action's selected network."""
+
+    required_field = {
+        "server": "ed2kConnected",
+        "global": "ed2kConnected",
+        "kad": "kadConnected",
+    }.get(method)
+    if required_field is None:
+        raise ValueError(f"unsupported observer action method: {method!r}")
+    clients: dict[str, dict[str, Any]] = {}
+    for name in ("rust", "mfc"):
+        stats = stats_by_client.get(name)
+        if not isinstance(stats, dict):
+            raise RuntimeError(f"{name} action network stats are unavailable")
+        clients[name] = {
+            "ed2kConnected": stats.get("ed2kConnected"),
+            "kadConnected": stats.get("kadConnected"),
+            "ready": stats.get(required_field) is True,
+        }
+    return {
+        "ok": all(client["ready"] for client in clients.values()),
+        "method": method,
+        "requiredField": required_field,
+        "clients": clients,
+    }
+
+
+def action_network_readiness(
+    clients: dict[str, converged_action_driver.ClientEndpoint],
+    method: str,
+) -> dict[str, Any]:
+    """Loads and classifies exact REST connectivity before reserving an action."""
+
+    stats_by_client: dict[str, dict[str, Any]] = {}
+    for name in ("rust", "mfc"):
+        client = clients[name]
+        payload = http_json(
+            client.api_root_url,
+            "/stats",
+            api_key=client.api_key,
+            timeout_seconds=5.0,
+        )
+        data = api_data(payload)
+        if not isinstance(data, dict):
+            raise RuntimeError(f"{name} action network stats are not an object")
+        stats_by_client[name] = data
+    return classify_action_network_readiness(method, stats_by_client)
+
+
 def utc_text(now_utc: Callable[[], datetime]) -> str:
     """Returns one canonical UTC timestamp from the injected clock."""
 
@@ -847,6 +900,10 @@ def capture_action_cycle(
     now_utc: Callable[[], datetime] = utc_now,
     now_ns: int | None = None,
     finalize_action: Callable[..., dict[str, Any]] = finalize_pending_action,
+    readiness_probe: Callable[
+        [dict[str, converged_action_driver.ClientEndpoint], str], dict[str, Any]
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     """Advances one crash-safe synchronized search without owning either client."""
 
@@ -862,6 +919,34 @@ def capture_action_cycle(
     if not resumed:
         cycle_index = int(validated["scheduler"]["nextCycle"])
         query, method = scheduled_action(config, cycle_index)
+        probe = readiness_probe or action_network_readiness
+        try:
+            readiness = probe(clients, method)
+        except (OSError, RuntimeError) as error:
+            skipped = converged_observer_state.record_connectivity_skip(
+                validated,
+                {
+                    "attemptedAtUtc": utc_text(now_utc),
+                    "phase": "network_readiness",
+                    "method": method,
+                    "error": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                },
+            )
+            return persist_state(runtime, skipped, now_ns=now_ns)
+        if readiness.get("ok") is not True:
+            skipped = converged_observer_state.record_connectivity_skip(
+                validated,
+                {
+                    "attemptedAtUtc": utc_text(now_utc),
+                    "phase": "network_readiness",
+                    "method": method,
+                    "readiness": copy.deepcopy(readiness),
+                },
+            )
+            return persist_state(runtime, skipped, now_ns=now_ns)
         try:
             diagnostic_runs = action_diagnostic_runs(clients)
         except (OSError, RuntimeError) as error:
