@@ -59,6 +59,8 @@ _COMPARABLE_BODY: dict[str, tuple[str, ...]] = {
     "kad_event": (
         "milestone",
         "action",
+        "outcome",
+        "reason",
         "connected",
         "bootstrapping",
         "firewalled",

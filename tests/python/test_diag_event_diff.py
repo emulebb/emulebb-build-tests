@@ -515,10 +515,32 @@ def test_kad_event_multiset_match() -> None:
                  body={"milestone": "bootstrap_contact_added", "action": "observe"})]
     mfc = [_env("kad_event", "bootstrap", keys={"nodeId": "ab"},
                 body={"milestone": "bootstrap_contact_added", "action": "observe",
-                      "reason": "client-specific-ignored"})]
+                      "implementationNote": "client-specific-ignored"})]
     report = diff_traces(rust, mfc)
     assert report["ok"] is True
     assert _family(report, "kad_event")["totals"]["matched"] == 1
+
+
+@pytest.mark.parametrize("field", ["outcome", "reason"])
+def test_kad_event_buddy_request_terminal_fields_are_comparable(field) -> None:
+    shared = {
+        "milestone": "buddy_request_refused",
+        "action": "refuse",
+        "outcome": "refused",
+        "reason": "self_firewalled",
+    }
+    rust = [_env("kad_event", "buddy_request", keys={"peer": "10.0.0.2:4672"},
+                 body=shared)]
+    mfc_body = {**shared, field: "different"}
+    mfc = [_env("kad_event", "buddy_request", keys={"peer": "10.0.0.2:4672"},
+                body=mfc_body)]
+
+    report = diff_traces(rust, mfc)
+
+    assert report["ok"] is False
+    family = _family(report, "kad_event")
+    assert family["totals"]["onlyRust"] == 1
+    assert family["totals"]["onlyMfc"] == 1
 
 
 def test_bad_peer_difference_reported() -> None:
