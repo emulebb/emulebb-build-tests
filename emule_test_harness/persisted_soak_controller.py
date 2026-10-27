@@ -787,6 +787,7 @@ def reconcile_diagnostic_evidence_pins(
     store = soak_storage.BoundedArtifactStore(context.root, context.policy)
     actions: list[dict[str, Any]] = []
     pending_cleanup: list[Path] = []
+    new_candidates: list[dict[str, Any]] = []
     for candidate in candidates:
         existing = next(
             (pin for pin in pins if pin["fileName"] == candidate["fileName"]),
@@ -806,6 +807,31 @@ def reconcile_diagnostic_evidence_pins(
                 }
             )
             continue
+        new_candidates.append(candidate)
+
+    retained_names = {
+        item["fileName"]
+        for item in sorted(
+            [*pins, *new_candidates],
+            key=_pin_rank,
+            reverse=True,
+        )[: policy.retained_segments]
+    }
+    candidates = []
+    for candidate in new_candidates:
+        if candidate["fileName"] in retained_names:
+            candidates.append(candidate)
+            continue
+        actions.append(
+            {
+                "action": "skipped-budget",
+                "segmentId": candidate["segmentId"],
+                "priority": candidate["priority"],
+                "reasons": candidate["reasons"],
+            }
+        )
+
+    for candidate in candidates:
 
         source = Path(candidate["source"])
         if not source.is_file() and candidate["priority"] < 200:

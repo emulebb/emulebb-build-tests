@@ -794,6 +794,7 @@ def test_advance_diagnostic_indexes_persists_and_resumes_both_clients(
 
 def test_reconcile_diagnostic_evidence_pins_keeps_highest_value_segments(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     root = controller.campaign_storage_root(tmp_path / "output")
     campaign = root / "20261025T120000Z"
@@ -833,6 +834,18 @@ def test_reconcile_diagnostic_evidence_pins_keeps_highest_value_segments(
         metadata(2, ["severity:critical"]),
     )
     checkpoint = {"evidencePins": []}
+    copied_segments: list[int] = []
+    persist = controller.soak_storage.persist_bounded_file_artifact
+
+    def record_copy(**kwargs):
+        copied_segments.append(int(kwargs["source"].stem.rsplit("-", 1)[1]))
+        return persist(**kwargs)
+
+    monkeypatch.setattr(
+        controller.soak_storage,
+        "persist_bounded_file_artifact",
+        record_copy,
+    )
 
     result = controller.reconcile_diagnostic_evidence_pins(
         client="rust",
@@ -845,8 +858,9 @@ def test_reconcile_diagnostic_evidence_pins_keeps_highest_value_segments(
 
     assert [pin["segmentId"] for pin in result["pins"]] == [0, 2]
     assert [pin["priority"] for pin in result["pins"]] == [300, 400]
+    assert copied_segments == [0, 2]
     assert any(
-        action["action"] == "replaced" and action["replacedSegmentId"] == 1
+        action["action"] == "skipped-budget" and action["segmentId"] == 1
         for action in result["actions"]
     )
     controller._finalize_diagnostic_evidence_pin_swaps(result["pendingCleanup"])
