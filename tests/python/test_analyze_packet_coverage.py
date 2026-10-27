@@ -137,6 +137,9 @@ def _client_udp_diag(
             "direction": "send",
             "outcome": "attempted",
             "sendAttemptId": attempt_id,
+            "protocolMarker": 0xC5,
+            "opcode": 0x90,
+            "opcodeName": "OP_REASKFILEPING",
             "rawHex": "AABB",
             "rawLen": 2,
         }
@@ -152,7 +155,11 @@ def _client_udp_diag(
         family="ed2k_client_udp",
         event=event,
         stream_sequence=stream_sequence,
-        keys={"sendAttemptId": attempt_id},
+        keys={
+            "sendAttemptId": attempt_id,
+            "protocolMarker": 0xC5,
+            "opcode": 0x90,
+        },
         body=body,
     )
 

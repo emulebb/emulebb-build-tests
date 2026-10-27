@@ -43,6 +43,9 @@ from emule_test_harness.diag_event_schema import (
 )
 
 PACKET_FAMILIES = ("ed2k_tcp", "ed2k_server_udp", "kad_udp")
+REQUIRED_PROTOCOL_PACKET_FAMILIES = frozenset(
+    (*PACKET_FAMILIES, ED2K_CLIENT_UDP_FAMILY)
+)
 EVENT_FAMILIES = ("kad_event", "bad_peer")
 SCHED_FAMILY = "sched"
 DIFF_DETAIL_LIMIT = 32
@@ -1254,25 +1257,41 @@ def family_conformance(
 
     audit = schema_audit(rust_trace, mfc_trace)
     required = sorted(set(required_families))
-    rust_present = {
-        record.get("family")
-        for record in rust_trace
-        if isinstance(record.get("family"), str)
-    }
-    mfc_present = {
-        record.get("family")
-        for record in mfc_trace
-        if isinstance(record.get("family"), str)
-    }
-    required_presence = [
-        {
-            "family": family,
-            "rustPresent": family in rust_present,
-            "mfcPresent": family in mfc_present,
-            "ok": family in rust_present and family in mfc_present,
-        }
-        for family in required
-    ]
+    def required_family_present(trace: list[dict[str, Any]], family: str) -> bool:
+        for record in trace:
+            if record.get("family") != family:
+                continue
+            if family not in REQUIRED_PROTOCOL_PACKET_FAMILIES:
+                return True
+            body = record.get("body")
+            keys = record.get("keys")
+            if not isinstance(body, dict) or not isinstance(keys, dict):
+                continue
+            protocol_marker = body.get("protocolMarker")
+            opcode = body.get("opcode")
+            if (
+                record.get("event") == "packet"
+                and body.get("direction") in _PACKET_DIRECTIONS
+                and _is_non_negative_int(protocol_marker, maximum=0xFF)
+                and _is_non_negative_int(opcode, maximum=0xFF)
+                and keys.get("protocolMarker") == protocol_marker
+                and keys.get("opcode") == opcode
+            ):
+                return True
+        return False
+
+    required_presence: list[dict[str, Any]] = []
+    for family in required:
+        rust_family_present = required_family_present(rust_trace, family)
+        mfc_family_present = required_family_present(mfc_trace, family)
+        required_presence.append(
+            {
+                "family": family,
+                "rustPresent": rust_family_present,
+                "mfcPresent": mfc_family_present,
+                "ok": rust_family_present and mfc_family_present,
+            }
+        )
     required_ok = all(item["ok"] for item in required_presence)
     per_family: dict[str, dict[str, Any]] = {}
     for event in audit["events"]:

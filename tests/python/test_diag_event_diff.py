@@ -792,6 +792,43 @@ def test_family_conformance_can_require_full_run_family_presence() -> None:
     ]
 
 
+def test_family_conformance_rejects_undecodable_client_udp_as_presence() -> None:
+    rust = [_client_udp_packet("recv", "aabb", opcode=None, outcome="dropped")]
+    mfc = [_client_udp_packet("recv", "c590")]
+
+    gate = family_conformance(
+        rust,
+        mfc,
+        required_families={"ed2k_client_udp"},
+    )
+
+    assert gate["requiredFamilies"] == [
+        {
+            "family": "ed2k_client_udp",
+            "rustPresent": False,
+            "mfcPresent": True,
+            "ok": False,
+        }
+    ]
+
+
+def test_family_conformance_rejects_lifecycle_without_ed2k_packet_presence() -> None:
+    gate = family_conformance(
+        _connected_server_lifecycle(),
+        [_peer_tcp_packet_event()],
+        required_families={"ed2k_tcp"},
+    )
+
+    assert gate["requiredFamilies"] == [
+        {
+            "family": "ed2k_tcp",
+            "rustPresent": False,
+            "mfcPresent": True,
+            "ok": False,
+        }
+    ]
+
+
 def test_full_run_conformance_requires_valid_client_udp_lifecycles() -> None:
     rust = [
         *_connected_server_lifecycle(),

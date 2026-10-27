@@ -631,8 +631,12 @@ def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
         "ts": ts.isoformat().replace("+00:00", "Z"),
         "family": "kad_udp",
         "event": "packet",
-        "keys": {"opcode": opcode},
-        "body": {"direction": direction, "opcode": opcode},
+        "keys": {"protocolMarker": 0xE4, "opcode": opcode},
+        "body": {
+            "direction": direction,
+            "protocolMarker": 0xE4,
+            "opcode": opcode,
+        },
     }
 
 
