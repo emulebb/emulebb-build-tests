@@ -182,7 +182,8 @@ def _successful_client(client: str, completed_seconds: float) -> dict[str, objec
         "results": {
             "completedAtUtc": _utc(completed_seconds),
             "completed": True,
-            "resultCount": 2,
+            "returnedCount": 2,
+            "totalCount": 2,
             "error": None,
             "poll": poll,
         },
@@ -224,7 +225,8 @@ def _pending_action(
     }
     searches = {}
     search_ids = {}
-    result_counts = {}
+    returned_counts = {}
+    result_totals = {}
     errors = []
     for client, client_state in clients.items():
         create = client_state["create"]
@@ -234,13 +236,15 @@ def _pending_action(
                 "create": {"ok": True, "searchId": create["searchId"]},
                 "results": {
                     "ok": True,
-                    "count": results["resultCount"],
+                    "returnedCount": results["returnedCount"],
+                    "totalCount": results["totalCount"],
                     "completed": True,
                     "poll": results["poll"],
                 },
             }
             search_ids[client] = create["searchId"]
-            result_counts[client] = results["resultCount"]
+            returned_counts[client] = results["returnedCount"]
+            result_totals[client] = results["totalCount"]
         else:
             searches[client] = {
                 "create": {"ok": False, "error": create["error"]},
@@ -258,7 +262,8 @@ def _pending_action(
         "ok": not errors,
         "searches": searches,
         "searchIds": search_ids,
-        "resultCounts": result_counts,
+        "returnedCounts": returned_counts,
+        "resultTotals": result_totals,
         "errors": errors,
         "startedAtUtc": _utc(0),
         "completedAtUtc": _utc(10),
@@ -281,7 +286,13 @@ def _pending_action(
     }
 
 
-def _kad_records(client: str, process_id: int, run_id: str) -> list[dict[str, object]]:
+def _kad_records(
+    client: str,
+    process_id: int,
+    run_id: str,
+    *,
+    result_total: int = 2,
+) -> list[dict[str, object]]:
     return [
         _kad_record(
             client=client,
@@ -317,7 +328,7 @@ def _kad_records(client: str, process_id: int, run_id: str) -> list[dict[str, ob
             sequence=4,
             seconds=8,
             milestone="lookup_complete",
-            result_count=2,
+            result_count=result_total,
         ),
     ]
 
@@ -333,15 +344,15 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         mfc_records=_kad_records("mfc", 4201, "mfc-run"),
     )
 
-    seen_result_counts = None
+    seen_result_totals = None
     original_diff_action = soak_action_diff.diff_action
 
-    def capture_result_counts(*args, **kwargs):
-        nonlocal seen_result_counts
-        seen_result_counts = kwargs.get("search_result_counts")
+    def capture_result_totals(*args, **kwargs):
+        nonlocal seen_result_totals
+        seen_result_totals = kwargs.get("search_result_totals")
         return original_diff_action(*args, **kwargs)
 
-    monkeypatch.setattr(soak_action_diff, "diff_action", capture_result_counts)
+    monkeypatch.setattr(soak_action_diff, "diff_action", capture_result_totals)
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=pending,
@@ -357,7 +368,7 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
     assert report["driverOutcome"] == pending["driverOutcome"]
-    assert seen_result_counts == {"rust": 2, "mfc": 2}
+    assert seen_result_totals == {"rust": 2, "mfc": 2}
     assert report["diagnosticEvidence"]["status"] == "complete"
     assert report["diagnosticEvidence"]["clients"]["rust"]["identity"] == {
         "processId": 4101,
@@ -368,6 +379,46 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         "rust": 2,
         "mfc": 2,
     }
+
+
+def test_build_report_correlates_lifecycle_to_total_not_returned_page(
+    tmp_path: Path,
+) -> None:
+    pending = _pending_action()
+    totals = {"rust": 338, "mfc": 331}
+    pending["driverOutcome"]["returnedCounts"] = {"rust": 100, "mfc": 100}
+    pending["driverOutcome"]["resultTotals"] = totals
+    for client, total in totals.items():
+        pending["clients"][client]["results"]["returnedCount"] = 100
+        pending["clients"][client]["results"]["totalCount"] = total
+        pending["driverOutcome"]["searches"][client]["results"][
+            "returnedCount"
+        ] = 100
+        pending["driverOutcome"]["searches"][client]["results"][
+            "totalCount"
+        ] = total
+
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=pending,
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records(
+                "rust", 4101, "rust-run", result_total=totals["rust"]
+            ),
+            mfc_records=_kad_records(
+                "mfc", 4201, "mfc-run", result_total=totals["mfc"]
+            ),
+        ),
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert report["coverageOk"] is True
+    lifecycle = {
+        row["label"]: row
+        for row in report["assessment"]["actionCoverage"]["required"]
+    }
+    assert lifecycle["kad-lookup-complete"]["presentOnBoth"] is True
     assert report["assessment"]["packets"] == {"rust": 0, "mfc": 0}
 
 

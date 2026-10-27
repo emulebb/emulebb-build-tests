@@ -824,7 +824,8 @@ def pending_cycle_payload(
 
     searches: dict[str, dict[str, Any]] = {}
     search_ids: dict[str, str] = {}
-    result_counts: dict[str, int] = {}
+    returned_counts: dict[str, int] = {}
+    result_totals: dict[str, int] = {}
     errors: list[dict[str, Any]] = []
     for client in ("rust", "mfc"):
         client_state = pending["clients"][client]
@@ -859,18 +860,21 @@ def pending_cycle_payload(
                 "completed": results["completed"],
                 "error": results["error"],
             }
-            if results["resultCount"] is not None:
-                results_record["count"] = results["resultCount"]
-                result_counts[client] = results["resultCount"]
+            if results["totalCount"] is not None:
+                results_record["returnedCount"] = results["returnedCount"]
+                results_record["totalCount"] = results["totalCount"]
+                returned_counts[client] = results["returnedCount"]
+                result_totals[client] = results["totalCount"]
             errors.append(results["error"])
         else:
-            result_count = results["resultCount"]
             results_record = {
                 "ok": True,
-                "count": result_count,
+                "returnedCount": results["returnedCount"],
+                "totalCount": results["totalCount"],
                 "completed": results["completed"],
             }
-            result_counts[client] = result_count
+            returned_counts[client] = results["returnedCount"]
+            result_totals[client] = results["totalCount"]
         if status == "succeeded":
             results_record["poll"] = copy.deepcopy(results["poll"])
         searches[client] = {"create": create_record, "results": results_record}
@@ -885,7 +889,8 @@ def pending_cycle_payload(
         "ok": not errors,
         "searches": searches,
         "searchIds": search_ids,
-        "resultCounts": result_counts,
+        "returnedCounts": returned_counts,
+        "resultTotals": result_totals,
         "errors": errors,
         "startedAtUtc": pending["reservedAtUtc"],
         "completedAtUtc": completed_at_utc,
@@ -1112,7 +1117,7 @@ def capture_action_cycle(
         if observed_at >= deadline:
             expiration_error = None
             if (
-                result_poll["lastObservedResultCount"] is None
+                result_poll["lastObservedTotalCount"] is None
                 and result_poll["lastAttemptError"] is None
             ):
                 expiration_error = action_phase_error(
@@ -1161,7 +1166,8 @@ def capture_action_cycle(
             attempted_at_utc=attempted_at.isoformat(),
             next_attempt_at_utc=next_attempt_at,
             completed=completed_before_deadline,
-            result_count=None if phase.error is not None else len(phase.rows),
+            returned_count=None if phase.error is not None else len(phase.rows),
+            total_count=phase.total,
             error=phase.error,
         )
         validated = persist_state(runtime, validated, now_ns=now_ns)

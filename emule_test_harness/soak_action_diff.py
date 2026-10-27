@@ -599,7 +599,7 @@ def _build_search_coverage(
     *,
     method: str | None,
     search_ids: dict[str, str] | None,
-    search_result_counts: dict[str, int] | None,
+    search_result_totals: dict[str, int] | None,
     rust_kad_records: list[dict[str, Any]] | None,
     mfc_kad_records: list[dict[str, Any]] | None,
     rust_kad_event_records: list[dict[str, Any]] | None,
@@ -624,11 +624,11 @@ def _build_search_coverage(
     full_coverage_ok = bool(packet_diff.get("coverageOk"))
 
     zero_results_on_both = bool(
-        isinstance(search_result_counts, dict)
-        and set(search_result_counts) == {"rust", "mfc"}
+        isinstance(search_result_totals, dict)
+        and set(search_result_totals) == {"rust", "mfc"}
         and all(
             not isinstance(value, bool) and isinstance(value, int) and value == 0
-            for value in search_result_counts.values()
+            for value in search_result_totals.values()
         )
     )
     server_request = _check_action_requirements(
@@ -713,11 +713,11 @@ def _build_search_coverage(
         isinstance(search_ids, dict)
         and set(search_ids) == {"rust", "mfc"}
         and all(isinstance(value, str) and value for value in search_ids.values())
-        and isinstance(search_result_counts, dict)
-        and set(search_result_counts) == {"rust", "mfc"}
+        and isinstance(search_result_totals, dict)
+        and set(search_result_totals) == {"rust", "mfc"}
         and all(
             not isinstance(value, bool) and isinstance(value, int) and value >= 0
-            for value in search_result_counts.values()
+            for value in search_result_totals.values()
         )
     )
     lifecycle = {
@@ -726,17 +726,17 @@ def _build_search_coverage(
     }
     if driver_evidence_complete:
         assert search_ids is not None
-        assert search_result_counts is not None
+        assert search_result_totals is not None
         lifecycle = {
             "rust": _kad_lookup_lifecycle(
                 rust_kad_event_records,
                 search_id=search_ids["rust"],
-                result_count=search_result_counts["rust"],
+                result_count=search_result_totals["rust"],
             ),
             "mfc": _kad_lookup_lifecycle(
                 mfc_kad_event_records,
                 search_id=search_ids["mfc"],
-                result_count=search_result_counts["mfc"],
+                result_count=search_result_totals["mfc"],
             ),
         }
     kad_required.extend(
@@ -758,10 +758,10 @@ def _build_search_coverage(
         ]
     )
     rust_result_required = bool(
-        driver_evidence_complete and search_result_counts["rust"] > 0
+        driver_evidence_complete and search_result_totals["rust"] > 0
     )
     mfc_result_required = bool(
-        driver_evidence_complete and search_result_counts["mfc"] > 0
+        driver_evidence_complete and search_result_totals["mfc"] > 0
     )
     result_evidence = {
         "label": "kad-search-result",
@@ -816,7 +816,7 @@ def build_action_coverage(
     *,
     method: str | None = None,
     search_ids: dict[str, str] | None = None,
-    search_result_counts: dict[str, int] | None = None,
+    search_result_totals: dict[str, int] | None = None,
     rust_kad_records: list[dict[str, Any]] | None = None,
     mfc_kad_records: list[dict[str, Any]] | None = None,
     rust_kad_event_records: list[dict[str, Any]] | None = None,
@@ -836,7 +836,7 @@ def build_action_coverage(
             packet_diff,
             method=method,
             search_ids=search_ids,
-            search_result_counts=search_result_counts,
+            search_result_totals=search_result_totals,
             rust_kad_records=rust_kad_records,
             mfc_kad_records=mfc_kad_records,
             rust_kad_event_records=rust_kad_event_records,
@@ -1022,7 +1022,7 @@ def diff_action(
     mfc_diag: list[dict[str, Any]] | None = None,
     diagnostics_required: bool = False,
     search_ids: dict[str, str] | None = None,
-    search_result_counts: dict[str, int] | None = None,
+    search_result_totals: dict[str, int] | None = None,
     action_window: ActionWindow | None = None,
     lead_seconds: float = DEFAULT_LEAD_SECONDS,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
@@ -1077,7 +1077,7 @@ def diff_action(
         packet_diff,
         method=method,
         search_ids=search_ids,
-        search_result_counts=search_result_counts,
+        search_result_totals=search_result_totals,
         rust_kad_records=rust_kad_records,
         mfc_kad_records=mfc_kad_records,
         rust_kad_event_records=rust_kad_event_records,

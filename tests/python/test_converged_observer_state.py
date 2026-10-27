@@ -408,7 +408,8 @@ def test_pending_action_round_trip_preserves_one_sided_exact_outcomes() -> None:
         attempted_at_utc="2026-10-01T00:02:00+00:00",
         next_attempt_at_utc=None,
         completed=False,
-        result_count=3,
+        returned_count=3,
+        total_count=8,
         error=None,
     )
     state = observer_state.record_driver_cycle(
@@ -458,7 +459,7 @@ def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None
         configuration_digest=CONFIGURATION_DIGEST,
     )
 
-    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v6"
+    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v7"
     assert reloaded["pendingAction"]["clients"]["rust"]["resultPoll"] == {
         "startedAtUtc": "2026-10-01T00:00:03+00:00",
         "deadlineUtc": "2026-10-01T00:03:03+00:00",
@@ -466,7 +467,8 @@ def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None
         "attempts": 0,
         "errorCount": 0,
         "latestAttemptAtUtc": None,
-        "lastObservedResultCount": None,
+        "lastObservedReturnedCount": None,
+        "lastObservedTotalCount": None,
         "lastAttemptError": None,
         "latestError": None,
     }
@@ -485,7 +487,8 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         attempted_at_utc="2026-10-01T00:00:03+00:00",
         next_attempt_at_utc="2026-10-01T00:00:05+00:00",
         completed=False,
-        result_count=3,
+        returned_count=3,
+        total_count=8,
         error=None,
     )
     exact_error = {
@@ -500,7 +503,8 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         attempted_at_utc="2026-10-01T00:00:05+00:00",
         next_attempt_at_utc="2026-10-01T00:00:07+00:00",
         completed=False,
-        result_count=None,
+        returned_count=None,
+        total_count=None,
         error=exact_error,
     )
     state = observer_state.validate_state(
@@ -517,7 +521,8 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         "attempts": 2,
         "errorCount": 1,
         "latestAttemptAtUtc": "2026-10-01T00:00:05+00:00",
-        "lastObservedResultCount": 3,
+        "lastObservedReturnedCount": 3,
+        "lastObservedTotalCount": 8,
         "lastAttemptError": exact_error,
         "latestError": exact_error,
     }
@@ -528,7 +533,8 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
         attempted_at_utc="2026-10-01T00:00:07+00:00",
         next_attempt_at_utc=None,
         completed=True,
-        result_count=5,
+        returned_count=5,
+        total_count=13,
         error=None,
     )
 
@@ -537,7 +543,8 @@ def test_incremental_result_poll_reschedules_errors_and_completes() -> None:
     assert client_state["results"] == {
         "completedAtUtc": "2026-10-01T00:00:07+00:00",
         "completed": True,
-        "resultCount": 5,
+        "returnedCount": 5,
+        "totalCount": 13,
         "error": None,
         "poll": {
             "startedAtUtc": "2026-10-01T00:00:03+00:00",
@@ -568,7 +575,8 @@ def test_incremental_result_poll_expiry_preserves_exact_latest_error() -> None:
         attempted_at_utc="2026-10-01T00:00:03+00:00",
         next_attempt_at_utc="2026-10-01T00:00:05+00:00",
         completed=False,
-        result_count=None,
+        returned_count=None,
+        total_count=None,
         error=exact_error,
     )
 
@@ -582,7 +590,8 @@ def test_incremental_result_poll_expiry_preserves_exact_latest_error() -> None:
     assert state["pendingAction"]["clients"]["rust"]["results"] == {
         "completedAtUtc": "2026-10-01T00:00:05+00:00",
         "completed": False,
-        "resultCount": None,
+        "returnedCount": None,
+        "totalCount": None,
         "error": exact_error,
         "poll": {
             "startedAtUtc": "2026-10-01T00:00:03+00:00",
@@ -610,7 +619,8 @@ def test_incremental_result_poll_attempt_at_deadline_is_terminal() -> None:
         attempted_at_utc="2026-10-01T00:00:05+00:00",
         next_attempt_at_utc=None,
         completed=False,
-        result_count=4,
+        returned_count=4,
+        total_count=9,
         error=None,
     )
 
@@ -619,7 +629,8 @@ def test_incremental_result_poll_attempt_at_deadline_is_terminal() -> None:
     assert client_state["results"] == {
         "completedAtUtc": "2026-10-01T00:00:05+00:00",
         "completed": False,
-        "resultCount": 4,
+        "returnedCount": 4,
+        "totalCount": 9,
         "error": None,
         "poll": {
             "startedAtUtc": "2026-10-01T00:00:03+00:00",
@@ -670,7 +681,8 @@ def test_incremental_result_poll_rejects_invalid_or_premature_progress() -> None
             attempted_at_utc="2026-10-01T00:00:03+00:00",
             next_attempt_at_utc="2026-10-01T00:03:04+00:00",
             completed=False,
-            result_count=0,
+            returned_count=0,
+            total_count=0,
             error=None,
         )
     assert not hasattr(observer_state, "record_search_results")
@@ -701,11 +713,15 @@ def test_incremental_result_poll_rejects_impossible_success_history() -> None:
         attempted_at_utc="2026-10-01T00:00:03+00:00",
         next_attempt_at_utc="2026-10-01T00:00:05+00:00",
         completed=False,
-        result_count=None,
+        returned_count=None,
+        total_count=None,
         error=exact_error,
     )
     active["pendingAction"]["clients"]["rust"]["resultPoll"][
-        "lastObservedResultCount"
+        "lastObservedReturnedCount"
+    ] = 4
+    active["pendingAction"]["clients"]["rust"]["resultPoll"][
+        "lastObservedTotalCount"
     ] = 4
     with pytest.raises(RuntimeError, match="success history is invalid"):
         observer_state.validate_state(active)
@@ -722,10 +738,12 @@ def test_incremental_result_poll_rejects_impossible_success_history() -> None:
         attempted_at_utc="2026-10-01T00:00:05+00:00",
         next_attempt_at_utc=None,
         completed=False,
-        result_count=None,
+        returned_count=None,
+        total_count=None,
         error=exact_error,
     )
-    terminal["pendingAction"]["clients"]["rust"]["results"]["resultCount"] = 4
+    terminal["pendingAction"]["clients"]["rust"]["results"]["returnedCount"] = 4
+    terminal["pendingAction"]["clients"]["rust"]["results"]["totalCount"] = 4
     with pytest.raises(RuntimeError, match="success history is invalid"):
         observer_state.validate_state(terminal)
 
@@ -769,7 +787,7 @@ def test_pending_action_cannot_restore_a_consumed_deadline() -> None:
         diagnostic_runs=diagnostic_runs(),
     )
 
-    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v6"
+    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v7"
     assert state["scheduler"]["nextActionAtUtc"] is None
     with pytest.raises(RuntimeError, match="cannot set a scheduler deadline"):
         observer_state.set_next_action_deadline(
@@ -926,7 +944,8 @@ def test_matching_action_report_is_the_only_commit_that_clears_pending() -> None
             attempted_at_utc="2026-10-01T00:01:00+00:00",
             next_attempt_at_utc=None,
             completed=True,
-            result_count=2,
+            returned_count=2,
+            total_count=7,
             error=None,
         )
     state = observer_state.record_driver_cycle(

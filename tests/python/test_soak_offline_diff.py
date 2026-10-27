@@ -526,7 +526,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
         settle=5.0,
         method="kad",
         search_ids={"rust": "rust-search", "mfc": "mfc-search"},
-        search_result_counts={"rust": 0, "mfc": 0},
+        search_result_totals={"rust": 0, "mfc": 0},
     )
     assert result["coverageOk"] is True
 
