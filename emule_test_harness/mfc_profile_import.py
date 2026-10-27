@@ -372,6 +372,50 @@ def parse_server_met(path: Path) -> list[dict[str, object]]:
     return servers
 
 
+def inspect_stock_mfc_servers(
+    mfc_profile_dir: Path,
+    *,
+    limit: int = 50,
+) -> dict[str, object]:
+    """Returns ordered server candidates from one persisted stock MFC profile."""
+
+    if limit <= 0:
+        raise ValueError("Server candidate limit must be positive.")
+    server_met = next(
+        (
+            candidate
+            for candidate in (
+                mfc_profile_dir / "config" / "server.met",
+                mfc_profile_dir / "server.met",
+            )
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if server_met is None:
+        raise RuntimeError(
+            f"Persisted MFC server.met was not found under: {mfc_profile_dir.resolve()}"
+        )
+    servers = parse_server_met(server_met)
+    candidates = [
+        {
+            "endpoint": f"{server['address']}:{server['port']}",
+            "address": server["address"],
+            "port": server["port"],
+            "name": server["name"],
+        }
+        for server in servers[:limit]
+    ]
+    return {
+        "schema": "emulebb.mfc-server-candidates.v1",
+        "profileDir": str(mfc_profile_dir.resolve()),
+        "serverMet": str(server_met.resolve()),
+        "serverCount": len(servers),
+        "returnedCount": len(candidates),
+        "servers": candidates,
+    }
+
+
 def read_preferences_dat_user_hash(path: Path) -> bytes:
     """Return the 16-byte stock eMule user hash from ``preferences.dat``."""
 

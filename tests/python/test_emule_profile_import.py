@@ -455,6 +455,31 @@ def test_parse_server_met_rejects_trailing_bytes(tmp_path: Path) -> None:
         mfc_profile_import.parse_server_met(server_met)
 
 
+def test_inspect_stock_mfc_servers_preserves_server_met_order(tmp_path: Path) -> None:
+    profile = tmp_path / "EMULE_BIN"
+    config = profile / "config"
+    config.mkdir(parents=True)
+    _write_server_met(config / "server.met")
+
+    summary = mfc_profile_import.inspect_stock_mfc_servers(profile, limit=1)
+
+    assert summary == {
+        "schema": "emulebb.mfc-server-candidates.v1",
+        "profileDir": str(profile.resolve()),
+        "serverMet": str((config / "server.met").resolve()),
+        "serverCount": 1,
+        "returnedCount": 1,
+        "servers": [
+            {
+                "endpoint": "45.82.80.155:5687",
+                "address": "45.82.80.155",
+                "port": 5687,
+                "name": "Local",
+            }
+        ],
+    }
+
+
 def test_load_recursive_roots_ignores_non_stock_monitored_sidecars(tmp_path: Path) -> None:
     config = tmp_path / "stock-config"
     config.mkdir()
