@@ -454,6 +454,7 @@ def _rust_any_opcode_present(packet_diff: dict[str, Any], alternatives: list[dic
 SEARCH_METHOD_SERVER = "server"
 SEARCH_METHOD_GLOBAL = "global"
 SEARCH_METHOD_KAD = "kad"
+_SEARCH_CLIENTS = ("rust", "mfc")
 
 # Server (TCP) keyword-search gate: what a server-method search must exercise.
 _SERVER_SEARCH_REQUIRED: list[dict[str, Any]] = [
@@ -490,6 +491,90 @@ ED2K_TCP_FAMILY = "ed2k_tcp"
 ED2K_SERVER_UDP_FAMILY = "ed2k_server_udp"
 KAD_UDP_FAMILY = "kad_udp"
 KAD_EVENT_FAMILY = "kad_event"
+
+
+def normalize_server_endpoints(
+    server_endpoints: dict[str, str] | None,
+) -> dict[str, dict[str, Any]]:
+    """Validates and structurally normalizes bilateral server authority."""
+
+    if server_endpoints is None or set(server_endpoints) != set(_SEARCH_CLIENTS):
+        raise ActionTraceError("server_endpoints must contain exactly rust and mfc")
+    normalized: dict[str, dict[str, Any]] = {}
+    for client in _SEARCH_CLIENTS:
+        endpoint = server_endpoints[client]
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise ActionTraceError(
+                f"server_endpoints[{client!r}] must be a non-empty host:port string"
+            )
+        try:
+            host, port_text = endpoint.strip().rsplit(":", 1)
+            port = int(port_text)
+        except ValueError as error:
+            raise ActionTraceError(
+                f"server_endpoints[{client!r}] must be a host:port string"
+            ) from error
+        if not host.strip() or port < 1 or port > 65535:
+            raise ActionTraceError(
+                f"server_endpoints[{client!r}] must be a live host:port endpoint"
+            )
+        normalized[client] = {"host": host.strip().casefold(), "port": port}
+    return normalized
+
+
+def _server_endpoint_comparison(
+    server_endpoints: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Describes whether server responses came from the same authority."""
+
+    normalized = normalize_server_endpoints(server_endpoints)
+    comparable = normalized["rust"] == normalized["mfc"]
+    return {
+        "status": "comparable" if comparable else "not-assessable",
+        "comparable": comparable,
+        "mode": "same-endpoint" if comparable else "distinct-endpoints",
+        "reason": "same-server-endpoint" if comparable else "distinct-server-endpoints",
+        "endpoints": normalized,
+    }
+
+
+def _opcode_observation(
+    packet_diff: dict[str, Any],
+    *,
+    channel: str,
+    direction: str,
+    protocol_marker: int,
+    opcode: int,
+) -> dict[str, Any]:
+    """Returns bilateral packet counts for one opcode across all diff buckets."""
+
+    rust_count = 0
+    mfc_count = 0
+    coverage = packet_diff.get("opcodeCoverage") or {}
+    for channel_row in coverage.get("channels") or []:
+        if (
+            not isinstance(channel_row, dict)
+            or channel_row.get("channel") != channel
+            or channel_row.get("direction") != direction
+        ):
+            continue
+        for bucket in ("shared", "onlyRust", "onlyEmule"):
+            for row in channel_row.get(bucket) or []:
+                if (
+                    not isinstance(row, dict)
+                    or int(row.get("protocolMarker") or 0) != protocol_marker
+                    or int(row.get("opcode") or 0) != opcode
+                ):
+                    continue
+                rust_count += int(row.get("rustCount") or 0)
+                mfc_count += int(row.get("emuleCount") or 0)
+    return {
+        "rustCount": rust_count,
+        "mfcCount": mfc_count,
+        "rustPresent": rust_count > 0,
+        "mfcPresent": mfc_count > 0,
+        "presentOnBoth": rust_count > 0 and mfc_count > 0,
+    }
 
 
 def _kad_record_opcode(record: dict[str, Any]) -> int | str | None:
@@ -598,6 +683,7 @@ def _build_search_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None,
+    server_endpoints: dict[str, str] | None,
     search_ids: dict[str, str] | None,
     search_result_totals: dict[str, int] | None,
     rust_kad_records: list[dict[str, Any]] | None,
@@ -610,8 +696,10 @@ def _build_search_coverage(
     """Method-aware search gate: each search method has its own live evidence.
 
     ``server`` always requires TCP OP_SEARCHREQUEST. OP_SEARCHRESULT is required
-    unless the action driver authoritatively completed with zero results on both
-    clients; a zero-hit server search may complete without a result packet.
+    only when both clients queried the same endpoint and the action driver did
+    not authoritatively complete with zero results on both clients. Responses
+    from distinct or unknown server authorities remain observed but are not a
+    parity gate.
     ``global`` goes over server UDP. The MFC capture has no aligned server-UDP
     diagnostics, so global search remains explicitly ``not-assessable`` and can
     never become parity from Rust-only evidence. ``kad`` is assessed from the
@@ -637,15 +725,33 @@ def _build_search_coverage(
     server_result = _check_action_requirements(
         _SERVER_SEARCH_REQUIRED[1:], packet_diff
     )
-    server_required = server_request + ([] if zero_results_on_both else server_result)
-    server_optional = server_result if zero_results_on_both else []
+    response_comparison = None
+    response_required = False
+    if normalized not in {SEARCH_METHOD_GLOBAL, SEARCH_METHOD_KAD}:
+        response_comparison = _server_endpoint_comparison(server_endpoints)
+        response_required = response_comparison["comparable"] and not zero_results_on_both
+    server_required = server_request + (server_result if response_required else [])
+    server_optional = [] if response_required else server_result
     server_ok = all(row["presentOnBoth"] for row in server_required)
     if normalized in (None, "", SEARCH_METHOD_SERVER):
+        assert response_comparison is not None
         coverage = {
             "ok": server_ok,
             "mode": "action-required-opcodes",
             "method": normalized or SEARCH_METHOD_SERVER,
             "required": server_required,
+            "responseAssessment": {
+                **response_comparison,
+                "requiredForParity": response_required,
+                "resultTotals": search_result_totals,
+                "wire": _opcode_observation(
+                    packet_diff,
+                    channel="server",
+                    direction="recv",
+                    protocol_marker=0xE3,
+                    opcode=0x33,
+                ),
+            },
             "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
         }
         if server_optional:
@@ -795,12 +901,25 @@ def _build_search_coverage(
             coverage["status"] = "evidence-incomplete"
         return coverage
 
+    assert response_comparison is not None
     coverage = {
         "ok": server_ok or kad_ok,
         "mode": "search-automatic",
         "method": normalized,
         "serverOk": server_ok,
         "kadOk": kad_ok,
+        "responseAssessment": {
+            **response_comparison,
+            "requiredForParity": response_required,
+            "resultTotals": search_result_totals,
+            "wire": _opcode_observation(
+                packet_diff,
+                channel="server",
+                direction="recv",
+                protocol_marker=0xE3,
+                opcode=0x33,
+            ),
+        },
         "required": server_required + kad_required,
         "optional": server_optional + kad_optional,
         "diagnosticFullOpcodeCoverageOk": full_coverage_ok,
@@ -815,6 +934,7 @@ def build_action_coverage(
     packet_diff: dict[str, Any],
     *,
     method: str | None = None,
+    server_endpoints: dict[str, str] | None = None,
     search_ids: dict[str, str] | None = None,
     search_result_totals: dict[str, int] | None = None,
     rust_kad_records: list[dict[str, Any]] | None = None,
@@ -835,6 +955,7 @@ def build_action_coverage(
         return _build_search_coverage(
             packet_diff,
             method=method,
+            server_endpoints=server_endpoints,
             search_ids=search_ids,
             search_result_totals=search_result_totals,
             rust_kad_records=rust_kad_records,
@@ -1021,6 +1142,7 @@ def diff_action(
     rust_diag: list[dict[str, Any]] | None = None,
     mfc_diag: list[dict[str, Any]] | None = None,
     diagnostics_required: bool = False,
+    server_endpoints: dict[str, str] | None = None,
     search_ids: dict[str, str] | None = None,
     search_result_totals: dict[str, int] | None = None,
     action_window: ActionWindow | None = None,
@@ -1076,6 +1198,7 @@ def diff_action(
         pair.kind,
         packet_diff,
         method=method,
+        server_endpoints=server_endpoints,
         search_ids=search_ids,
         search_result_totals=search_result_totals,
         rust_kad_records=rust_kad_records,

@@ -1362,11 +1362,15 @@ def test_finalize_pending_action_is_report_first_and_uses_persisted_authority(
         assert mfc.run_id == "mfc-run"
         return evidence_token
 
-    def build_report(*, campaign_id, pending_action, evidence):
+    def build_report(*, campaign_id, pending_action, evidence, server_endpoints):
         events.append("build")
         assert campaign_id == CAMPAIGN_ID
         assert pending_action == pending
         assert evidence is evidence_token
+        assert server_endpoints == {
+            "rust": subject.rust_server_endpoint,
+            "mfc": subject.mfc_server_endpoint,
+        }
         return pending_action_report(pending_action)
 
     persisted = soak_storage.PersistedArtifact(
@@ -1537,10 +1541,14 @@ def test_finalize_pending_action_recovers_report_before_diagnostic_recapture(
         assert kwargs["pending_action"] == pending
         return candidate
 
-    def validate_candidate(report, pending_action):
+    def validate_candidate(report, pending_action, *, server_endpoints):
         events.append("validate")
         assert report is candidate
         assert pending_action == pending
+        assert server_endpoints == {
+            "rust": subject.rust_server_endpoint,
+            "mfc": subject.mfc_server_endpoint,
+        }
         return report
 
     def persist_report(**kwargs):

@@ -2133,6 +2133,10 @@ def main(argv: list[str] | None = None) -> int:
                             pair, rust_packets=rust_pkts, mfc_packets=mfc_pkts,
                             rust_diag=rust_dg, mfc_diag=mfc_dg,
                             diagnostics_required=True,
+                            server_endpoints={
+                                "rust": args.rust_server,
+                                "mfc": args.mfc_server,
+                            },
                             lead_seconds=args.lead_seconds,
                             settle_seconds=tracker.settle_seconds_for(pair.kind),
                         )
@@ -2169,6 +2173,10 @@ def main(argv: list[str] | None = None) -> int:
                                 rust_diag=load_diag(rust_dump_dir, side="rust", min_mtime=marker_t0.timestamp() - 60.0),
                                 mfc_diag=load_diag(mfc_dump_dir, side="emule", min_mtime=marker_t0.timestamp() - 60.0),
                                 diagnostics_required=True,
+                                server_endpoints={
+                                    "rust": args.rust_server,
+                                    "mfc": args.mfc_server,
+                                },
                                 lead_seconds=0.0, settle_seconds=0.0,
                             )
                         )

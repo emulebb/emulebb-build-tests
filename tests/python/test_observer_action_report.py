@@ -14,6 +14,11 @@ from emule_test_harness.diag_event_runs import (
 
 pytestmark = pytest.mark.unit
 
+SERVER_ENDPOINTS = {
+    "rust": "198.51.100.2:4661",
+    "mfc": "203.0.113.3:5687",
+}
+
 
 def _ts(seconds: float) -> datetime:
     return datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc) + timedelta(
@@ -349,11 +354,13 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
     )
 
     seen_result_totals = None
+    seen_server_endpoints = None
     original_diff_action = soak_action_diff.diff_action
 
     def capture_result_totals(*args, **kwargs):
-        nonlocal seen_result_totals
+        nonlocal seen_result_totals, seen_server_endpoints
         seen_result_totals = kwargs.get("search_result_totals")
+        seen_server_endpoints = kwargs.get("server_endpoints")
         return original_diff_action(*args, **kwargs)
 
     monkeypatch.setattr(soak_action_diff, "diff_action", capture_result_totals)
@@ -361,6 +368,7 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         campaign_id="20261026T120000Z",
         pending_action=pending,
         evidence=evidence,
+        server_endpoints=SERVER_ENDPOINTS,
     )
 
     assert report["schema"] == observer_action_report.SCHEMA
@@ -373,6 +381,10 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
     assert report["coverageOk"] is True
     assert report["driverOutcome"] == pending["driverOutcome"]
     assert seen_result_totals == {"rust": 2, "mfc": 2}
+    assert seen_server_endpoints == {
+        "rust": "198.51.100.2:4661",
+        "mfc": "203.0.113.3:5687",
+    }
     assert report["diagnosticEvidence"]["status"] == "complete"
     assert report["diagnosticEvidence"]["clients"]["rust"]["identity"] == {
         "processId": 4101,
@@ -405,6 +417,7 @@ def test_build_report_correlates_lifecycle_to_total_not_returned_page(
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=pending,
+        server_endpoints=SERVER_ENDPOINTS,
         evidence=_evidence(
             tmp_path,
             rust_records=_kad_records(
@@ -432,6 +445,7 @@ def test_incomplete_exact_tail_overrides_an_otherwise_parity_verdict(
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=_pending_action(),
+        server_endpoints=SERVER_ENDPOINTS,
         evidence=_evidence(
             tmp_path,
             rust_records=_kad_records("rust", 4101, "rust-run"),
@@ -475,11 +489,13 @@ def test_failed_driver_outcomes_still_produce_deterministic_reports(
         campaign_id="20261026T120000Z",
         pending_action=pending,
         evidence=evidence,
+        server_endpoints=SERVER_ENDPOINTS,
     )
     second = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=pending,
         evidence=evidence,
+        server_endpoints=SERVER_ENDPOINTS,
     )
 
     assert first == second
@@ -513,6 +529,7 @@ def test_failed_driver_outcome_keeps_raw_assessment_incomplete(
         campaign_id="20261026T120000Z",
         pending_action=pending,
         evidence=evidence,
+        server_endpoints=SERVER_ENDPOINTS,
     )
 
     assert report["assessment"]["verdict"] == "evidence-incomplete"
@@ -529,6 +546,7 @@ def test_report_rejects_evidence_from_a_different_window(tmp_path: Path) -> None
             campaign_id="20261026T120000Z",
             pending_action=_pending_action(),
             evidence=_evidence(tmp_path, start_seconds=-1),
+            server_endpoints=SERVER_ENDPOINTS,
         )
 
 
@@ -544,6 +562,7 @@ def test_report_rejects_evidence_from_a_different_writer(tmp_path: Path) -> None
             campaign_id="20261026T120000Z",
             pending_action=pending,
             evidence=_evidence(tmp_path),
+            server_endpoints=SERVER_ENDPOINTS,
         )
 
 
@@ -551,6 +570,7 @@ def test_validator_rejects_schema_and_assessment_drift(tmp_path: Path) -> None:
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=_pending_action(),
+        server_endpoints=SERVER_ENDPOINTS,
         evidence=_evidence(
             tmp_path,
             rust_records=_kad_records("rust", 4101, "rust-run"),
@@ -558,7 +578,7 @@ def test_validator_rejects_schema_and_assessment_drift(tmp_path: Path) -> None:
         ),
     )
     wrong_schema = dict(report)
-    wrong_schema["schema"] = "emulebb-build-tests.observer-action-report.v2"
+    wrong_schema["schema"] = "emulebb-build-tests.observer-action-report.v1"
     with pytest.raises(
         observer_action_report.ObserverActionReportError,
         match="schema is invalid",
@@ -582,6 +602,7 @@ def test_pending_validator_rejects_a_valid_report_for_another_action(
     report = observer_action_report.build_observer_action_report(
         campaign_id="20261026T120000Z",
         pending_action=original_pending,
+        server_endpoints=SERVER_ENDPOINTS,
         evidence=_evidence(
             tmp_path,
             rust_records=_kad_records("rust", 4101, "rust-run"),
@@ -599,4 +620,34 @@ def test_pending_validator_rejects_a_valid_report_for_another_action(
         observer_action_report.validate_observer_action_report_for_pending(
             report,
             different_pending,
+            server_endpoints=SERVER_ENDPOINTS,
+        )
+
+
+def test_pending_validator_rejects_different_server_authority(
+    tmp_path: Path,
+) -> None:
+    pending = _pending_action()
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=pending,
+        server_endpoints=SERVER_ENDPOINTS,
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records("rust", 4101, "rust-run"),
+            mfc_records=_kad_records("mfc", 4201, "mfc-run"),
+        ),
+    )
+
+    with pytest.raises(
+        observer_action_report.ObserverActionReportError,
+        match="server authority does not match",
+    ):
+        observer_action_report.validate_observer_action_report_for_pending(
+            report,
+            pending,
+            server_endpoints={
+                "rust": SERVER_ENDPOINTS["rust"],
+                "mfc": "192.0.2.44:4661",
+            },
         )
