@@ -40,7 +40,7 @@ CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
-MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v3"
+MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v4"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v3"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
@@ -134,6 +134,8 @@ class SessionConfig:
     lan_bind_addr: str = DEFAULT_CONTROL_BIND
     rest_timeout_seconds: float = soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
     connect_timeout_seconds: float = 240.0
+    rust_server: str = soak_launch.OPERATOR_SERVER
+    mfc_server: str = soak_launch.OPERATOR_SERVER
     mfc_variant: str = clw.DEFAULT_MFC_VARIANT
     mfc_arch: str = clw.DEFAULT_MFC_ARCH
     mfc_configuration: str = clw.DEFAULT_MFC_CONFIGURATION
@@ -1321,6 +1323,14 @@ def preflight_session(
         output_root,
         protected_campaigns=protected_campaigns,
     )
+    rust_server = soak_launch.require_live_server_endpoint(
+        config.rust_server,
+        label="--rust-server",
+    )
+    mfc_server = soak_launch.require_live_server_endpoint(
+        config.mfc_server,
+        label="--mfc-server",
+    )
 
     rest_addr = soak_launch.resolve_lan_rest_bind_addr(
         config.lan_bind_addr,
@@ -1359,6 +1369,8 @@ def preflight_session(
             "bindAddress": rest_addr,
             "rustBaseUrl": f"http://{rest_addr}:4731/api/v1",
             "mfcBaseUrl": f"http://{rest_addr}:4732/api/v1",
+            "rustServerEndpoint": rust_server,
+            "mfcServerEndpoint": mfc_server,
         },
         "vpn": {
             "topology": routing["topology"],
@@ -1406,6 +1418,10 @@ def build_launch_command(
         str(config.rest_timeout_seconds),
         "--connect-timeout-seconds",
         str(config.connect_timeout_seconds),
+        "--rust-server",
+        config.rust_server,
+        "--mfc-server",
+        config.mfc_server,
         "--mfc-variant",
         config.mfc_variant,
         "--mfc-arch",
@@ -3367,6 +3383,8 @@ def add_session_config_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument("--connect-timeout-seconds", type=float, default=240.0)
+    parser.add_argument("--rust-server", default=soak_launch.OPERATOR_SERVER)
+    parser.add_argument("--mfc-server", default=soak_launch.OPERATOR_SERVER)
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
@@ -3381,6 +3399,8 @@ def session_config_from_args(args: argparse.Namespace) -> SessionConfig:
         lan_bind_addr=args.lan_bind_addr,
         rest_timeout_seconds=args.rest_timeout_seconds,
         connect_timeout_seconds=args.connect_timeout_seconds,
+        rust_server=args.rust_server,
+        mfc_server=args.mfc_server,
         mfc_variant=args.mfc_variant,
         mfc_arch=args.mfc_arch,
         mfc_configuration=args.mfc_configuration,

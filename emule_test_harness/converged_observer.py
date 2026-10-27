@@ -40,6 +40,8 @@ DEFAULT_ACTION_INTERVAL_SECONDS = 1_800.0
 DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS = 180.0
 ACTION_RESULT_POLL_INTERVAL_SECONDS = 2.0
 ACTION_RESULT_REQUEST_TIMEOUT_SECONDS = 30.0
+ACTION_NETWORK_RECONNECT_TIMEOUT_SECONDS = 60.0
+ACTION_NETWORK_RECONNECT_POLL_INTERVAL_SECONDS = 2.0
 SUPPORTED_ACTION_METHODS = ("server", "global", "kad")
 DEFAULT_ACTION_METHODS = ("server", "kad")
 
@@ -78,6 +80,8 @@ class ObserverRuntime:
     launcher_identity: dict[str, Any]
     rust_base_url: str
     mfc_base_url: str
+    rust_server_endpoint: str
+    mfc_server_endpoint: str
     diagnostic_directories: DiagnosticDirectories
     action_config: ObserverActionConfig = ObserverActionConfig()
 
@@ -276,10 +280,24 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
         raise RuntimeError("Persisted soak observer REST authority is invalid.")
     rust_base_url = control.get("rustBaseUrl")
     mfc_base_url = control.get("mfcBaseUrl")
+    rust_server_endpoint = control.get("rustServerEndpoint")
+    mfc_server_endpoint = control.get("mfcServerEndpoint")
     if not isinstance(rust_base_url, str) or not rust_base_url.strip():
         raise RuntimeError("Persisted soak observer Rust REST authority is invalid.")
     if not isinstance(mfc_base_url, str) or not mfc_base_url.strip():
         raise RuntimeError("Persisted soak observer MFC REST authority is invalid.")
+    if not isinstance(rust_server_endpoint, str):
+        raise RuntimeError("Persisted soak observer Rust server endpoint is invalid.")
+    if not isinstance(mfc_server_endpoint, str):
+        raise RuntimeError("Persisted soak observer MFC server endpoint is invalid.")
+    rust_server_endpoint = soak_launch.require_live_server_endpoint(
+        rust_server_endpoint,
+        label="Rust server endpoint",
+    )
+    mfc_server_endpoint = soak_launch.require_live_server_endpoint(
+        mfc_server_endpoint,
+        label="MFC server endpoint",
+    )
     diagnostic_dirs = diagnostic_profile_directories(preflight)
 
     return ObserverRuntime(
@@ -291,6 +309,8 @@ def load_runtime(session_manifest: Path, output_root: Path) -> ObserverRuntime:
         launcher_identity=launcher_identity,
         rust_base_url=rust_base_url,
         mfc_base_url=mfc_base_url,
+        rust_server_endpoint=rust_server_endpoint,
+        mfc_server_endpoint=mfc_server_endpoint,
         diagnostic_directories=diagnostic_dirs,
         action_config=parse_action_config(observer_config),
     )
@@ -359,15 +379,39 @@ def load_ready_manifest(runtime: ObserverRuntime) -> dict[str, Any] | None:
     return manifest
 
 
-def diagnostic_writer_health(base_url: str, api_key: str) -> dict[str, Any]:
+def diagnostic_writer_health(
+    base_url: str,
+    api_key: str,
+    *,
+    attempts: int = 3,
+    timeout_seconds: float = 15.0,
+    retry_delay_seconds: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
     """Loads one complete healthy diagnostic writer payload."""
 
-    payload = http_json(
-        base_url,
-        "/diagnostics",
-        api_key=api_key,
-        timeout_seconds=5.0,
-    )
+    if attempts <= 0:
+        raise ValueError("Diagnostic writer health attempts must be positive.")
+    if timeout_seconds <= 0:
+        raise ValueError("Diagnostic writer health timeout must be positive.")
+    if retry_delay_seconds < 0:
+        raise ValueError("Diagnostic writer health retry delay must not be negative.")
+    payload: object | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            payload = http_json(
+                base_url,
+                "/diagnostics",
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+            break
+        except (OSError, RuntimeError) as error:
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"Diagnostic writer health failed after {attempts} attempts: {error}"
+                ) from error
+            sleep(retry_delay_seconds)
     data = api_data(payload)
     health = data.get("diagnosticWriter") if isinstance(data, dict) else None
     violations = diag_event_runs.diagnostic_writer_health_violations(health)
@@ -676,6 +720,96 @@ def action_network_readiness(
     return classify_action_network_readiness(method, stats_by_client)
 
 
+def rest_origin_url(api_root_url: str) -> str:
+    """Returns the REST origin from one canonical `/api/v1` root URL."""
+
+    suffix = "/api/v1"
+    normalized = api_root_url.rstrip("/")
+    if not normalized.endswith(suffix):
+        raise RuntimeError(f"Observer REST root must end with {suffix}: {api_root_url!r}")
+    return normalized[: -len(suffix)]
+
+
+def repair_action_network(
+    runtime: ObserverRuntime,
+    clients: dict[str, converged_action_driver.ClientEndpoint],
+    method: str,
+    readiness: dict[str, Any],
+    *,
+    readiness_probe: Callable[
+        [dict[str, converged_action_driver.ClientEndpoint], str], dict[str, Any]
+    ] = action_network_readiness,
+    timeout_seconds: float = ACTION_NETWORK_RECONNECT_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = ACTION_NETWORK_RECONNECT_POLL_INTERVAL_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Reconnects disconnected eD2K clients and returns refreshed readiness."""
+
+    if readiness.get("ok") is True or method not in {"server", "global"}:
+        return {
+            "attempted": False,
+            "method": method,
+            "clients": {},
+            "readiness": copy.deepcopy(readiness),
+        }
+    if timeout_seconds <= 0:
+        raise ValueError("Action network reconnect timeout must be positive.")
+    if poll_interval_seconds <= 0:
+        raise ValueError("Action network reconnect poll interval must be positive.")
+
+    endpoints = {
+        "rust": runtime.rust_server_endpoint,
+        "mfc": runtime.mfc_server_endpoint,
+    }
+    attempts: dict[str, dict[str, Any]] = {}
+    readiness_clients = readiness.get("clients")
+    if not isinstance(readiness_clients, dict):
+        raise RuntimeError("Action network readiness clients are invalid.")
+    for name in ("rust", "mfc"):
+        client_readiness = readiness_clients.get(name)
+        if not isinstance(client_readiness, dict):
+            raise RuntimeError(f"Action network readiness for {name} is invalid.")
+        if client_readiness.get("ready") is True:
+            continue
+        client = clients[name]
+        try:
+            result = soak_launch.connect_operator_server(
+                rest_origin_url(client.api_root_url),
+                client.api_key,
+                description=f"observer {name} server reconnect",
+                endpoint=endpoints[name],
+                name=f"persisted-soak-{name}",
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            attempts[name] = {
+                "ok": False,
+                "endpoint": endpoints[name],
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+        else:
+            attempts[name] = {
+                "ok": True,
+                "endpoint": endpoints[name],
+                "response": copy.deepcopy(result),
+            }
+
+    refreshed = readiness_probe(clients, method)
+    deadline = monotonic() + timeout_seconds
+    while refreshed.get("ok") is not True and monotonic() < deadline:
+        sleep(min(poll_interval_seconds, max(deadline - monotonic(), 0.0)))
+        refreshed = readiness_probe(clients, method)
+    return {
+        "attempted": bool(attempts),
+        "method": method,
+        "clients": attempts,
+        "readiness": copy.deepcopy(refreshed),
+    }
+
+
 def utc_text(now_utc: Callable[[], datetime]) -> str:
     """Returns one canonical UTC timestamp from the injected clock."""
 
@@ -909,6 +1043,7 @@ def capture_action_cycle(
         [dict[str, converged_action_driver.ClientEndpoint], str], dict[str, Any]
     ]
     | None = None,
+    network_repair: Callable[..., dict[str, Any]] = repair_action_network,
 ) -> dict[str, Any]:
     """Advances one crash-safe synchronized search without owning either client."""
 
@@ -941,15 +1076,47 @@ def capture_action_cycle(
                 },
             )
             return persist_state(runtime, skipped, now_ns=now_ns)
+        repair: dict[str, Any] | None = None
         if readiness.get("ok") is not True:
+            try:
+                repair = network_repair(
+                    runtime,
+                    clients,
+                    method,
+                    readiness,
+                    readiness_probe=probe,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                skipped = converged_observer_state.record_connectivity_skip(
+                    validated,
+                    {
+                        "attemptedAtUtc": utc_text(now_utc),
+                        "phase": "network_repair",
+                        "method": method,
+                        "readiness": copy.deepcopy(readiness),
+                        "error": {
+                            "type": type(error).__name__,
+                            "message": str(error),
+                        },
+                    },
+                )
+                return persist_state(runtime, skipped, now_ns=now_ns)
+            refreshed = repair.get("readiness")
+            if not isinstance(refreshed, dict):
+                raise RuntimeError("Action network repair readiness is invalid.")
+            readiness = refreshed
+        if readiness.get("ok") is not True:
+            skip = {
+                "attemptedAtUtc": utc_text(now_utc),
+                "phase": "network_readiness",
+                "method": method,
+                "readiness": copy.deepcopy(readiness),
+            }
+            if repair is not None and repair.get("attempted") is True:
+                skip["repair"] = copy.deepcopy(repair)
             skipped = converged_observer_state.record_connectivity_skip(
                 validated,
-                {
-                    "attemptedAtUtc": utc_text(now_utc),
-                    "phase": "network_readiness",
-                    "method": method,
-                    "readiness": copy.deepcopy(readiness),
-                },
+                skip,
             )
             return persist_state(runtime, skipped, now_ns=now_ns)
         try:

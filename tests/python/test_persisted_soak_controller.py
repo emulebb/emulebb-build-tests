@@ -437,6 +437,8 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "bindAddress": "127.0.0.1",
             "rustBaseUrl": "http://127.0.0.1:4731/api/v1",
             "mfcBaseUrl": "http://127.0.0.1:4732/api/v1",
+            "rustServerEndpoint": controller.soak_launch.OPERATOR_SERVER,
+            "mfcServerEndpoint": controller.soak_launch.OPERATOR_SERVER,
         },
         "vpn": {
             "topology": "full-tunnel",
@@ -1017,6 +1019,8 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert command[command.index("--campaign-id") + 1] == "20261025T120000Z"
     assert command[command.index("--stop-file") + 1] == str(paths.stop_file)
     assert command[command.index("--rest-timeout-seconds") + 1] == "300.0"
+    assert command[command.index("--rust-server") + 1] == controller.soak_launch.OPERATOR_SERVER
+    assert command[command.index("--mfc-server") + 1] == controller.soak_launch.OPERATOR_SERVER
     assert "--vpn-guard-scenario" in command
     assert "success" in command
     assert "--reuse-rust-shared-profile" in command
@@ -1536,6 +1540,10 @@ def test_preflight_parser_uses_shared_session_selection() -> None:
             "127.0.0.1",
             "--mfc-variant",
             "emulebb-main",
+            "--rust-server",
+            "198.51.100.2:4661",
+            "--mfc-server",
+            "203.0.113.3:5687",
         ]
     )
 
@@ -1545,6 +1553,8 @@ def test_preflight_parser_uses_shared_session_selection() -> None:
     assert config.vpn_guard_config == Path("operator-vpn.json")
     assert config.lan_bind_addr == controller.DEFAULT_CONTROL_BIND
     assert config.mfc_variant == "emulebb-main"
+    assert config.rust_server == "198.51.100.2:4661"
+    assert config.mfc_server == "203.0.113.3:5687"
 
 
 def test_preflight_command_reports_existing_preflight_without_launch(
