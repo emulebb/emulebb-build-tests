@@ -810,8 +810,8 @@ def main(argv: list[str] | None = None) -> int:
         mfc_kad_port=args.mfc_kad_port,
         mfc_server_udp_port=args.mfc_server_udp_port,
     )
-    soak_launch.require_operator_server_endpoint(args.rust_server, label="--rust-server")
-    soak_launch.require_operator_server_endpoint(args.mfc_server, label="--mfc-server")
+    soak_launch.require_live_server_endpoint(args.rust_server, label="--rust-server")
+    soak_launch.require_live_server_endpoint(args.mfc_server, label="--mfc-server")
     for index, endpoint in enumerate(args.rust_fallback_server, start=1):
         soak_launch.require_live_server_endpoint(endpoint, label=f"--rust-fallback-server #{index}")
     if args.rust_fallback_server and not args.no_mfc:

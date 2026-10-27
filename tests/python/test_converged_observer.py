@@ -89,6 +89,8 @@ def runtime(tmp_path: Path) -> converged_observer.ObserverRuntime:
         launcher_identity={"pid": 100, "creationDate": "20261025120000.000000+000"},
         rust_base_url="http://127.0.0.1:4731/api/v1",
         mfc_base_url="http://127.0.0.1:4732/api/v1",
+        rust_server_endpoint="198.51.100.2:4661",
+        mfc_server_endpoint="203.0.113.3:5687",
         diagnostic_directories=converged_observer.DiagnosticDirectories(
             rust=rust_profile / "packet-dump",
             mfc=mfc_profile / "logs",
@@ -285,6 +287,8 @@ def test_load_runtime_accepts_profile_paths_before_first_import(
                     "control": {
                         "rustBaseUrl": "http://127.0.0.1:4731/api/v1",
                         "mfcBaseUrl": "http://127.0.0.1:4732/api/v1",
+                        "rustServerEndpoint": "198.51.100.2:4661",
+                        "mfcServerEndpoint": "203.0.113.3:5687",
                     },
                     "profiles": {
                         "rust": str(rust_profile),
@@ -314,6 +318,8 @@ def test_load_runtime_accepts_profile_paths_before_first_import(
         rust=(rust_profile / "packet-dump").resolve(),
         mfc=(mfc_profile / "logs").resolve(),
     )
+    assert loaded.rust_server_endpoint == "198.51.100.2:4661"
+    assert loaded.mfc_server_endpoint == "203.0.113.3:5687"
     assert not rust_profile.exists()
     assert not mfc_profile.exists()
 
@@ -424,6 +430,37 @@ def test_capture_checkpoint_persists_full_health_and_cumulative_state(
         )
         == updated
     )
+
+
+def test_diagnostic_writer_health_retries_transient_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[float] = []
+    delays: list[float] = []
+
+    def request(*_args, timeout_seconds: float, **_kwargs):
+        calls.append(timeout_seconds)
+        if len(calls) == 1:
+            raise TimeoutError("busy writer")
+        return {"data": {"diagnosticWriter": {"runId": "run-1"}}}
+
+    monkeypatch.setattr(converged_observer, "http_json", request)
+    monkeypatch.setattr(
+        converged_observer.diag_event_runs,
+        "diagnostic_writer_health_violations",
+        lambda _health: (),
+    )
+
+    health = converged_observer.diagnostic_writer_health(
+        "http://127.0.0.1:4732/api/v1",
+        "key",
+        retry_delay_seconds=0.25,
+        sleep=delays.append,
+    )
+
+    assert health == {"runId": "run-1"}
+    assert calls == [15.0, 15.0]
+    assert delays == [0.25]
 
 
 def test_parse_action_config_requires_gentle_complete_schedule() -> None:
@@ -747,6 +784,65 @@ def test_action_network_readiness_is_method_specific() -> None:
     assert kad["clients"]["mfc"]["ready"] is True
 
 
+def test_repair_action_network_reconnects_only_disconnected_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = runtime(tmp_path)
+    clients = converged_observer.action_clients(subject)
+    initial = {
+        "ok": False,
+        "method": "server",
+        "requiredField": "ed2kConnected",
+        "clients": {
+            "rust": {"ed2kConnected": True, "ready": True},
+            "mfc": {"ed2kConnected": False, "ready": False},
+        },
+    }
+    connected = {
+        "ok": True,
+        "method": "server",
+        "requiredField": "ed2kConnected",
+        "clients": {
+            "rust": {"ed2kConnected": True, "ready": True},
+            "mfc": {"ed2kConnected": True, "ready": True},
+        },
+    }
+    connect_calls: list[tuple[str, str, str, str]] = []
+
+    def connect(base_url, api_key, *, description, endpoint, name):
+        connect_calls.append((base_url, api_key, endpoint, name))
+        assert description == "observer mfc server reconnect"
+        return {"connect": {"data": {"connecting": True}}}
+
+    monkeypatch.setattr(
+        converged_observer.soak_launch,
+        "connect_operator_server",
+        connect,
+    )
+
+    result = converged_observer.repair_action_network(
+        subject,
+        clients,
+        "server",
+        initial,
+        readiness_probe=lambda _clients, _method: connected,
+        monotonic=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+
+    assert connect_calls == [
+        (
+            "http://127.0.0.1:4732",
+            converged_observer.soak_launch.MFC_API_KEY,
+            "203.0.113.3:5687",
+            "persisted-soak-mfc",
+        )
+    ]
+    assert result["attempted"] is True
+    assert result["readiness"] == connected
+
+
 def test_capture_action_cycle_skips_disconnected_selected_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -845,6 +941,12 @@ def test_connectivity_skip_advances_to_the_next_scheduled_method(
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         now_ns=1_000_000_000,
         readiness_probe=not_ready,
+        network_repair=lambda _runtime, _clients, method, readiness, **_kwargs: {
+            "attempted": False,
+            "method": method,
+            "clients": {},
+            "readiness": readiness,
+        },
     )
     second = converged_observer.capture_action_cycle(
         subject,
@@ -853,6 +955,12 @@ def test_connectivity_skip_advances_to_the_next_scheduled_method(
         now_utc=lambda: datetime(2026, 10, 25, 12, 2, tzinfo=UTC),
         now_ns=2_000_000_000,
         readiness_probe=not_ready,
+        network_repair=lambda _runtime, _clients, method, readiness, **_kwargs: {
+            "attempted": False,
+            "method": method,
+            "clients": {},
+            "readiness": readiness,
+        },
     )
 
     assert observed_methods == ["server", "kad"]
