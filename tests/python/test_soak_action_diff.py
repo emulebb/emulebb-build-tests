@@ -758,8 +758,10 @@ def _kad_lookup(
     milestone: str,
     result_count: int,
     ts: datetime,
+    *,
+    outcome: str | None = None,
 ) -> dict:
-    return {
+    record = {
         "schema": "diag_event_v2",
         "ts": ts.isoformat().replace("+00:00", "Z"),
         "family": "kad_event",
@@ -772,6 +774,9 @@ def _kad_lookup(
             "resultCount": result_count,
         },
     }
+    if outcome is not None:
+        record["body"]["outcome"] = outcome
+    return record
 
 
 def _server_udp_diag(opcode: int, direction: str, ts: datetime) -> dict:
@@ -836,6 +841,39 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
         "mfc": 2,
     }
     assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is True
+
+
+def test_search_gate_kad_rejects_not_dispatched_terminal_receipt() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup(
+                "rust-1",
+                "lookup_complete",
+                0,
+                _ts(3),
+                outcome="not-dispatched",
+            ),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "send", _ts(2)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(2)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(3)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["coverageOk"] is False
+    complete_row = report["actionCoverage"]["required"][2]
+    assert complete_row["label"] == "kad-lookup-complete"
+    assert complete_row["rustPresent"] is False
+    assert complete_row["mfcPresent"] is True
 
 
 def test_search_gate_kad_method_fails_without_kad_request_on_both() -> None:
