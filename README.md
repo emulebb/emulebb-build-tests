@@ -136,6 +136,8 @@ Script inventory:
 - Python 3 is the canonical runtime for live/UI harnesses in this repo
 - `python -m pip install -e .[dev]` installs the fast pytest harness dependencies
 - `python -m pip install -e .[dev,live]` also installs the Win32 live/UI automation dependencies
+- Python virtual environments are generated state and must live below
+  `EMULEBB_WORKSPACE_OUTPUT_ROOT\venvs`, never in this repository as `.venv`
 - default pytest collection is intentionally fast and excludes `native` and `live` marked tests
 - Python 3 is the only tracked script runtime in this repo
 - operator-facing Python script filenames are hyphenated; importable Python implementation modules stay under `emule_test_harness` with normal snake_case names
