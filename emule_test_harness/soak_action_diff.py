@@ -626,6 +626,7 @@ def _kad_lookup_lifecycle(
         if (
             body.get("milestone") == "lookup_complete"
             and body.get("resultCount") == result_count
+            and body.get("outcome") in (None, "completed")
         ):
             completed = True
     return {"started": started, "completed": completed}
