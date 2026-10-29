@@ -415,6 +415,7 @@ def test_start_server_uses_pid_backed_wsl_process(monkeypatch, tmp_path: Path) -
     assert "--wait" in calls[0]["command"]
     assert "/bin/sh" in calls[0]["command"]
     assert "python3" not in calls[0]["command"]
+    assert "/mnt/c/wsl_managed_process.sh" in calls[0]["command"]
     assert "/mnt/c/server.pid" in calls[0]["command"]
     assert calls[0]["command"][-3:] == ["/mnt/c/ed2k-server", "--config", "/mnt/c/config.toml"]
 
