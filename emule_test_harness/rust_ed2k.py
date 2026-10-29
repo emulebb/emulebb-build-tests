@@ -740,6 +740,7 @@ def launch_server(
     admin_secret: str,
     admin_address: str,
     ed2k_address: str | None = None,
+    windows_client_address: str | None = None,
     fixture_files: list[dict[str, object]] | None = None,
     repo_override: str | None = None,
     exe_override: str | None = None,
@@ -776,7 +777,7 @@ def launch_server(
     if _is_windows_host():
         advertised_address = wsl_ipv4_address(distribution)
         listen_address = "0.0.0.0"
-        client_address = "127.0.0.1"
+        client_address = str(windows_client_address or "127.0.0.1").strip()
     else:
         advertised_address = ed2k_address
         listen_address = ed2k_address

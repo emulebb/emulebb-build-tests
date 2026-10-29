@@ -460,7 +460,16 @@ def test_stop_process_signals_wsl_pid_even_after_proxy_exit(monkeypatch, tmp_pat
 
 
 @pytest.mark.unit
-def test_rust_server_launches_wsl_with_forwarded_connect_address(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("windows_client_address", "expected_client_address"),
+    [(None, "127.0.0.1"), ("192.0.2.10", "192.0.2.10")],
+)
+def test_rust_server_launches_wsl_with_selected_connect_address(
+    monkeypatch,
+    tmp_path: Path,
+    windows_client_address: str | None,
+    expected_client_address: str,
+) -> None:
     server_exe = tmp_path / "tools" / "ed2k-server"
     server_exe.parent.mkdir(parents=True)
     server_exe.write_bytes(b"linux")
@@ -485,9 +494,10 @@ def test_rust_server_launches_wsl_with_forwarded_connect_address(monkeypatch, tm
         admin_secret="unused",
         admin_address="192.0.2.10",
         ed2k_address="192.0.2.10",
+        windows_client_address=windows_client_address,
     )
 
-    assert launch.ed2k_host == "127.0.0.1"
+    assert launch.ed2k_host == expected_client_address
     assert launch.ed2k_port == 4661
     assert launch.admin_base_url == "http://127.0.0.1:8080"
     assert launch.config["network"]["listen_ip"] == "0.0.0.0"
