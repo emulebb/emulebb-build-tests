@@ -67,6 +67,25 @@ class TransferCompletionTimeout(RuntimeError):
         self.observations = observations
 
 
+class LowIdClientsError(RuntimeError):
+    """Raised before transfer setup when either deterministic client is LowID."""
+
+    def __init__(self, evidence: dict[str, object]) -> None:
+        clients = evidence.get("clients")
+        low_id_clients = []
+        if isinstance(clients, dict):
+            low_id_clients = [
+                name
+                for name, snapshot in clients.items()
+                if isinstance(snapshot, dict) and snapshot.get("high_id") is not True
+            ]
+        super().__init__(
+            "Deterministic transfer requires both clients to be HighID before queuing; "
+            f"LowID clients: {', '.join(low_id_clients) or 'unknown'}."
+        )
+        self.evidence = evidence
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parses the standalone deterministic transfer suite arguments."""
 
@@ -84,6 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
+    parser.add_argument("--ed2k-server-connect-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
@@ -760,6 +780,15 @@ def resolve_lan_p2p_bind_address(
     return rest_smoke.require_lan_bind_addr(lan_bind_addr)
 
 
+def resolve_ed2k_server_connect_address(p2p_address: str, override: str | None) -> str:
+    """Resolves the Windows address clients use to reach the ED2K server."""
+
+    return rest_smoke.require_lan_bind_addr(
+        override or p2p_address,
+        option_name="--ed2k-server-connect-address",
+    )
+
+
 def configure_client_profile(
     *,
     config_dir: Path,
@@ -957,6 +986,58 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
         "connect": connect_summary,
         "connected": connected,
     }
+
+
+def require_high_id_clients(
+    server_control: ed2k_server.Ed2kServerControl,
+    *,
+    client1: dict[str, object],
+    client1_port: int,
+    client2: dict[str, object],
+    client2_port: int,
+) -> dict[str, object]:
+    """Requires both connected clients to be HighID before transfer work starts."""
+
+    def compact_client(client: dict[str, object], port: int) -> dict[str, object]:
+        return {
+            "name": str(client.get("client_name") or client.get("nick") or ""),
+            "ip": str(client.get("ip") or ""),
+            "port": int(port),
+            "high_id": client.get("high_id") is True,
+        }
+
+    clients = {
+        "client1": compact_client(client1, client1_port),
+        "client2": compact_client(client2, client2_port),
+    }
+    evidence: dict[str, object] = {
+        "required": True,
+        "passed": all(client["high_id"] is True for client in clients.values()),
+        "clients": clients,
+    }
+    if evidence["passed"] is True:
+        return evidence
+
+    verification: dict[str, object] = {"available": False}
+    try:
+        stats = server_control.stats()
+        data = stats.get("data") if isinstance(stats, dict) else None
+        if isinstance(data, dict):
+            for key in (
+                "highid_verify_verified",
+                "highid_verify_verified_marker",
+                "highid_verify_mismatch",
+                "highid_verify_no_answer",
+                "highid_verify_skipped",
+                "highid_verify_reasons",
+            ):
+                if key in data:
+                    verification[key] = data[key]
+            verification["available"] = len(verification) > 1
+    except Exception as exc:
+        verification["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+    evidence["server_highid_verification"] = verification
+    raise LowIdClientsError(evidence)
 
 
 def wait_for_emule_server_connected(
@@ -1479,10 +1560,15 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
+        server_connect_address = resolve_ed2k_server_connect_address(
+            p2p_address,
+            args.ed2k_server_connect_address,
+        )
         ports = choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
+            "ed2k_server_connect_address": server_connect_address,
             "ports": ports,
         }
 
@@ -1496,7 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
             token=args.api_key,
             admin_address=args.lan_bind_addr,
             ed2k_address=p2p_address,
-            windows_client_address=p2p_address,
+            windows_client_address=server_connect_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
             offerfiles_v1=args.verify_offerfiles_v1_stock_fallback,
@@ -1560,6 +1646,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=ports["client1_rest"],
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_addr=p2p_address,
         )
         if args.client2_identity == "amule":
             amule_client.configure_profile(
@@ -1586,6 +1673,7 @@ def main(argv: list[str] | None = None) -> int:
                 rest_port=ports["client2_rest"],
                 lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
+                p2p_bind_addr=p2p_address,
             )
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
@@ -1791,6 +1879,15 @@ def main(argv: list[str] | None = None) -> int:
             args.server_connect_timeout_seconds,
         )
 
+        current_phase = "high_id_gate"
+        report["checks"]["high_id_gate"] = require_high_id_clients(
+            server_control,
+            client1=report["checks"]["client1_server_client"],
+            client1_port=ports["client1_tcp"],
+            client2=report["checks"]["client2_server_client"],
+            client2_port=ports["client2_tcp"],
+        )
+
         current_phase = "add_transfer"
         report["checks"]["client1_transfer_add"] = add_transfer(base_url, args.api_key, exported_link, transfer_hash)
         completed_path = Path(client1["incoming_dir"]) / str(link_info["name"])
@@ -1830,6 +1927,8 @@ def main(argv: list[str] | None = None) -> int:
         report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
+        if isinstance(exc, LowIdClientsError):
+            report["checks"]["high_id_gate"] = exc.evidence
         return 1
     finally:
         close_results: dict[str, object] = {}

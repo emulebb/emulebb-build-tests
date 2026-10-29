@@ -78,6 +78,27 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
 
+def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> None:
+    module = load_suite_module()
+
+    defaults = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    overridden = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--ed2k-server-connect-address",
+            "172.20.32.2",
+        ]
+    )
+
+    assert defaults.ed2k_server_connect_address is None
+    assert module.resolve_ed2k_server_connect_address("192.0.2.10", defaults.ed2k_server_connect_address) == "192.0.2.10"
+    assert module.resolve_ed2k_server_connect_address(
+        "192.0.2.10",
+        overridden.ed2k_server_connect_address,
+    ) == "172.20.32.2"
+
+
 def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
     module = load_suite_module()
     wrong_client = module.parse_args(
@@ -452,9 +473,10 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "server_provider" not in script_text
     assert "token=args.api_key" in script_text
     assert "admin_secret=args.api_key" not in script_text
-    assert "windows_client_address=p2p_address" in script_text
+    assert "windows_client_address=server_connect_address" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
+    assert script_text.count("p2p_bind_addr=p2p_address") == 2
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -729,6 +751,30 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
     assert "CryptLayerRequested=1" in emule_section
     assert "CryptLayerRequired=1" in emule_section
     assert "CryptTCPPaddingLength=128" in emule_section
+
+
+def test_configure_client_profiles_use_resolved_p2p_bind_address(tmp_path: Path) -> None:
+    module = load_suite_module()
+    resolved_address = module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.44")
+
+    for profile_name in ("client1", "client2"):
+        config_dir = tmp_path / profile_name / "config"
+        config_dir.mkdir(parents=True)
+        module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+        module.configure_client_profile(
+            config_dir=config_dir,
+            app_exe=tmp_path / "app" / "emulebb.exe",
+            nick=profile_name,
+            tcp_port=4662,
+            udp_port=4672,
+            ed2k_enabled=True,
+            autoconnect=True,
+            p2p_bind_addr=resolved_address,
+        )
+
+        text = module.live_common.read_ini_text(config_dir / "preferences.ini")
+        emule_section = text.split("[WebServer]", 1)[0]
+        assert f"BindAddr={resolved_address}" in emule_section
 
 
 def test_configure_client_profile_prefers_p2p_interface_over_bind_address(tmp_path: Path) -> None:
@@ -1535,6 +1581,77 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
             {"link": "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/", "paused": False, "categoryId": 0},
         )
     ]
+
+
+def test_require_high_id_clients_passes_without_fetching_server_stats() -> None:
+    module = load_suite_module()
+
+    class FakeControl:
+        def stats(self):
+            raise AssertionError("HighID success must not fetch failure diagnostics")
+
+    result = module.require_high_id_clients(
+        FakeControl(),
+        client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": True},
+        client1_port=4662,
+        client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
+        client2_port=4663,
+    )
+
+    assert result == {
+        "required": True,
+        "passed": True,
+        "clients": {
+            "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": True},
+            "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
+        },
+    }
+
+
+def test_require_high_id_clients_fails_with_compact_server_verification_evidence() -> None:
+    module = load_suite_module()
+
+    class FakeControl:
+        def stats(self):
+            return {
+                "ok": True,
+                "data": {
+                    "bytes_in": 999,
+                    "highid_verify_verified": 1,
+                    "highid_verify_verified_marker": 0,
+                    "highid_verify_mismatch": 2,
+                    "highid_verify_no_answer": 3,
+                    "highid_verify_skipped": 4,
+                    "highid_verify_reasons": "connect failed: 3",
+                },
+            }
+
+    with pytest.raises(module.LowIdClientsError) as raised:
+        module.require_high_id_clients(
+            FakeControl(),
+            client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": False},
+            client1_port=4662,
+            client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
+            client2_port=4663,
+        )
+
+    assert raised.value.evidence == {
+        "required": True,
+        "passed": False,
+        "clients": {
+            "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": False},
+            "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
+        },
+        "server_highid_verification": {
+            "available": True,
+            "highid_verify_verified": 1,
+            "highid_verify_verified_marker": 0,
+            "highid_verify_mismatch": 2,
+            "highid_verify_no_answer": 3,
+            "highid_verify_skipped": 4,
+            "highid_verify_reasons": "connect failed: 3",
+        },
+    }
 
 
 def test_wait_for_completed_file_timeout_carries_diagnostic_observations(tmp_path: Path) -> None:
