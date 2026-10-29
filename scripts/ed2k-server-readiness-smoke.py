@@ -38,6 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ed2k-server-exe", required=True)
+    parser.add_argument("--windows-client-address")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--health-timeout-seconds", type=float, default=30.0)
     return parser.parse_args(argv)
@@ -92,6 +93,7 @@ def run_readiness_smoke(
     server_exe: Path,
     artifacts_dir: Path,
     health_timeout_seconds: float,
+    windows_client_address: str | None = None,
 ) -> dict[str, Any]:
     """Run one real WSL launch/readiness/cleanup proof."""
 
@@ -131,6 +133,7 @@ def run_readiness_smoke(
             token="readiness-smoke",
             admin_address="127.0.0.1",
             ed2k_address="127.0.0.1",
+            windows_client_address=windows_client_address,
             exe_override=str(server_exe),
             health_timeout_seconds=health_timeout_seconds,
         )
@@ -142,8 +145,14 @@ def run_readiness_smoke(
             raise RuntimeError(f"WSL ED2K server PID evidence is invalid: {pid_text!r}")
         if launch.process.poll() is not None:
             raise RuntimeError(f"WSL ED2K server exited after readiness with code {launch.process.returncode}.")
+        with socket.create_connection(
+            (launch.ed2k_host, launch.ed2k_port),
+            timeout=min(5.0, health_timeout_seconds),
+        ):
+            pass
         control = ed2k_server.ed2k_server_control(launch.admin_base_url, "readiness-smoke")
         result["checks"] = {
+            "ed2k_tcp_connect": {"host": launch.ed2k_host, "port": launch.ed2k_port},
             "health": launch.health,
             "pid": int(pid_text),
             "stats": control.stats(),
@@ -182,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             server_exe=Path(args.ed2k_server_exe).resolve(),
             artifacts_dir=artifacts_dir,
             health_timeout_seconds=args.health_timeout_seconds,
+            windows_client_address=args.windows_client_address,
         )
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         result_path = artifacts_dir / f"{SUITE_NAME}-result.json"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,10 +45,13 @@ def test_readiness_smoke_passes_and_stops_server(monkeypatch, tmp_path: Path) ->
         return SimpleNamespace(
             process=process,
             admin_base_url="http://127.0.0.1:32000",
+            ed2k_host="192.0.2.10",
+            ed2k_port=31000,
             health={"ok": True},
         )
 
     monkeypatch.setattr(module.ed2k_server, "launch_ed2k_server", launch)
+    monkeypatch.setattr(module.socket, "create_connection", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         module.ed2k_server,
         "ed2k_server_control",
@@ -64,10 +68,12 @@ def test_readiness_smoke_passes_and_stops_server(monkeypatch, tmp_path: Path) ->
         server_exe=server_exe,
         artifacts_dir=artifacts_dir,
         health_timeout_seconds=30.0,
+        windows_client_address="192.0.2.10",
     )
 
     assert result["status"] == "passed"
     assert result["checks"]["pid"] == 1234
+    assert result["checks"]["ed2k_tcp_connect"] == {"host": "192.0.2.10", "port": 31000}
     assert result["checks"]["stats"] == {"client_count": 0}
     assert result["cleanup"] == {"return_code": 0, "stopped": True}
 
@@ -109,9 +115,16 @@ def test_cleanup_failure_overrides_passed_result(monkeypatch, tmp_path: Path) ->
     def launch(**kwargs):
         kwargs["server_dir"].mkdir(parents=True)
         (kwargs["server_dir"] / "server.pid").write_text("1234\n", encoding="ascii")
-        return SimpleNamespace(process=process, admin_base_url="http://127.0.0.1:32000", health={"ok": True})
+        return SimpleNamespace(
+            process=process,
+            admin_base_url="http://127.0.0.1:32000",
+            ed2k_host="127.0.0.1",
+            ed2k_port=31000,
+            health={"ok": True},
+        )
 
     monkeypatch.setattr(module.ed2k_server, "launch_ed2k_server", launch)
+    monkeypatch.setattr(module.socket, "create_connection", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(module.ed2k_server, "ed2k_server_control", lambda *_args: SimpleNamespace(stats=lambda: {}))
     monkeypatch.setattr(
         module.ed2k_server,
