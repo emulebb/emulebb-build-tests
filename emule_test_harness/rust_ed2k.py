@@ -268,18 +268,16 @@ def start_server(
             linux_exe = wsl_path(server_exe, distribution)
             linux_config = wsl_path(config_path, distribution)
             linux_pid = wsl_path(pid_path, distribution)
-            helper_path = Path(__file__).with_name("wsl_managed_process.py")
-            linux_helper = wsl_path(helper_path, distribution)
             proxy = subprocess.Popen(
                 _wsl_command(
                     distribution,
                     "setsid",
                     "--wait",
-                    "python3",
-                    linux_helper,
-                    "--pid-file",
+                    "/bin/sh",
+                    "-c",
+                    "printf '%s\\n' \"$$\" > \"$1\"; shift; exec \"$@\"",
+                    "emulebb-ed2k-server",
                     linux_pid,
-                    "--",
                     linux_exe,
                     "--config",
                     linux_config,
