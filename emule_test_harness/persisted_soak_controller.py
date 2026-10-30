@@ -1377,6 +1377,11 @@ def preflight_session(
             ("mfc", "eMuleBB MFC", mfc_exe),
         ],
     )
+    p2p_bind_address = str(routing["bindIp"])
+    bindability = soak_launch.require_persisted_soak_port_bindability(
+        rest_bind_address=rest_addr,
+        p2p_bind_address=p2p_bind_address,
+    )
     return {
         "inputs": str(inputs_path),
         "profiles": {
@@ -1393,10 +1398,11 @@ def preflight_session(
         },
         "control": {
             "bindAddress": rest_addr,
-            "rustBaseUrl": f"http://{rest_addr}:4731/api/v1",
-            "mfcBaseUrl": f"http://{rest_addr}:4732/api/v1",
+            "rustBaseUrl": f"http://{rest_addr}:{soak_launch.RUST_REST_PORT}/api/v1",
+            "mfcBaseUrl": f"http://{rest_addr}:{soak_launch.MFC_REST_PORT}/api/v1",
             "rustServerEndpoint": rust_server,
             "mfcServerEndpoint": mfc_server,
+            "bindability": bindability["control"],
         },
         "vpn": {
             "topology": routing["topology"],
@@ -1404,6 +1410,8 @@ def preflight_session(
             "routesThroughHideMe": True,
             "guardMode": guard["mode"],
             "guardConfig": guard["config_path"],
+            "p2pBindAddress": p2p_bind_address,
+            "bindability": bindability["p2p"],
         },
         "storage": storage,
     }

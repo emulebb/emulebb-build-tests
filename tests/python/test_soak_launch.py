@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import socket
 import subprocess
 
 import pytest
@@ -267,6 +268,103 @@ def test_live_server_endpoint_validation_accepts_explicit_fallback() -> None:
         soak_launch.require_live_server_endpoint("176.123.5.89")
     with pytest.raises(ValueError, match="range"):
         soak_launch.require_live_server_endpoint("176.123.5.89:70000")
+
+
+def test_require_bindable_ports_rejects_occupied_rest_port() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        port = int(occupied.getsockname()[1])
+
+        with pytest.raises(RuntimeError, match=rf"Rust REST control cannot bind TCP 127\.0\.0\.1:{port}"):
+            soak_launch.require_bindable_ports(
+                "127.0.0.1",
+                (("Rust REST control", "tcp", port),),
+            )
+
+
+@pytest.mark.parametrize(
+    ("label", "protocol"),
+    (("Rust eD2K", "tcp"), ("MFC Kad", "udp")),
+)
+def test_require_bindable_ports_rejects_unavailable_client_bind(
+    label: str,
+    protocol: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableBindSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def setsockopt(self, *_args) -> None:
+            return None
+
+        def bind(self, _address) -> None:
+            raise OSError("address is not available")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        soak_launch.socket,
+        "socket",
+        lambda *_args, **_kwargs: UnavailableBindSocket(),
+    )
+
+    with pytest.raises(RuntimeError, match=rf"{label} cannot bind {protocol.upper()}"):
+        soak_launch.require_bindable_ports(
+            "192.0.2.10",
+            ((label, protocol, 42662),),
+        )
+
+
+def test_persisted_soak_bindability_uses_owned_control_and_p2p_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probes: list[tuple[str, tuple[tuple[str, str, int], ...]]] = []
+
+    def record_probes(
+        bind_address: str,
+        requested: tuple[tuple[str, str, int], ...],
+    ) -> dict[str, object]:
+        probes.append((bind_address, requested))
+        return {"bindAddress": bind_address, "ports": []}
+
+    monkeypatch.setattr(soak_launch, "require_bindable_ports", record_probes)
+
+    result = soak_launch.require_persisted_soak_port_bindability(
+        rest_bind_address="127.0.0.1",
+        p2p_bind_address="192.0.2.10",
+    )
+
+    assert probes == [
+        (
+            "127.0.0.1",
+            (
+                ("Rust REST control", "tcp", soak_launch.RUST_REST_PORT),
+                ("MFC REST control", "tcp", soak_launch.MFC_REST_PORT),
+            ),
+        ),
+        (
+            "192.0.2.10",
+            (
+                ("Rust eD2K", "tcp", soak_launch.RUST_ED2K_PORT),
+                ("Rust Kad", "udp", soak_launch.RUST_KAD_PORT),
+                ("MFC eD2K", "tcp", soak_launch.MFC_ED2K_PORT),
+                ("MFC Kad", "udp", soak_launch.MFC_KAD_PORT),
+                ("MFC server UDP", "udp", soak_launch.MFC_SERVER_UDP_PORT),
+            ),
+        ),
+    ]
+    assert result == {
+        "control": {"bindAddress": "127.0.0.1", "ports": []},
+        "p2p": {"bindAddress": "192.0.2.10", "ports": []},
+    }
 
 
 def test_rust_bringup_does_not_force_second_server_connect() -> None:

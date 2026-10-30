@@ -16,6 +16,7 @@ import importlib.util
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,8 @@ DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 VPN_TOPOLOGIES = hideme_vpn.VPN_TOPOLOGIES
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
 DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS = 300.0
+RUST_REST_PORT = 4731
+MFC_REST_PORT = 4732
 RUST_ED2K_PORT = 42662
 RUST_KAD_PORT = 42672
 MFC_ED2K_PORT = 43662
@@ -242,6 +245,104 @@ def resolve_lan_rest_bind_addr(
     if parsed.is_unspecified or parsed.is_loopback:
         raise ValueError(f"LAN REST/control bind address must not be loopback or wildcard, got {candidate!r}.")
     return candidate
+
+
+def require_bindable_ports(
+    bind_address: str,
+    probes: tuple[tuple[str, str, int], ...],
+) -> dict[str, object]:
+    """Require every named TCP or UDP port to bind on one explicit IPv4 address."""
+
+    try:
+        address = ipaddress.IPv4Address(bind_address.strip())
+    except ipaddress.AddressValueError as exc:
+        raise ValueError(
+            f"Port bindability probes require an explicit IPv4 address, got {bind_address!r}."
+        ) from exc
+    if address.is_unspecified:
+        raise ValueError("Port bindability probes cannot bind to all network interfaces.")
+
+    results: list[dict[str, object]] = []
+    seen: set[tuple[str, int]] = set()
+    for label, raw_protocol, port in probes:
+        protocol = raw_protocol.strip().lower()
+        if protocol not in {"tcp", "udp"}:
+            raise ValueError(f"Unsupported port probe protocol for {label}: {raw_protocol!r}.")
+        if port < 1 or port > 65535:
+            raise ValueError(f"Port probe for {label} must be in the range 1..65535, got {port}.")
+        identity = (protocol, port)
+        if identity in seen:
+            raise ValueError(
+                f"Duplicate {protocol.upper()} port probe {port} on {address} for {label}."
+            )
+        seen.add(identity)
+
+        socket_type = socket.SOCK_STREAM if protocol == "tcp" else socket.SOCK_DGRAM
+        try:
+            with socket.socket(socket.AF_INET, socket_type) as probe:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                probe.bind((str(address), port))
+        except OSError as exc:
+            raise RuntimeError(
+                f"{label} cannot bind {protocol.upper()} {address}:{port}: {exc}"
+            ) from exc
+        results.append(
+            {
+                "label": label,
+                "protocol": protocol,
+                "port": port,
+                "bindable": True,
+            }
+        )
+
+    return {"bindAddress": str(address), "ports": results}
+
+
+def require_persisted_soak_port_bindability(
+    *,
+    rest_bind_address: str,
+    p2p_bind_address: str,
+    rust_rest_port: int = RUST_REST_PORT,
+    mfc_rest_port: int = MFC_REST_PORT,
+    rust_ed2k_port: int = RUST_ED2K_PORT,
+    rust_kad_port: int = RUST_KAD_PORT,
+    mfc_ed2k_port: int = MFC_ED2K_PORT,
+    mfc_kad_port: int = MFC_KAD_PORT,
+    mfc_server_udp_port: int = MFC_SERVER_UDP_PORT,
+) -> dict[str, object]:
+    """Require every control and P2P port owned by one persisted soak to bind."""
+
+    endpoint_ports = require_distinct_endpoint_ports(
+        rust_ed2k_port=rust_ed2k_port,
+        rust_kad_port=rust_kad_port,
+        mfc_ed2k_port=mfc_ed2k_port,
+        mfc_kad_port=mfc_kad_port,
+        mfc_server_udp_port=mfc_server_udp_port,
+    )
+    return {
+        "control": require_bindable_ports(
+            rest_bind_address,
+            (
+                ("Rust REST control", "tcp", rust_rest_port),
+                ("MFC REST control", "tcp", mfc_rest_port),
+            ),
+        ),
+        "p2p": require_bindable_ports(
+            p2p_bind_address,
+            (
+                ("Rust eD2K", "tcp", endpoint_ports["rust"]["ed2kTcpPort"]),
+                ("Rust Kad", "udp", endpoint_ports["rust"]["kadUdpPort"]),
+                ("MFC eD2K", "tcp", endpoint_ports["mfc"]["ed2kTcpPort"]),
+                ("MFC Kad", "udp", endpoint_ports["mfc"]["kadUdpPort"]),
+                (
+                    "MFC server UDP",
+                    "udp",
+                    endpoint_ports["mfc"]["serverUdpPort"],
+                ),
+            ),
+        ),
+    }
 
 
 def require_rust_profile_location(

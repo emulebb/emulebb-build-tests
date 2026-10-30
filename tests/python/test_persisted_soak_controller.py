@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import struct
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -439,6 +440,10 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "mfcBaseUrl": "http://127.0.0.1:4732/api/v1",
             "rustServerEndpoint": controller.soak_launch.OPERATOR_SERVER,
             "mfcServerEndpoint": controller.soak_launch.OPERATOR_SERVER,
+            "bindability": {
+                "bindAddress": "127.0.0.1",
+                "ports": [],
+            },
         },
         "vpn": {
             "topology": "full-tunnel",
@@ -446,6 +451,11 @@ def preflight_payload(tmp_path: Path) -> dict[str, object]:
             "routesThroughHideMe": True,
             "guardMode": "block",
             "guardConfig": str(tmp_path / "vpn.json"),
+            "p2pBindAddress": "192.0.2.10",
+            "bindability": {
+                "bindAddress": "192.0.2.10",
+                "ports": [],
+            },
         },
         "storage": {
             "feasible": True,
@@ -1592,6 +1602,90 @@ def test_preflight_command_reports_existing_preflight_without_launch(
     assert controller.main(["preflight"]) == 0
     assert json.loads(capsys.readouterr().out) == expected
     assert launched is False
+
+
+def test_preflight_session_requires_control_and_client_p2p_bindability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs_path = tmp_path / "inputs.json"
+    inputs_path.write_text("{}", encoding="utf-8")
+    mfc_profile = tmp_path / "mfc-profile"
+    rust_profile = tmp_path / "rust-profile"
+    mfc_profile.mkdir()
+    rust_profile.mkdir()
+    inputs = replace(
+        live_inputs(tmp_path, policy=storage_policy()),
+        path=inputs_path,
+        mfc_profile_dir=mfc_profile,
+        rust_profile_dir=rust_profile,
+    )
+    config = controller.SessionConfig(
+        inputs=inputs_path,
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    bindability_calls: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        controller,
+        "preflight_campaign_storage",
+        lambda *_args, **_kwargs: {"feasible": True},
+    )
+    monkeypatch.setattr(
+        controller.clw,
+        "resolve_rust_diagnostics_exe",
+        lambda _output_root: tmp_path / "emulebb-rust-diagnostics.exe",
+    )
+    monkeypatch.setattr(
+        controller.clw,
+        "resolve_mfc_diagnostics_exe",
+        lambda *_args, **_kwargs: tmp_path / "emulebb-diagnostics.exe",
+    )
+    monkeypatch.setattr(
+        controller.soak_launch,
+        "require_blocking_vpn_guard_config",
+        lambda _path: {"mode": "block", "config_path": str(tmp_path / "vpn.json")},
+    )
+    monkeypatch.setattr(
+        controller.soak_launch,
+        "prepare_hideme_routing",
+        lambda *_args, **_kwargs: {
+            "topology": controller.hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL,
+            "bindIp": "192.0.2.10",
+        },
+    )
+
+    def record_bindability(
+        *,
+        rest_bind_address: str,
+        p2p_bind_address: str,
+    ) -> dict[str, object]:
+        bindability_calls.append(
+            {
+                "rest": rest_bind_address,
+                "p2p": p2p_bind_address,
+            }
+        )
+        return {
+            "control": {"bindAddress": rest_bind_address, "ports": []},
+            "p2p": {"bindAddress": p2p_bind_address, "ports": []},
+        }
+
+    monkeypatch.setattr(
+        controller.soak_launch,
+        "require_persisted_soak_port_bindability",
+        record_bindability,
+    )
+
+    result = controller.preflight_session(
+        config,
+        tmp_path / "output",
+        inputs=inputs,
+    )
+
+    assert bindability_calls == [{"rest": "127.0.0.1", "p2p": "192.0.2.10"}]
+    assert result["control"]["bindability"]["bindAddress"] == "127.0.0.1"
+    assert result["vpn"]["bindability"]["bindAddress"] == "192.0.2.10"
 
 
 def test_session_status_reports_exact_dual_process_tree(
