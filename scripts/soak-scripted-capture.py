@@ -1423,6 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
                 upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
+                apply_shared_directories=args.fresh_profile,
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
@@ -1577,6 +1578,7 @@ def main(argv: list[str] | None = None) -> int:
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
             "uploadLimitKiBps": inputs.bandwidth.upload_limit_kibps,
+            "sharedDirectoriesApplied": bool(handles.get("sharedDirectoriesApplied")),
             "sharedRootsEnabled": not args.no_shared_roots,
             # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
             # has no config key (its eD2K secure-ident is always provisioned).

@@ -1441,4 +1441,5 @@ def bring_up_mfc(
         "incomingDir": incoming_dir,
         "packetDumpDir": packet_dump_dir,
         "secureIdent": secure_ident,
+        "sharedDirectoriesApplied": replace_shared_roots,
     }
