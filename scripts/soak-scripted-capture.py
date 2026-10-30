@@ -42,7 +42,7 @@ from emule_test_harness import converged_live_wire as clw  # noqa: E402
 from emule_test_harness import scripted_actions, soak_launch  # noqa: E402
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
-from emule_test_harness.live_wire_inputs import load_live_wire_inputs  # noqa: E402
+from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
     audit_client_processes,
     audit_open_handles,
@@ -91,6 +91,23 @@ from emule_test_harness.soak_launch import (  # noqa: E402
 )
 
 MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS = 15
+
+
+def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
+    """Return the configured persisted profile for one solo capture client."""
+
+    if client == "rust":
+        profile_dir = inputs.rust_profile_dir
+    elif client == "mfc":
+        profile_dir = inputs.mfc_profile_dir
+    else:
+        raise ValueError(f"unsupported capture client: {client!r}")
+    if profile_dir is None:
+        raise RuntimeError(
+            f"Persisted {client} capture requires {client}_profile.profile_dir "
+            "in the live-wire inputs."
+        )
+    return profile_dir.resolve()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1415,7 +1432,11 @@ def main(argv: list[str] | None = None) -> int:
     run_start = time.time()
     try:
         if client == "rust":
-            rust_profile_dir = report_dir / "rust-profile" if args.fresh_profile else soak_root / "rust-profile"
+            rust_profile_dir = (
+                report_dir / "rust-profile"
+                if args.fresh_profile
+                else persisted_profile_dir(inputs, "rust")
+            )
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
                 rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
@@ -1428,10 +1449,15 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
-            mfc_profile_dir = None if args.fresh_profile else inputs.mfc_profile_dir
+            mfc_profile_dir = (
+                None
+                if args.fresh_profile
+                else persisted_profile_dir(inputs, "mfc")
+            )
             handles = bring_up_mfc(
                 live_common=mods["live_common"], rest_smoke=mods["rest_smoke"],
                 shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
@@ -1445,6 +1471,7 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
@@ -1579,6 +1606,7 @@ def main(argv: list[str] | None = None) -> int:
             "restPort": rest_port, "obfuscation": obfuscation,
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
+            "uploadLimitKiBps": inputs.bandwidth.upload_limit_kibps,
             "sharedRootsEnabled": not args.no_shared_roots,
             # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
             # has no config key (its eD2K secure-ident is always provisioned).

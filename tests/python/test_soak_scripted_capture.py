@@ -11,6 +11,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from emule_test_harness.scripted_actions import ScriptedAction
+from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +48,69 @@ def test_direct_capture_parser_exposes_connectivity_and_total_download_deadline(
     assert args.route == "direct"
     assert args.connectivity == "firewalled"
     assert args.download_timeout_seconds > 0
+
+
+def _live_inputs(
+    tmp_path: Path,
+    *,
+    rust_profile_dir: Path | None,
+    mfc_profile_dir: Path | None,
+) -> LiveWireInputs:
+    return LiveWireInputs(
+        path=tmp_path / "live-wire-inputs.local.json",
+        generic_open_terms=("linux",),
+        document_terms=("manual",),
+        radarr_movie_terms=("movie",),
+        sonarr_series_terms=("series",),
+        video_roots=(),
+        bootstrap_transfer_hashes=("a" * 32,),
+        direct_bootstrap_transfers=(
+            {
+                "hash": "a" * 32,
+                "name": "fixture.iso",
+                "size": 1024,
+                "method": "direct_ed2k",
+            },
+        ),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
+        rust_profile_dir=rust_profile_dir,
+        mfc_profile_dir=mfc_profile_dir,
+    )
+
+
+@pytest.mark.parametrize("client", ("rust", "mfc"))
+def test_persisted_profile_dir_uses_live_wire_authority(
+    tmp_path: Path,
+    client: str,
+) -> None:
+    module = _load_capture()
+    rust_profile = tmp_path / "rust-profile"
+    mfc_profile = tmp_path / "mfc-profile"
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=rust_profile,
+        mfc_profile_dir=mfc_profile,
+    )
+
+    selected = module.persisted_profile_dir(inputs, client)
+
+    assert selected == (rust_profile if client == "rust" else mfc_profile).resolve()
+
+
+@pytest.mark.parametrize("client", ("rust", "mfc"))
+def test_persisted_profile_dir_fails_closed_without_authority(
+    tmp_path: Path,
+    client: str,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=None,
+        mfc_profile_dir=None,
+    )
+
+    with pytest.raises(RuntimeError, match=rf"Persisted {client} capture requires"):
+        module.persisted_profile_dir(inputs, client)
 
 
 @pytest.mark.parametrize(
