@@ -250,6 +250,8 @@ def emulebb_rust_routes(path: Path) -> set[tuple[str, str]]:
         text = "".join(
             source.read_text(encoding="utf-8", errors="replace")
             for source in sorted(path.glob("**/*.rs"))
+            if "tests" not in source.relative_to(path).parts
+            and source.stem not in {"test", "tests"}
         )
     else:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -262,6 +264,21 @@ def emulebb_rust_routes(path: Path) -> set[tuple[str, str]]:
         for method in re.findall(r"\b(get|post|patch|delete)\s*\(", call):
             routes.add((method.upper(), route_path))
     return routes
+
+
+def test_emulebb_rust_routes_ignore_test_modules(tmp_path: Path) -> None:
+    (tmp_path / "routes.rs").write_text(
+        '.route("/api/v1/live", get(handler))',
+        encoding="utf-8",
+    )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "request.rs").write_text(
+        '.route("/api/v1/test", post(handler))',
+        encoding="utf-8",
+    )
+
+    assert emulebb_rust_routes(tmp_path) == {("GET", "/api/v1/live")}
 
 
 def route_spec_block(text: str) -> str:
