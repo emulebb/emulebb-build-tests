@@ -3562,12 +3562,14 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
     inputs.write_text(
         json.dumps(
             {
-                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "schema": "emulebb-build-tests.live-wire-inputs.v2",
+                "bandwidth": {"upload_limit_kibps": 8},
                 "rust_profile": {"profile_dir": str(profile_dir)},
                 "search_terms": {
                     "generic_open": ["linux iso"],
                     "documents": ["linux pdf"],
                     "radarr_movies": ["public domain"],
+                        "sonarr_series": ["public domain series"],
                 },
                 "auto_browse": {
                     "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],
@@ -4431,12 +4433,14 @@ def _make_profile_base(profile_base: Path) -> Path:
 
 def _write_inputs_with_mfc_profile(path: Path, profile_dir: Path) -> None:
     payload = {
-        "schema": "emulebb-build-tests.live-wire-inputs.v1",
+        "schema": "emulebb-build-tests.live-wire-inputs.v2",
+        "bandwidth": {"upload_limit_kibps": 8},
         "mfc_profile": {"profile_dir": str(profile_dir)},
         "search_terms": {
             "generic_open": ["linux"],
             "documents": ["debian"],
             "radarr_movies": ["public domain movie"],
+            "sonarr_series": ["public domain series"],
         },
         "auto_browse": {
             "bootstrap_transfer_hashes": ["0031c9cba65c50dd2015c184b2ca2c88"],

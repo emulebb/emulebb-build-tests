@@ -14,6 +14,7 @@ def payload() -> dict[str, object]:
 
     return {
         "schema": live_wire_inputs.SCHEMA,
+        "bandwidth": {"upload_limit_kibps": 8},
         "search_terms": {
             "generic_open": [" linux ", "ubuntu"],
             "documents": ["debian"],
@@ -52,6 +53,7 @@ def test_parse_live_wire_inputs_normalizes_runtime_values() -> None:
     )
     assert inputs.bootstrap_transfer_hashes == ("28EAB1A0AB1B9416AAF534E27A234941",)
     assert inputs.direct_bootstrap_transfers[0]["name"] == "ubuntu.iso"
+    assert inputs.bandwidth.upload_limit_kibps == 8
     assert live_wire_inputs.summarize_terms(inputs.generic_open_terms) == {"count": 2}
     assert live_wire_inputs.summarize_direct_transfers(
         inputs.direct_bootstrap_transfers
@@ -79,15 +81,14 @@ def test_parse_live_wire_inputs_rejects_missing_or_invalid_fields() -> None:
         live_wire_inputs.parse_live_wire_inputs(bad_hash)
 
 
-def test_parse_live_wire_inputs_keeps_sonarr_terms_backward_compatible() -> None:
-    old_payload = payload()
-    search_terms = old_payload["search_terms"]
+def test_parse_live_wire_inputs_requires_sonarr_terms() -> None:
+    missing_terms = payload()
+    search_terms = missing_terms["search_terms"]
     assert isinstance(search_terms, dict)
     del search_terms["sonarr_series"]
 
-    inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
-
-    assert inputs.sonarr_series_terms == inputs.radarr_movie_terms
+    with pytest.raises(RuntimeError, match="sonarr_series"):
+        live_wire_inputs.parse_live_wire_inputs(missing_terms)
 
 
 def test_parse_live_wire_inputs_keeps_media_corpus_optional() -> None:
@@ -186,15 +187,21 @@ def test_example_allows_one_mfc_log_line_rotation_overshoot() -> None:
     )
 
 
-def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> (
-    None
-):
-    old_payload = payload()
-    old_payload["schema"] = live_wire_inputs.LEGACY_SCHEMAS[0]
+def test_parse_live_wire_inputs_rejects_previous_schema() -> None:
+    previous_payload = payload()
+    previous_payload["schema"] = "emulebb-build-tests.live-wire-inputs.v1"
 
-    inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
+    with pytest.raises(RuntimeError, match="live-wire-inputs.v2"):
+        live_wire_inputs.parse_live_wire_inputs(previous_payload)
 
-    assert inputs.generic_open_terms == ("linux", "ubuntu")
+
+@pytest.mark.parametrize("value", [None, True, False, 0, -1, 1.5, "8"])
+def test_parse_live_wire_inputs_rejects_invalid_upload_limit(value: object) -> None:
+    invalid_payload = payload()
+    invalid_payload["bandwidth"] = {"upload_limit_kibps": value}
+
+    with pytest.raises(RuntimeError, match="upload_limit_kibps"):
+        live_wire_inputs.parse_live_wire_inputs(invalid_payload)
 
 
 def test_select_daily_and_redaction_are_deterministic() -> None:

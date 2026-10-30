@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import cpu_profile, soak_storage, vpn_guard_live
-from emule_test_harness.live_wire_inputs import LiveWireInputs
+from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +36,7 @@ def inputs_with_profiles(profile_dir: Path | None, rust_profile_dir: Path | None
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         mfc_profile_dir=profile_dir,
         rust_profile_dir=rust_profile_dir,
     )
@@ -241,6 +242,7 @@ def test_required_daemon_output_policy_rejects_missing_storage(tmp_path: Path) -
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         soak_storage=None,
     )
 
@@ -260,6 +262,7 @@ def test_required_daemon_output_policy_selects_daemon_stream(tmp_path: Path) -> 
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         soak_storage=soak_storage.SoakStoragePolicy(
             max_total_bytes=1_000,
             max_age_seconds=3_600,
@@ -316,6 +319,7 @@ def test_required_rust_diagnostic_writer_policy_selects_profile_writer(
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         soak_storage=soak_storage.SoakStoragePolicy(
             max_total_bytes=1_000,
             max_age_seconds=3_600,

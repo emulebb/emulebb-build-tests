@@ -582,7 +582,7 @@ def test_live_wire_shared_roots_can_point_to_mfc_shareddir(tmp_path: Path) -> No
     inputs.write_text(
         json.dumps(
             {
-                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "schema": "emulebb-build-tests.live-wire-inputs.v2",
                 "shared_directories": {
                     "shareddir_file": str(shareddir),
                     "roots": [{"path": "D:\\Fallback\\", "recursive": True}],
@@ -605,7 +605,7 @@ def test_live_wire_shared_roots_keep_explicit_roots_as_fallback(tmp_path: Path) 
     inputs.write_text(
         json.dumps(
             {
-                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "schema": "emulebb-build-tests.live-wire-inputs.v2",
                 "shared_directories": {
                     "roots": [
                         {"path": "C:\\Flat\\", "recursive": False},
