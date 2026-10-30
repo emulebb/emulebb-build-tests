@@ -39,7 +39,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw  # noqa: E402
-from emule_test_harness import scripted_actions, soak_launch, soak_storage  # noqa: E402
+from emule_test_harness import (  # noqa: E402
+    converged_observer,
+    diagnostic_run_scan,
+    scripted_actions,
+    soak_launch,
+    soak_storage,
+    transfer_coverage_evidence,
+)
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
@@ -175,7 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
     parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
-    parser.add_argument("--search-methods", default="server,global,kad", help="Comma list of search methods.")
+    parser.add_argument(
+        "--search-methods",
+        default="server,global,kad",
+        help="Comma list of search methods; pass an empty value for transfer-only capture.",
+    )
     parser.add_argument(
         "--search-terms",
         default="ubuntu,linux,debian",
@@ -189,6 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
     parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
+    parser.add_argument(
+        "--transfer-coverage-timeout-seconds",
+        type=float,
+        default=None,
+        help="Persisted VPN only: wait for an exact client-UDP request lifecycle; 0 waits until proof or Ctrl-C.",
+    )
+    parser.add_argument(
+        "--transfer-coverage-poll-seconds",
+        type=float,
+        default=5.0,
+        help="Closed diagnostic-segment scan cadence for transfer coverage.",
+    )
     parser.add_argument(
         "--download-timeout-seconds",
         type=float,
@@ -255,6 +278,160 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _utc_stamp() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def normalized_search_methods(value: str) -> tuple[str, ...]:
+    """Returns the explicitly selected search methods, allowing transfer-only runs."""
+
+    return tuple(method.strip() for method in value.split(",") if method.strip())
+
+
+def _transfer_coverage_summary(
+    evidence: dict[str, object],
+    *,
+    timed_out: bool,
+    stopped_by_operator: bool,
+    finalized: bool,
+    elapsed_seconds: float,
+) -> dict[str, object]:
+    proof = evidence["proof"]
+    source = evidence["source"]
+    assert isinstance(proof, dict)
+    assert isinstance(source, dict)
+    return {
+        "enabled": True,
+        "complete": bool(evidence["complete"]),
+        "protocolChainComplete": bool(evidence["protocolChainComplete"]),
+        "timedOut": timed_out,
+        "stoppedByOperator": stopped_by_operator,
+        "finalized": finalized,
+        "elapsedSeconds": round(elapsed_seconds, 3),
+        "closedSegmentsScanned": source["closedSegmentsScanned"],
+        "lastClosedSegmentId": source["lastClosedSegmentId"],
+        "proofSlots": sorted(proof),
+        "privateArtifact": "transfer-coverage-evidence.json",
+    }
+
+
+def observe_transfer_coverage(
+    *,
+    base_url: str,
+    api_key: str,
+    client: str,
+    process_id: int,
+    diagnostics_dir: Path,
+    fixture_hashes: tuple[str, ...],
+    evidence_path: Path,
+    max_bytes: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    now_utc: Callable[[], str] = _utc_now,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    """Scan closed segments until exact client-UDP proof, timeout, or operator stop."""
+
+    started = monotonic()
+    deadline = None if timeout_seconds == 0 else started + timeout_seconds
+    checkpoint = None
+    health = converged_observer.diagnostic_writer_health(base_url, api_key)
+    if health.get("processId") != process_id:
+        raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
+    evidence = transfer_coverage_evidence.new_evidence(
+        client=client,
+        process_id=process_id,
+        run_id=str(health["runId"]),
+        fixture_hashes=fixture_hashes,
+        observed_utc=now_utc(),
+    )
+    timed_out = False
+    stopped_by_operator = False
+    try:
+        while True:
+            observed_utc = now_utc()
+            health = converged_observer.diagnostic_writer_health(base_url, api_key)
+            advanced = diagnostic_run_scan.scan_closed_segments(
+                profile_dir=diagnostics_dir,
+                client=client,
+                writer_health=health,
+                observed_utc=observed_utc,
+                checkpoint=checkpoint,
+            )
+            checkpoint = advanced.checkpoint
+            evidence = transfer_coverage_evidence.advance_evidence(
+                evidence,
+                advanced.processed_segments,
+                observed_utc=observed_utc,
+            )
+            transfer_coverage_evidence.write_evidence(
+                evidence_path,
+                evidence,
+                max_bytes=max_bytes,
+            )
+            if evidence["complete"]:
+                break
+            now = monotonic()
+            if deadline is not None and now >= deadline:
+                timed_out = True
+                break
+            sleep(poll_seconds if deadline is None else min(poll_seconds, deadline - now))
+    except KeyboardInterrupt:
+        stopped_by_operator = True
+    elapsed = monotonic() - started
+    summary = _transfer_coverage_summary(
+        evidence,
+        timed_out=timed_out,
+        stopped_by_operator=stopped_by_operator,
+        finalized=False,
+        elapsed_seconds=elapsed,
+    )
+    return summary, checkpoint, evidence
+
+
+def finalize_transfer_coverage(
+    *,
+    client: str,
+    diagnostics_dir: Path,
+    checkpoint: dict[str, object],
+    evidence: dict[str, object],
+    evidence_path: Path,
+    max_bytes: int,
+    summary: dict[str, object],
+    observed_utc: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Capture the writer's final active segment after graceful client shutdown."""
+
+    advanced = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=diagnostics_dir,
+        client=client,
+        observed_utc=observed_utc,
+        checkpoint=checkpoint,
+    )
+    finalized = transfer_coverage_evidence.advance_evidence(
+        evidence,
+        advanced.processed_segments,
+        observed_utc=observed_utc,
+    )
+    transfer_coverage_evidence.write_evidence(
+        evidence_path,
+        finalized,
+        max_bytes=max_bytes,
+    )
+    result = dict(summary)
+    result.update(
+        _transfer_coverage_summary(
+            finalized,
+            timed_out=bool(summary["timedOut"]),
+            stopped_by_operator=bool(summary["stoppedByOperator"]),
+            finalized=True,
+            elapsed_seconds=float(summary["elapsedSeconds"]),
+        )
+    )
+    return result, finalized
 
 
 def _campaign_leaf(value: str | None) -> str:
@@ -495,7 +672,7 @@ def pack_recording(
     report_dir: Path,
     *,
     incoming_dir: Path | None = None,
-    private_evidence_path: Path | None = None,
+    private_evidence_paths: tuple[Path, ...] = (),
 ) -> Path:
     """Pack sanitized evidence and move all private/raw artifacts beside it."""
 
@@ -530,13 +707,17 @@ def pack_recording(
             private_moves.append(
                 (resolved_incoming, artifact_dir / "downloaded-payloads", "downloaded payloads")
             )
-    if private_evidence_path is not None:
+    for private_evidence_path in private_evidence_paths:
         if not private_evidence_path.is_file():
-            raise RuntimeError("Private completion evidence is missing.")
+            raise RuntimeError("Private evidence is missing.")
         if not private_evidence_path.resolve().is_relative_to(report_dir.resolve()):
-            raise RuntimeError("Private completion evidence is outside the bounded report tree.")
+            raise RuntimeError("Private evidence is outside the bounded report tree.")
         private_moves.append(
-            (private_evidence_path, artifact_dir / "completion-private.json", "completion evidence")
+            (
+                private_evidence_path,
+                artifact_dir / private_evidence_path.name,
+                f"{private_evidence_path.name} evidence",
+            )
         )
     for source, destination, label in (
         (report_dir / "dumps", artifact_dir / "dumps", "diagnostic dumps"),
@@ -1288,6 +1469,13 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--hold-poll-seconds must be > 0.")
     if args.download_timeout_seconds <= 0:
         raise RuntimeError("--download-timeout-seconds must be > 0.")
+    if (
+        args.transfer_coverage_timeout_seconds is not None
+        and args.transfer_coverage_timeout_seconds < 0
+    ):
+        raise RuntimeError("--transfer-coverage-timeout-seconds must be >= 0.")
+    if args.transfer_coverage_poll_seconds <= 0:
+        raise RuntimeError("--transfer-coverage-poll-seconds must be > 0.")
     if args.share_ready_timeout_seconds <= 0:
         raise RuntimeError("--share-ready-timeout-seconds must be > 0.")
     if args.upnp_audit_timeout_seconds <= 0:
@@ -1309,6 +1497,7 @@ def main(argv: list[str] | None = None) -> int:
     # Well-sourced terms only (ubuntu/linux/debian) — a stale term like fedora yields no
     # results/sources and makes the search + download comparison meaningless.
     search_terms = [term.strip() for term in args.search_terms.split(",") if term.strip()]
+    search_methods = normalized_search_methods(args.search_methods)
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
     rust_diagnostic_writer_policy = (
@@ -1321,6 +1510,8 @@ def main(argv: list[str] | None = None) -> int:
     if native_config is not None:
         if args.skip_actions or args.no_shared_roots:
             raise RuntimeError("Direct native parity requires searches, downloads, and shared roots.")
+        if not search_methods:
+            raise RuntimeError("Direct native parity requires at least one search method.")
         args.fresh_profile = True
         links = load_ed2k_link_fixture(native_config.ed2k_links_file)
         shared_paths = load_shared_path_fixture(native_config.shared_paths_file)
@@ -1372,6 +1563,16 @@ def main(argv: list[str] | None = None) -> int:
     upnp_audits: dict[str, object] = {}
     network_audit_failure = False
     mapping_tcp_ports, mapping_udp_ports = _client_mapping_ports(client, args)
+    if args.transfer_coverage_timeout_seconds is not None and (
+        native_config is not None or args.fresh_profile or args.skip_actions
+    ):
+        raise RuntimeError(
+            "Transfer coverage waiting requires persisted VPN capture with actions enabled."
+        )
+    transfer_coverage_path = report_dir / "transfer-coverage-evidence.json"
+    transfer_coverage_checkpoint: dict[str, object] | None = None
+    transfer_coverage_evidence_payload: dict[str, object] | None = None
+    transfer_coverage_summary: dict[str, object] | None = None
     capture = None
     capture_result = None
     network_stack = contextlib.ExitStack()
@@ -1569,7 +1770,7 @@ def main(argv: list[str] | None = None) -> int:
                 actions = scripted_actions.default_action_set(
                     search_terms,
                     download_fixtures,
-                    methods=tuple(args.search_methods.split(",")),
+                    methods=search_methods,
                     search_options=(
                         {"type": "doc", "extension": "pdf", "minAvailability": 1}
                         if native_config is not None
@@ -1591,6 +1792,35 @@ def main(argv: list[str] | None = None) -> int:
                     )
         if args.skip_actions:
             log("actions skipped; no post-action settle")
+        elif args.transfer_coverage_timeout_seconds is not None:
+            assert handles is not None
+            assert inputs.soak_storage is not None
+            fixture_hashes = tuple(str(fixture["hash"]) for fixture in download_fixtures)
+            log(
+                "actions done; scanning closed diagnostic segments for exact transfer coverage..."
+            )
+            (
+                transfer_coverage_summary,
+                transfer_coverage_checkpoint,
+                transfer_coverage_evidence_payload,
+            ) = observe_transfer_coverage(
+                base_url=base_url,
+                api_key=api_key,
+                client=client,
+                process_id=client_process_ids[0],
+                diagnostics_dir=dump_dir,
+                fixture_hashes=fixture_hashes,
+                evidence_path=transfer_coverage_path,
+                max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
+                timeout_seconds=args.transfer_coverage_timeout_seconds,
+                poll_seconds=args.transfer_coverage_poll_seconds,
+            )
+            log(
+                "transfer coverage wait done: "
+                f"complete={transfer_coverage_summary['complete']} "
+                f"operatorStop={transfer_coverage_summary['stoppedByOperator']} "
+                f"timeout={transfer_coverage_summary['timedOut']}"
+            )
         else:
             log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
             time.sleep(args.settle_seconds)
@@ -1663,6 +1893,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             ),
             "hold": hold_result,
+            "transferCoverage": transfer_coverage_summary,
             "runStartEpoch": run_start,
             "runEndEpoch": time.time(),
         }
@@ -1712,6 +1943,29 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         _preserve_post_run_failures(primary_error, post_run_failures)
+
+    if (
+        transfer_coverage_checkpoint is not None
+        and transfer_coverage_evidence_payload is not None
+        and transfer_coverage_summary is not None
+    ):
+        assert inputs.soak_storage is not None
+        (
+            transfer_coverage_summary,
+            transfer_coverage_evidence_payload,
+        ) = finalize_transfer_coverage(
+            client=client,
+            diagnostics_dir=dump_dir,
+            checkpoint=transfer_coverage_checkpoint,
+            evidence=transfer_coverage_evidence_payload,
+            evidence_path=transfer_coverage_path,
+            max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
+            summary=transfer_coverage_summary,
+            observed_utc=_utc_now(),
+        )
+        results_meta["transferCoverage"] = transfer_coverage_summary
+        if not transfer_coverage_summary["complete"]:
+            results_meta["externalInconclusive"] = True
 
     if native_config is not None:
         if args.connectivity == "firewalled" and not upnp_audits.get("active", {}).get("passed"):
@@ -1763,7 +2017,11 @@ def main(argv: list[str] | None = None) -> int:
     archive = pack_recording(
         report_dir,
         incoming_dir=(Path(handles["incomingDir"]) if native_config is not None and handles else None),
-        private_evidence_path=private_completion_path,
+        private_evidence_paths=tuple(
+            path
+            for path in (private_completion_path, transfer_coverage_path)
+            if path is not None and path.is_file()
+        ),
     )
     log(f"recording packed: {archive}")
     if any(result.get("status") != "ok" for result in results_meta.get("actionResults", [])):

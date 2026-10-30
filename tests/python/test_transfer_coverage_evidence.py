@@ -121,6 +121,7 @@ def test_advance_retains_exact_bounded_protocol_chain(tmp_path: Path) -> None:
                 body={
                     "direction": "send",
                     "outcome": "send_succeeded",
+                        "deliveryKnown": True,
                     "role": "reask_request",
                     "sendAttemptId": 7,
                 },
@@ -180,14 +181,24 @@ def test_attempt_is_replaced_until_a_matching_terminal_is_observed(
                 segment_id=1,
                 family="ed2k_client_udp",
                 event="packet",
-                body={"direction": "send", "role": "reask_request", "sendAttemptId": 8},
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 8,
+                },
             ),
             _record(
                 3,
                 segment_id=1,
                 family="ed2k_client_udp",
                 event="send_outcome",
-                body={"direction": "send", "role": "reask_request", "sendAttemptId": 8},
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 8,
+                    "outcome": "send_succeeded",
+                    "deliveryKnown": True,
+                },
             ),
         ],
     )
@@ -201,6 +212,45 @@ def test_attempt_is_replaced_until_a_matching_terminal_is_observed(
     assert evidence["proof"]["client_udp_attempt"]["record"]["body"]["sendAttemptId"] == 8
     assert evidence["proof"]["client_udp_terminal"]["record"]["body"]["sendAttemptId"] == 8
     assert evidence["complete"] is True
+
+
+def test_failed_send_is_retained_without_completing_target(tmp_path: Path) -> None:
+    segment = _segment(
+        tmp_path,
+        0,
+        [
+            _record(
+                1,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="packet",
+                body={"direction": "send", "role": "reask_request", "sendAttemptId": 7},
+            ),
+            _record(
+                2,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="send_outcome",
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 7,
+                    "outcome": "send_failed",
+                    "deliveryKnown": True,
+                },
+            ),
+        ],
+    )
+
+    evidence = transfer_coverage_evidence.advance_evidence(
+        _empty(),
+        (segment,),
+        observed_utc="2026-10-31T00:01:00Z",
+    )
+
+    assert evidence["coverage"]["client_udp_send_failure"] is True
+    assert evidence["coverage"]["client_udp_terminal"] is False
+    assert evidence["complete"] is False
 
 
 def test_fixture_hash_excludes_unrelated_transfer_events(tmp_path: Path) -> None:

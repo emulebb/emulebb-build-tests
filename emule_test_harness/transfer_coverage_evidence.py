@@ -24,6 +24,7 @@ PROOF_SLOTS = (
     "queued_detached_udp_reask",
     "download_payload_accepted",
     "client_udp_attempt",
+    "client_udp_send_failure",
     "client_udp_terminal",
     "reask_sent",
 )
@@ -199,6 +200,13 @@ def _retain_record(
         attempt_id = _field(attempt["record"], "sendAttemptId")
         if attempt_id is None or _field(record, "sendAttemptId") != attempt_id:
             return
+    if slot == "client_udp_send_failure":
+        attempt = proof.get("client_udp_attempt")
+        if attempt is None:
+            return
+        attempt_id = _field(attempt["record"], "sendAttemptId")
+        if attempt_id is None or _field(record, "sendAttemptId") != attempt_id:
+            return
     proof.setdefault(
         slot,
         {"segment": copy.deepcopy(segment), "record": copy.deepcopy(record)},
@@ -252,7 +260,12 @@ def _proof_slot(
         ):
             return "client_udp_attempt"
         if event == "send_outcome" and _field(record, "direction") == "send":
-            return "client_udp_terminal"
+            if (
+                _field(record, "outcome") == "send_succeeded"
+                and _field(record, "deliveryKnown") is True
+            ):
+                return "client_udp_terminal"
+            return "client_udp_send_failure"
     return None
 
 

@@ -13,6 +13,7 @@ import pytest
 from emule_test_harness.scripted_actions import ScriptedAction
 from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
 from emule_test_harness import soak_storage
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 pytestmark = pytest.mark.unit
 
@@ -50,6 +51,13 @@ def test_direct_capture_parser_exposes_connectivity_and_total_download_deadline(
     assert args.connectivity == "firewalled"
     assert args.download_timeout_seconds > 0
     assert args.fixture_count == 1
+
+
+def test_search_methods_allow_explicit_transfer_only_capture() -> None:
+    module = _load_capture()
+
+    assert module.normalized_search_methods("") == ()
+    assert module.normalized_search_methods("server, kad") == ("server", "kad")
 
 
 def _live_inputs(
@@ -144,6 +152,148 @@ def test_focused_capture_writer_policy_requires_storage_contract(
 
     with pytest.raises(RuntimeError, match="requires soak_storage"):
         module.focused_capture_writer_policy(inputs)
+
+
+def _coverage_record(
+    sequence: int,
+    *,
+    segment_id: int,
+    event: str,
+    send_attempt_id: int,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "direction": "send",
+        "role": "reask_request",
+        "sendAttemptId": send_attempt_id,
+    }
+    if event == "send_outcome":
+        body.update({"outcome": "send_succeeded", "deliveryKnown": True})
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "processId": 42,
+        "runId": "run-a",
+        "segmentId": segment_id,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": "ed2k_client_udp",
+        "event": event,
+        "severity": "info",
+        "keys": {"sendAttemptId": send_attempt_id},
+        "body": body,
+    }
+
+
+def _write_coverage_segment(
+    directory: Path,
+    records: list[dict[str, object]],
+    *,
+    segment_id: int = 0,
+) -> None:
+    path = directory / f"emulebb-rust-diag-42-run-a-{segment_id:06}.jsonl"
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def test_transfer_coverage_wait_stops_on_exact_client_udp_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    _write_coverage_segment(
+        tmp_path,
+        [
+            _coverage_record(1, segment_id=0, event="packet", send_attempt_id=7),
+            _coverage_record(2, segment_id=0, event="send_outcome", send_attempt_id=7),
+        ],
+    )
+    health = current_diagnostic_writer_health(segment_id=1)
+    health["recordsWritten"] = 2
+    health["rotations"] = 1
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731/api/v1",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=60.0,
+        poll_seconds=1.0,
+        sleep=lambda _seconds: pytest.fail("completed proof should not sleep"),
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+
+    assert summary["complete"] is True
+    assert summary["finalized"] is False
+    assert checkpoint["source"]["lastClosedSegmentId"] == 0
+    assert evidence["complete"] is True
+    assert evidence_path.is_file()
+
+
+def test_transfer_coverage_operator_stop_is_finalized_after_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(segment_id=0)
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731/api/v1",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=0,
+        poll_seconds=1.0,
+        sleep=lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+    _write_coverage_segment(
+        tmp_path,
+        [
+            _coverage_record(1, segment_id=0, event="packet", send_attempt_id=9),
+            _coverage_record(2, segment_id=0, event="send_outcome", send_attempt_id=9),
+        ],
+    )
+
+    finalized_summary, finalized = module.finalize_transfer_coverage(
+        client="rust",
+        diagnostics_dir=tmp_path,
+        checkpoint=checkpoint,
+        evidence=evidence,
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        summary=summary,
+        observed_utc="2026-10-31T00:01:00Z",
+    )
+
+    assert summary["stoppedByOperator"] is True
+    assert finalized_summary["stoppedByOperator"] is True
+    assert finalized_summary["finalized"] is True
+    assert finalized_summary["complete"] is True
+    assert finalized["complete"] is True
 
 
 @pytest.mark.parametrize("client", ("rust", "mfc"))
@@ -477,10 +627,12 @@ def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: 
 
     private_evidence = report / "completion-private.json"
     private_evidence.write_text('{"private": true}', encoding="utf-8")
+    transfer_evidence = report / "transfer-coverage-evidence.json"
+    transfer_evidence.write_text('{"private": true}', encoding="utf-8")
     archive = module.pack_recording(
         report,
         incoming_dir=report / "rust-profile" / "incoming",
-        private_evidence_path=private_evidence,
+        private_evidence_paths=(private_evidence, transfer_evidence),
     )
 
     with zipfile.ZipFile(archive) as zipped:
@@ -499,6 +651,7 @@ def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: 
     retained = private_artifacts / "downloaded-payloads" / "private.pdf"
     assert retained.read_bytes() == b"payload"
     assert (private_artifacts / "completion-private.json").is_file()
+    assert (private_artifacts / "transfer-coverage-evidence.json").is_file()
     assert (private_artifacts / "native-capture.pcapng").read_bytes() == b"capture"
     assert (private_artifacts / "dumps" / "diag.jsonl").is_file()
     assert not report.exists()
