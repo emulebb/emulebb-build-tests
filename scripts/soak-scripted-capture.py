@@ -140,15 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Well-sourced search terms (round-robin over methods). AVOID stale terms (e.g. fedora).",
     )
     parser.add_argument(
-        "--download-terms",
-        default="ubuntu,linux",
-        help="Terms searched to RESOLVE well-sourced download fixtures (ranked by source count).",
-    )
-    parser.add_argument("--fixture-count", type=int, default=2, help="How many sourced download fixtures to use.")
-    parser.add_argument(
-        "--fixture-hashes",
-        default=None,
-        help="Explicit CSV of ed2k hashes to download (overrides resolution; use to reuse across runs).",
+        "--fixture-count",
+        type=int,
+        default=1,
+        help="How many approved direct_bootstrap_transfers to use.",
     )
     parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
     parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
@@ -345,54 +340,33 @@ def ensure_kad(base_url: str, api_key: str, *, wait_seconds: float = 120.0) -> b
     return False
 
 
-def resolve_sourced_fixtures(
-    base_url: str, api_key: str, terms: list[str], count: int, *, poll_seconds: float = 25.0
-) -> list[dict]:
-    """Search well-sourced terms and return the top ``count`` results BY SOURCE COUNT
-    (sources > 0 only), as {hash,name,size} download fixtures. This is why downloads
-    use ubuntu/linux and not a stale/synthetic hash: the source-acquisition + transfer
-    comparison is only meaningful against files that actually have sources."""
-
-    seen: dict[str, dict] = {}
-    for term in terms:
-        result = scripted_actions.run_search(base_url, api_key, term, "global", poll_seconds=poll_seconds)
-        search_id = result.get("searchId") or ""
-        try:
-            page = _http(base_url, api_key, f"/api/v1/searches/{search_id}")
-        except Exception:  # noqa: BLE001
-            continue
-        rows = page.get("data", {}).get("items") if isinstance(page.get("data"), dict) else None
-        for row in rows or []:
-            file_hash = str(row.get("hash") or "").strip().lower()
-            sources = int(row.get("sources") or row.get("completeSources") or 0)
-            size = int(row.get("sizeBytes") or row.get("size") or 0)
-            name = str(row.get("name") or row.get("fileName") or "").strip()
-            if len(file_hash) != 32 or sources <= 0 or size <= 0 or not name:
-                continue
-            existing = seen.get(file_hash)
-            if existing is None or sources > int(existing["sources"]):
-                seen[file_hash] = {"hash": file_hash, "name": name, "size": size, "sources": sources}
-    ranked = sorted(seen.values(), key=lambda fx: (-int(fx["sources"]), int(fx["size"])))
-    return [{"hash": fx["hash"], "name": fx["name"], "size": fx["size"]} for fx in ranked[:count]]
-
-
 def campaign_fixtures(
-    *, campaign_dir: Path, base_url: str, api_key: str, explicit_hashes: str | None,
-    download_terms: list[str], count: int,
+    *,
+    campaign_dir: Path,
+    approved_fixtures: tuple[dict[str, object], ...],
+    count: int,
 ) -> list[dict]:
-    """Resolve download fixtures once per campaign and reuse them across the two solo
-    runs so both clients fetch the SAME sourced files (apples-to-apples)."""
+    """Snapshot approved fixtures once so both solo runs use identical transfers."""
 
     fixtures_path = campaign_dir / "fixtures.json"
-    if explicit_hashes:
-        # Explicit hashes: sizes/names come from a quick search lookup if resolvable.
-        wanted = {h.strip().lower() for h in explicit_hashes.split(",") if h.strip()}
-        resolved = [fx for fx in resolve_sourced_fixtures(base_url, api_key, download_terms, count * 4) if fx["hash"] in wanted]
-        if resolved:
-            return resolved
     if fixtures_path.is_file():
-        return json.loads(fixtures_path.read_text(encoding="utf-8"))
-    fixtures = resolve_sourced_fixtures(base_url, api_key, download_terms, count)
+        fixtures = json.loads(fixtures_path.read_text(encoding="utf-8"))
+        if not isinstance(fixtures, list) or not fixtures:
+            raise RuntimeError("Campaign transfer fixture snapshot is invalid.")
+        for fixture in fixtures:
+            if not isinstance(fixture, dict):
+                raise RuntimeError("Campaign transfer fixture snapshot is invalid.")
+            scripted_actions.build_ed2k_link(fixture)
+        return fixtures
+    if count <= 0:
+        raise RuntimeError("--fixture-count must be greater than zero.")
+    if len(approved_fixtures) < count:
+        raise RuntimeError(
+            "Live-wire inputs do not contain enough approved direct bootstrap transfers."
+        )
+    fixtures = [dict(fixture) for fixture in approved_fixtures[:count]]
+    for fixture in fixtures:
+        scripted_actions.build_ed2k_link(fixture)
     fixtures_path.parent.mkdir(parents=True, exist_ok=True)
     fixtures_path.write_text(json.dumps(fixtures, indent=2), encoding="utf-8")
     return fixtures
@@ -1293,7 +1267,6 @@ def main(argv: list[str] | None = None) -> int:
     # Well-sourced terms only (ubuntu/linux/debian) — a stale term like fedora yields no
     # results/sources and makes the search + download comparison meaningless.
     search_terms = [term.strip() for term in args.search_terms.split(",") if term.strip()]
-    download_terms = [term.strip() for term in args.download_terms.split(",") if term.strip()]
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
     native_fixtures: list[dict[str, object]] = []
@@ -1541,10 +1514,7 @@ def main(argv: list[str] | None = None) -> int:
                     if native_config is not None
                     else campaign_fixtures(
                         campaign_dir=report_dir.parent,
-                        base_url=base_url,
-                        api_key=api_key,
-                        explicit_hashes=args.fixture_hashes,
-                        download_terms=download_terms,
+                        approved_fixtures=inputs.direct_bootstrap_transfers,
                         count=args.fixture_count,
                     )
                 )

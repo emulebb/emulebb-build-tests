@@ -48,6 +48,7 @@ def test_direct_capture_parser_exposes_connectivity_and_total_download_deadline(
     assert args.route == "direct"
     assert args.connectivity == "firewalled"
     assert args.download_timeout_seconds > 0
+    assert args.fixture_count == 1
 
 
 def _live_inputs(
@@ -111,6 +112,52 @@ def test_persisted_profile_dir_fails_closed_without_authority(
 
     with pytest.raises(RuntimeError, match=rf"Persisted {client} capture requires"):
         module.persisted_profile_dir(inputs, client)
+
+
+def test_campaign_fixtures_snapshots_approved_direct_transfers(tmp_path: Path) -> None:
+    module = _load_capture()
+    approved = (
+        {"hash": "a" * 32, "name": "first.iso", "size": 1024, "method": "direct_ed2k"},
+        {"hash": "b" * 32, "name": "second.iso", "size": 2048, "method": "direct_ed2k"},
+    )
+
+    fixtures = module.campaign_fixtures(
+        campaign_dir=tmp_path,
+        approved_fixtures=approved,
+        count=1,
+    )
+
+    assert fixtures == [approved[0]]
+    assert json.loads((tmp_path / "fixtures.json").read_text(encoding="utf-8")) == fixtures
+
+
+def test_campaign_fixtures_reuses_exact_snapshot(tmp_path: Path) -> None:
+    module = _load_capture()
+    snapshot = [{"hash": "a" * 32, "name": "first.iso", "size": 1024}]
+    (tmp_path / "fixtures.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    fixtures = module.campaign_fixtures(
+        campaign_dir=tmp_path,
+        approved_fixtures=(
+            {"hash": "b" * 32, "name": "changed.iso", "size": 2048},
+        ),
+        count=1,
+    )
+
+    assert fixtures == snapshot
+
+
+def test_campaign_fixtures_fails_when_approved_set_is_too_small(tmp_path: Path) -> None:
+    module = _load_capture()
+
+    with pytest.raises(RuntimeError, match="enough approved direct bootstrap transfers"):
+        module.campaign_fixtures(
+            campaign_dir=tmp_path,
+            approved_fixtures=(
+                {"hash": "a" * 32, "name": "first.iso", "size": 1024},
+            ),
+            count=2,
+        )
 
 
 @pytest.mark.parametrize(
