@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timedelta
+import hashlib
 import json
 from typing import Any
 
+from . import observer_action_report
 from .soak_storage import PersistedArtifact
 
-SCHEMA = "emulebb-build-tests.converged-observer-state.v8"
+SCHEMA = "emulebb-build-tests.converged-observer-state.v9"
+PARITY_METHODS = ("server", "kad")
 _TOP_LEVEL_FIELDS = {
     "schema",
     "campaignId",
@@ -19,6 +22,7 @@ _TOP_LEVEL_FIELDS = {
     "nextActionSeq",
     "totals",
     "histograms",
+    "parityGate",
     "checkpoints",
     "driver",
     "scheduler",
@@ -58,6 +62,7 @@ def new_state(
     configuration_digest: str,
     recent_action_limit: int,
     recent_anomaly_limit: int,
+    success_target_per_method: int = 4,
 ) -> dict[str, Any]:
     """Returns one empty, strictly bounded cumulative observer state."""
 
@@ -65,6 +70,10 @@ def new_state(
     _validate_sha256(configuration_digest, "configuration_digest")
     _require_positive_integer(recent_action_limit, "recent_action_limit")
     _require_positive_integer(recent_anomaly_limit, "recent_anomaly_limit")
+    _require_positive_integer(
+        success_target_per_method,
+        "success_target_per_method",
+    )
     return {
         "schema": SCHEMA,
         "campaignId": campaign_id,
@@ -90,6 +99,17 @@ def new_state(
             "kind": {bucket: 0 for bucket in _KIND_BUCKETS},
             "method": {bucket: 0 for bucket in _METHOD_BUCKETS},
             "verdict": {bucket: 0 for bucket in _VERDICT_BUCKETS},
+        },
+        "parityGate": {
+            "targets": {
+                method: success_target_per_method for method in PARITY_METHODS
+            },
+            "successful": {method: 0 for method in PARITY_METHODS},
+            "retryable": {method: 0 for method in PARITY_METHODS},
+            "confirmedDivergences": 0,
+            "status": "pending",
+            "greenAtUtc": None,
+            "firstConfirmedDivergence": None,
         },
         "checkpoints": {
             "count": 0,
@@ -125,6 +145,7 @@ def validate_state(
     *,
     campaign_id: str | None = None,
     configuration_digest: str | None = None,
+    success_target_per_method: int | None = None,
 ) -> dict[str, Any]:
     """Returns a deep copy after strict schema and invariant validation."""
 
@@ -187,6 +208,18 @@ def validate_state(
     _validate_histogram(histograms["kind"], _KIND_BUCKETS, totals["actions"])
     _validate_histogram(histograms["method"], _METHOD_BUCKETS, totals["actions"])
     _validate_histogram(histograms["verdict"], _VERDICT_BUCKETS, totals["actions"])
+    parity_gate = payload.get("parityGate")
+    _validate_parity_gate(parity_gate)
+    if success_target_per_method is not None:
+        _require_positive_integer(
+            success_target_per_method,
+            "success_target_per_method",
+        )
+        if any(
+            parity_gate["targets"][method] != success_target_per_method
+            for method in PARITY_METHODS
+        ):
+            raise RuntimeError("Converged observer parity gate target is inconsistent.")
 
     checkpoints = payload.get("checkpoints")
     if not isinstance(checkpoints, dict) or set(checkpoints) != {
@@ -324,6 +357,7 @@ def _fold_action_report(
     updated["histograms"]["kind"][kind] += 1
     updated["histograms"]["method"][method] += 1
     updated["nextActionSeq"] += 1
+    _fold_parity_gate(updated["parityGate"], report, observed_utc)
 
     compact = {
         "seq": sequence,
@@ -349,6 +383,47 @@ def _fold_action_report(
             updated["limits"]["recentAnomalies"],
         )
     return updated
+
+
+def _fold_parity_gate(
+    gate: dict[str, Any],
+    report: dict[str, Any],
+    observed_utc: str,
+) -> None:
+    method = report.get("method")
+    if method not in PARITY_METHODS:
+        return
+    outcome = observer_action_report.classify_validated_parity_gate_outcome(report)
+    if outcome == observer_action_report.GATE_SUCCESS:
+        gate["successful"][method] += 1
+        if gate["status"] == "pending" and all(
+            gate["successful"][candidate] >= gate["targets"][candidate]
+            for candidate in PARITY_METHODS
+        ):
+            gate["status"] = "green"
+            gate["greenAtUtc"] = observed_utc
+        return
+    if outcome == observer_action_report.GATE_CONFIRMED_DIVERGENCE:
+        gate["confirmedDivergences"] += 1
+        if gate["firstConfirmedDivergence"] is None:
+            encoded = json.dumps(
+                report,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            gate["firstConfirmedDivergence"] = {
+                "seq": report["seq"],
+                "actionId": report["actionId"],
+                "cycle": report["cycle"],
+                "method": method,
+                "observedUtc": observed_utc,
+                "reportSha256": hashlib.sha256(encoded).hexdigest(),
+            }
+        gate["status"] = "failed"
+        return
+    gate["retryable"][method] += 1
 
 
 def record_checkpoint(
@@ -1447,6 +1522,75 @@ def _validate_histogram(value: object, buckets: tuple[str, ...], total: int) -> 
         _require_nonnegative_integer(value[name], f"histograms.{name}")
     if sum(value.values()) != total:
         raise RuntimeError("Converged observer histogram total is inconsistent.")
+
+
+def _validate_parity_gate(value: object) -> None:
+    fields = {
+        "targets",
+        "successful",
+        "retryable",
+        "confirmedDivergences",
+        "status",
+        "greenAtUtc",
+        "firstConfirmedDivergence",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise RuntimeError("Converged observer parity gate is invalid.")
+    for field in ("targets", "successful", "retryable"):
+        counts = value[field]
+        if not isinstance(counts, dict) or set(counts) != set(PARITY_METHODS):
+            raise RuntimeError(
+                f"Converged observer parity gate {field} counts are invalid."
+            )
+        for method, count in counts.items():
+            if field == "targets":
+                _require_positive_integer(count, f"parityGate.{field}.{method}")
+            else:
+                _require_nonnegative_integer(count, f"parityGate.{field}.{method}")
+    divergence_count = _require_nonnegative_integer(
+        value["confirmedDivergences"],
+        "parityGate.confirmedDivergences",
+    )
+    status = value["status"]
+    if status not in {"pending", "green", "failed"}:
+        raise RuntimeError("Converged observer parity gate status is invalid.")
+    _validate_optional_utc_timestamp(value["greenAtUtc"], "parityGate.greenAtUtc")
+    target_reached = all(
+        value["successful"][method] >= value["targets"][method]
+        for method in PARITY_METHODS
+    )
+    receipt = value["firstConfirmedDivergence"]
+    if status == "pending":
+        if target_reached or value["greenAtUtc"] is not None or divergence_count:
+            raise RuntimeError("Converged observer pending parity gate is inconsistent.")
+        if receipt is not None:
+            raise RuntimeError("Converged observer pending parity gate receipt is invalid.")
+        return
+    if status == "green":
+        if not target_reached or value["greenAtUtc"] is None or divergence_count:
+            raise RuntimeError("Converged observer green parity gate is inconsistent.")
+        if receipt is not None:
+            raise RuntimeError("Converged observer green parity gate receipt is invalid.")
+        return
+    if divergence_count <= 0 or not isinstance(receipt, dict):
+        raise RuntimeError("Converged observer failed parity gate receipt is missing.")
+    receipt_fields = {
+        "seq",
+        "actionId",
+        "cycle",
+        "method",
+        "observedUtc",
+        "reportSha256",
+    }
+    if set(receipt) != receipt_fields:
+        raise RuntimeError("Converged observer parity divergence receipt is invalid.")
+    _require_positive_integer(receipt["seq"], "parityGate.receipt.seq")
+    _require_nonempty_string(receipt["actionId"], "parityGate.receipt.actionId")
+    _require_positive_integer(receipt["cycle"], "parityGate.receipt.cycle")
+    if receipt["method"] not in PARITY_METHODS:
+        raise RuntimeError("Converged observer parity divergence method is invalid.")
+    _parse_utc_timestamp(receipt["observedUtc"], "parityGate.receipt.observedUtc")
+    _validate_sha256(receipt["reportSha256"], "parityGate.receipt.reportSha256")
 
 
 def _action_observed_utc(report: dict[str, Any]) -> str:

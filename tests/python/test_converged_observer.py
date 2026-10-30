@@ -171,7 +171,7 @@ def reportable_state(
 
 def pending_action_report(pending: dict[str, object]) -> dict[str, object]:
     return {
-        "schema": "emulebb-build-tests.observer-action-report.v1",
+        "schema": "emulebb-build-tests.observer-action-report.v3",
         "campaignId": CAMPAIGN_ID,
         "seq": pending["reportSeq"],
         "actionId": pending["actionId"],
@@ -192,6 +192,8 @@ def pending_action_report(pending: dict[str, object]) -> dict[str, object]:
         "coverageOk": False,
         "byteMatch": False,
         "diagOk": True,
+        "driverOutcome": pending["driverOutcome"],
+        "diagnosticEvidence": {"status": "complete"},
     }
 
 
@@ -468,26 +470,22 @@ def test_parse_action_config_requires_gentle_complete_schedule() -> None:
         {
             "actionDriving": {
                 "enabled": True,
-                "sourceProfile": "generic_open",
                 "terms": ["linux", "debian", "linux"],
-                "methods": ["server", "kad", "server"],
+                "successTargets": {"server": 4, "kad": 4},
                 "startDelaySeconds": 30,
                 "searchIntervalSeconds": 900,
                 "searchTimeoutSeconds": 120,
-                "maxCycles": 12,
             }
         }
     )
 
     assert config == converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux", "debian"),
-        methods=("server", "kad"),
+        success_target_per_method=4,
         start_delay_seconds=30.0,
         search_interval_seconds=900.0,
         search_timeout_seconds=120.0,
-        max_cycles=12,
     )
 
 
@@ -497,13 +495,12 @@ def test_parse_action_config_rejects_retired_single_method_shape() -> None:
             {
                 "actionDriving": {
                     "enabled": True,
-                    "sourceProfile": "generic_open",
                     "terms": ["linux"],
                     "method": "server",
+                    "successTargets": {"server": 4, "kad": 4},
                     "startDelaySeconds": 30,
                     "searchIntervalSeconds": 900,
                     "searchTimeoutSeconds": 120,
-                    "maxCycles": 0,
                 }
             }
         )
@@ -512,7 +509,7 @@ def test_parse_action_config_rejects_retired_single_method_shape() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     (
-        ("sourceProfile", None),
+        ("successTargets", {"server": 4, "kad": 3}),
         ("startDelaySeconds", True),
         ("searchIntervalSeconds", float("inf")),
         ("searchTimeoutSeconds", float("nan")),
@@ -524,13 +521,11 @@ def test_parse_action_config_rejects_ambiguous_or_nonfinite_values(
 ) -> None:
     payload = {
         "enabled": True,
-        "sourceProfile": "generic_open",
         "terms": ["linux"],
-        "methods": ["server"],
+        "successTargets": {"server": 4, "kad": 4},
         "startDelaySeconds": 60,
         "searchIntervalSeconds": 900,
         "searchTimeoutSeconds": 120,
-        "maxCycles": 0,
     }
     payload[field] = value
 
@@ -541,13 +536,10 @@ def test_parse_action_config_rejects_ambiguous_or_nonfinite_values(
 def test_load_state_binds_the_exact_action_configuration(tmp_path: Path) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="explicit",
         terms=("exact local term", "ünicode term"),
-        methods=("kad",),
         start_delay_seconds=30,
         search_interval_seconds=900,
         search_timeout_seconds=120,
-        max_cycles=4,
     )
     subject = replace(runtime(tmp_path), action_config=config)
 
@@ -571,9 +563,7 @@ def test_capture_action_cycle_persists_intents_before_posts_and_terminal_phases(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="explicit",
         terms=("Exact Local Search Term",),
-        methods=("server",),
         start_delay_seconds=0,
         search_interval_seconds=900,
         search_timeout_seconds=120,
@@ -718,7 +708,6 @@ def test_capture_action_cycle_records_diagnostic_connectivity_skip(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_interval_seconds=900,
     )
@@ -849,19 +838,17 @@ def test_capture_action_cycle_skips_disconnected_selected_network(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("kad",),
         search_interval_seconds=900,
     )
     subject = replace(runtime(tmp_path), action_config=config)
     readiness = {
         "ok": False,
-        "method": "kad",
-        "requiredField": "kadConnected",
+        "method": "server",
+        "requiredField": "ed2kConnected",
         "clients": {
             "rust": {
-                "ed2kConnected": True,
+                "ed2kConnected": False,
                 "kadConnected": False,
                 "ready": False,
             },
@@ -894,6 +881,12 @@ def test_capture_action_cycle_skips_disconnected_selected_network(
         now_utc=lambda: datetime(2026, 10, 25, 12, 1, tzinfo=UTC),
         now_ns=1_000_000_000,
         readiness_probe=lambda _clients, _method: readiness,
+        network_repair=lambda _runtime, _clients, method, observed, **_kwargs: {
+            "attempted": False,
+            "method": method,
+            "clients": {},
+            "readiness": observed,
+        },
     )
 
     assert updated["pendingAction"] is None
@@ -902,7 +895,7 @@ def test_capture_action_cycle_skips_disconnected_selected_network(
     assert updated["driver"]["latestConnectivitySkip"] == {
         "attemptedAtUtc": "2026-10-25T12:01:00+00:00",
         "phase": "network_readiness",
-        "method": "kad",
+        "method": "server",
         "readiness": readiness,
         "scheduleSlot": 1,
     }
@@ -913,9 +906,7 @@ def test_connectivity_skip_advances_to_the_next_scheduled_method(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("server", "kad"),
         search_interval_seconds=900,
     )
     subject = replace(runtime(tmp_path), action_config=config)
@@ -977,7 +968,6 @@ def test_capture_action_cycle_fails_closed_on_restarted_prepared_posts(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_interval_seconds=900,
     )
@@ -1027,7 +1017,6 @@ def test_capture_action_cycle_resumes_persisted_search_ids_without_post(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_interval_seconds=900,
     )
@@ -1109,7 +1098,6 @@ def test_capture_action_cycle_expires_one_overdue_poll_without_get(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_timeout_seconds=3,
     )
@@ -1170,7 +1158,6 @@ def test_capture_action_cycle_reclassifies_get_finishing_after_deadline(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_timeout_seconds=3,
     )
@@ -1248,7 +1235,6 @@ def test_capture_action_cycle_recovers_evidence_marker_after_driver_persist(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         search_interval_seconds=900,
     )
@@ -1341,7 +1327,6 @@ def test_finalize_pending_action_is_report_first_and_uses_persisted_authority(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
     )
     subject = replace(runtime(tmp_path), action_config=config)
@@ -1468,7 +1453,6 @@ def test_finalize_pending_action_does_not_commit_if_report_persistence_fails(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
     )
     subject = replace(runtime(tmp_path), action_config=config)
@@ -1518,7 +1502,6 @@ def test_finalize_pending_action_recovers_report_before_diagnostic_recapture(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
     )
     subject = replace(runtime(tmp_path), action_config=config)
@@ -1655,7 +1638,6 @@ def test_run_observer_services_checkpoints_between_result_attempts(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
         start_delay_seconds=0,
         search_interval_seconds=300,
@@ -1776,13 +1758,10 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
         runtime(tmp_path),
         action_config=converged_observer.ObserverActionConfig(
             enabled=True,
-            source_profile="generic_open",
             terms=("linux", "debian"),
-            methods=("global", "kad"),
             start_delay_seconds=0,
             search_interval_seconds=300,
             search_timeout_seconds=120,
-            max_cycles=2,
         ),
     )
     subject.last_run_manifest.parent.mkdir(parents=True)
@@ -1850,21 +1829,19 @@ def test_run_observer_schedules_actions_without_owning_clients(tmp_path: Path) -
     )
 
     assert action_cycles == [1, 2]
-    assert action_methods == ["global", "kad"]
+    assert action_methods == ["server", "kad"]
     assert action_queries == ["linux", "linux"]
     assert action_times == [0.0, 300.0]
     assert result["driver"]["cycles"] == 2
     assert result["driver"]["latestCycle"]["query"] == "linux"
     assert result["driver"]["latestCycle"]["method"] == "kad"
-    assert result["scheduler"]["nextActionAtUtc"] is None
+    assert result["scheduler"]["nextActionAtUtc"] == "2026-10-25T12:10:00+00:00"
 
 
 def test_scheduled_action_runs_every_method_for_each_term() -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux", "debian"),
-        methods=("server", "kad"),
     )
 
     assert [
@@ -1879,14 +1856,67 @@ def test_scheduled_action_runs_every_method_for_each_term() -> None:
     ]
 
 
+def test_scheduled_action_focuses_the_only_unmet_method_and_rotates_terms() -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        terms=("linux", "debian"),
+    )
+    parity_gate = {
+        "status": "pending",
+        "targets": {"server": 4, "kad": 4},
+        "successful": {"server": 4, "kad": 2},
+    }
+
+    assert [
+        converged_observer.scheduled_action(
+            config,
+            cycle,
+            parity_gate=parity_gate,
+        )
+        for cycle in range(1, 5)
+    ] == [
+        ("linux", "kad"),
+        ("debian", "kad"),
+        ("linux", "kad"),
+        ("debian", "kad"),
+    ]
+
+
+@pytest.mark.parametrize("terminal_status", ["green", "failed"])
+def test_scheduled_action_continues_both_methods_after_terminal_gate(
+    terminal_status: str,
+) -> None:
+    config = converged_observer.ObserverActionConfig(
+        enabled=True,
+        terms=("linux", "debian"),
+    )
+    parity_gate = {
+        "status": terminal_status,
+        "targets": {"server": 4, "kad": 4},
+        "successful": {"server": 4, "kad": 4},
+    }
+
+    assert [
+        converged_observer.scheduled_action(
+            config,
+            cycle,
+            parity_gate=parity_gate,
+        )
+        for cycle in range(1, 5)
+    ] == [
+        ("linux", "server"),
+        ("linux", "kad"),
+        ("debian", "server"),
+        ("debian", "kad"),
+    ]
+
+
 def test_reconcile_action_deadline_persists_initial_and_post_action_schedule(
     tmp_path: Path,
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("server",),
         start_delay_seconds=60,
         search_interval_seconds=300,
         search_timeout_seconds=120,
@@ -1939,13 +1969,10 @@ def test_run_observer_services_exact_persisted_utc_deadline_after_restart(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("server",),
         start_delay_seconds=3_600,
         search_interval_seconds=300,
         search_timeout_seconds=120,
-        max_cycles=1,
     )
     subject = replace(runtime(tmp_path), action_config=config)
     subject.last_run_manifest.parent.mkdir(parents=True)
@@ -1994,7 +2021,7 @@ def test_run_observer_services_exact_persisted_utc_deadline_after_restart(
     )
 
     assert action_times == [120.0]
-    assert result["scheduler"]["nextActionAtUtc"] is None
+    assert result["scheduler"]["nextActionAtUtc"] == "2026-10-25T12:07:00+00:00"
 
 
 def test_run_observer_reconciles_missing_deadline_after_report_commit(
@@ -2002,13 +2029,10 @@ def test_run_observer_reconciles_missing_deadline_after_report_commit(
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("server",),
         start_delay_seconds=60,
         search_interval_seconds=300,
         search_timeout_seconds=120,
-        max_cycles=2,
     )
     subject = replace(runtime(tmp_path), action_config=config)
     subject.last_run_manifest.parent.mkdir(parents=True)
@@ -2063,18 +2087,15 @@ def test_run_observer_reconciles_missing_deadline_after_report_commit(
     )
 
 
-def test_run_observer_services_pending_action_before_delay_or_cycle_limit(
+def test_run_observer_services_pending_action_before_delay(
     tmp_path: Path,
 ) -> None:
     config = converged_observer.ObserverActionConfig(
         enabled=True,
-        source_profile="generic_open",
         terms=("linux",),
-        methods=("server",),
         start_delay_seconds=3_600,
         search_interval_seconds=300,
         search_timeout_seconds=120,
-        max_cycles=1,
     )
     subject = replace(runtime(tmp_path), action_config=config)
     subject.last_run_manifest.parent.mkdir(parents=True)
@@ -2120,7 +2141,7 @@ def test_run_observer_services_pending_action_before_delay_or_cycle_limit(
 
     assert action_times == [0.0]
     assert result["pendingAction"] is not None
-    assert result["driver"]["cycles"] == config.max_cycles
+    assert result["driver"]["cycles"] == 1
 
 
 def test_run_observer_honors_shared_stop_before_process_probe(tmp_path: Path) -> None:

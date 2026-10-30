@@ -9,7 +9,10 @@ from typing import Any
 
 from . import diag_event_diff, observer_action_evidence, soak_action_diff
 
-SCHEMA = "emulebb-build-tests.observer-action-report.v2"
+SCHEMA = "emulebb-build-tests.observer-action-report.v3"
+GATE_SUCCESS = "success"
+GATE_RETRYABLE = "retryable"
+GATE_CONFIRMED_DIVERGENCE = "confirmed-divergence"
 _CLIENTS = ("rust", "mfc")
 _VERDICTS = {
     "coverage-parity",
@@ -195,6 +198,17 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
         raise ObserverActionReportError(
             "Observer action driver outcome ok flag is invalid."
         )
+    driver_errors = driver.get("errors")
+    if not isinstance(driver_errors, list) or any(
+        not isinstance(error, dict) for error in driver_errors
+    ):
+        raise ObserverActionReportError(
+            "Observer action driver outcome errors are invalid."
+        )
+    if driver["ok"] != (not driver_errors):
+        raise ObserverActionReportError(
+            "Observer action driver outcome error state is inconsistent."
+        )
     if (
         driver.get("actionId") != report["actionId"]
         or driver.get("cycle") != report["cycle"]
@@ -266,6 +280,43 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
             "Observer action report is not deterministic JSON."
         ) from error
     return copy.deepcopy(report)
+
+
+def classify_parity_gate_outcome(report: object) -> str:
+    """Classifies one current validated action report for the parity gate."""
+
+    return classify_validated_parity_gate_outcome(
+        validate_observer_action_report(report)
+    )
+
+
+def classify_validated_parity_gate_outcome(report: dict[str, Any]) -> str:
+    """Classifies a report already validated against the current contract."""
+
+    method = report.get("method")
+    if method not in {
+        soak_action_diff.SEARCH_METHOD_SERVER,
+        soak_action_diff.SEARCH_METHOD_KAD,
+    }:
+        return GATE_RETRYABLE
+    driver = report["driverOutcome"]
+    diagnostic_evidence = report["diagnosticEvidence"]
+    terminal_complete = bool(
+        driver["ok"] is True
+        and not driver["errors"]
+        and diagnostic_evidence["status"] == "complete"
+    )
+    if not terminal_complete:
+        return GATE_RETRYABLE
+    if report["verdict"] == "divergence":
+        return GATE_CONFIRMED_DIVERGENCE
+    if (
+        report["verdict"] == "coverage-parity"
+        and report["coverageOk"] is True
+        and report["diagOk"] is True
+    ):
+        return GATE_SUCCESS
+    return GATE_RETRYABLE
 
 
 def validate_observer_action_report_for_pending(

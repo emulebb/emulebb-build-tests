@@ -85,9 +85,17 @@ def storage_policy() -> soak_storage.SoakStoragePolicy:
 
 
 def action_report(
-    campaign_id: str, sequence: int, observed_utc: str
+    campaign_id: str,
+    sequence: int,
+    observed_utc: str,
+    *,
+    method: str = "server",
+    verdict: str | None = None,
 ) -> dict[str, object]:
-    divergent = sequence % 10 == 0
+    resolved_verdict = verdict or (
+        "divergence" if sequence % 10 == 0 else "coverage-parity"
+    )
+    successful = resolved_verdict == "coverage-parity"
     return {
         "schema": "soak_action_diff_v1",
         "campaignId": campaign_id,
@@ -95,15 +103,17 @@ def action_report(
         "actionId": f"{campaign_id}-cycle-{sequence:08d}",
         "cycle": sequence,
         "kind": "search" if sequence % 2 else "download",
-        "method": "server",
+        "method": method,
         "key": f"exact-local-key-{sequence}",
         "label": f"exact local label {sequence}",
         "window": {"t0": observed_utc, "t1": observed_utc},
         "observed": {"rust": observed_utc, "mfc": observed_utc},
-        "verdict": "divergence" if divergent else "coverage-parity",
-        "coverageOk": not divergent,
+        "verdict": resolved_verdict,
+        "coverageOk": successful,
         "byteMatch": False,
-        "diagOk": not divergent,
+        "diagOk": successful,
+        "driverOutcome": {"ok": True, "errors": []},
+        "diagnosticEvidence": {"status": "complete"},
     }
 
 
@@ -266,6 +276,8 @@ def test_observer_state_reduces_driver_activity_without_history_growth() -> None
             "scheduleSlot": 2,
         },
     }
+    assert state["parityGate"]["successful"] == {"server": 0, "kad": 0}
+    assert state["parityGate"]["retryable"] == {"server": 0, "kad": 0}
 
 
 def test_observer_state_counts_structured_cycle_failure() -> None:
@@ -338,6 +350,107 @@ def test_observer_state_counts_inconclusive_action_verdicts(
     assert updated["totals"][total_field] == 1
     assert updated["histograms"]["verdict"][verdict] == 1
     assert updated["recentAnomalies"][0]["verdict"] == verdict
+
+
+def test_parity_gate_requires_four_successes_per_method_and_failure_is_sticky() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=16,
+        recent_anomaly_limit=8,
+        success_target_per_method=4,
+    )
+    for sequence in range(1, 9):
+        method = "server" if sequence % 2 else "kad"
+        state = observer_state.record_action(
+            state,
+            action_report(
+                state["campaignId"],
+                sequence,
+                f"2026-10-01T00:{sequence:02d}:00+00:00",
+                method=method,
+                verdict="coverage-parity",
+            ),
+        )
+        expected_status = "green" if sequence == 8 else "pending"
+        assert state["parityGate"]["status"] == expected_status
+
+    assert state["parityGate"]["successful"] == {"server": 4, "kad": 4}
+    assert state["parityGate"]["greenAtUtc"] == "2026-10-01T00:08:00+00:00"
+
+    retryable = action_report(
+        state["campaignId"],
+        9,
+        "2026-10-01T00:09:00+00:00",
+        method="server",
+        verdict="one-sided",
+    )
+    state = observer_state.record_action(state, retryable)
+    assert state["parityGate"]["status"] == "green"
+    assert state["parityGate"]["retryable"] == {"server": 1, "kad": 0}
+
+    divergence = action_report(
+        state["campaignId"],
+        10,
+        "2026-10-01T00:10:00+00:00",
+        method="kad",
+        verdict="divergence",
+    )
+    state = observer_state.record_action(state, divergence)
+    receipt = state["parityGate"]["firstConfirmedDivergence"]
+    assert state["parityGate"]["status"] == "failed"
+    assert state["parityGate"]["confirmedDivergences"] == 1
+    assert receipt["seq"] == 10
+    assert receipt["method"] == "kad"
+    assert len(receipt["reportSha256"]) == 64
+
+    state = observer_state.record_action(
+        state,
+        action_report(
+            state["campaignId"],
+            11,
+            "2026-10-01T00:11:00+00:00",
+            method="server",
+            verdict="coverage-parity",
+        ),
+    )
+    reloaded = observer_state.validate_state(
+        json.loads(observer_state.canonical_bytes(state)),
+        success_target_per_method=4,
+    )
+    assert reloaded["parityGate"]["status"] == "failed"
+    assert reloaded["parityGate"]["firstConfirmedDivergence"] == receipt
+
+
+def test_parity_gate_treats_public_misses_and_incomplete_evidence_as_retryable() -> None:
+    state = observer_state.new_state(
+        "20261001T000000Z",
+        configuration_digest=CONFIGURATION_DIGEST,
+        recent_action_limit=8,
+        recent_anomaly_limit=8,
+    )
+    verdicts = (
+        ("server", "no-traffic"),
+        ("kad", "one-sided"),
+        ("server", "not-assessable"),
+        ("kad", "evidence-incomplete"),
+    )
+    for sequence, (method, verdict) in enumerate(verdicts, start=1):
+        report = action_report(
+            state["campaignId"],
+            sequence,
+            f"2026-10-01T01:{sequence:02d}:00+00:00",
+            method=method,
+            verdict=verdict,
+        )
+        if verdict == "evidence-incomplete":
+            report["diagnosticEvidence"]["status"] = "incomplete"
+        state = observer_state.record_action(state, report)
+
+    assert state["parityGate"]["status"] == "pending"
+    assert state["parityGate"]["successful"] == {"server": 0, "kad": 0}
+    assert state["parityGate"]["retryable"] == {"server": 2, "kad": 2}
+    assert state["parityGate"]["confirmedDivergences"] == 0
 
 
 @pytest.mark.parametrize("cycle", (1, 3))
@@ -461,7 +574,7 @@ def test_incremental_result_poll_round_trip_preserves_restart_schedule() -> None
         configuration_digest=CONFIGURATION_DIGEST,
     )
 
-    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v8"
+    assert reloaded["schema"] == "emulebb-build-tests.converged-observer-state.v9"
     assert reloaded["pendingAction"]["clients"]["rust"]["resultPoll"] == {
         "startedAtUtc": "2026-10-01T00:00:03+00:00",
         "deadlineUtc": "2026-10-01T00:03:03+00:00",
@@ -789,7 +902,7 @@ def test_pending_action_cannot_restore_a_consumed_deadline() -> None:
         diagnostic_runs=diagnostic_runs(),
     )
 
-    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v8"
+    assert state["schema"] == "emulebb-build-tests.converged-observer-state.v9"
     assert state["scheduler"]["nextActionAtUtc"] is None
     with pytest.raises(RuntimeError, match="cannot set a scheduler deadline"):
         observer_state.set_next_action_deadline(

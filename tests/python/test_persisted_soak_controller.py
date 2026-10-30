@@ -133,6 +133,18 @@ def live_inputs(
     )
 
 
+def pending_parity_gate() -> dict[str, object]:
+    return {
+        "targets": {"server": 4, "kad": 4},
+        "successful": {"server": 0, "kad": 0},
+        "retryable": {"server": 0, "kad": 0},
+        "confirmedDivergences": 0,
+        "status": "pending",
+        "greenAtUtc": None,
+        "firstConfirmedDivergence": None,
+    }
+
+
 def test_control_paths_must_stay_under_output_root(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="must stay below"):
         controller.build_control_paths(tmp_path / "output", tmp_path / "elsewhere")
@@ -1074,42 +1086,29 @@ def test_bounded_process_command_preserves_policy_paths_and_target(tmp_path: Pat
     assert command[-3:] == ["python", "target.py", "--flag"]
 
 
-def test_build_observer_action_config_resolves_exact_manifest_terms(tmp_path: Path) -> None:
-    inputs = live_inputs(tmp_path, policy=storage_policy())
-
-    fallback = controller.build_observer_action_config(
-        inputs,
+def test_build_observer_action_config_generates_campaign_stable_terms() -> None:
+    campaign_id = "20261025T120000Z"
+    configured = controller.build_observer_action_config(
+        campaign_id,
         enabled=True,
-        terms=(),
-        methods=("server", "kad"),
+        success_target_per_method=12,
         start_delay_seconds=30,
         search_interval_seconds=900,
         search_timeout_seconds=120,
-        max_cycles=12,
     )
-    explicit = controller.build_observer_action_config(
-        inputs,
-        enabled=True,
-        terms=("Exact Local Term", "Exact Local Term", "debian"),
-        methods=("global",),
-        start_delay_seconds=60,
-        search_interval_seconds=1_800,
-        search_timeout_seconds=180,
-        max_cycles=0,
-    )
+    terms = controller.campaign_action_terms(campaign_id)
 
-    assert fallback == {
+    assert configured == {
         "enabled": True,
-        "sourceProfile": "generic_open",
-        "terms": ["linux"],
-        "methods": ["server", "kad"],
+        "terms": list(terms),
+        "successTargets": {"server": 12, "kad": 12},
         "startDelaySeconds": 30.0,
         "searchIntervalSeconds": 900.0,
         "searchTimeoutSeconds": 120.0,
-        "maxCycles": 12,
     }
-    assert explicit["sourceProfile"] == "explicit"
-    assert explicit["terms"] == ["Exact Local Term", "debian"]
+    assert controller.campaign_action_terms(campaign_id) == terms
+    assert terms[0].isascii()
+    assert not terms[1].isascii()
 
 
 def test_exact_process_row_rejects_pid_reuse() -> None:
@@ -1208,11 +1207,10 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
         paths,
         watch_interval_seconds=30.0,
         observer_drive_actions=True,
-        observer_action_methods=("server", "kad"),
+        observer_action_success_target_per_method=12,
         observer_action_start_delay_seconds=30,
         observer_action_search_interval_seconds=900,
         observer_action_search_timeout_seconds=120,
-        observer_action_max_cycles=12,
     )
 
     assert result["schema"] == controller.MANIFEST_SCHEMA
@@ -1226,13 +1224,11 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
     assert result["storage"]["launchEnforcement"]["withinLimits"] is True
     assert result["observerConfig"]["actionDriving"] == {
         "enabled": True,
-        "sourceProfile": "generic_open",
-        "terms": ["linux"],
-        "methods": ["server", "kad"],
+        "terms": list(controller.campaign_action_terms("20261025T120000Z")),
+        "successTargets": {"server": 12, "kad": 12},
         "startDelaySeconds": 30.0,
         "searchIntervalSeconds": 900.0,
         "searchTimeoutSeconds": 120.0,
-        "maxCycles": 12,
     }
     storage_context = controller.parse_session_storage_context(result, output_root)
     assert storage_context.active_campaign == (
@@ -1523,30 +1519,22 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
         [
             "start",
             "--observer-drive-actions",
-            "--observer-action-term",
-            "Exact Local Term",
-            "--observer-action-method",
-            "server",
-            "--observer-action-method",
-            "kad",
+            "--observer-action-success-target-per-method",
+            "12",
             "--observer-action-start-delay-seconds",
             "30",
             "--observer-action-search-interval-seconds",
             "900",
             "--observer-action-search-timeout-seconds",
             "120",
-            "--observer-action-max-cycles",
-            "12",
         ]
     )
 
     assert args.observer_drive_actions is True
-    assert args.observer_action_term == ["Exact Local Term"]
-    assert args.observer_action_methods == ["server", "kad"]
+    assert args.observer_action_success_target_per_method == 12
     assert args.observer_action_start_delay_seconds == 30
     assert args.observer_action_search_interval_seconds == 900
     assert args.observer_action_search_timeout_seconds == 120
-    assert args.observer_action_max_cycles == 12
     assert (
         args.rest_timeout_seconds
         == controller.soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
@@ -1739,8 +1727,9 @@ def test_session_status_reports_exact_dual_process_tree(
     )
     monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
     exact_observer_report = {
-        "schema": "emulebb-build-tests.converged-soak-report.v2",
+        "schema": "emulebb-build-tests.converged-soak-report.v3",
         "campaignId": "20261024T120000Z",
+        "parityGate": pending_parity_gate(),
         "observerState": {"exact": "unredacted local evidence"},
         "retainedWindow": {},
     }
@@ -1752,9 +1741,10 @@ def test_session_status_reports_exact_dual_process_tree(
 
     result = controller.session_status(paths)
 
-    assert result["schema"] == "emulebb.persisted-soak-status.v3"
+    assert result["schema"] == "emulebb.persisted-soak-status.v4"
     assert result["observerReport"] is exact_observer_report
     assert result["observerReportError"] is None
+    assert result["parityGate"] == pending_parity_gate()
     assert result["ok"] is True
     assert result["launcher"]["alive"] is True
     assert result["observer"]["alive"] is True
@@ -1792,6 +1782,110 @@ def test_session_status_reports_exact_dual_process_tree(
     assert invalid["findings"] == ["observer-report-invalid"]
 
 
+@pytest.mark.parametrize(
+    ("gate_status", "expected_ok"),
+    [("pending", False), ("green", True), ("failed", False)],
+)
+def test_parity_gate_status_reports_current_gate_without_runtime_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gate_status: str,
+    expected_ok: bool,
+) -> None:
+    paths = make_paths(tmp_path)
+    campaign_id = "20261024T120000Z"
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "campaignId": campaign_id,
+            "observerConfig": {"actionDriving": {"enabled": True}},
+        },
+    )
+    controller.write_json_atomic(
+        paths.last_run_manifest,
+        {"campaignId": campaign_id},
+    )
+    gate = pending_parity_gate()
+    gate["status"] = gate_status
+    if gate_status == "green":
+        gate["successful"] = {"server": 4, "kad": 4}
+        gate["greenAtUtc"] = "2026-10-24T12:30:00+00:00"
+    elif gate_status == "failed":
+        gate["confirmedDivergences"] = 1
+        gate["firstConfirmedDivergence"] = {
+            "seq": 1,
+            "actionId": "search-000001",
+            "cycle": 1,
+            "method": "server",
+            "observedUtc": "2026-10-24T12:30:00+00:00",
+            "reportSha256": "a" * 64,
+        }
+    monkeypatch.setattr(
+        controller,
+        "current_observer_report_with_retry",
+        lambda _manifest, _last_run: {"parityGate": gate},
+    )
+
+    result = controller.parity_gate_status(paths)
+
+    assert result == {
+        "schema": "emulebb.persisted-soak-gate-status.v1",
+        "campaignId": campaign_id,
+        "ok": expected_ok,
+        "status": gate_status,
+        "reason": None,
+        "gate": gate,
+    }
+
+
+def test_parity_gate_status_rejects_disabled_action_driving(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path)
+    controller.write_json_atomic(
+        paths.manifest,
+        {
+            "campaignId": "20261024T120000Z",
+            "observerConfig": {"actionDriving": {"enabled": False}},
+        },
+    )
+
+    result = controller.parity_gate_status(paths)
+
+    assert result == {
+        "schema": "emulebb.persisted-soak-gate-status.v1",
+        "campaignId": "20261024T120000Z",
+        "ok": False,
+        "status": "unavailable",
+        "reason": "observer-action-driving-disabled",
+        "gate": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("ok", "expected_exit"),
+    [(True, 0), (False, 1)],
+)
+def test_gate_status_command_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    ok: bool,
+    expected_exit: int,
+) -> None:
+    result = {
+        "schema": "emulebb.persisted-soak-gate-status.v1",
+        "campaignId": "20261024T120000Z",
+        "ok": ok,
+        "status": "green" if ok else "pending",
+        "reason": None,
+        "gate": pending_parity_gate(),
+    }
+    monkeypatch.setattr(controller, "get_workspace_output_root", lambda: tmp_path)
+    monkeypatch.setattr(controller, "parity_gate_status", lambda _paths: result)
+
+    assert controller.main(["gate-status"]) == expected_exit
+    assert json.loads(capsys.readouterr().out) == result
+
+
 def test_current_observer_report_loads_exact_current_campaign(
     tmp_path: Path,
     monkeypatch,
@@ -1801,8 +1895,9 @@ def test_current_observer_report_loads_exact_current_campaign(
     report_dir = campaign_dir / "report"
     controller.write_json_atomic(report_dir / "summary.json", {"placeholder": True})
     exact_report = {
-        "schema": "emulebb-build-tests.converged-soak-report.v2",
+        "schema": "emulebb-build-tests.converged-soak-report.v3",
         "campaignId": campaign_id,
+        "parityGate": pending_parity_gate(),
         "observerState": {"exact": "unredacted local evidence"},
         "retainedWindow": {},
     }
@@ -1897,7 +1992,7 @@ def test_current_observer_report_rejects_stale_or_misdirected_evidence(
         controller.soak_report_summary,
         "summarize_report",
         lambda _path: {
-            "schema": "emulebb-build-tests.converged-soak-report.v2",
+            "schema": "emulebb-build-tests.converged-soak-report.v3",
             "campaignId": "20261023T120000Z",
         },
     )
