@@ -18,7 +18,7 @@
     ]
   },
   "operator_runtime_inputs": {
-    "schema": "emulebb-build-tests.live-wire-inputs.v1",
+    "schema": "emulebb-build-tests.live-wire-inputs.v2",
     "default_file": "live-wire-inputs.local.json",
     "example_file": "live-wire-inputs.example.json"
   },

@@ -1106,7 +1106,8 @@ def test_controller_local_profile_honors_explicit_live_wire_inputs_file(tmp_path
     explicit_inputs.write_text(
         json.dumps(
             {
-                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "schema": "emulebb-build-tests.live-wire-inputs.v2",
+                "bandwidth": {"upload_limit_kibps": 8},
                 "search_terms": {
                     "generic_open": ["operator generic"],
                     "documents": ["operator document"],

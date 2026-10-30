@@ -70,7 +70,7 @@ def test_local_swarm_payload_inputs_are_generated_from_fixture(tmp_path: Path) -
     (repo_root / "live-wire-inputs.local.json").write_text(
         json.dumps(
             {
-                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "schema": "emulebb-build-tests.live-wire-inputs.v2",
                 "local_package_install": {
                     "dependency_manifest": "suite-dependencies.json",
                 },

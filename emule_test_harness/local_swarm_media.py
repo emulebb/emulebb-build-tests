@@ -24,6 +24,7 @@ def build_local_swarm_live_wire_payload(
 
     payload: dict[str, Any] = {
         "schema": live_wire_inputs.SCHEMA,
+        "bandwidth": {"upload_limit_kibps": 8},
         "search_terms": {
             "generic_open": ["emulebb local swarm generated fixture"],
             "documents": ["emulebb local swarm generated document"],

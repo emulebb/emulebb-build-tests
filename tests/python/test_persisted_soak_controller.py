@@ -14,7 +14,7 @@ import pytest
 
 from emule_test_harness import persisted_soak_controller as controller
 from emule_test_harness import soak_storage
-from emule_test_harness.live_wire_inputs import LiveWireInputs
+from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
 from emule_test_harness.windows_processes import WindowsProcessInfo
 
 
@@ -128,6 +128,7 @@ def live_inputs(
         video_roots=(),
         bootstrap_transfer_hashes=(),
         direct_bootstrap_transfers=(),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         soak_storage=policy,
     )
 

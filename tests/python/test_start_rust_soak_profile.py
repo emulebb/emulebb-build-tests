@@ -94,12 +94,14 @@ def test_background_starter_rejects_short_operator_runs(monkeypatch: pytest.Monk
 
 def write_minimal_live_inputs(repo_root: Path, rust_profile: Path) -> None:
     payload = {
-        "schema": "emulebb-build-tests.live-wire-inputs.v1",
+        "schema": "emulebb-build-tests.live-wire-inputs.v2",
+        "bandwidth": {"upload_limit_kibps": 8},
         "rust_profile": {"profile_dir": str(rust_profile)},
         "search_terms": {
             "generic_open": ["linux iso"],
             "documents": ["linux pdf"],
             "radarr_movies": ["public domain"],
+            "sonarr_series": ["public domain series"],
         },
         "auto_browse": {
             "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],

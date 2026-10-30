@@ -11,11 +11,17 @@ from typing import Any
 
 from .soak_storage import SoakStoragePolicy, parse_soak_storage_policy
 
-SCHEMA = "emulebb-build-tests.live-wire-inputs.v1"
-LEGACY_SCHEMAS = ("emule-build-tests.live-wire-inputs.v1",)
+SCHEMA = "emulebb-build-tests.live-wire-inputs.v2"
 DEFAULT_INPUTS_FILE_NAME = "live-wire-inputs.local.json"
 HASH_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 PLACEHOLDER_HASH = "0123456789abcdef0123456789abcdef"
+
+
+@dataclass(frozen=True)
+class BandwidthPolicy:
+    """Shared live-client bandwidth policy used for parity runs."""
+
+    upload_limit_kibps: int
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,7 @@ class LiveWireInputs:
     video_roots: tuple[Path, ...]
     bootstrap_transfer_hashes: tuple[str, ...]
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
+    bandwidth: BandwidthPolicy
     mfc_profile_dir: Path | None = None
     rust_profile_dir: Path | None = None
     soak_storage: SoakStoragePolicy | None = None
@@ -89,10 +96,11 @@ def parse_live_wire_inputs(
 ) -> LiveWireInputs:
     """Validates one live-wire input payload and returns normalized values."""
 
-    if payload.get("schema") not in (SCHEMA, *LEGACY_SCHEMAS):
+    if payload.get("schema") != SCHEMA:
         raise RuntimeError(f"Live-wire inputs schema must be {SCHEMA!r}.")
     search_terms = require_object(payload, "search_terms")
     auto_browse = require_object(payload, "auto_browse")
+    bandwidth = require_object(payload, "bandwidth")
     media_corpus = read_optional_object(payload, "media_corpus")
     mfc_profile = read_optional_object(payload, "mfc_profile")
     rust_profile = read_optional_object(payload, "rust_profile")
@@ -102,13 +110,17 @@ def parse_live_wire_inputs(
         generic_open_terms=read_terms(search_terms, "generic_open"),
         document_terms=read_terms(search_terms, "documents"),
         radarr_movie_terms=read_terms(search_terms, "radarr_movies"),
-        sonarr_series_terms=read_optional_terms(
-            search_terms, "sonarr_series", fallback_key="radarr_movies"
-        ),
+        sonarr_series_terms=read_terms(search_terms, "sonarr_series"),
         video_roots=read_optional_paths(media_corpus, "video_roots"),
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
         direct_bootstrap_transfers=read_direct_transfers(
             auto_browse, "direct_bootstrap_transfers"
+        ),
+        bandwidth=BandwidthPolicy(
+            upload_limit_kibps=read_positive_integer(
+                bandwidth,
+                "upload_limit_kibps",
+            )
         ),
         mfc_profile_dir=read_optional_single_path(mfc_profile, "profile_dir"),
         rust_profile_dir=read_optional_single_path(rust_profile, "profile_dir"),
@@ -152,14 +164,15 @@ def read_terms(payload: dict[str, Any], key: str) -> tuple[str, ...]:
     return tuple(terms)
 
 
-def read_optional_terms(
-    payload: dict[str, Any], key: str, *, fallback_key: str
-) -> tuple[str, ...]:
-    """Reads an optional term field, falling back to an existing required field."""
+def read_positive_integer(payload: dict[str, Any], key: str) -> int:
+    """Reads one required positive non-boolean integer."""
 
-    if key not in payload:
-        return read_terms(payload, fallback_key)
-    return read_terms(payload, key)
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError(
+            f"Live-wire inputs field {key!r} must be a positive integer."
+        )
+    return value
 
 
 def read_optional_paths(payload: dict[str, Any], key: str) -> tuple[Path, ...]:
