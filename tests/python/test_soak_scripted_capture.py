@@ -177,7 +177,7 @@ def test_campaign_leaf_returns_sanitized_retained_value() -> None:
     assert module._campaign_leaf("ci-054-native-case") == "ci-054-native-case"
 
 
-def test_cli_maps_unexpected_failures_to_sanitized_harness_exit(
+def test_cli_maps_unexpected_failures_to_actionable_harness_exit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -190,11 +190,10 @@ def test_cli_maps_unexpected_failures_to_sanitized_harness_exit(
 
     assert module._cli_main() == 2
     stderr = capsys.readouterr().err
-    assert stderr == "harness-failure: RuntimeError\n"
-    assert "private fixture path" not in stderr
+    assert stderr == "harness-failure: RuntimeError: private fixture path\n"
 
 
-def test_cli_reports_sanitized_post_run_failure_taxonomy(
+def test_cli_reports_post_run_failure_taxonomy(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:

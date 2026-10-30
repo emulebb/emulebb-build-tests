@@ -1733,19 +1733,17 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _cli_main() -> int:
-    """Map unexpected operator-run failures to the harness-failure exit class."""
+    """Map unexpected operator-run failures to an actionable local exit report."""
 
     try:
         return main()
     except KeyboardInterrupt:
         raise
     except Exception as error:  # noqa: BLE001 - CLI failures are harness failures, never divergences
-        # Do not print the exception text: operator-local inputs and paths can be
-        # embedded in third-party exception messages. PostRunSafetyError is the
-        # exception-safe boundary: it retains only fixed audit stage names and
-        # exception class names, so its taxonomy is safe and necessary to debug.
-        detail = f": {error}" if isinstance(error, PostRunSafetyError) else ""
-        print(f"harness-failure: {type(error).__name__}{detail}", file=sys.stderr)
+        print(
+            f"harness-failure: {type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
         return 2
 
 
