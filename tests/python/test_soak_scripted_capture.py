@@ -233,15 +233,17 @@ def test_transfer_coverage_wait_stops_on_exact_client_udp_lifecycle(
     health = current_diagnostic_writer_health(segment_id=1)
     health["recordsWritten"] = 2
     health["rotations"] = 1
-    monkeypatch.setattr(
-        module.converged_observer,
-        "diagnostic_writer_health",
-        lambda *_args, **_kwargs: health,
-    )
+    requested_base_urls: list[str] = []
+
+    def writer_health(base_url: str, _api_key: str) -> dict[str, object]:
+        requested_base_urls.append(base_url)
+        return health
+
+    monkeypatch.setattr(module.converged_observer, "diagnostic_writer_health", writer_health)
     evidence_path = tmp_path / "transfer-coverage-evidence.json"
 
     summary, checkpoint, evidence = module.observe_transfer_coverage(
-        base_url="http://127.0.0.1:4731/api/v1",
+        base_url="http://127.0.0.1:4731",
         api_key="test",
         client="rust",
         process_id=42,
@@ -261,6 +263,10 @@ def test_transfer_coverage_wait_stops_on_exact_client_udp_lifecycle(
     assert checkpoint["source"]["lastClosedSegmentId"] == 0
     assert evidence["complete"] is True
     assert evidence_path.is_file()
+    assert requested_base_urls == [
+        "http://127.0.0.1:4731/api/v1",
+        "http://127.0.0.1:4731/api/v1",
+    ]
 
 
 def test_transfer_coverage_operator_stop_is_finalized_after_shutdown(
@@ -277,7 +283,7 @@ def test_transfer_coverage_operator_stop_is_finalized_after_shutdown(
     evidence_path = tmp_path / "transfer-coverage-evidence.json"
 
     summary, checkpoint, evidence = module.observe_transfer_coverage(
-        base_url="http://127.0.0.1:4731/api/v1",
+        base_url="http://127.0.0.1:4731",
         api_key="test",
         client="rust",
         process_id=42,

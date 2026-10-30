@@ -352,7 +352,8 @@ def observe_transfer_coverage(
     started = monotonic()
     deadline = None if timeout_seconds == 0 else started + timeout_seconds
     checkpoint = None
-    health = converged_observer.diagnostic_writer_health(base_url, api_key)
+    diagnostic_base_url = f"{base_url.rstrip('/')}/api/v1"
+    health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
     if health.get("processId") != process_id:
         raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
     evidence = transfer_coverage_evidence.new_evidence(
@@ -367,7 +368,9 @@ def observe_transfer_coverage(
     try:
         while True:
             observed_utc = now_utc()
-            health = converged_observer.diagnostic_writer_health(base_url, api_key)
+            health = converged_observer.diagnostic_writer_health(
+                diagnostic_base_url, api_key
+            )
             advanced = diagnostic_run_scan.scan_closed_segments(
                 profile_dir=diagnostics_dir,
                 client=client,
