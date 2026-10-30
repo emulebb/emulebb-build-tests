@@ -1,8 +1,9 @@
 """Solo scripted-action capture for the capture-then-offline-diff parity model.
 
-Brings up ONE client (rust OR mfc) on the persisted profile, ensures operator +
-Kad, runs the identical scripted action set (``scripted_actions``) with begin/end
-markers, packs sanitized results and markers into a compressed recording under
+Brings up ONE client (rust OR mfc) on the persisted profile through the already
+active hide.me full tunnel, binds local control to loopback, requires VPN Guard
+Block, ensures operator + Kad, runs the identical scripted action set
+(``scripted_actions``) with begin/end markers, packs results and markers under
 ``$OUTPUT_ROOT/soak/reports/<campaign>/``, retains raw diagnostics in a private
 artifact sibling, then tears the client down.
 
@@ -47,7 +48,7 @@ from emule_test_harness import (  # noqa: E402
     soak_storage,
     transfer_coverage_evidence,
 )
-from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
+from emule_test_harness import hideme_vpn  # noqa: E402
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
@@ -288,6 +289,19 @@ def normalized_search_methods(value: str) -> tuple[str, ...]:
     """Returns the explicitly selected search methods, allowing transfer-only runs."""
 
     return tuple(method.strip() for method in value.split(",") if method.strip())
+
+
+def control_bind_address(route: str) -> str:
+    """Select loopback for full-tunnel control and inherited LAN state for direct runs."""
+
+    if route == "vpn":
+        return "127.0.0.1"
+    if route != "direct":
+        raise ValueError(f"unsupported capture route: {route!r}")
+    address = os.environ.get("X_LOCAL_IP", "").strip()
+    if not address:
+        raise RuntimeError("X_LOCAL_IP must be set for direct-route REST control.")
+    return address
 
 
 def _transfer_coverage_summary(
@@ -1485,9 +1499,7 @@ def main(argv: list[str] | None = None) -> int:
     rest_port = args.rest_port or (4731 if client == "rust" else 4732)
     obfuscation = not args.no_obfuscation
 
-    rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
-    if not rest_addr:
-        raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
+    rest_addr = control_bind_address(args.route)
     output_root = get_workspace_output_root()
 
     inputs_path = Path(args.inputs).resolve() if args.inputs else REPO_ROOT / "live-wire-inputs.local.json"
@@ -1541,7 +1553,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"scripted capture: client={client} campaign={campaign} report={report_dir}")
     if native_config is None:
-        vpn = ensure_vpn_ready(exe, name=f"eMuleBB {client}")
+        vpn = hideme_vpn.require_full_tunnel_ready()
         bind_ip = str(vpn["bindIp"])
     else:
         bind_ip = rest_addr
@@ -1668,6 +1680,7 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                vpn_guard_mode="off" if native_config is not None else "block",
                 upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
                 apply_shared_directories=args.fresh_profile,
                 diagnostic_writer_policy=rust_diagnostic_writer_policy,
@@ -1692,7 +1705,9 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                vpn_guard_mode="off" if native_config is not None else "block",
                 upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
+                allow_loopback_rest=native_config is None,
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None

@@ -60,6 +60,27 @@ def test_search_methods_allow_explicit_transfer_only_capture() -> None:
     assert module.normalized_search_methods("server, kad") == ("server", "kad")
 
 
+def test_full_tunnel_control_uses_loopback_without_local_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    assert module.control_bind_address("vpn") == "127.0.0.1"
+
+
+def test_direct_control_requires_inherited_local_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+    assert module.control_bind_address("direct") == "192.0.2.10"
+
+    monkeypatch.delenv("X_LOCAL_IP")
+    with pytest.raises(RuntimeError, match="must be set for direct-route"):
+        module.control_bind_address("direct")
+
+
 def _live_inputs(
     tmp_path: Path,
     *,
