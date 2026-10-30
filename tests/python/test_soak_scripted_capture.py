@@ -12,6 +12,7 @@ import pytest
 
 from emule_test_harness.scripted_actions import ScriptedAction
 from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
+from emule_test_harness import soak_storage
 
 pytestmark = pytest.mark.unit
 
@@ -56,6 +57,7 @@ def _live_inputs(
     *,
     rust_profile_dir: Path | None,
     mfc_profile_dir: Path | None,
+    storage: soak_storage.SoakStoragePolicy | None = None,
 ) -> LiveWireInputs:
     return LiveWireInputs(
         path=tmp_path / "live-wire-inputs.local.json",
@@ -76,7 +78,72 @@ def _live_inputs(
         bandwidth=BandwidthPolicy(upload_limit_kibps=8),
         rust_profile_dir=rust_profile_dir,
         mfc_profile_dir=mfc_profile_dir,
+        soak_storage=storage,
     )
+
+
+def _soak_storage_policy() -> soak_storage.SoakStoragePolicy:
+    return soak_storage.SoakStoragePolicy(
+        max_total_bytes=16 * 1024 * 1024 * 1024,
+        max_age_seconds=86_400,
+        minimum_free_bytes=20 * 1024 * 1024 * 1024,
+        bundle_interval_seconds=300,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=64 * 1024 * 1024,
+            max_segment_seconds=3_600,
+            retained_segments=128,
+            max_total_bytes=8 * 1024 * 1024 * 1024,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=20 * 1024 * 1024 * 1024,
+        ),
+        streams={
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(
+                max_segment_bytes=4 * 1024 * 1024,
+                retained_segments=48,
+            ),
+            "diagnostic_pins": soak_storage.ArtifactStreamPolicy(
+                max_segment_bytes=64 * 1024 * 1024,
+                retained_segments=4,
+            ),
+        },
+    )
+
+
+def test_focused_capture_writer_policy_uses_short_bounded_segments(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+
+    policy = module.focused_capture_writer_policy(inputs)
+
+    assert policy == soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=4 * 1024 * 1024,
+        max_segment_seconds=60,
+        retained_segments=64,
+        max_total_bytes=256 * 1024 * 1024,
+        max_retained_seconds=3_600,
+        minimum_free_bytes=20 * 1024 * 1024 * 1024,
+    )
+
+
+def test_focused_capture_writer_policy_requires_storage_contract(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+    )
+
+    with pytest.raises(RuntimeError, match="requires soak_storage"):
+        module.focused_capture_writer_policy(inputs)
 
 
 @pytest.mark.parametrize("client", ("rust", "mfc"))

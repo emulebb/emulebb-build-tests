@@ -39,7 +39,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw  # noqa: E402
-from emule_test_harness import scripted_actions, soak_launch  # noqa: E402
+from emule_test_harness import scripted_actions, soak_launch, soak_storage  # noqa: E402
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
@@ -108,6 +108,48 @@ def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
             "in the live-wire inputs."
         )
     return profile_dir.resolve()
+
+
+def focused_capture_writer_policy(
+    inputs: LiveWireInputs,
+) -> soak_storage.RustDiagnosticWriterPolicy:
+    """Derive a short-segment Rust ring for incremental protocol evidence scans."""
+
+    storage = inputs.soak_storage
+    if storage is None:
+        raise RuntimeError(
+            "Focused persisted capture requires soak_storage in the live-wire inputs."
+        )
+    source = storage.rust_diagnostics
+    bundle = storage.stream("diagnostic_bundles")
+    pins = storage.stream("diagnostic_pins")
+    max_segment_bytes = min(source.max_segment_bytes, bundle.max_segment_bytes)
+    max_segment_seconds = min(source.max_segment_seconds, 60)
+    pin_capacity_bytes = pins.max_segment_bytes * pins.retained_segments
+    retained_segments = min(
+        source.retained_segments,
+        pin_capacity_bytes // max_segment_bytes,
+    )
+    if retained_segments < 2:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot retain two diagnostic segments."
+        )
+    max_total_bytes = min(
+        source.max_total_bytes,
+        pin_capacity_bytes,
+        max_segment_bytes * retained_segments,
+    )
+    return soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=max_segment_bytes,
+        max_segment_seconds=max_segment_seconds,
+        retained_segments=retained_segments,
+        max_total_bytes=max_total_bytes,
+        max_retained_seconds=min(
+            source.max_retained_seconds,
+            max_segment_seconds * retained_segments,
+        ),
+        minimum_free_bytes=source.minimum_free_bytes,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1269,6 +1311,9 @@ def main(argv: list[str] | None = None) -> int:
     search_terms = [term.strip() for term in args.search_terms.split(",") if term.strip()]
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
+    rust_diagnostic_writer_policy = (
+        focused_capture_writer_policy(inputs) if native_config is None else None
+    )
     native_fixtures: list[dict[str, object]] = []
     expected_shared_identities: frozenset[tuple[str, int]] = frozenset()
     forbidden_roots: tuple[str, ...] = ()
@@ -1424,6 +1469,7 @@ def main(argv: list[str] | None = None) -> int:
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
                 upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
                 apply_shared_directories=args.fresh_profile,
+                diagnostic_writer_policy=rust_diagnostic_writer_policy,
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
