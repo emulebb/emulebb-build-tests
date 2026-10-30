@@ -51,11 +51,13 @@ from emule_test_harness.soak_launch import (
     MFC_ED2K_PORT,
     MFC_API_KEY,
     MFC_KAD_PORT,
+    MFC_REST_PORT,
     MFC_SERVER_UDP_PORT,
     OPERATOR_SERVER,
     RUST_ED2K_PORT,
     RUST_API_KEY,
     RUST_KAD_PORT,
+    RUST_REST_PORT,
     bring_up_mfc,
     bring_up_rust,
     log,
@@ -276,13 +278,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="split-tunnel",
         help="hide.me routing topology; full-tunnel is read-only and requires split tunneling disabled.",
     )
-    parser.add_argument("--rust-rest-port", type=int, default=4731)
+    parser.add_argument("--rust-rest-port", type=int, default=RUST_REST_PORT)
     parser.add_argument(
         "--rust-profile-dir",
         type=Path,
         help="Override rust_profile.profile_dir with an existing profile below the workspace output root.",
     )
-    parser.add_argument("--mfc-rest-port", type=int, default=4732)
+    parser.add_argument("--mfc-rest-port", type=int, default=MFC_REST_PORT)
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
