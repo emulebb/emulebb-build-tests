@@ -31,6 +31,132 @@ def test_build_ed2k_link_rejects_bad_fixture(fixture: dict) -> None:
         sa.build_ed2k_link(fixture)
 
 
+def test_run_download_adds_absent_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, object]] = []
+    fixture = {"hash": "a" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(sa, "_http_optional", lambda *_args: None)
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda _base, _key, path, method="GET", body=None: calls.append(
+            (path, method, body)
+        ),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": True, "reused": False, "resumed": False}
+    assert calls == [
+        (
+            "/api/v1/transfers",
+            "POST",
+            {"link": f"ed2k://|file|sample.bin|1234|{'a' * 32}|/"},
+        )
+    ]
+
+
+def test_run_download_reuses_active_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "b" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(
+        sa,
+        "_http_optional",
+        lambda *_args: {
+            "data": {
+                "hash": "B" * 32,
+                "sizeBytes": 1234,
+                "state": "downloading",
+                "stopped": False,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda *_args, **_kwargs: pytest.fail("active transfer must not be re-added"),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": False, "reused": True, "resumed": False}
+
+
+def test_run_download_resumes_paused_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, object]] = []
+    fixture = {"hash": "c" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(
+        sa,
+        "_http_optional",
+        lambda *_args: {
+            "data": {
+                "hash": "c" * 32,
+                "sizeBytes": 1234,
+                "state": "paused",
+                "stopped": False,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda _base, _key, path, method="GET", body=None: calls.append(
+            (path, method, body)
+        ),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": False, "reused": True, "resumed": True}
+    assert calls == [
+        (
+            f"/api/v1/transfers/{'c' * 32}/operations/resume",
+            "POST",
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("transfer", "message"),
+    [
+        (
+            {"hash": "d" * 32, "sizeBytes": 1235, "state": "downloading"},
+            "size does not match",
+        ),
+        (
+            {
+                "hash": "d" * 32,
+                "sizeBytes": 1234,
+                "state": "paused",
+                "stopped": True,
+            },
+            "is stopped",
+        ),
+        (
+            {"hash": "d" * 32, "sizeBytes": 1234, "state": "completed"},
+            "already completed",
+        ),
+        (
+            {"hash": "d" * 32, "sizeBytes": 1234, "state": "hashing"},
+            "is not runnable",
+        ),
+    ],
+)
+def test_run_download_rejects_unusable_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    transfer: dict[str, object],
+    message: str,
+) -> None:
+    fixture = {"hash": "d" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(sa, "_http_optional", lambda *_args: {"data": transfer})
+
+    with pytest.raises(RuntimeError, match=message):
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+
 def test_default_action_set_one_search_per_method_plus_downloads() -> None:
     actions = sa.default_action_set(
         ["ubuntu", "debian"],

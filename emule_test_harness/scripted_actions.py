@@ -28,6 +28,7 @@ import os
 import re
 import struct
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -264,6 +265,15 @@ def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: Any
         return json.loads(response.read())
 
 
+def _http_optional(base_url: str, api_key: str, path: str) -> Any | None:
+    try:
+        return _http(base_url, api_key, path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
 def _data(payload: Any) -> Any:
     return payload.get("data", payload) if isinstance(payload, dict) else payload
 
@@ -310,12 +320,47 @@ def run_search(
     return {"method": method, "searchId": search_id, "resultCount": result_count}
 
 
-def run_download(base_url: str, api_key: str, fixture: dict[str, Any]) -> dict[str, Any]:
-    """Add a direct transfer by ed2k link (``POST /api/v1/transfers``)."""
+def run_download(
+    base_url: str, api_key: str, fixture: dict[str, Any]
+) -> dict[str, Any]:
+    """Ensure the approved direct transfer is active in a persisted profile."""
 
-    link = str(fixture.get("link") or build_ed2k_link(fixture))
-    _http(base_url, api_key, "/api/v1/transfers", "POST", {"link": link})
-    return {"added": True}
+    link = build_ed2k_link(fixture)
+    file_hash = str(fixture["hash"]).strip().lower()
+    expected_size = int(fixture["size"])
+    existing_payload = _http_optional(
+        base_url, api_key, f"/api/v1/transfers/{file_hash}"
+    )
+    if existing_payload is None:
+        _http(base_url, api_key, "/api/v1/transfers", "POST", {"link": link})
+        return {"added": True, "reused": False, "resumed": False}
+
+    existing = _data(existing_payload)
+    if not isinstance(existing, dict):
+        raise RuntimeError("persisted transfer response is not an object")
+    if str(existing.get("hash") or "").strip().lower() != file_hash:
+        raise RuntimeError("persisted transfer hash does not match approved fixture")
+    if existing.get("sizeBytes") != expected_size:
+        raise RuntimeError("persisted transfer size does not match approved fixture")
+
+    state = str(existing.get("state") or "").strip().lower()
+    if not state:
+        raise RuntimeError("persisted transfer response has no state")
+    if bool(existing.get("stopped")):
+        raise RuntimeError("approved persisted transfer is stopped")
+    if state == "completed":
+        raise RuntimeError("approved persisted transfer is already completed")
+    if state == "paused":
+        _http(
+            base_url,
+            api_key,
+            f"/api/v1/transfers/{file_hash}/operations/resume",
+            "POST",
+        )
+        return {"added": False, "reused": True, "resumed": True}
+    if state in {"downloading", "queued"}:
+        return {"added": False, "reused": True, "resumed": False}
+    raise RuntimeError("approved persisted transfer is not runnable")
 
 
 def _rotate_left_32(value: int, shift: int) -> int:
