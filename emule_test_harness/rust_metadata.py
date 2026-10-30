@@ -301,9 +301,12 @@ def seed_indexed_file(
     size_bytes: int,
     content_type: str = "archive",
     availability_score: int = 0,
+    origin: str,
 ) -> None:
     """Seed a harvested search-index entry (mirrors ``MetadataStore::upsert_indexed_file``)."""
 
+    if origin not in {"local_share", "transfer", "passive_cache"}:
+        raise ValueError("Indexed file origin is invalid.")
     hash_blob = bytes.fromhex(ed2k_hash)
     normalized = normalize_search_text(name)
     now = _now_ms()
@@ -331,6 +334,32 @@ def seed_indexed_file(
         ).fetchone()[0]
         conn.execute(
             """
+            INSERT INTO known_file_origins(
+                known_file_id, origin, size_bytes, content_type,
+                availability_score, first_seen_ms, last_seen_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(known_file_id, origin) DO UPDATE SET
+                size_bytes = excluded.size_bytes,
+                content_type = excluded.content_type,
+                availability_score = max(
+                    known_file_origins.availability_score,
+                    excluded.availability_score
+                ),
+                last_seen_ms = excluded.last_seen_ms
+            """,
+            (
+                known_file_id,
+                origin,
+                size_bytes,
+                content_type,
+                availability_score,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
             INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_ms, last_seen_ms)
             VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT(known_file_id, normalized_name) DO UPDATE SET
@@ -339,6 +368,21 @@ def seed_indexed_file(
                 last_seen_ms = excluded.last_seen_ms
             """,
             (known_file_id, name, normalized, now, now),
+        )
+        file_name_id = conn.execute(
+            "SELECT id FROM file_names WHERE known_file_id = ? AND normalized_name = ?",
+            (known_file_id, normalized),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO file_name_origins(
+                file_name_id, origin, first_seen_ms, last_seen_ms
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(file_name_id, origin) DO UPDATE SET
+                last_seen_ms = excluded.last_seen_ms
+            """,
+            (file_name_id, origin, now, now),
         )
         conn.commit()
 

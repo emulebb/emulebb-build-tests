@@ -71,6 +71,7 @@ def write_rust_profile(
     ed2k_port: int | None = None,
     ed2k_nickname: str | None = None,
     kad_port: int | None = None,
+    kad_passive_replay_enabled: bool | None = None,
     server_endpoint: str | None = None,
     server_entry: dict[str, object] | None = None,
     obfuscation_enabled: bool = True,
@@ -147,6 +148,8 @@ def write_rust_profile(
     kad_settings: dict[str, object] = {}
     if kad_port is not None:
         kad_settings["listenPort"] = kad_port
+    if kad_passive_replay_enabled is not None:
+        kad_settings["passiveReplayEnabled"] = kad_passive_replay_enabled
     if kad_bootstrap_min_routing_contacts != 10:
         kad_settings["bootstrapMinRoutingContacts"] = kad_bootstrap_min_routing_contacts
     if kad_settings:

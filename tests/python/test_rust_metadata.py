@@ -62,6 +62,34 @@ def test_metadata_writes_close_sqlite_connection(
 
 
 @pytest.mark.unit
+def test_seed_indexed_file_persists_explicit_origin_metadata(tmp_path: Path) -> None:
+    metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.create_metadata_db(rust_repo(), metadata_db)
+
+    rust_metadata.seed_indexed_file(
+        metadata_db,
+        ed2k_hash="00112233445566778899aabbccddeeff",
+        name="Passive Cache Result.bin",
+        size_bytes=4096,
+        content_type="archive",
+        availability_score=2,
+        origin="passive_cache",
+    )
+
+    with sqlite3.connect(metadata_db) as connection:
+        file_origin = connection.execute(
+            "SELECT origin, size_bytes, content_type, availability_score "
+            "FROM known_file_origins"
+        ).fetchone()
+        name_origin = connection.execute(
+            "SELECT origin FROM file_name_origins"
+        ).fetchone()
+
+    assert file_origin == ("passive_cache", 4096, "archive", 2)
+    assert name_origin == ("passive_cache",)
+
+
+@pytest.mark.unit
 def test_share_in_place_seed_uses_native_path_and_fingerprint(tmp_path: Path) -> None:
     source = tmp_path / "Sample Résumé 😀.bin"
     source.write_bytes(b"payload")

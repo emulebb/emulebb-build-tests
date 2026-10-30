@@ -87,10 +87,12 @@ def make_inputs(module):
     return module.live_wire_inputs.parse_live_wire_inputs(
         {
             "schema": module.live_wire_inputs.SCHEMA,
+            "bandwidth": {"upload_limit_kibps": 8},
             "search_terms": {
                 "generic_open": ["linux", "ubuntu", "fedora"],
                 "documents": ["debian"],
                 "radarr_movies": ["public domain movie"],
+                "sonarr_series": ["public domain series"],
             },
             "auto_browse": {
                 "bootstrap_transfer_hashes": ["28EAB1A0AB1B9416AAF534E27A234941"],
@@ -158,10 +160,12 @@ def test_live_wire_inputs_update_writes_selected_safe_result(tmp_path: Path) -> 
         json.dumps(
             {
                 "schema": module.live_wire_inputs.SCHEMA,
+                "bandwidth": {"upload_limit_kibps": 8},
                 "search_terms": {
                     "generic_open": ["linux"],
                     "documents": ["debian"],
                     "radarr_movies": ["public domain movie"],
+                    "sonarr_series": ["public domain series"],
                 },
                 "auto_browse": {
                     "bootstrap_transfer_hashes": [module.live_wire_inputs.PLACEHOLDER_HASH],
