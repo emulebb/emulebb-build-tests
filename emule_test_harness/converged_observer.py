@@ -42,8 +42,8 @@ ACTION_RESULT_POLL_INTERVAL_SECONDS = 2.0
 ACTION_RESULT_REQUEST_TIMEOUT_SECONDS = 30.0
 ACTION_NETWORK_RECONNECT_TIMEOUT_SECONDS = 60.0
 ACTION_NETWORK_RECONNECT_POLL_INTERVAL_SECONDS = 2.0
-SUPPORTED_ACTION_METHODS = ("server", "global", "kad")
-DEFAULT_ACTION_METHODS = ("server", "kad")
+PARITY_ACTION_METHODS = ("server", "kad")
+DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD = 4
 
 
 @dataclass(frozen=True)
@@ -51,13 +51,11 @@ class ObserverActionConfig:
     """Immutable synchronized search schedule owned by the observer."""
 
     enabled: bool = False
-    source_profile: str | None = None
     terms: tuple[str, ...] = ()
-    methods: tuple[str, ...] = DEFAULT_ACTION_METHODS
+    success_target_per_method: int = DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD
     start_delay_seconds: float = DEFAULT_ACTION_START_DELAY_SECONDS
     search_interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
     search_timeout_seconds: float = DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS
-    max_cycles: int = 0
 
 
 @dataclass(frozen=True)
@@ -91,13 +89,14 @@ def action_configuration_digest(config: ObserverActionConfig) -> str:
 
     payload = {
         "enabled": config.enabled,
-        "sourceProfile": config.source_profile,
         "terms": list(config.terms),
-        "methods": list(config.methods),
+        "successTargets": {
+            method: config.success_target_per_method
+            for method in PARITY_ACTION_METHODS
+        },
         "startDelaySeconds": config.start_delay_seconds,
         "searchIntervalSeconds": config.search_interval_seconds,
         "searchTimeoutSeconds": config.search_timeout_seconds,
-        "maxCycles": config.max_cycles,
     }
     encoded = json.dumps(
         payload,
@@ -119,26 +118,17 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
         raise RuntimeError("Persisted soak observer action config is invalid.")
     required_fields = {
         "enabled",
-        "sourceProfile",
         "terms",
-        "methods",
+        "successTargets",
         "startDelaySeconds",
         "searchIntervalSeconds",
         "searchTimeoutSeconds",
-        "maxCycles",
     }
     if set(payload) != required_fields:
         raise RuntimeError("Persisted soak observer action config fields are invalid.")
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise RuntimeError("Persisted soak observer action enabled flag is invalid.")
-    source_profile = payload.get("sourceProfile")
-    if source_profile is not None and (
-        not isinstance(source_profile, str) or not source_profile.strip()
-    ):
-        raise RuntimeError("Persisted soak observer action source profile is invalid.")
-    if enabled and source_profile is None:
-        raise RuntimeError("Enabled observer action driving requires a source profile.")
     raw_terms = payload.get("terms")
     if not isinstance(raw_terms, list) or any(
         not isinstance(term, str) or not term.strip() for term in raw_terms
@@ -147,19 +137,24 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
     terms = tuple(dict.fromkeys(term.strip() for term in raw_terms))
     if enabled and not terms:
         raise RuntimeError("Enabled observer action driving requires search terms.")
-    raw_methods = payload.get("methods")
-    if not isinstance(raw_methods, list) or any(
-        not isinstance(method, str) or method not in SUPPORTED_ACTION_METHODS
-        for method in raw_methods
+    success_targets = payload.get("successTargets")
+    if (
+        not isinstance(success_targets, dict)
+        or set(success_targets) != set(PARITY_ACTION_METHODS)
     ):
-        raise RuntimeError("Persisted soak observer action methods are invalid.")
-    methods = tuple(dict.fromkeys(raw_methods))
-    if not methods:
-        raise RuntimeError("Persisted soak observer action methods are empty.")
+        raise RuntimeError("Persisted soak observer action success targets are invalid.")
+    success_target_per_method = success_targets.get("server")
+    if (
+        not isinstance(success_target_per_method, int)
+        or isinstance(success_target_per_method, bool)
+        or success_target_per_method <= 0
+    ):
+        raise RuntimeError("Persisted soak observer action success target is invalid.")
+    if success_targets.get("kad") != success_target_per_method:
+        raise RuntimeError("Persisted soak observer action success targets are invalid.")
     start_delay = payload.get("startDelaySeconds")
     interval = payload.get("searchIntervalSeconds")
     search_timeout = payload.get("searchTimeoutSeconds")
-    max_cycles = payload.get("maxCycles")
     if (
         isinstance(start_delay, bool)
         or not isinstance(start_delay, (int, float))
@@ -183,21 +178,13 @@ def parse_action_config(observer_config: dict[str, Any]) -> ObserverActionConfig
         or search_timeout <= 0
     ):
         raise RuntimeError("Persisted soak observer action search timeout is invalid.")
-    if (
-        not isinstance(max_cycles, int)
-        or isinstance(max_cycles, bool)
-        or max_cycles < 0
-    ):
-        raise RuntimeError("Persisted soak observer action max cycles is invalid.")
     return ObserverActionConfig(
         enabled=enabled,
-        source_profile=source_profile,
         terms=terms,
-        methods=methods,
+        success_target_per_method=success_target_per_method,
         start_delay_seconds=float(start_delay),
         search_interval_seconds=float(interval),
         search_timeout_seconds=float(search_timeout),
-        max_cycles=max_cycles,
     )
 
 
@@ -435,11 +422,13 @@ def load_state(runtime: ObserverRuntime) -> dict[str, Any]:
             configuration_digest=configuration_digest,
             recent_action_limit=DEFAULT_RECENT_ACTION_LIMIT,
             recent_anomaly_limit=DEFAULT_RECENT_ANOMALY_LIMIT,
+            success_target_per_method=runtime.action_config.success_target_per_method,
         )
     return converged_observer_state.validate_state(
         load_json_object(summary_path),
         campaign_id=runtime.run_paths.campaign_id,
         configuration_digest=configuration_digest,
+        success_target_per_method=runtime.action_config.success_target_per_method,
     )
 
 
@@ -479,6 +468,7 @@ def capture_checkpoint(
                 state,
                 campaign_id=runtime.run_paths.campaign_id,
                 configuration_digest=action_configuration_digest(runtime.action_config),
+                success_target_per_method=runtime.action_config.success_target_per_method,
             )["totals"]["actions"]
         },
     }
@@ -515,6 +505,7 @@ def persist_state(
         state,
         campaign_id=runtime.run_paths.campaign_id,
         configuration_digest=action_configuration_digest(runtime.action_config),
+        success_target_per_method=runtime.action_config.success_target_per_method,
     )
     soak_run_layout.persist_observer_summary(
         paths=runtime.run_paths,
@@ -574,6 +565,7 @@ def finalize_pending_action(
         state,
         campaign_id=runtime.run_paths.campaign_id,
         configuration_digest=action_configuration_digest(runtime.action_config),
+        success_target_per_method=runtime.action_config.success_target_per_method,
     )
     pending_action = validated["pendingAction"]
     if not isinstance(pending_action, dict):
@@ -833,18 +825,6 @@ def utc_datetime(now_utc: Callable[[], datetime]) -> datetime:
     return current.astimezone(UTC)
 
 
-def action_cycle_limit_reached(
-    state: dict[str, Any], config: ObserverActionConfig
-) -> bool:
-    """Returns whether no additional action cycle may be reserved."""
-
-    return bool(
-        config.max_cycles
-        and int(state["driver"]["cycles"]) >= config.max_cycles
-        and state["pendingAction"] is None
-    )
-
-
 def reconcile_action_deadline(
     runtime: ObserverRuntime,
     state: dict[str, Any],
@@ -859,13 +839,13 @@ def reconcile_action_deadline(
         state,
         campaign_id=runtime.run_paths.campaign_id,
         configuration_digest=action_configuration_digest(runtime.action_config),
+        success_target_per_method=runtime.action_config.success_target_per_method,
     )
     config = runtime.action_config
     current_deadline = validated["scheduler"]["nextActionAtUtc"]
     scheduling_enabled = bool(
         config.enabled
         and validated["pendingAction"] is None
-        and not action_cycle_limit_reached(validated, config)
     )
     if not scheduling_enabled:
         desired_deadline = None
@@ -898,7 +878,7 @@ def action_due_in_seconds(
     """Returns wall-clock seconds until the next persisted action is due."""
 
     validated = converged_observer_state.validate_state(state)
-    if not config.enabled or action_cycle_limit_reached(validated, config):
+    if not config.enabled:
         return float("inf")
     pending = validated["pendingAction"]
     if isinstance(pending, dict):
@@ -926,17 +906,33 @@ def action_due_in_seconds(
     return max((deadline - utc_datetime(now_utc)).total_seconds(), 0.0)
 
 
-def scheduled_action(config: ObserverActionConfig, schedule_slot: int) -> tuple[str, str]:
+def scheduled_action(
+    config: ObserverActionConfig,
+    schedule_slot: int,
+    *,
+    parity_gate: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     """Returns the query and method for one positive observer schedule slot."""
 
     if schedule_slot <= 0:
         raise ValueError("observer action schedule slot must be positive")
-    if not config.terms or not config.methods:
-        raise ValueError("observer action schedule must contain terms and methods")
+    if not config.terms:
+        raise ValueError("observer action schedule must contain terms")
     offset = schedule_slot - 1
-    method_count = len(config.methods)
-    query = config.terms[(offset // method_count) % len(config.terms)]
-    method = config.methods[offset % method_count]
+    methods = PARITY_ACTION_METHODS
+    if isinstance(parity_gate, dict) and parity_gate.get("status") == "pending":
+        targets = parity_gate.get("targets")
+        successful = parity_gate.get("successful")
+        if isinstance(targets, dict) and isinstance(successful, dict):
+            unmet = tuple(
+                method
+                for method in PARITY_ACTION_METHODS
+                if successful.get(method, 0) < targets.get(method, 0)
+            )
+            if unmet:
+                methods = unmet
+    query = config.terms[(offset // len(methods)) % len(config.terms)]
+    method = methods[offset % len(methods)]
     return query, method
 
 
@@ -1059,6 +1055,7 @@ def capture_action_cycle(
         state,
         campaign_id=runtime.run_paths.campaign_id,
         configuration_digest=action_configuration_digest(runtime.action_config),
+        success_target_per_method=runtime.action_config.success_target_per_method,
     )
     if not config.enabled or not config.terms:
         raise RuntimeError("Observer action driving is not enabled.")
@@ -1066,7 +1063,11 @@ def capture_action_cycle(
     resumed = validated["pendingAction"] is not None
     if not resumed:
         schedule_slot = int(validated["scheduler"]["nextScheduleSlot"])
-        query, method = scheduled_action(config, schedule_slot)
+        query, method = scheduled_action(
+            config,
+            schedule_slot,
+            parity_gate=validated["parityGate"],
+        )
         probe = readiness_probe or action_network_readiness
         try:
             readiness = probe(clients, method)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -395,6 +396,10 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
         "rust": 2,
         "mfc": 2,
     }
+    assert (
+        observer_action_report.classify_parity_gate_outcome(report)
+        == observer_action_report.GATE_SUCCESS
+    )
 
 
 def test_build_report_correlates_lifecycle_to_total_not_returned_page(
@@ -461,6 +466,40 @@ def test_incomplete_exact_tail_overrides_an_otherwise_parity_verdict(
     assert report["diagnosticEvidence"]["clients"]["rust"]["findings"] == [
         "segment-000000:incomplete-tail-ignored"
     ]
+    assert (
+        observer_action_report.classify_parity_gate_outcome(report)
+        == observer_action_report.GATE_RETRYABLE
+    )
+
+
+def test_gate_classifier_distinguishes_complete_success_and_divergence(
+    tmp_path: Path,
+) -> None:
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=_pending_action(),
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records("rust", 4101, "rust-run"),
+            mfc_records=_kad_records("mfc", 4201, "mfc-run"),
+        ),
+        server_endpoints=SERVER_ENDPOINTS,
+    )
+    assert (
+        observer_action_report.classify_parity_gate_outcome(report)
+        == observer_action_report.GATE_SUCCESS
+    )
+
+    divergent = copy.deepcopy(report)
+    divergent["verdict"] = "divergence"
+    divergent["coverageOk"] = False
+    divergent["assessment"]["verdict"] = "divergence"
+    divergent["assessment"]["coverageOk"] = False
+
+    assert (
+        observer_action_report.classify_parity_gate_outcome(divergent)
+        == observer_action_report.GATE_CONFIRMED_DIVERGENCE
+    )
 
 
 @pytest.mark.parametrize(
@@ -503,6 +542,10 @@ def test_failed_driver_outcomes_still_produce_deterministic_reports(
     assert first["assessment"]["verdict"] == expected_assessment_verdict
     assert first["driverOutcome"]["ok"] is False
     assert first["driverOutcome"]["errors"]
+    assert (
+        observer_action_report.classify_parity_gate_outcome(first)
+        == observer_action_report.GATE_RETRYABLE
+    )
 
 
 def test_failed_driver_outcome_keeps_raw_assessment_incomplete(

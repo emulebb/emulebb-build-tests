@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from contextlib import closing
+import copy
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,8 +42,9 @@ CONTROL_SCRIPT = REPO_ROOT / "scripts" / "persisted-soak-control.py"
 LAUNCH_SCRIPT = REPO_ROOT / "scripts" / "launch-soak.py"
 BOUNDED_PROCESS_SCRIPT = REPO_ROOT / "scripts" / "run-bounded-process.py"
 OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
-MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v4"
-STATUS_SCHEMA = "emulebb.persisted-soak-status.v3"
+MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v5"
+STATUS_SCHEMA = "emulebb.persisted-soak-status.v4"
+GATE_STATUS_SCHEMA = "emulebb.persisted-soak-gate-status.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
@@ -1492,39 +1495,27 @@ def build_observer_command(
 
 
 def build_observer_action_config(
-    inputs: LiveWireInputs,
+    campaign_id: str,
     *,
     enabled: bool,
-    terms: tuple[str, ...],
-    methods: tuple[str, ...],
+    success_target_per_method: int,
     start_delay_seconds: float,
     search_interval_seconds: float,
     search_timeout_seconds: float,
-    max_cycles: int,
 ) -> dict[str, Any]:
     """Builds one normalized manifest-only observer action-driving contract."""
 
-    if terms and not enabled:
-        raise ValueError("observer action terms require observer action driving.")
-    if any(not isinstance(term, str) or not term.strip() for term in terms):
-        raise ValueError("observer action terms must be non-empty strings.")
-    normalized_terms = tuple(dict.fromkeys(term.strip() for term in terms))
-    source_profile: str | None = None
-    if enabled:
-        if normalized_terms:
-            source_profile = "explicit"
-        else:
-            source_profile = "generic_open"
-            normalized_terms = inputs.generic_open_terms
+    normalized_terms = campaign_action_terms(campaign_id) if enabled else ()
     payload = {
         "enabled": enabled,
-        "sourceProfile": source_profile,
-        "terms": list(normalized_terms) if enabled else [],
-        "methods": list(methods),
+        "terms": list(normalized_terms),
+        "successTargets": {
+            method: success_target_per_method
+            for method in converged_observer.PARITY_ACTION_METHODS
+        },
         "startDelaySeconds": start_delay_seconds,
         "searchIntervalSeconds": search_interval_seconds,
         "searchTimeoutSeconds": search_timeout_seconds,
-        "maxCycles": max_cycles,
     }
     try:
         validated = converged_observer.parse_action_config(
@@ -1534,14 +1525,27 @@ def build_observer_action_config(
         raise ValueError(str(error)) from error
     return {
         "enabled": validated.enabled,
-        "sourceProfile": validated.source_profile,
         "terms": list(validated.terms),
-        "methods": list(validated.methods),
+        "successTargets": {
+            method: validated.success_target_per_method
+            for method in converged_observer.PARITY_ACTION_METHODS
+        },
         "startDelaySeconds": validated.start_delay_seconds,
         "searchIntervalSeconds": validated.search_interval_seconds,
         "searchTimeoutSeconds": validated.search_timeout_seconds,
-        "maxCycles": validated.max_cycles,
     }
+
+
+def campaign_action_terms(campaign_id: str) -> tuple[str, str]:
+    """Returns the campaign-stable neutral ASCII and NFC Unicode query pair."""
+
+    validated_campaign = soak_run_layout.validate_campaign_id(campaign_id)
+    token = hashlib.sha256(validated_campaign.encode("ascii")).hexdigest()[:12]
+    ascii_term = f"emulebb soak {token} ascii"
+    unicode_term = unicodedata.normalize("NFC", f"emulebb soak {token} café")
+    if not ascii_term.isascii() or unicode_term.isascii():
+        raise AssertionError("Campaign action terms lost their encoding distinction.")
+    return ascii_term, unicode_term
 
 
 def build_watch_command(
@@ -1684,12 +1688,10 @@ def start_session(
     observer_checkpoint_interval_seconds: float = converged_observer.DEFAULT_CHECKPOINT_INTERVAL_SECONDS,
     observer_failure_threshold: int = converged_observer.DEFAULT_FAILURE_THRESHOLD,
     observer_drive_actions: bool = False,
-    observer_action_terms: tuple[str, ...] = (),
-    observer_action_methods: tuple[str, ...] = converged_observer.DEFAULT_ACTION_METHODS,
+    observer_action_success_target_per_method: int = converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
     observer_action_start_delay_seconds: float = converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
     observer_action_search_interval_seconds: float = converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
     observer_action_search_timeout_seconds: float = converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
-    observer_action_max_cycles: int = 0,
 ) -> dict[str, Any]:
     """Starts one detached dual-client diagnostics session."""
 
@@ -1726,20 +1728,18 @@ def start_session(
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
+    campaign_id = soak_run_layout.utc_campaign_id()
     observer_action_config = build_observer_action_config(
-        inputs,
+        campaign_id,
         enabled=observer_drive_actions,
-        terms=observer_action_terms,
-        methods=observer_action_methods,
+        success_target_per_method=observer_action_success_target_per_method,
         start_delay_seconds=observer_action_start_delay_seconds,
         search_interval_seconds=observer_action_search_interval_seconds,
         search_timeout_seconds=observer_action_search_timeout_seconds,
-        max_cycles=observer_action_max_cycles,
     )
     storage_policy = required_storage_policy(inputs)
     controller_output_policy = storage_policy.stream("controller_output")
     campaigns_root = campaign_storage_root(output_root)
-    campaign_id = soak_run_layout.utc_campaign_id()
     campaign_dir = (campaigns_root / campaign_id).resolve()
     campaign_output = build_campaign_output_paths(campaign_dir)
     if campaign_dir.exists():
@@ -2297,6 +2297,62 @@ def current_observer_report_with_retry(
     raise AssertionError("observer report retry loop exhausted unexpectedly")
 
 
+def parity_gate_status(paths: ControlPaths) -> dict[str, Any]:
+    """Returns the machine-readable current parity gate without runtime-health coupling."""
+
+    manifest = load_json(paths.manifest)
+    campaign_id = manifest.get("campaignId")
+    observer_config = manifest.get("observerConfig")
+    action_config = (
+        observer_config.get("actionDriving")
+        if isinstance(observer_config, dict)
+        and isinstance(observer_config.get("actionDriving"), dict)
+        else {}
+    )
+    if action_config.get("enabled") is not True:
+        return {
+            "schema": GATE_STATUS_SCHEMA,
+            "campaignId": campaign_id,
+            "ok": False,
+            "status": "unavailable",
+            "reason": "observer-action-driving-disabled",
+            "gate": None,
+        }
+    last_run = load_json(paths.last_run_manifest)
+    try:
+        report = current_observer_report_with_retry(manifest, last_run)
+    except Exception as error:  # noqa: BLE001 - exact gate read failures are output data
+        return {
+            "schema": GATE_STATUS_SCHEMA,
+            "campaignId": campaign_id,
+            "ok": False,
+            "status": "unavailable",
+            "reason": "observer-report-invalid",
+            "error": bounded_error(
+                {"type": type(error).__name__, "message": str(error)}
+            ),
+            "gate": None,
+        }
+    if report is None:
+        return {
+            "schema": GATE_STATUS_SCHEMA,
+            "campaignId": campaign_id,
+            "ok": False,
+            "status": "pending",
+            "reason": "observer-state-unavailable",
+            "gate": None,
+        }
+    gate = report["parityGate"]
+    return {
+        "schema": GATE_STATUS_SCHEMA,
+        "campaignId": campaign_id,
+        "ok": gate["status"] == "green",
+        "status": gate["status"],
+        "reason": None,
+        "gate": copy.deepcopy(gate),
+    }
+
+
 def session_status(
     paths: ControlPaths,
     *,
@@ -2390,6 +2446,11 @@ def session_status(
         },
         "observerReport": observer_report,
         "observerReportError": observer_report_error,
+        "parityGate": (
+            copy.deepcopy(observer_report["parityGate"])
+            if isinstance(observer_report, dict)
+            else None
+        ),
         "watcher": {
             "alive": watcher is not None,
             "identity": watcher_identity,
@@ -3345,13 +3406,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=converged_observer.DEFAULT_FAILURE_THRESHOLD,
     )
     start.add_argument("--observer-drive-actions", action="store_true")
-    start.add_argument("--observer-action-term", action="append", default=[])
     start.add_argument(
-        "--observer-action-method",
-        action="append",
-        choices=converged_observer.SUPPORTED_ACTION_METHODS,
-        dest="observer_action_methods",
-        default=None,
+        "--observer-action-success-target-per-method",
+        type=int,
+        default=converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
     )
     start.add_argument(
         "--observer-action-start-delay-seconds",
@@ -3368,7 +3426,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
     )
-    start.add_argument("--observer-action-max-cycles", type=int, default=0)
+    subparsers.add_parser(
+        "gate-status",
+        help="Print the machine-readable observer parity gate and fail unless green.",
+    )
 
     status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
     status.add_argument("--no-rest", action="store_true")
@@ -3464,18 +3525,17 @@ def main(argv: list[str] | None = None) -> int:
             observer_checkpoint_interval_seconds=args.observer_checkpoint_interval_seconds,
             observer_failure_threshold=args.observer_failure_threshold,
             observer_drive_actions=args.observer_drive_actions,
-            observer_action_terms=tuple(args.observer_action_term),
-            observer_action_methods=tuple(
-                args.observer_action_methods
-                or converged_observer.DEFAULT_ACTION_METHODS
+            observer_action_success_target_per_method=(
+                args.observer_action_success_target_per_method
             ),
             observer_action_start_delay_seconds=args.observer_action_start_delay_seconds,
             observer_action_search_interval_seconds=args.observer_action_search_interval_seconds,
             observer_action_search_timeout_seconds=args.observer_action_search_timeout_seconds,
-            observer_action_max_cycles=args.observer_action_max_cycles,
         )
     elif args.command == "status":
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
+    elif args.command == "gate-status":
+        result = parity_gate_status(paths)
     elif args.command == "watch":
         launcher_fallback = None
         if args.launcher_pid is not None or args.launcher_creation_date is not None:

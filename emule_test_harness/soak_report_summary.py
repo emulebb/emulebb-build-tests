@@ -12,7 +12,7 @@ from typing import Any
 
 from . import converged_observer_state, observer_action_report, soak_action_diff
 
-SCHEMA = "emulebb-build-tests.converged-soak-report.v2"
+SCHEMA = "emulebb-build-tests.converged-soak-report.v3"
 CONSISTENCY_ATTEMPTS = 5
 CONSISTENCY_RETRY_SECONDS = 0.1
 
@@ -590,6 +590,7 @@ def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[
         "schema": SCHEMA,
         "campaignId": state["campaignId"],
         "finished": log_finished(log_path),
+        "parityGate": copy.deepcopy(state["parityGate"]),
         "observerState": state,
         "retainedWindow": {
             "actions": action_inventory,

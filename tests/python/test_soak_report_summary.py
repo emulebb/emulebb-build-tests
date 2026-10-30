@@ -53,7 +53,7 @@ def _action_report(seq: int, *, verdict: str) -> dict[str, object]:
         "packetDiff": {"opcodeCoverage": {"channels": []}},
     }
     return {
-        "schema": "emulebb-build-tests.observer-action-report.v1",
+        "schema": "emulebb-build-tests.observer-action-report.v3",
         "campaignId": CAMPAIGN_ID,
         "seq": seq,
         "actionId": action_id,
@@ -83,7 +83,7 @@ def _action_report(seq: int, *, verdict: str) -> dict[str, object]:
             },
             "errors": [],
         },
-        "diagnosticEvidence": {},
+        "diagnosticEvidence": {"status": "complete"},
         "assessment": assessment,
     }
 
@@ -218,9 +218,10 @@ def test_summarize_report_combines_exact_state_and_rotated_window(
 
     report = soak_report_summary.summarize_report(report_dir, log_path=log_path)
 
-    assert report["schema"] == "emulebb-build-tests.converged-soak-report.v2"
+    assert report["schema"] == "emulebb-build-tests.converged-soak-report.v3"
     assert report["finished"] is True
     assert report["observerState"] == state
+    assert report["parityGate"] == state["parityGate"]
     assert report["observerState"]["totals"]["actions"] == 3
     assert report["observerState"]["histograms"]["verdict"] == {
         "coverage-parity": 1,
