@@ -115,6 +115,21 @@ def test_write_rust_profile_persists_connection_cap(tmp_path: Path) -> None:
     assert setting_value(profile_dir, "core", "networkKademlia") is False
 
 
+def test_write_rust_profile_persists_kad_passive_replay_switch(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        kad_passive_replay_enabled=True,
+    )
+
+    assert setting_value(profile_dir, "kad", "passiveReplayEnabled") is True
+
+
 def test_write_rust_profile_rejects_zero_connection_cap(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         rust_client.write_rust_profile(

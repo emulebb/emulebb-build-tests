@@ -129,6 +129,7 @@ def write_profile(
     kad_listen_port: int | None = None,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
+    kad_passive_replay_enabled: bool | None = None,
 ) -> None:
     rust_client.write_rust_profile(
         profile_dir,
@@ -142,6 +143,7 @@ def write_profile(
         server_endpoint=ed2k_server_endpoint,
         kad_bootstrap_nodes=kad_bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=kad_bootstrap_min_routing_contacts,
+        kad_passive_replay_enabled=kad_passive_replay_enabled,
     )
 
 
@@ -189,6 +191,7 @@ def seed_index(repo: Path, metadata_path: Path) -> None:
         size_bytes=4096,
         content_type="archive",
         availability_score=2,
+        origin="passive_cache",
     )
 
 
@@ -366,7 +369,15 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     shared_top_file.write_bytes(b"emulebb-rust shared root fixture")
     shared_nested_file.write_bytes(b"emulebb-rust nested shared root fixture")
     port = free_lan_port(lan_host)
-    write_profile(profile_dir, lan_host, port)
+    write_profile(
+        profile_dir,
+        lan_host,
+        port,
+        ed2k_server_endpoint=f"{lan_host}:{free_lan_port(lan_host)}",
+        ed2k_listen_port=free_lan_port(lan_host),
+        kad_listen_port=free_lan_port(lan_host),
+        kad_passive_replay_enabled=True,
+    )
     seed_index(repo, rust_metadata_path(profile_dir))
 
     process = rust_client.start_rust_client(repo, profile_dir, output_path)
@@ -676,14 +687,23 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         logs_after_clear = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
         assert logs_after_clear == []
 
+        restored_settings = request_json(
+            base_url,
+            "PATCH",
+            "/api/v1/app/settings",
+            {"core": {"networkEd2k": True}},
+        )["data"]
+        assert restored_settings["core"]["networkEd2k"] is True
+
         search = request_json(
             base_url,
             "POST",
             "/api/v1/searches",
             {"query": "scenario file", "method": "automatic", "type": ""},
         )["data"]
-        # search/start returns an empty first page (status running); poll for results.
-        assert search["status"] == "running"
+        # The configured but disconnected network keeps the request queued while
+        # already-indexed passive-cache results remain available for polling.
+        assert search["status"] == "queued"
         paged_search = poll_search(base_url, search["id"], want=1)
         assert paged_search["id"] == search["id"]
         assert len(paged_search["items"]) == 1
