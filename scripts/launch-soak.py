@@ -62,11 +62,11 @@ from emule_test_harness.soak_launch import (
     bring_up_rust,
     log,
 )
-from emule_test_harness.vm_guest_profiles import api_data, retry_http_json
+from emule_test_harness.vm_guest_profiles import retry_http_bytes, retry_http_json
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
-RUST_DIAGNOSTIC_BUNDLE_SCHEMA = "emulebb.diagnostic-bundle.v5"
+RUST_DIAGNOSTIC_BUNDLE_SCHEMA = "emulebb.diagnostic-bundle.v6"
 
 
 @dataclass(frozen=True)
@@ -144,17 +144,24 @@ def capture_rust_diagnostic_bundle(
 ) -> dict[str, object]:
     """Captures one inline Rust bundle into the bounded campaign-owned stream."""
 
-    response = retry_http_json(
+    bundle_policy = storage_policy.stream("diagnostic_bundles")
+    encoded = retry_http_bytes(
         f"rust diagnostic bundle ({phase})",
         3,
         base_url,
         "/api/v1/diagnostics/bundles",
         api_key=RUST_API_KEY,
         method="POST",
-        body={"confirmCapture": True},
+        body={
+            "confirmCapture": True,
+            "maxBytes": bundle_policy.max_segment_bytes,
+        },
         timeout_seconds=30.0,
     )
-    bundle = api_data(response)
+    try:
+        bundle = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Rust diagnostic bundle response must be exact UTF-8 JSON.") from error
     if not isinstance(bundle, dict):
         raise RuntimeError("Rust diagnostic bundle response data must be an object.")
     if bundle.get("schema") != RUST_DIAGNOSTIC_BUNDLE_SCHEMA:
@@ -164,14 +171,21 @@ def capture_rust_diagnostic_bundle(
     summary = bundle.get("summary")
     if not isinstance(summary, dict):
         raise RuntimeError("Rust diagnostic bundle response is missing its summary.")
+    budget = bundle.get("budget")
+    if not isinstance(budget, dict):
+        raise RuntimeError("Rust diagnostic bundle response is missing its byte budget.")
+    if budget.get("maxBytes") != bundle_policy.max_segment_bytes:
+        raise RuntimeError("Rust diagnostic bundle response changed its requested byte budget.")
+    if budget.get("encodedBytes") != len(encoded):
+        raise RuntimeError("Rust diagnostic bundle response byte count is not authoritative.")
 
-    persisted = soak_storage.persist_bounded_json_artifact(
+    persisted = soak_storage.persist_bounded_json_bytes_artifact(
         store=campaign_artifact_store(run_paths, storage_policy),
         active_campaign=run_paths.campaign_dir,
         directory=run_paths.diagnostic_bundles_dir,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle",
-        payload=bundle,
+        encoded=encoded,
         now_ns=now_ns,
     )
     return {

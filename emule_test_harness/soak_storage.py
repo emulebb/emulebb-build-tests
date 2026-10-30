@@ -410,7 +410,46 @@ def persist_bounded_json_artifact(
     now_ns: int | None = None,
 ) -> PersistedArtifact:
     """Atomically writes one JSON artifact while enforcing stream and store bounds."""
+    encoded = (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
 
+    return persist_bounded_json_bytes_artifact(
+        store=store,
+        active_campaign=active_campaign,
+        directory=directory,
+        stream_name=stream_name,
+        stem=stem,
+        encoded=encoded,
+        now_ns=now_ns,
+    )
+
+
+def persist_bounded_json_bytes_artifact(
+    *,
+    store: BoundedArtifactStore,
+    active_campaign: Path,
+    directory: Path,
+    stream_name: str,
+    stem: str,
+    encoded: bytes,
+    now_ns: int | None = None,
+) -> PersistedArtifact:
+    """Atomically persists one already-serialized JSON artifact without rewriting it."""
+
+    if not isinstance(encoded, bytes) or not encoded:
+        raise ValueError("encoded must contain non-empty JSON bytes.")
+    try:
+        json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("encoded must contain valid UTF-8 JSON.") from error
     if not stem or any(
         not (character.isalnum() or character == "-") for character in stem
     ):
@@ -437,16 +476,6 @@ def persist_bounded_json_artifact(
         )
 
     policy = store.policy.stream(stream_name)
-    encoded = (
-        json.dumps(
-            payload,
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
     if len(encoded) > policy.max_segment_bytes:
         raise RuntimeError(
             f"{stream_name} artifact requires {len(encoded)} bytes, exceeding its "
