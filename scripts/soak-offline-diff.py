@@ -35,6 +35,7 @@ from emule_test_harness import (  # noqa: E402
     secident_audit,
     soak_action_diff,
     soak_report_summary,
+    transfer_coverage_evidence,
 )
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -45,6 +46,37 @@ CAMPAIGN_EXIT_CODES = {
     "harness-failure": 2,
     "inconclusive-external": 3,
 }
+
+
+def _merge_diagnostic_records(
+    primary: list[dict[str, Any]], supplemental: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Merge exact envelopes from one run, rejecting conflicting duplicates."""
+
+    indexed: dict[tuple[object, ...], dict[str, Any]] = {}
+    run_identities: set[tuple[object, ...]] = set()
+    for record in [*primary, *supplemental]:
+        identity = (
+            record.get("client"),
+            record.get("processId"),
+            record.get("runId"),
+        )
+        run_identities.add(identity)
+        key = (*identity, record.get("seq"))
+        existing = indexed.get(key)
+        if existing is not None and existing != record:
+            raise ValueError(f"Conflicting diagnostic envelope for identity {key!r}.")
+        indexed[key] = record
+    if len(run_identities) > 1:
+        raise ValueError(
+            f"Raw and compact diagnostic evidence identify different runs: {run_identities!r}"
+        )
+    return sorted(
+        indexed.values(),
+        key=lambda record: (record.get("seq"), record.get("streamSeq")),
+    )
+
+
 def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
     """Read sanitized metadata plus raw diagnostics from its private sibling."""
 
@@ -63,6 +95,8 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
             lower = name.lower()
             if lower.endswith("native-capture.pcapng"):
                 raise ValueError("A sanitized recording contains a private packet capture.")
+            if lower.endswith("transfer-coverage-evidence.json"):
+                raise ValueError("A sanitized recording contains private transfer coverage evidence.")
             if lower.endswith("evidence-classification.json"):
                 classification = json.loads(zf.read(name).decode("utf-8", "replace"))
                 continue
@@ -147,6 +181,30 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
                     raise ValueError(
                         f"Legacy packet side files are unsupported: {path.name}"
                     )
+    transfer_coverage_path = private_dir / "transfer-coverage-evidence.json"
+    transfer_coverage_summary = meta.get("transferCoverage")
+    transfer_coverage_enabled = (
+        isinstance(transfer_coverage_summary, dict)
+        and transfer_coverage_summary.get("enabled") is True
+    )
+    if transfer_coverage_enabled:
+        if transfer_coverage_summary.get("privateArtifact") != transfer_coverage_path.name:
+            raise ValueError("Transfer coverage private-artifact authority is invalid.")
+        if not transfer_coverage_path.is_file():
+            raise ValueError("Transfer coverage evidence is required but missing.")
+        transfer_coverage = transfer_coverage_evidence.load_evidence(
+            transfer_coverage_path
+        )
+        if transfer_coverage.get("client") != client:
+            raise ValueError("Transfer coverage evidence client identity is invalid.")
+        diag = _merge_diagnostic_records(
+            diag,
+            transfer_coverage_evidence.evidence_records(transfer_coverage),
+        )
+        packets = diag_event_diff.ed2k_tcp_packet_views(diag)
+        meta["_privateTransferCoverageEvidence"] = transfer_coverage
+    elif transfer_coverage_path.exists():
+        raise ValueError("Transfer coverage evidence has no recording authority.")
     private_completion_path = private_dir / "completion-private.json"
     if private_completion_path.is_file():
         private_completion = json.loads(

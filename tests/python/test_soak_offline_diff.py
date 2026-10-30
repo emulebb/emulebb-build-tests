@@ -11,6 +11,7 @@ from types import ModuleType
 
 import pytest
 
+from emule_test_harness import diag_event_runs, transfer_coverage_evidence
 from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
 
@@ -167,12 +168,17 @@ def _sides(rust_pkt: list, mfc_pkt: list, rust_diag: list | None = None, mfc_dia
     return rust, mfc
 
 
-def _write_recording_shell(tmp_path: Path, stem: str) -> tuple[Path, Path]:
+def _write_recording_shell(
+    tmp_path: Path,
+    stem: str,
+    *,
+    results: dict[str, object] | None = None,
+) -> tuple[Path, Path]:
     recording = tmp_path / f"{stem}.zip"
     private_dir = tmp_path / f"{stem}-private-artifacts"
     (private_dir / "dumps").mkdir(parents=True)
     with zipfile.ZipFile(recording, "w") as archive:
-        archive.writestr(f"{stem}/results.json", "{}")
+        archive.writestr(f"{stem}/results.json", json.dumps(results or {}))
         archive.writestr(f"{stem}/markers.jsonl", "")
         archive.writestr(
             f"{stem}/evidence-classification.json",
@@ -184,6 +190,77 @@ def _write_recording_shell(tmp_path: Path, stem: str) -> tuple[Path, Path]:
             ),
         )
     return recording, private_dir
+
+
+def _write_transfer_coverage(
+    private_dir: Path,
+    *,
+    client: str = "rust",
+) -> list[dict[str, object]]:
+    records = [
+        {
+            **_segmented_diag(client, 42, "active", 0, 1, 1),
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {"sendAttemptId": 7},
+            "body": {
+                "direction": "send",
+                "role": "reask_request",
+                "sendAttemptId": 7,
+                "outcome": "attempted",
+            },
+        },
+        {
+            **_segmented_diag(client, 42, "active", 0, 2, 2),
+            "family": "ed2k_client_udp",
+            "event": "send_outcome",
+            "keys": {"sendAttemptId": 7},
+            "body": {
+                "direction": "send",
+                "role": "reask_request",
+                "sendAttemptId": 7,
+                "outcome": "send_succeeded",
+                "deliveryKnown": True,
+            },
+        },
+    ]
+    prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
+    source = private_dir / f"{prefix}-diag-42-active-000000.jsonl"
+    source.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    snapshot = diag_event_runs.load_diag_event_segment_snapshot(source)
+    evidence = transfer_coverage_evidence.new_evidence(
+        client=client,
+        process_id=42,
+        run_id="active",
+        fixture_hashes=("a" * 32,),
+        observed_utc=_ts(0),
+    )
+    evidence = transfer_coverage_evidence.advance_evidence(
+        evidence,
+        (
+            {
+                "segmentId": 0,
+                "fileName": source.name,
+                "source": str(source.resolve()),
+                "bytes": snapshot.byte_count,
+                "modifiedNs": snapshot.modified_ns,
+                "sha256": snapshot.sha256,
+                "recordCount": len(snapshot.records),
+                "interestingReasons": [],
+            },
+        ),
+        observed_utc=_ts(3),
+    )
+    transfer_coverage_evidence.write_evidence(
+        private_dir / "transfer-coverage-evidence.json",
+        evidence,
+        max_bytes=64 * 1024,
+    )
+    source.unlink()
+    return records
 
 
 def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
@@ -226,6 +303,58 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     assert loaded["diag"][0]["ts"] == _ts(1)
     assert loaded["diag"][1]["ts"] == _ts(2)
     assert len(loaded["packets"]) == 1
+
+
+def test_load_recording_merges_exact_compact_transfer_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(
+        tmp_path,
+        "rust-recording",
+        results={
+            "transferCoverage": {
+                "enabled": True,
+                "privateArtifact": "transfer-coverage-evidence.json",
+            }
+        },
+    )
+    expected = _write_transfer_coverage(private_dir)
+
+    loaded = mod._load_recording(recording, client="rust")
+
+    assert loaded["diag"] == expected
+    assert loaded["meta"]["_privateTransferCoverageEvidence"]["complete"] is True
+
+
+def test_load_recording_requires_declared_transfer_coverage_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording, _private_dir = _write_recording_shell(
+        tmp_path,
+        "rust-recording",
+        results={
+            "transferCoverage": {
+                "enabled": True,
+                "privateArtifact": "transfer-coverage-evidence.json",
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="required but missing"):
+        mod._load_recording(recording, client="rust")
+
+
+def test_load_recording_rejects_undeclared_transfer_coverage_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "rust-recording")
+    _write_transfer_coverage(private_dir)
+
+    with pytest.raises(ValueError, match="no recording authority"):
+        mod._load_recording(recording, client="rust")
 
 
 def test_load_recording_rejects_legacy_packet_side_file(tmp_path: Path) -> None:
