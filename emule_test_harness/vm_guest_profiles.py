@@ -78,6 +78,28 @@ def http_json(
 ) -> Any:
     """Calls one eMuleBB REST endpoint and decodes the JSON response."""
 
+    raw = http_bytes(
+        base_url,
+        path,
+        api_key=api_key,
+        method=method,
+        body=body,
+        timeout_seconds=timeout_seconds,
+    )
+    return json.loads(raw.decode("utf-8-sig")) if raw else {}
+
+
+def http_bytes(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    timeout_seconds: float = 30.0,
+) -> bytes:
+    """Calls one eMuleBB REST endpoint and returns its exact response bytes."""
+
     data = None
     headers = {"X-API-Key": api_key}
     if body is not None:
@@ -85,8 +107,7 @@ def http_json(
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(base_url + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-        raw = response.read()
-    return json.loads(raw.decode("utf-8-sig")) if raw else {}
+        return response.read()
 
 
 def retry_http_json(
@@ -101,6 +122,29 @@ def retry_http_json(
 
     last_error: str | None = None
     request = request_func or http_json
+    for attempt in range(attempts):
+        try:
+            return request(base_url, path, **kwargs)
+        except (OSError, TimeoutError, urllib.error.URLError, RuntimeError) as exc:
+            last_error = str(exc)
+            if attempt + 1 < attempts:
+                time.sleep(min(1.0 + attempt, 5.0))
+    suffix = f": {last_error}" if last_error else ""
+    raise RuntimeError(f"{description} failed after {attempts} attempts{suffix}")
+
+
+def retry_http_bytes(
+    description: str,
+    attempts: int,
+    base_url: str,
+    path: str,
+    request_func=None,
+    **kwargs: Any,
+) -> bytes:
+    """Calls a byte-exact REST endpoint with bounded retry backoff."""
+
+    last_error: str | None = None
+    request = request_func or http_bytes
     for attempt in range(attempts):
         try:
             return request(base_url, path, **kwargs)

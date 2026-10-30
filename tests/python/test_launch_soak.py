@@ -26,6 +26,20 @@ def load_launch_soak_module():
     return module
 
 
+def encode_exact_bundle(bundle: dict[str, object]) -> bytes:
+    while True:
+        encoded = json.dumps(
+            bundle,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        budget = bundle["budget"]
+        assert isinstance(budget, dict)
+        if budget.get("encodedBytes") == len(encoded):
+            return encoded
+        budget["encodedBytes"] = len(encoded)
+
+
 def inputs_with_profiles(profile_dir: Path | None, rust_profile_dir: Path | None = None) -> LiveWireInputs:
     return LiveWireInputs(
         path=REPO_ROOT / "live-wire-inputs.local.json",
@@ -394,7 +408,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         streams={
             "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
             "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
-            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(65_536, 2),
             "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(4_096, 1),
             "diagnostic_pins": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_segments": soak_storage.ArtifactStreamPolicy(4_096, 2),
@@ -409,7 +423,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         },
     )
     bundle = {
-        "schema": "emulebb.diagnostic-bundle.v5",
+        "schema": "emulebb.diagnostic-bundle.v6",
         "capturedAt": "2026-10-25T12:00:00Z",
         "summary": {
             "artifactFileCount": 1,
@@ -417,7 +431,14 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
             "issueCount": 0,
         },
         "settingsProvenance": {"sensitiveValues": "exact"},
+        "budget": {
+            "maxBytes": 65_536,
+            "encodedBytes": 0,
+            "truncated": False,
+            "truncatedSections": [],
+        },
     }
+    encoded_bundle = encode_exact_bundle(bundle)
     old_campaign_artifact = (
         run_paths.campaigns_root
         / "20261024T120000Z"
@@ -439,9 +460,9 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
 
     def fake_retry(*args, **kwargs):
         requests.append((args, kwargs))
-        return {"data": bundle}
+        return encoded_bundle
 
-    monkeypatch.setattr(module, "retry_http_json", fake_retry)
+    monkeypatch.setattr(module, "retry_http_bytes", fake_retry)
 
     evidence = module.capture_rust_diagnostic_bundle(
         base_url="http://127.0.0.1:4711",
@@ -462,23 +483,24 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
             {
                 "api_key": module.RUST_API_KEY,
                 "method": "POST",
-                "body": {"confirmCapture": True},
+                "body": {"confirmCapture": True, "maxBytes": 65_536},
                 "timeout_seconds": 30.0,
             },
         )
     ]
     artifact = Path(str(evidence["path"]))
     assert artifact.parent == run_paths.diagnostic_bundles_dir.resolve()
+    assert artifact.read_bytes() == encoded_bundle
     assert json.loads(artifact.read_text(encoding="utf-8")) == bundle
     assert evidence["phase"] == "ready"
-    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v5"
+    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v6"
     assert evidence["bundleSummary"] == bundle["summary"]
     assert evidence["retainedCount"] == 1
     assert not old_campaign_artifact.exists()
     assert all(path.read_bytes() == b"a" * 512 for path in adjacent_artifacts)
 
 
-def test_capture_rust_diagnostic_bundle_rejects_non_v5_response(
+def test_capture_rust_diagnostic_bundle_rejects_non_v6_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -503,7 +525,7 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v5_response(
         streams={
             "controller_output": soak_storage.ArtifactStreamPolicy(32, 2),
             "daemon_output": soak_storage.ArtifactStreamPolicy(64, 2),
-            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(4_096, 2),
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(65_536, 2),
             "diagnostic_indexes": soak_storage.ArtifactStreamPolicy(4_096, 1),
             "diagnostic_pins": soak_storage.ArtifactStreamPolicy(4_096, 2),
             "diagnostic_segments": soak_storage.ArtifactStreamPolicy(4_096, 2),
@@ -519,11 +541,13 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v5_response(
     )
     monkeypatch.setattr(
         module,
-        "retry_http_json",
-        lambda *_args, **_kwargs: {"data": {"schema": "emulebb.diagnostic-bundle.v3"}},
+        "retry_http_bytes",
+        lambda *_args, **_kwargs: json.dumps(
+            {"schema": "emulebb.diagnostic-bundle.v3"}, separators=(",", ":")
+        ).encode("utf-8"),
     )
 
-    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v5"):
+    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v6"):
         module.capture_rust_diagnostic_bundle(
             base_url="http://127.0.0.1:4711",
             run_paths=run_paths,

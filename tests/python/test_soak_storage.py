@@ -787,7 +787,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 1},
+        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 1},
         now_ns=1,
     )
     second = soak_storage.persist_bounded_json_artifact(
@@ -796,7 +796,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 2},
+        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 2},
         now_ns=2,
     )
     third = soak_storage.persist_bounded_json_artifact(
@@ -805,7 +805,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v5", "seq": 3},
+        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 3},
         now_ns=3,
     )
 
@@ -849,6 +849,37 @@ def test_persist_bounded_json_artifact_rejects_oversized_payload_before_write(
     assert not directory.exists()
 
 
+def test_persist_bounded_json_bytes_artifact_preserves_exact_server_bytes(
+    tmp_path: Path,
+) -> None:
+    soak_root = tmp_path / "soak"
+    campaign = soak_root / "campaigns" / "20261025T120000Z"
+    directory = campaign / "report" / "diagnostic-bundles"
+    store = soak_storage.BoundedArtifactStore(
+        soak_root,
+        direct_policy(
+            max_total_bytes=10_000,
+            minimum_free_bytes=1,
+            bundle_max_bytes=1_024,
+        ),
+    )
+    encoded = b'{"schema":"emulebb.diagnostic-bundle.v6","exact":true}'
+
+    result = soak_storage.persist_bounded_json_bytes_artifact(
+        store=store,
+        active_campaign=campaign,
+        directory=directory,
+        stream_name="diagnostic_bundles",
+        stem="rust-diagnostic-bundle-ready",
+        encoded=encoded,
+        now_ns=1,
+    )
+
+    assert result.path.read_bytes() == encoded
+    assert result.byte_count == len(encoded)
+    assert result.sha256 == hashlib.sha256(encoded).hexdigest()
+
+
 def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
     tmp_path: Path,
 ) -> None:
@@ -872,7 +903,7 @@ def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
             directory=directory,
             stream_name="diagnostic_bundles",
             stem="rust-diagnostic-bundle-ready",
-            payload={"schema": "emulebb.diagnostic-bundle.v5"},
+            payload={"schema": "emulebb.diagnostic-bundle.v6"},
             now_ns=1,
         )
 
