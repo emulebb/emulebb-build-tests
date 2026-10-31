@@ -92,6 +92,60 @@ TEST_CASE("UDP reask diagnostics classify callback buddy requirements")
 	CHECK(UdpReaskDiagnosticsSeams::EvaluateEligibility(eligibility) == EUdpReaskDecision::CallbackEligible);
 }
 
+TEST_CASE("UDP reask schedule diagnostics preserve the exact call-site boundaries")
+{
+	using UdpReaskDiagnosticsSeams::EUdpReaskScheduleDecision;
+	UdpReaskDiagnosticsSeams::SUdpReaskScheduleEligibility eligibility = {};
+	eligibility.bAppConnected = true;
+	eligibility.ullNowTick = UdpReaskDiagnosticsSeams::kReaskScheduleConnectCooldownMs;
+
+	eligibility.ullTimeUntilReaskMs = UdpReaskDiagnosticsSeams::kReaskScheduleWindowOpenMs;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::ReaskWindowNotOpen);
+
+	eligibility.ullTimeUntilReaskMs = UdpReaskDiagnosticsSeams::kReaskScheduleWindowOpenMs - 1u;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::Eligible);
+
+	eligibility.ullTimeUntilReaskMs = UdpReaskDiagnosticsSeams::kReaskScheduleWindowCloseMs;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::ReaskWindowClosed);
+
+	eligibility.ullTimeUntilReaskMs = UdpReaskDiagnosticsSeams::kReaskScheduleWindowCloseMs + 1u;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::Eligible);
+}
+
+TEST_CASE("UDP reask schedule diagnostics expose connectivity and cooldown blockers")
+{
+	using UdpReaskDiagnosticsSeams::EUdpReaskScheduleDecision;
+	UdpReaskDiagnosticsSeams::SUdpReaskScheduleEligibility eligibility = {};
+	eligibility.ullTimeUntilReaskMs = UdpReaskDiagnosticsSeams::kReaskScheduleWindowCloseMs + 1u;
+	eligibility.ullNowTick = UdpReaskDiagnosticsSeams::kReaskScheduleConnectCooldownMs;
+
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::AppDisconnected);
+
+	eligibility.bAppConnected = true;
+	eligibility.ullLastTriedTick = 1u;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::ConnectCooldown);
+	CHECK(UdpReaskDiagnosticsSeams::ConnectCooldownRemainingMs(eligibility) == 1u);
+
+	eligibility.ullLastTriedTick = 0u;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::Eligible);
+	CHECK(UdpReaskDiagnosticsSeams::IsScheduleEligible(EUdpReaskScheduleDecision::Eligible));
+	CHECK_FALSE(UdpReaskDiagnosticsSeams::IsScheduleEligible(EUdpReaskScheduleDecision::ConnectCooldown));
+
+	eligibility.ullNowTick = 10u;
+	eligibility.ullLastTriedTick = 11u;
+	CHECK(UdpReaskDiagnosticsSeams::EvaluateScheduleEligibility(eligibility)
+		== EUdpReaskScheduleDecision::ConnectCooldown);
+	CHECK(UdpReaskDiagnosticsSeams::ConnectCooldownRemainingMs(eligibility)
+		== UdpReaskDiagnosticsSeams::kReaskScheduleConnectCooldownMs);
+}
+
 TEST_CASE("UDP reask diagnostics distinguish transport eligibility from sends")
 {
 	using UdpReaskDiagnosticsSeams::EUdpReaskDecision;
