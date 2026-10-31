@@ -49,16 +49,21 @@ CAMPAIGN_EXIT_CODES = {
 }
 
 UDP_REASK_DECISION_EVENT = "udp_reask_decision"
+UDP_REASK_SCHEDULE_DECISION_EVENT = "udp_reask_schedule_decision"
 
 
-def _udp_reask_decision_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _udp_reask_decision_summary(
+    records: list[dict[str, Any]],
+    *,
+    event: str = UDP_REASK_DECISION_EVENT,
+) -> dict[str, Any]:
     """Summarize exact current-schema UDP reask decisions without dropping examples."""
 
     decisions = [
         record
         for record in records
         if record.get("family") == "sched"
-        and record.get("event") == UDP_REASK_DECISION_EVENT
+        and record.get("event") == event
     ]
     reasons: collections.Counter[str] = collections.Counter()
     outcomes: collections.Counter[str] = collections.Counter()
@@ -84,14 +89,16 @@ def _udp_reask_decision_summary(records: list[dict[str, Any]]) -> dict[str, Any]
             outcomes[outcome] += 1
         else:
             invalid_records += 1
-        if isinstance(path, str) and path:
-            paths[path] += 1
-        else:
-            invalid_records += 1
-        if isinstance(transport_eligible, bool):
-            transport_eligibility[str(transport_eligible).lower()] += 1
-        else:
-            invalid_records += 1
+        if path is not None:
+            if isinstance(path, str) and path:
+                paths[path] += 1
+            else:
+                invalid_records += 1
+        if transport_eligible is not None:
+            if isinstance(transport_eligible, bool):
+                transport_eligibility[str(transport_eligible).lower()] += 1
+            else:
+                invalid_records += 1
         reasons[reason] += 1
         peer_file_keys.add(
             (
@@ -996,6 +1003,14 @@ def main(argv: list[str] | None = None) -> int:
         "rust": _udp_reask_decision_summary(rust["diag"]),
         "mfc": _udp_reask_decision_summary(mfc["diag"]),
     }
+    udp_reask_schedule_decisions = {
+        "rust": _udp_reask_decision_summary(
+            rust["diag"], event=UDP_REASK_SCHEDULE_DECISION_EVENT
+        ),
+        "mfc": _udp_reask_decision_summary(
+            mfc["diag"], event=UDP_REASK_SCHEDULE_DECISION_EVENT
+        ),
+    }
     kad_cov = packet_trace_diff.kad_opcode_coverage(
         packet_trace_diff.kad_records(rust["diag"]),
         packet_trace_diff.kad_records(mfc["diag"]),
@@ -1023,6 +1038,12 @@ def main(argv: list[str] | None = None) -> int:
     for name, summary in udp_reask_decisions.items():
         print(
             f"  udp reask decisions[{name}]: events={summary['eventCount']} "
+            f"peerFiles={summary['peerFileKeyCount']} "
+            f"outcomes={summary['outcomes']} reasons={summary['reasons']}"
+        )
+    for name, summary in udp_reask_schedule_decisions.items():
+        print(
+            f"  udp reask schedule decisions[{name}]: events={summary['eventCount']} "
             f"peerFiles={summary['peerFileKeyCount']} "
             f"outcomes={summary['outcomes']} reasons={summary['reasons']}"
         )
@@ -1114,6 +1135,7 @@ def main(argv: list[str] | None = None) -> int:
             full_diag_gate
         ),
         "udpReaskDecisions": udp_reask_decisions,
+        "udpReaskScheduleDecisions": udp_reask_schedule_decisions,
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,

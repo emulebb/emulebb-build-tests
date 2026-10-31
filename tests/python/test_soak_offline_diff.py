@@ -233,6 +233,25 @@ def test_udp_reask_decision_summary_retains_reason_counts_and_exact_examples() -
         "remoteUdpPort"
     ] == 4672
 
+    schedule_summary = mod._udp_reask_decision_summary(
+        [
+            _diag(
+                "sched",
+                "udp_reask_schedule_decision",
+                5.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "connect_cooldown",
+                    "path": "direct",
+                    "transportEligible": False,
+                },
+            )
+        ],
+        event=mod.UDP_REASK_SCHEDULE_DECISION_EVENT,
+    )
+    assert schedule_summary["reasons"] == {"connect_cooldown": 1}
+    assert schedule_summary["invalidRecordCount"] == 0
+
 
 def _window(at: float = 0.0) -> dict:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=at)
