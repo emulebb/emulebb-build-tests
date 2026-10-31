@@ -175,6 +175,118 @@ def test_focused_capture_writer_policy_requires_storage_contract(
         module.focused_capture_writer_policy(inputs)
 
 
+def test_focused_mfc_segment_bytes_caps_fixed_ring_to_focused_budget(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+
+    segment_bytes = module.focused_mfc_segment_bytes(inputs)
+
+    assert segment_bytes == 2 * 1024 * 1024
+    assert (
+        segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS
+        == 256 * 1024 * 1024
+    )
+
+
+def test_focused_mfc_segment_bytes_rejects_budget_below_writer_minimum(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+    monkeypatch.setattr(
+        module,
+        "focused_capture_writer_policy",
+        lambda _inputs: soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=4 * 1024 * 1024,
+            max_segment_seconds=60,
+            retained_segments=16,
+            max_total_bytes=64 * 1024 * 1024,
+            max_retained_seconds=960,
+            minimum_free_bytes=0,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="minimum diagnostic segment size"):
+        module.focused_mfc_segment_bytes(inputs)
+
+
+def test_require_focused_mfc_writer_ready_matches_fixed_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    segment_bytes = 2 * 1024 * 1024
+    health = current_diagnostic_writer_health(
+        client="mfc",
+        process_id=42,
+        active_file_name="emulebb-mfc-diag-42-run-a-000000.jsonl",
+    )
+    health.update(
+        {
+            "maxSegmentBytes": segment_bytes,
+            "maxSegmentSeconds": module.MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS,
+            "retainedSegments": module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+            "maxTotalBytes": segment_bytes
+            * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+            "maxRetainedSeconds": module.MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS,
+            "minimumFreeBytes": 0,
+        }
+    )
+    requested_base_urls: list[str] = []
+
+    def writer_health(base_url: str, _api_key: str) -> dict[str, object]:
+        requested_base_urls.append(base_url)
+        return health
+
+    monkeypatch.setattr(module.converged_observer, "diagnostic_writer_health", writer_health)
+
+    observed = module.require_focused_mfc_writer_ready(
+        "http://127.0.0.1:4732",
+        "test",
+        42,
+        segment_bytes,
+    )
+
+    assert observed == health
+    assert requested_base_urls == ["http://127.0.0.1:4732/api/v1"]
+
+
+def test_require_focused_mfc_writer_ready_rejects_unbounded_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(
+        client="mfc",
+        process_id=42,
+        active_file_name="emulebb-mfc-diag-42-run-a-000000.jsonl",
+    )
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+
+    with pytest.raises(RuntimeError, match="maxSegmentBytes"):
+        module.require_focused_mfc_writer_ready(
+            "http://127.0.0.1:4732",
+            "test",
+            42,
+            2 * 1024 * 1024,
+        )
+
+
 def _coverage_record(
     sequence: int,
     *,

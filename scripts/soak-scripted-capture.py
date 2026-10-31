@@ -99,6 +99,10 @@ from emule_test_harness.soak_launch import (  # noqa: E402
 )
 
 MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS = 15
+MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES = 1 * 1024 * 1024
+MFC_DIAGNOSTIC_RETAINED_SEGMENTS = 128
+MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS = 60 * 60
+MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS = 7 * 24 * 60 * 60
 
 
 def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
@@ -158,6 +162,74 @@ def focused_capture_writer_policy(
         ),
         minimum_free_bytes=source.minimum_free_bytes,
     )
+
+
+def focused_mfc_segment_bytes(inputs: LiveWireInputs) -> int:
+    """Fits MFC's fixed 128-segment ring inside the focused capture budget."""
+
+    focused_policy = focused_capture_writer_policy(inputs)
+    segment_bytes, remainder = divmod(
+        focused_policy.max_total_bytes,
+        MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+    )
+    if remainder:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot divide the diagnostic budget "
+            "across MFC's fixed retained segment count."
+        )
+    if segment_bytes < MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot satisfy MFC's minimum "
+            "diagnostic segment size."
+        )
+    if segment_bytes > focused_policy.max_segment_bytes:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot keep MFC segments within "
+            "the incremental scan bound."
+        )
+    return segment_bytes
+
+
+def require_focused_mfc_writer_ready(
+    base_url: str,
+    api_key: str,
+    process_id: int,
+    segment_bytes: int,
+) -> dict[str, object]:
+    """Requires the live MFC writer to match the bounded focused-capture ring."""
+
+    health = converged_observer.diagnostic_writer_health(
+        f"{base_url.rstrip('/')}/api/v1",
+        api_key,
+    )
+    expected = {
+        "processId": process_id,
+        "maxSegmentBytes": segment_bytes,
+        "maxSegmentSeconds": MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS,
+        "retainedSegments": MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+        "maxTotalBytes": segment_bytes * MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+        "maxRetainedSeconds": MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS,
+        "minimumFreeBytes": 0,
+    }
+    mismatches = [
+        f"{name}={health.get(name)!r} expected {value!r}"
+        for name, value in expected.items()
+        if health.get(name) != value
+    ]
+    active_file_name = health.get("activeFileName")
+    expected_prefix = f"emulebb-mfc-diag-{process_id}-"
+    if not isinstance(active_file_name, str) or not active_file_name.startswith(
+        expected_prefix
+    ):
+        mismatches.append(
+            f"activeFileName={active_file_name!r} expected prefix {expected_prefix!r}"
+        )
+    if mismatches:
+        raise RuntimeError(
+            "MFC diagnostic writer health does not satisfy the focused capture policy: "
+            + "; ".join(mismatches)
+        )
+    return health
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1533,7 +1605,14 @@ def main(argv: list[str] | None = None) -> int:
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
     rust_diagnostic_writer_policy = (
-        focused_capture_writer_policy(inputs) if native_config is None else None
+        focused_capture_writer_policy(inputs)
+        if native_config is None and client == "rust"
+        else None
+    )
+    mfc_diagnostic_segment_bytes = (
+        focused_mfc_segment_bytes(inputs)
+        if native_config is None and client == "mfc"
+        else None
     )
     native_fixtures: list[dict[str, object]] = []
     expected_shared_identities: frozenset[tuple[str, int]] = frozenset()
@@ -1728,6 +1807,11 @@ def main(argv: list[str] | None = None) -> int:
                 vpn_guard_mode="off" if native_config is not None else "block",
                 upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
                 allow_loopback_rest=native_config is None,
+                log_trim_bytes=(
+                    mfc_diagnostic_segment_bytes
+                    if mfc_diagnostic_segment_bytes is not None
+                    else soak_launch.DEFAULT_LOG_TRIM_BYTES
+                ),
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
@@ -1735,6 +1819,13 @@ def main(argv: list[str] | None = None) -> int:
         if len(client_process_ids) != 1:
             raise RuntimeError("Could not resolve the launched client process identity.")
         base_url = handles["baseUrl"]
+        if client == "mfc" and mfc_diagnostic_segment_bytes is not None:
+            handles["diagnosticWriterHealth"] = require_focused_mfc_writer_ready(
+                base_url,
+                api_key,
+                next(iter(client_process_ids)),
+                mfc_diagnostic_segment_bytes,
+            )
         if native_config is not None:
             incoming_dir = handles.get("incomingDir")
             if incoming_dir is None:
