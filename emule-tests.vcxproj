@@ -196,6 +196,7 @@
     <ClCompile Include="src\win32_callback_timer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\Win32CallbackTimerSeams.h')" />
     <ClCompile Include="src\download_progress_bar.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadProgressBarSeams.h')" />
     <ClCompile Include="src\diag_event_writer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DiagEventWriterSeams.h')" />
+    <ClCompile Include="src\udp_reask_diagnostics.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UdpReaskDiagnosticsSeams.h')" />
     <ClCompile Include="src\i18n.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\I18nSeams.h')" />
     <ClCompile Include="src\ini2.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\Ini2Helpers.h')" />
     <ClCompile Include="src\ip_filter.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\IPFilterSeams.h')" />
