@@ -323,6 +323,52 @@ def test_transfer_coverage_operator_stop_is_finalized_after_shutdown(
     assert finalized["complete"] is True
 
 
+def test_transfer_coverage_route_loss_stops_with_retained_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(segment_id=0)
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+    route_checks = iter((None, RuntimeError("private provider detail")))
+
+    def route_guard() -> None:
+        outcome = next(route_checks)
+        if isinstance(outcome, Exception):
+            raise outcome
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=0,
+        poll_seconds=1.0,
+        route_guard=route_guard,
+        sleep=lambda _seconds: None,
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+
+    assert summary["complete"] is False
+    assert summary["routeLost"] is True
+    assert summary["timedOut"] is False
+    assert summary["stoppedByOperator"] is False
+    assert checkpoint["source"]["lastClosedSegmentId"] is None
+    assert evidence["complete"] is False
+    assert evidence_path.is_file()
+    assert "private provider detail" not in json.dumps(summary)
+
+
 @pytest.mark.parametrize("client", ("rust", "mfc"))
 def test_persisted_profile_dir_uses_live_wire_authority(
     tmp_path: Path,

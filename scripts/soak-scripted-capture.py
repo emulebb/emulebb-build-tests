@@ -309,6 +309,7 @@ def _transfer_coverage_summary(
     *,
     timed_out: bool,
     stopped_by_operator: bool,
+    route_lost: bool,
     finalized: bool,
     elapsed_seconds: float,
 ) -> dict[str, object]:
@@ -322,6 +323,7 @@ def _transfer_coverage_summary(
         "protocolChainComplete": bool(evidence["protocolChainComplete"]),
         "timedOut": timed_out,
         "stoppedByOperator": stopped_by_operator,
+        "routeLost": route_lost,
         "finalized": finalized,
         "elapsedSeconds": round(elapsed_seconds, 3),
         "closedSegmentsScanned": source["closedSegmentsScanned"],
@@ -343,6 +345,7 @@ def observe_transfer_coverage(
     max_bytes: int,
     timeout_seconds: float,
     poll_seconds: float,
+    route_guard: Callable[[], object] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     now_utc: Callable[[], str] = _utc_now,
@@ -365,8 +368,15 @@ def observe_transfer_coverage(
     )
     timed_out = False
     stopped_by_operator = False
+    route_lost = False
     try:
         while True:
+            if route_guard is not None:
+                try:
+                    route_guard()
+                except Exception:  # noqa: BLE001 - route loss is retained as bounded evidence
+                    route_lost = True
+                    break
             observed_utc = now_utc()
             health = converged_observer.diagnostic_writer_health(
                 diagnostic_base_url, api_key
@@ -390,6 +400,11 @@ def observe_transfer_coverage(
                 max_bytes=max_bytes,
             )
             if evidence["complete"]:
+                if route_guard is not None:
+                    try:
+                        route_guard()
+                    except Exception:  # noqa: BLE001 - reject proof after route loss
+                        route_lost = True
                 break
             now = monotonic()
             if deadline is not None and now >= deadline:
@@ -403,6 +418,7 @@ def observe_transfer_coverage(
         evidence,
         timed_out=timed_out,
         stopped_by_operator=stopped_by_operator,
+        route_lost=route_lost,
         finalized=False,
         elapsed_seconds=elapsed,
     )
@@ -444,6 +460,7 @@ def finalize_transfer_coverage(
             finalized,
             timed_out=bool(summary["timedOut"]),
             stopped_by_operator=bool(summary["stoppedByOperator"]),
+            route_lost=bool(summary["routeLost"]),
             finalized=True,
             elapsed_seconds=float(summary["elapsedSeconds"]),
         )
@@ -1832,12 +1849,18 @@ def main(argv: list[str] | None = None) -> int:
                 max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
                 timeout_seconds=args.transfer_coverage_timeout_seconds,
                 poll_seconds=args.transfer_coverage_poll_seconds,
+                route_guard=(
+                    hideme_vpn.require_full_tunnel_ready
+                    if native_config is None
+                    else None
+                ),
             )
             log(
                 "transfer coverage wait done: "
                 f"complete={transfer_coverage_summary['complete']} "
                 f"operatorStop={transfer_coverage_summary['stoppedByOperator']} "
-                f"timeout={transfer_coverage_summary['timedOut']}"
+                f"timeout={transfer_coverage_summary['timedOut']} "
+                f"routeLost={transfer_coverage_summary['routeLost']}"
             )
         else:
             log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
@@ -1982,7 +2005,10 @@ def main(argv: list[str] | None = None) -> int:
             observed_utc=_utc_now(),
         )
         results_meta["transferCoverage"] = transfer_coverage_summary
-        if not transfer_coverage_summary["complete"]:
+        if (
+            not transfer_coverage_summary["complete"]
+            or transfer_coverage_summary["routeLost"]
+        ):
             results_meta["externalInconclusive"] = True
 
     if native_config is not None:
