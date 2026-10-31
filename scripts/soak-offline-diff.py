@@ -16,6 +16,7 @@ reproducible, contention-free, apples-to-apples — no simultaneous operator run
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import re
 import sys
@@ -46,6 +47,76 @@ CAMPAIGN_EXIT_CODES = {
     "harness-failure": 2,
     "inconclusive-external": 3,
 }
+
+UDP_REASK_DECISION_EVENT = "udp_reask_decision"
+
+
+def _udp_reask_decision_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize exact current-schema UDP reask decisions without dropping examples."""
+
+    decisions = [
+        record
+        for record in records
+        if record.get("family") == "sched"
+        and record.get("event") == UDP_REASK_DECISION_EVENT
+    ]
+    reasons: collections.Counter[str] = collections.Counter()
+    outcomes: collections.Counter[str] = collections.Counter()
+    paths: collections.Counter[str] = collections.Counter()
+    transport_eligibility: collections.Counter[str] = collections.Counter()
+    peer_file_keys: set[tuple[object, object]] = set()
+    examples: dict[str, dict[str, Any]] = {}
+    invalid_records = 0
+    for record in decisions:
+        body = record.get("body")
+        keys = record.get("keys")
+        if not isinstance(body, dict) or not isinstance(keys, dict):
+            invalid_records += 1
+            continue
+        reason = body.get("reason")
+        outcome = body.get("outcome")
+        path = body.get("path")
+        transport_eligible = body.get("transportEligible")
+        if not isinstance(reason, str) or not reason:
+            invalid_records += 1
+            reason = "<invalid>"
+        if isinstance(outcome, str) and outcome:
+            outcomes[outcome] += 1
+        else:
+            invalid_records += 1
+        if isinstance(path, str) and path:
+            paths[path] += 1
+        else:
+            invalid_records += 1
+        if isinstance(transport_eligible, bool):
+            transport_eligibility[str(transport_eligible).lower()] += 1
+        else:
+            invalid_records += 1
+        reasons[reason] += 1
+        peer_file_keys.add(
+            (
+                keys.get("peerHash") or keys.get("peer"),
+                keys.get("fileHash"),
+            )
+        )
+        examples.setdefault(
+            reason,
+            {
+                "ts": record.get("ts"),
+                "keys": keys,
+                "body": body,
+            },
+        )
+    return {
+        "eventCount": len(decisions),
+        "peerFileKeyCount": len(peer_file_keys),
+        "invalidRecordCount": invalid_records,
+        "outcomes": dict(sorted(outcomes.items())),
+        "reasons": dict(sorted(reasons.items())),
+        "paths": dict(sorted(paths.items())),
+        "transportEligible": dict(sorted(transport_eligibility.items())),
+        "examplesByReason": dict(sorted(examples.items())),
+    }
 
 
 def _merge_diagnostic_records(
@@ -921,6 +992,10 @@ def main(argv: list[str] | None = None) -> int:
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
     conf = audit["conformance"]
     full_diag_gate = _full_run_diagnostic_gate(rust["diag"], mfc["diag"])
+    udp_reask_decisions = {
+        "rust": _udp_reask_decision_summary(rust["diag"]),
+        "mfc": _udp_reask_decision_summary(mfc["diag"]),
+    }
     kad_cov = packet_trace_diff.kad_opcode_coverage(
         packet_trace_diff.kad_records(rust["diag"]),
         packet_trace_diff.kad_records(mfc["diag"]),
@@ -945,6 +1020,12 @@ def main(argv: list[str] | None = None) -> int:
         f"mfcServerLifecycleViolations="
         f"{len(full_diag_gate['serverConnectionLifecycle']['mfc']['violations'])}"
     )
+    for name, summary in udp_reask_decisions.items():
+        print(
+            f"  udp reask decisions[{name}]: events={summary['eventCount']} "
+            f"peerFiles={summary['peerFileKeyCount']} "
+            f"outcomes={summary['outcomes']} reasons={summary['reasons']}"
+        )
     print(
         f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "
         f"sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} "
@@ -1021,7 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     report = {
-        "schema": "soak_offline_diff_v1",
+        "schema": "soak_offline_diff_v2",
         "rustRecording": rust_zip.name,
         "mfcRecording": mfc_zip.name,
         "obfuscation": rust["meta"].get("obfuscation"),
@@ -1032,6 +1113,7 @@ def main(argv: list[str] | None = None) -> int:
         "fullRunDiagnosticSummary": soak_report_summary.summarize_full_run_diagnostics(
             full_diag_gate
         ),
+        "udpReaskDecisions": udp_reask_decisions,
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,

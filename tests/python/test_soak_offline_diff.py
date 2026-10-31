@@ -168,6 +168,72 @@ def test_full_run_diagnostics_require_client_udp_without_narrow_window_penalty()
     ]
 
 
+def test_udp_reask_decision_summary_retains_reason_counts_and_exact_examples() -> None:
+    mod = _load_offline_diff()
+    records = [
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                1.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "source_exchange_due",
+                    "path": "direct",
+                    "transportEligible": True,
+                    "remoteUdpPort": 4672,
+                },
+            ),
+            "keys": {"peer": "198.51.100.1:4662", "fileHash": "a" * 32},
+        },
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                2.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "source_exchange_due",
+                    "path": "direct",
+                    "transportEligible": True,
+                },
+            ),
+            "keys": {"peer": "198.51.100.1:4662", "fileHash": "a" * 32},
+        },
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                3.0,
+                body={
+                    "outcome": "sent",
+                    "reason": "direct_reask_sent",
+                    "path": "direct",
+                    "transportEligible": True,
+                },
+            ),
+            "keys": {"peer": "198.51.100.2:4662", "fileHash": "a" * 32},
+        },
+        _diag("sched", "queue_rank", 4.0, body={"outcome": "waiting"}),
+    ]
+
+    summary = mod._udp_reask_decision_summary(records)
+
+    assert summary["eventCount"] == 3
+    assert summary["peerFileKeyCount"] == 2
+    assert summary["invalidRecordCount"] == 0
+    assert summary["outcomes"] == {"sent": 1, "skipped": 2}
+    assert summary["reasons"] == {
+        "direct_reask_sent": 1,
+        "source_exchange_due": 2,
+    }
+    assert summary["paths"] == {"direct": 3}
+    assert summary["transportEligible"] == {"true": 3}
+    assert summary["examplesByReason"]["source_exchange_due"]["body"][
+        "remoteUdpPort"
+    ] == 4672
+
+
 def _window(at: float = 0.0) -> dict:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=at)
     return {"kind": "search", "t0": stamp, "t1": stamp + timedelta(seconds=10)}
