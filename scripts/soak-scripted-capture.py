@@ -1983,6 +1983,7 @@ def main(argv: list[str] | None = None) -> int:
         results_meta = {
             "client": client, "campaign": campaign, "kadConnected": kad_ok,
             "restPort": rest_port, "obfuscation": obfuscation,
+            "serverEndpoint": OPERATOR_SERVER,
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
             "uploadLimitKiBps": inputs.bandwidth.upload_limit_kibps,

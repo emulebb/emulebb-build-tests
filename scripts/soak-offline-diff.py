@@ -825,6 +825,20 @@ def _find_recordings(campaign_dir: Path) -> tuple[Path | None, Path | None]:
     return (rust[-1] if rust else None, mfc[-1] if mfc else None)
 
 
+def _recording_server_endpoints(
+    rust: dict[str, Any],
+    mfc: dict[str, Any],
+) -> dict[str, str]:
+    """Loads the explicit server authority recorded by each capture."""
+
+    server_endpoints = {
+        "rust": rust.get("meta", {}).get("serverEndpoint"),
+        "mfc": mfc.get("meta", {}).get("serverEndpoint"),
+    }
+    soak_action_diff.normalize_server_endpoints(server_endpoints)
+    return server_endpoints
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--campaign", help="Campaign folder under soak/reports (finds rust-*.zip + mfc-*.zip).")
@@ -856,12 +870,8 @@ def main(argv: list[str] | None = None) -> int:
         return CAMPAIGN_EXIT_CODES["harness-failure"]
     print(f"rust recording: {rust_zip.name}  obf={rust['meta'].get('obfuscation')}  diag={len(rust['diag'])} pkt={len(rust['packets'])}")
     print(f"mfc  recording: {mfc_zip.name}  obf={mfc['meta'].get('obfuscation')}  diag={len(mfc['diag'])} pkt={len(mfc['packets'])}")
-    server_endpoints = {
-        "rust": rust["meta"].get("rustServer"),
-        "mfc": mfc["meta"].get("mfcServer"),
-    }
     try:
-        soak_action_diff.normalize_server_endpoints(server_endpoints)
+        server_endpoints = _recording_server_endpoints(rust, mfc)
     except soak_action_diff.ActionTraceError as error:
         print(f"harness-failure: recording server authority is invalid ({error})")
         return CAMPAIGN_EXIT_CODES["harness-failure"]

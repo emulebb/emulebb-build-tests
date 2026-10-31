@@ -34,6 +34,17 @@ def _load_offline_diff() -> ModuleType:
     return module
 
 
+def test_recording_server_endpoints_require_current_explicit_authority() -> None:
+    module = _load_offline_diff()
+    rust = {"meta": {"serverEndpoint": SERVER_ENDPOINTS["rust"]}}
+    mfc = {"meta": {"serverEndpoint": SERVER_ENDPOINTS["mfc"]}}
+
+    assert module._recording_server_endpoints(rust, mfc) == SERVER_ENDPOINTS
+
+    with pytest.raises(module.soak_action_diff.ActionTraceError, match="rust"):
+        module._recording_server_endpoints({"meta": {}}, mfc)
+
+
 def _ts(seconds: float) -> str:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds)
     return stamp.isoformat().replace("+00:00", "Z")
