@@ -57,6 +57,38 @@ def test_run_download_adds_absent_transfer(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
+def test_run_download_rejects_completed_shared_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "a" * 32, "name": "sample.bin", "size": 1234}
+
+    def optional(_base: str, _key: str, path: str) -> dict | None:
+        if "/transfers/" in path:
+            return None
+        return {
+            "data": {
+                "hash": "A" * 32,
+                "sizeBytes": 1234,
+            }
+        }
+
+    monkeypatch.setattr(sa, "_http_optional", optional)
+    monkeypatch.setattr(
+        sa,
+        "_action_http",
+        lambda *_args, **_kwargs: pytest.fail("completed fixture must not be re-added"),
+    )
+
+    with pytest.raises(sa.ActionStateError, match="already completed") as captured:
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert captured.value.retained_outcome() == {
+        "errorCode": "action-state-error",
+        "errorType": "ActionStateError",
+        "stateCode": "already-completed",
+    }
+
+
 def test_run_download_reuses_active_persisted_transfer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -336,6 +368,26 @@ def test_execute_action_set_retains_structured_http_failure() -> None:
             },
         }
     ]
+
+
+def test_execute_action_set_retains_structured_state_failure() -> None:
+    actions = sa.default_action_set(
+        [], [{"hash": "f" * 32, "name": "private.bin", "size": 5}]
+    )
+
+    results = sa.execute_action_set(
+        actions,
+        lambda _action: (_ for _ in ()).throw(
+            sa.ActionStateError("already-completed", "private fixture completed")
+        ),
+        lambda _marker: None,
+    )
+
+    assert results[0]["outcome"] == {
+        "errorCode": "action-state-error",
+        "errorType": "ActionStateError",
+        "stateCode": "already-completed",
+    }
 
 
 def test_verify_completed_file_checks_size_ed2k_and_computes_sha256(tmp_path: Path) -> None:

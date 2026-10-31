@@ -113,6 +113,21 @@ class ActionHttpError(RuntimeError):
         return outcome
 
 
+class ActionStateError(RuntimeError):
+    """Stable retained taxonomy for one non-runnable persisted transfer state."""
+
+    def __init__(self, state_code: str, message: str) -> None:
+        super().__init__(message)
+        self.state_code = state_code
+
+    def retained_outcome(self) -> dict[str, Any]:
+        return {
+            "errorCode": "action-state-error",
+            "errorType": type(self).__name__,
+            "stateCode": self.state_code,
+        }
+
+
 def utc_now_iso() -> str:
     """RFC3339 UTC with a ``Z`` suffix, matching the diag/packet ``ts_utc`` format."""
 
@@ -255,6 +270,9 @@ def execute_action_set(
         except ActionHttpError as exc:
             outcome = exc.retained_outcome()
             status = "error"
+        except ActionStateError as exc:
+            outcome = exc.retained_outcome()
+            status = "error"
         except Exception as exc:  # noqa: BLE001 - one failing action must not abort the set
             # WHY: third-party exception text can embed operator-local paths,
             # queries, hashes, or response bodies. Retain only stable taxonomy.
@@ -392,6 +410,30 @@ def run_download(
         base_url, api_key, f"/api/v1/transfers/{file_hash}"
     )
     if existing_payload is None:
+        shared_payload = _http_optional(
+            base_url, api_key, f"/api/v1/shared-files/{file_hash}"
+        )
+        if shared_payload is not None:
+            shared = _data(shared_payload)
+            if not isinstance(shared, dict):
+                raise ActionStateError(
+                    "shared-response-invalid",
+                    "persisted shared-file response is not an object",
+                )
+            if str(shared.get("hash") or "").strip().lower() != file_hash:
+                raise ActionStateError(
+                    "shared-hash-mismatch",
+                    "persisted shared-file hash does not match approved fixture",
+                )
+            if shared.get("sizeBytes") != expected_size:
+                raise ActionStateError(
+                    "shared-size-mismatch",
+                    "persisted shared-file size does not match approved fixture",
+                )
+            raise ActionStateError(
+                "already-completed",
+                "approved persisted transfer is already completed",
+            )
         _action_http(
             "add",
             base_url,
@@ -404,19 +446,34 @@ def run_download(
 
     existing = _data(existing_payload)
     if not isinstance(existing, dict):
-        raise RuntimeError("persisted transfer response is not an object")
+        raise ActionStateError(
+            "transfer-response-invalid",
+            "persisted transfer response is not an object",
+        )
     if str(existing.get("hash") or "").strip().lower() != file_hash:
-        raise RuntimeError("persisted transfer hash does not match approved fixture")
+        raise ActionStateError(
+            "transfer-hash-mismatch",
+            "persisted transfer hash does not match approved fixture",
+        )
     if existing.get("sizeBytes") != expected_size:
-        raise RuntimeError("persisted transfer size does not match approved fixture")
+        raise ActionStateError(
+            "transfer-size-mismatch",
+            "persisted transfer size does not match approved fixture",
+        )
 
     state = str(existing.get("state") or "").strip().lower()
     if not state:
-        raise RuntimeError("persisted transfer response has no state")
+        raise ActionStateError(
+            "transfer-state-missing",
+            "persisted transfer response has no state",
+        )
     if bool(existing.get("stopped")):
-        raise RuntimeError("approved persisted transfer is stopped")
+        raise ActionStateError("stopped", "approved persisted transfer is stopped")
     if state == "completed":
-        raise RuntimeError("approved persisted transfer is already completed")
+        raise ActionStateError(
+            "already-completed",
+            "approved persisted transfer is already completed",
+        )
     if state == "paused":
         _action_http(
             "resume",
@@ -428,7 +485,10 @@ def run_download(
         return {"added": False, "reused": True, "resumed": True}
     if state in {"downloading", "queued"}:
         return {"added": False, "reused": True, "resumed": False}
-    raise RuntimeError("approved persisted transfer is not runnable")
+    raise ActionStateError(
+        "not-runnable",
+        "approved persisted transfer is not runnable",
+    )
 
 
 def _rotate_left_32(value: int, shift: int) -> int:
