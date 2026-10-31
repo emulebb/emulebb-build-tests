@@ -87,6 +87,32 @@ class CompletedFileVerification:
         }
 
 
+class ActionHttpError(RuntimeError):
+    """Stable retained taxonomy for one REST operation failure."""
+
+    def __init__(
+        self,
+        operation: str,
+        http_status: int,
+        api_error_code: str | None,
+    ) -> None:
+        super().__init__(f"{operation} failed with HTTP {http_status}")
+        self.operation = operation
+        self.http_status = http_status
+        self.api_error_code = api_error_code
+
+    def retained_outcome(self) -> dict[str, Any]:
+        outcome: dict[str, Any] = {
+            "errorCode": "action-http-error",
+            "errorType": type(self).__name__,
+            "operation": self.operation,
+            "httpStatus": self.http_status,
+        }
+        if self.api_error_code:
+            outcome["apiErrorCode"] = self.api_error_code
+        return outcome
+
+
 def utc_now_iso() -> str:
     """RFC3339 UTC with a ``Z`` suffix, matching the diag/packet ``ts_utc`` format."""
 
@@ -226,6 +252,9 @@ def execute_action_set(
         try:
             outcome = sanitize_action_outcome(action, runner(action))
             status = "ok"
+        except ActionHttpError as exc:
+            outcome = exc.retained_outcome()
+            status = "error"
         except Exception as exc:  # noqa: BLE001 - one failing action must not abort the set
             # WHY: third-party exception text can embed operator-local paths,
             # queries, hashes, or response bodies. Retain only stable taxonomy.
@@ -271,7 +300,38 @@ def _http_optional(base_url: str, api_key: str, path: str) -> Any | None:
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
-        raise
+        raise _action_http_error("lookup", error) from None
+
+
+def _action_http_error(operation: str, error: urllib.error.HTTPError) -> ActionHttpError:
+    api_error_code = None
+    try:
+        payload = json.loads(error.read().decode("utf-8", "replace"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            candidate = error_payload.get("code")
+        else:
+            candidate = payload.get("code")
+        if isinstance(candidate, str) and candidate:
+            api_error_code = candidate
+    return ActionHttpError(operation, int(error.code), api_error_code)
+
+
+def _action_http(
+    operation: str,
+    base_url: str,
+    api_key: str,
+    path: str,
+    method: str = "GET",
+    body: Any = None,
+) -> Any:
+    try:
+        return _http(base_url, api_key, path, method, body)
+    except urllib.error.HTTPError as error:
+        raise _action_http_error(operation, error) from None
 
 
 def _data(payload: Any) -> Any:
@@ -332,7 +392,14 @@ def run_download(
         base_url, api_key, f"/api/v1/transfers/{file_hash}"
     )
     if existing_payload is None:
-        _http(base_url, api_key, "/api/v1/transfers", "POST", {"link": link})
+        _action_http(
+            "add",
+            base_url,
+            api_key,
+            "/api/v1/transfers",
+            "POST",
+            {"link": link},
+        )
         return {"added": True, "reused": False, "resumed": False}
 
     existing = _data(existing_payload)
@@ -351,7 +418,8 @@ def run_download(
     if state == "completed":
         raise RuntimeError("approved persisted transfer is already completed")
     if state == "paused":
-        _http(
+        _action_http(
+            "resume",
             base_url,
             api_key,
             f"/api/v1/transfers/{file_hash}/operations/resume",

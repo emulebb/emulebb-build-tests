@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -157,6 +159,41 @@ def test_run_download_rejects_unusable_persisted_transfer(
         sa.run_download("http://127.0.0.1:4711", "secret", fixture)
 
 
+def test_run_download_retains_lookup_http_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "e" * 32, "name": "sample.bin", "size": 1234}
+    error = urllib.error.HTTPError(
+        "http://127.0.0.1:4711/api/v1/transfers/private",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "transfer-state-conflict",
+                        "message": "private fixture detail",
+                    }
+                }
+            ).encode()
+        ),
+    )
+    monkeypatch.setattr(sa, "_http", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+
+    with pytest.raises(sa.ActionHttpError) as captured:
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert captured.value.retained_outcome() == {
+        "errorCode": "action-http-error",
+        "errorType": "ActionHttpError",
+        "operation": "lookup",
+        "httpStatus": 409,
+        "apiErrorCode": "transfer-state-conflict",
+    }
+    assert "private fixture detail" not in json.dumps(captured.value.retained_outcome())
+
+
 def test_default_action_set_one_search_per_method_plus_downloads() -> None:
     actions = sa.default_action_set(
         ["ubuntu", "debian"],
@@ -270,6 +307,35 @@ def test_execute_action_set_isolates_a_failing_action() -> None:
     retained = json.dumps({"markers": markers, "results": results})
     assert "private fixture" not in retained
     assert "secret" not in retained
+
+
+def test_execute_action_set_retains_structured_http_failure() -> None:
+    actions = sa.default_action_set(
+        [], [{"hash": "f" * 32, "name": "private.bin", "size": 5}]
+    )
+    markers: list[dict] = []
+
+    results = sa.execute_action_set(
+        actions,
+        lambda _action: (_ for _ in ()).throw(
+            sa.ActionHttpError("resume", 409, "transfer-not-paused")
+        ),
+        markers.append,
+    )
+
+    assert results == [
+        {
+            "actionId": "action-0001",
+            "status": "error",
+            "outcome": {
+                "errorCode": "action-http-error",
+                "errorType": "ActionHttpError",
+                "operation": "resume",
+                "httpStatus": 409,
+                "apiErrorCode": "transfer-not-paused",
+            },
+        }
+    ]
 
 
 def test_verify_completed_file_checks_size_ed2k_and_computes_sha256(tmp_path: Path) -> None:
