@@ -821,6 +821,9 @@ def test_launch_soak_wires_direct_mfc_profile_to_cleanup_and_launch() -> None:
     assert "rust_profile_dir = resolve_direct_rust_profile(inputs)" in source
     assert "rust_profile_location = soak_launch.require_rust_profile_location(" in source
     assert "rust_profile_setup = mfc_profile_import.ensure_persisted_rust_profile(" in source
+    assert source.index('refresh_diagnostics_build(workspace_root, "rust")') < source.index(
+        "clw.resolve_rust_diagnostics_exe(output_root)"
+    )
     assert source.index("soak_launch.prepare_hideme_routing(") < source.index(
         "mfc_profile_import.ensure_persisted_rust_profile("
     )
