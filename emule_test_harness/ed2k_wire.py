@@ -234,8 +234,16 @@ def encode_hash_search(file_hash: bytes) -> bytes:
 
     if len(file_hash) != 16:
         raise ValueError("file_hash must be 16 bytes")
-    term = f"ed2k::{file_hash.hex().upper()}".encode("ascii")
-    return b"\x01" + struct.pack("<H", len(term)) + term
+    return encode_term_search(f"ed2k::{file_hash.hex().upper()}")
+
+
+def encode_term_search(term: str) -> bytes:
+    """Builds one compact string-term SEARCHREQUEST expression."""
+
+    encoded = term.encode("utf-8")
+    if not encoded or len(encoded) > 0xFFFF:
+        raise ValueError("search term must encode to 1..65535 bytes")
+    return b"\x01" + struct.pack("<H", len(encoded)) + encoded
 
 
 def encode_source_request(file_hash: bytes, size: int) -> bytes:
@@ -500,6 +508,13 @@ class Ed2kWireClient:
         """Runs one exact hash search and returns its decoded result page."""
 
         self.send(OP_SEARCHREQUEST, encode_hash_search(file_hash))
+        frame = self.receive_until({OP_SEARCHRESULT})
+        return decode_search_results(frame.payload)
+
+    def search_term(self, term: str) -> list[dict[str, object]]:
+        """Runs one keyword search and returns its decoded result page."""
+
+        self.send(OP_SEARCHREQUEST, encode_term_search(term))
         frame = self.receive_until({OP_SEARCHRESULT})
         return decode_search_results(frame.payload)
 

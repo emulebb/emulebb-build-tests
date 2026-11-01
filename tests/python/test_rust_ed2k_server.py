@@ -85,8 +85,10 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
     assert "offerfiles_v1 = true" in text
     assert config["limits"]["soft_limit_files"] == 100_000
     assert config["limits"]["hard_limit_files"] == 200_001
+    assert config["limits"]["getsources_cache_secs"] == 1
     assert "soft_limit_files = 100000" in text
     assert "hard_limit_files = 200001" in text
+    assert "getsources_cache_secs = 1" in text
     assert "private_highid_probe" not in config["network"]
     assert "private_highid_probe" not in text
     assert "password" not in text
@@ -118,6 +120,8 @@ def test_build_server_config_rejects_negative_file_limits(tmp_path: Path) -> Non
         rust_ed2k.build_server_config(tmp_path / "soft.toml", **common, soft_limit_files=-1)
     with pytest.raises(ValueError, match="hard_limit_files"):
         rust_ed2k.build_server_config(tmp_path / "hard.toml", **common, hard_limit_files=-1)
+    with pytest.raises(ValueError, match="get_sources_cache_seconds"):
+        rust_ed2k.build_server_config(tmp_path / "cache.toml", **common, get_sources_cache_seconds=0)
 
 
 @pytest.mark.unit
