@@ -132,13 +132,18 @@ def wait_for_current_server_metadata(
     expected_name: str,
     expected_description: str,
     timeout_seconds: float,
+    status_path: str = "/api/v1/status",
 ) -> dict[str, object]:
     """Waits until one client exposes the exact applied current-server metadata."""
 
+    last_status: dict[str, object] = {}
+
     def probe() -> dict[str, object] | None:
-        status = request_json(base_url, "GET", "/api/v1/status", api_key)
+        status = request_json(base_url, "GET", status_path, api_key)
         nested = status.get("servers")
         data = nested if isinstance(nested, dict) else status
+        last_status.clear()
+        last_status.update(data)
         current = data.get("currentServer") if isinstance(data.get("currentServer"), dict) else {}
         users = current.get("users")
         files = current.get("files")
@@ -158,12 +163,16 @@ def wait_for_current_server_metadata(
             return data
         return None
 
-    return wait_for(
-        probe,
-        timeout_seconds=timeout_seconds,
-        interval_seconds=0.25,
-        description="applied current ED2K server metadata",
-    )
+    try:
+        return wait_for(
+            probe,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=0.25,
+            description="applied current ED2K server metadata",
+        )
+    except RuntimeError as exc:
+        detail = json.dumps(last_status, sort_keys=True, separators=(",", ":"))
+        raise RuntimeError(f"{exc} Last normalized server status: {detail}") from exc
 
 
 def wait_for_server_search_result(

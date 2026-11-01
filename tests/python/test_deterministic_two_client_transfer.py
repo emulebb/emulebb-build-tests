@@ -921,6 +921,7 @@ def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> N
         "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
     ) == 2
     assert script_text.count("rust_local_ed2k.wait_for_current_server_metadata(") == 2
+    assert 'status_path="/api/v1/servers/status"' in script_text
     assert 'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots' in script_text
     assert (
         'report["checks"]["client_server_tcp_metadata_diagnostics"] = ('
