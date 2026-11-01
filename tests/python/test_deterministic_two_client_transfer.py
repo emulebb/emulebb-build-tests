@@ -92,11 +92,16 @@ def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> N
     )
 
     assert defaults.ed2k_server_connect_address is None
-    assert module.resolve_ed2k_server_connect_address("192.0.2.10", defaults.ed2k_server_connect_address) == "192.0.2.10"
-    assert module.resolve_ed2k_server_connect_address(
-        "192.0.2.10",
-        overridden.ed2k_server_connect_address,
-    ) == "172.20.32.2"
+    assert module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address) == "127.0.0.1"
+    assert module.resolve_ed2k_server_connect_address(overridden.ed2k_server_connect_address) == "172.20.32.2"
+
+
+@pytest.mark.parametrize("address", ["0.0.0.0", "ff02::1", "not-an-address"])
+def test_ed2k_server_connect_address_rejects_non_unicast_ipv4(address: str) -> None:
+    module = load_suite_module()
+
+    with pytest.raises(ValueError, match="--ed2k-server-connect-address"):
+        module.resolve_ed2k_server_connect_address(address)
 
 
 def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
@@ -264,12 +269,27 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     }
 
 
-def test_resolve_client2_app_exe_uses_emulebb_main_executable(tmp_path: Path) -> None:
+def test_resolve_client2_app_exe_uses_canonical_external_build(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    client2_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    output_root = tmp_path / "output"
+    client2_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "standard"
+        / "bin"
+        / "emulebb.exe"
+    )
     client2_exe.parent.mkdir(parents=True)
     client2_exe.write_bytes(b"")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
     assert module.resolve_client2_app_exe(workspace, "Release", None) == client2_exe.resolve()
 
@@ -419,32 +439,42 @@ def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(m
         module.discover_interface_ipv4("Ethernet")
 
 
-def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_defaults_to_loopback(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
+
+    assert module.resolve_local_p2p_bind_address() == "127.0.0.1"
+
+
+def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind() -> None:
+    module = load_suite_module()
 
     assert module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.10") == "192.0.2.10"
 
 
-def test_resolve_lan_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda name: f"192.0.2.{len(name)}")
 
-    assert module.resolve_lan_p2p_bind_address(
-        lan_bind_addr="192.0.2.10",
+    assert module.resolve_local_p2p_bind_address(
         p2p_bind_interface_name="Ethernet",
     ) == "192.0.2.8"
 
 
-def test_resolve_lan_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
 
-    assert module.resolve_lan_p2p_bind_address(
-        lan_bind_addr="192.0.2.10",
+    assert module.resolve_local_p2p_bind_address(
         p2p_bind_interface_name="Ethernet",
         p2p_bind_interface_address="192.0.2.44",
     ) == "192.0.2.44"
+
+
+def test_resolve_local_p2p_bind_address_accepts_explicit_loopback() -> None:
+    module = load_suite_module()
+
+    assert module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1") == "127.0.0.1"
 
 
 def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_path: Path) -> None:
@@ -469,14 +499,20 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
 
     assert "ed2k_server.launch_ed2k_server(" in script_text
     assert "ed2k_server.ed2k_server_control(" in script_text
+    assert "ed2k_file_observer.Ed2kFileObserver(" in script_text
     assert "ed2k_server.stop_process(server_process)" in script_text
+    assert "server_control.wait_for_file" not in script_text
+    assert "server_control.get_file" not in script_text
     assert "server_provider" not in script_text
     assert "token=args.api_key" in script_text
     assert "admin_secret=args.api_key" not in script_text
     assert "windows_client_address=server_connect_address" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert script_text.count("p2p_bind_addr=p2p_address") == 2
+    assert script_text.count("p2p_bind_addr=p2p_address") == 1
+    assert "p2p_bind_ip=p2p_address" in script_text
+    assert "rust_client.start_rust_client_executable(" in script_text
+    assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -755,7 +791,7 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
 
 def test_configure_client_profiles_use_resolved_p2p_bind_address(tmp_path: Path) -> None:
     module = load_suite_module()
-    resolved_address = module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.44")
+    resolved_address = module.resolve_local_p2p_bind_address()
 
     for profile_name in ("client1", "client2"):
         config_dir = tmp_path / profile_name / "config"
@@ -1125,12 +1161,13 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
             calls.append(("shared_files", nick, minimum, timeout))
             return {"client_name": nick, "ip": "172.17.128.1", "shared_files": 1}
 
-        def wait_for_file(self, file_hash, timeout):
-            calls.append(("file", file_hash, timeout))
+    class FakeFileObserver:
+        def wait_for_file(self, file_hash, file_size, timeout):
+            calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint", file_hash, host, port, timeout, description))
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(("source", file_hash, file_size, host, port, timeout, description))
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
@@ -1150,15 +1187,16 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
         ec_password="secret",
         client_nick="cl-amule-007",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         publish_timeout_seconds=30.0,
     )
 
     assert link == "ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/"
     assert observation["observed_host"] == "172.17.128.1"
     assert observation["published"]["sources"] == 1
-    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "endpoint"]
+    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "source"]
 
 
 def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
@@ -1176,20 +1214,21 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, hash_value, host, port, timeout):
-            calls.append(("endpoint_absent", hash_value, host, port, timeout))
-            return {"absent": True}
-
         def wait_for_client_shared_files(self, nick, minimum, timeout):
             calls.append(("shared_files", nick, minimum, timeout))
             return {"client_name": nick, "shared_files": 1}
 
-        def wait_for_file(self, hash_value, timeout):
-            calls.append(("file", hash_value, timeout))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, hash_value, file_size, host, port, timeout):
+            calls.append(("source_absent", hash_value, file_size, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_file(self, hash_value, file_size, timeout):
+            calls.append(("file", hash_value, file_size, timeout))
             return {"hash": hash_value, "sources": 1}
 
-        def wait_for_file_endpoint(self, hash_value, host, port, timeout, description):
-            calls.append(("endpoint", hash_value, host, port, timeout, description))
+        def wait_for_source(self, hash_value, file_size, host, port, timeout, description):
+            calls.append(("source", hash_value, file_size, host, port, timeout, description))
             return {"hash": hash_value, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
@@ -1223,8 +1262,9 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
         ec_password="secret",
         client_nick="cl-amule-007",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
     )
@@ -1238,12 +1278,12 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
         "observe",
         "shutdown",
         "client_absent",
-        "endpoint_absent",
+        "source_absent",
         "launch",
         "control",
         "shared_files",
         "file",
-        "endpoint",
+        "source",
     ]
 
 
@@ -1258,16 +1298,19 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
-            calls.append(("endpoint_absent", file_hash, host, port, timeout))
-            return {"absent": True}
-
         def wait_for_client(self, nick, timeout):
             calls.append(("client_present", nick, timeout))
             return {"client_name": nick}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, file_hash, file_size, host, port, timeout):
+            calls.append(("source_absent", file_hash, file_size, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(
+                ("source_present", file_hash, file_size, host, port, timeout, description)
+            )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
@@ -1301,9 +1344,11 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
         api_key="key",
         client_nick="publisher",
         transfer_hash="aa" * 16,
-        endpoint_host="192.0.2.10",
-        endpoint_port=4662,
+        file_size=7,
+        source_host="192.0.2.10",
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         rest_ready_timeout_seconds=10.0,
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
@@ -1311,20 +1356,21 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
 
     assert relaunched is new_app
     assert report["withdrawn"]["client"]["absent"] is True
-    assert report["republished"]["endpoint"]["hash"] == "aa" * 16
+    assert report["republished"]["source"]["hash"] == "aa" * 16
     assert calls == [
         ("close", old_app),
         ("client_absent", "publisher", 20.0),
-        ("endpoint_absent", "aa" * 16, "192.0.2.10", 4662, 20.0),
+        ("source_absent", "aa" * 16, 7, "192.0.2.10", 4662, 20.0),
         ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
         ("client_present", "publisher", 30.0),
         (
-            "endpoint_present",
+            "source_present",
             "aa" * 16,
+            7,
             "192.0.2.10",
             4662,
             30.0,
-            "ED2K publisher endpoint republication",
+            "ED2K publisher source republication",
         ),
     ]
 
@@ -1351,16 +1397,19 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
-            calls.append(("endpoint_absent", file_hash, host, port, timeout))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, file_hash, file_size, host, port, timeout):
+            calls.append(("source_absent", file_hash, file_size, host, port, timeout))
             return {"absent": True}
 
-        def wait_for_file(self, file_hash, timeout):
-            calls.append(("file", file_hash, timeout))
+        def wait_for_file(self, file_hash, file_size, timeout):
+            calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(
+                ("source_present", file_hash, file_size, host, port, timeout, description)
+            )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
@@ -1378,8 +1427,9 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
         config_dir=tmp_path / "profile" / "config",
         client_nick="stock publisher",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
     )
@@ -1392,17 +1442,18 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
         ("shared_files", "stock publisher", 1, 30.0),
         ("close", old_app),
         ("client_absent", "stock publisher", 20.0),
-        ("endpoint_absent", "cd" * 16, "172.17.128.1", 4662, 20.0),
+        ("source_absent", "cd" * 16, 7, "172.17.128.1", 4662, 20.0),
         ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
         ("shared_files", "stock publisher", 1, 30.0),
-        ("file", "cd" * 16, 30.0),
+        ("file", "cd" * 16, 7, 30.0),
         (
-            "endpoint_present",
+            "source_present",
             "cd" * 16,
+            7,
             "172.17.128.1",
             4662,
             30.0,
-            "stock ED2K publisher endpoint republication",
+            "stock ED2K publisher source republication",
         ),
     ]
 
@@ -1583,14 +1634,14 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
     ]
 
 
-def test_require_high_id_clients_passes_without_fetching_server_stats() -> None:
+def test_observe_client_id_classes_records_high_id_clients() -> None:
     module = load_suite_module()
 
     class FakeControl:
         def stats(self):
-            raise AssertionError("HighID success must not fetch failure diagnostics")
+            return {"ok": True, "data": {}}
 
-    result = module.require_high_id_clients(
+    result = module.observe_client_id_classes(
         FakeControl(),
         client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": True},
         client1_port=4662,
@@ -1599,16 +1650,17 @@ def test_require_high_id_clients_passes_without_fetching_server_stats() -> None:
     )
 
     assert result == {
-        "required": True,
-        "passed": True,
+        "high_id_required_for_transfer": False,
+        "all_high_id": True,
         "clients": {
             "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": True},
             "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
         },
+        "server_highid_verification": {"available": False},
     }
 
 
-def test_require_high_id_clients_fails_with_compact_server_verification_evidence() -> None:
+def test_observe_client_id_classes_records_low_id_server_evidence_without_gating() -> None:
     module = load_suite_module()
 
     class FakeControl:
@@ -1626,18 +1678,17 @@ def test_require_high_id_clients_fails_with_compact_server_verification_evidence
                 },
             }
 
-    with pytest.raises(module.LowIdClientsError) as raised:
-        module.require_high_id_clients(
-            FakeControl(),
-            client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": False},
-            client1_port=4662,
-            client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
-            client2_port=4663,
-        )
+    result = module.observe_client_id_classes(
+        FakeControl(),
+        client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": False},
+        client1_port=4662,
+        client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
+        client2_port=4663,
+    )
 
-    assert raised.value.evidence == {
-        "required": True,
-        "passed": False,
+    assert result == {
+        "high_id_required_for_transfer": False,
+        "all_high_id": False,
         "clients": {
             "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": False},
             "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},

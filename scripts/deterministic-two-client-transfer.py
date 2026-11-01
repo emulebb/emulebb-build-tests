@@ -23,12 +23,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server  # noqa: E402
+from emule_test_harness import ed2k_file_observer  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
+from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
+from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
+from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
+    ClientAvailability,
+    git_head_revision,
     resolve_amule_stable_client,
     resolve_mfc_oracle_client,
     resolve_stock_emule_client,
@@ -50,7 +57,7 @@ ED2K_LOCAL_PORT_MIN = 20000
 ED2K_LOCAL_PORT_MAX = 49151
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
-CLIENT01 = CLIENT_IDENTITIES["emulebb"]
+CLIENT01 = CLIENT_IDENTITIES["emulebb_rust"]
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
@@ -65,25 +72,6 @@ class TransferCompletionTimeout(RuntimeError):
     def __init__(self, observations: list[dict[str, object]]) -> None:
         super().__init__("Timed out waiting for completed deterministic transfer file.")
         self.observations = observations
-
-
-class LowIdClientsError(RuntimeError):
-    """Raised before transfer setup when either deterministic client is LowID."""
-
-    def __init__(self, evidence: dict[str, object]) -> None:
-        clients = evidence.get("clients")
-        low_id_clients = []
-        if isinstance(clients, dict):
-            low_id_clients = [
-                name
-                for name, snapshot in clients.items()
-                if isinstance(snapshot, dict) and snapshot.get("high_id") is not True
-            ]
-        super().__init__(
-            "Deterministic transfer requires both clients to be HighID before queuing; "
-            f"LowID clients: {', '.join(low_id_clients) or 'unknown'}."
-        )
-        self.evidence = evidence
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -101,9 +89,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
-    parser.add_argument("--p2p-bind-interface-name", default="")
-    parser.add_argument("--p2p-bind-interface-address")
-    parser.add_argument("--ed2k-server-connect-address")
+    parser.add_argument(
+        "--p2p-bind-interface-name",
+        default="",
+        help="Optional non-loopback interface for an explicitly routed campaign.",
+    )
+    parser.add_argument(
+        "--p2p-bind-interface-address",
+        help="Optional unicast IPv4 P2P bind; deterministic local campaigns default to 127.0.0.1.",
+    )
+    parser.add_argument(
+        "--ed2k-server-connect-address",
+        help="Optional Windows-reachable server IPv4; the managed WSL server defaults to 127.0.0.1.",
+    )
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
@@ -185,6 +183,26 @@ def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
     return (manifest_path.parent / value).resolve()
 
 
+def resolve_client2_availability(
+    workspace_root: Path,
+    configuration: str,
+    override: str | None,
+    identity_key: str = "mfc_oracle",
+    control_override: str | None = None,
+) -> ClientAvailability:
+    """Resolves the selected reference publisher and its source identity."""
+
+    if identity_key == "stock_emule":
+        return resolve_stock_emule_client(workspace_root, configuration, override)
+    if identity_key == "amule":
+        return resolve_amule_stable_client(
+            workspace_root,
+            executable_override=override,
+            control_override=control_override,
+        )
+    return resolve_mfc_oracle_client(workspace_root, configuration, override)
+
+
 def resolve_client2_app_exe(
     workspace_root: Path,
     configuration: str,
@@ -194,16 +212,13 @@ def resolve_client2_app_exe(
 ) -> Path:
     """Resolves the MFC parity peer client executable."""
 
-    if identity_key == "stock_emule":
-        availability = resolve_stock_emule_client(workspace_root, configuration, override)
-    elif identity_key == "amule":
-        availability = resolve_amule_stable_client(
-            workspace_root,
-            executable_override=override,
-            control_override=control_override,
-        )
-    else:
-        availability = resolve_mfc_oracle_client(workspace_root, configuration, override)
+    availability = resolve_client2_availability(
+        workspace_root,
+        configuration,
+        override,
+        identity_key,
+        control_override,
+    )
     if not availability.available or availability.executable is None:
         raise RuntimeError(f"Client2 {availability.identity.product} executable was not found: {availability.reason}.")
     return availability.executable
@@ -758,33 +773,60 @@ def discover_interface_ipv4(interface_name: str) -> str:
     return str(usable[0])
 
 
+def require_unicast_ipv4(value: str, *, option_name: str) -> str:
+    """Validates one concrete IPv4 endpoint without excluding loopback."""
+
+    raw_address = str(value).strip()
+    try:
+        address = ipaddress.ip_address(raw_address)
+    except ValueError as exc:
+        raise ValueError(f"{option_name} must be an IPv4 address, got {raw_address!r}.") from exc
+    if not isinstance(address, ipaddress.IPv4Address) or address.is_unspecified or address.is_multicast:
+        raise ValueError(f"{option_name} must be a usable unicast IPv4 address, got {raw_address!r}.")
+    return str(address)
+
+
 def resolve_lan_p2p_bind_address(
     *,
     lan_bind_addr: str,
     p2p_bind_interface_name: str = "",
     p2p_bind_interface_address: str | None = None,
 ) -> str:
-    """Returns the P2P bind address for LAN/local tests.
-
-    LAN campaigns default P2P address binding to the same explicit LAN address
-    used for REST/control. Interface discovery is only used when the caller
-    deliberately supplies an interface name.
-    """
+    """Resolves a non-loopback P2P bind for routed LAN/VPN campaigns."""
 
     explicit_address = str(p2p_bind_interface_address or "").strip()
     if explicit_address:
-        return rest_smoke.require_lan_bind_addr(explicit_address, option_name="--p2p-bind-interface-address")
+        return rest_smoke.require_lan_bind_addr(
+            explicit_address,
+            option_name="--p2p-bind-interface-address",
+        )
     interface_name = str(p2p_bind_interface_name or "").strip()
     if interface_name:
         return discover_interface_ipv4(interface_name)
     return rest_smoke.require_lan_bind_addr(lan_bind_addr)
 
 
-def resolve_ed2k_server_connect_address(p2p_address: str, override: str | None) -> str:
-    """Resolves the Windows address clients use to reach the ED2K server."""
+def resolve_local_p2p_bind_address(
+    *,
+    p2p_bind_interface_name: str = "",
+    p2p_bind_interface_address: str | None = None,
+) -> str:
+    """Resolves the P2P bind used by the deterministic local clients."""
 
-    return rest_smoke.require_lan_bind_addr(
-        override or p2p_address,
+    explicit_address = str(p2p_bind_interface_address or "").strip()
+    if explicit_address:
+        return require_unicast_ipv4(explicit_address, option_name="--p2p-bind-interface-address")
+    interface_name = str(p2p_bind_interface_name or "").strip()
+    if interface_name:
+        return discover_interface_ipv4(interface_name)
+    return "127.0.0.1"
+
+
+def resolve_ed2k_server_connect_address(override: str | None) -> str:
+    """Resolves the Windows endpoint used to reach the WSL ED2K server."""
+
+    return require_unicast_ipv4(
+        str(override or "127.0.0.1"),
         option_name="--ed2k-server-connect-address",
     )
 
@@ -988,7 +1030,7 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
     }
 
 
-def require_high_id_clients(
+def observe_client_id_classes(
     server_control: ed2k_server.Ed2kServerControl,
     *,
     client1: dict[str, object],
@@ -996,7 +1038,7 @@ def require_high_id_clients(
     client2: dict[str, object],
     client2_port: int,
 ) -> dict[str, object]:
-    """Requires both connected clients to be HighID before transfer work starts."""
+    """Records server-assigned ID classes without making transfer depend on them."""
 
     def compact_client(client: dict[str, object], port: int) -> dict[str, object]:
         return {
@@ -1011,13 +1053,10 @@ def require_high_id_clients(
         "client2": compact_client(client2, client2_port),
     }
     evidence: dict[str, object] = {
-        "required": True,
-        "passed": all(client["high_id"] is True for client in clients.values()),
+        "high_id_required_for_transfer": False,
+        "all_high_id": all(client["high_id"] is True for client in clients.values()),
         "clients": clients,
     }
-    if evidence["passed"] is True:
-        return evidence
-
     verification: dict[str, object] = {"available": False}
     try:
         stats = server_control.stats()
@@ -1037,7 +1076,7 @@ def require_high_id_clients(
     except Exception as exc:
         verification["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
     evidence["server_highid_verification"] = verification
-    raise LowIdClientsError(evidence)
+    return evidence
 
 
 def wait_for_emule_server_connected(
@@ -1199,9 +1238,11 @@ def recycle_publisher(
     api_key: str,
     client_nick: str,
     transfer_hash: str,
-    endpoint_host: str,
-    endpoint_port: int,
+    file_size: int,
+    source_host: str,
+    source_port: int,
     server_control: ed2k_server.Ed2kServerControl,
+    file_observer: ed2k_file_observer.Ed2kFileObserver,
     rest_ready_timeout_seconds: float,
     withdraw_timeout_seconds: float,
     publish_timeout_seconds: float,
@@ -1213,10 +1254,11 @@ def recycle_publisher(
         client_nick,
         withdraw_timeout_seconds,
     )
-    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+    withdrawn_source = file_observer.wait_for_source_absent(
         transfer_hash,
-        endpoint_host,
-        endpoint_port,
+        file_size,
+        source_host,
+        source_port,
         withdraw_timeout_seconds,
     )
 
@@ -1238,12 +1280,13 @@ def recycle_publisher(
             client_nick,
             publish_timeout_seconds,
         )
-        republished_endpoint = server_control.wait_for_file_endpoint(
+        republished_source = file_observer.wait_for_source(
             transfer_hash,
-            endpoint_host,
-            endpoint_port,
+            file_size,
+            source_host,
+            source_port,
             publish_timeout_seconds,
-            "ED2K publisher endpoint republication",
+            "ED2K publisher source republication",
         )
     except Exception:
         live_common.close_app_cleanly(relaunched_app)
@@ -1252,7 +1295,7 @@ def recycle_publisher(
     return relaunched_app, {
         "withdrawn": {
             "client": withdrawn_client,
-            "endpoint": withdrawn_endpoint,
+            "source": withdrawn_source,
         },
         "reconnected": {
             "rest_ready": rest_ready,
@@ -1260,7 +1303,7 @@ def recycle_publisher(
             "client": reconnected_client,
         },
         "republished": {
-            "endpoint": republished_endpoint,
+            "source": republished_source,
         },
     }
 
@@ -1273,8 +1316,9 @@ def recycle_stock_publisher(
     config_dir: Path,
     client_nick: str,
     fixture_file: Path,
-    endpoint_port: int,
+    source_port: int,
     server_control: ed2k_server.Ed2kServerControl,
+    file_observer: ed2k_file_observer.Ed2kFileObserver,
     withdraw_timeout_seconds: float,
     publish_timeout_seconds: float,
 ) -> tuple[object, str, dict[str, object]]:
@@ -1300,10 +1344,12 @@ def recycle_stock_publisher(
         file_size=fixture_file.stat().st_size,
     )
     transfer_hash = known_entry.ed2k_hash
-    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+    file_size = fixture_file.stat().st_size
+    withdrawn_source = file_observer.wait_for_source_absent(
         transfer_hash,
+        file_size,
         observed_host,
-        endpoint_port,
+        source_port,
         withdraw_timeout_seconds,
     )
 
@@ -1318,16 +1364,18 @@ def recycle_stock_publisher(
             1,
             publish_timeout_seconds,
         )
-        republished_file = server_control.wait_for_file(
+        republished_file = file_observer.wait_for_file(
             transfer_hash,
+            file_size,
             publish_timeout_seconds,
         )
-        republished_endpoint = server_control.wait_for_file_endpoint(
+        republished_source = file_observer.wait_for_source(
             transfer_hash,
+            file_size,
             observed_host,
-            endpoint_port,
+            source_port,
             publish_timeout_seconds,
-            "stock ED2K publisher endpoint republication",
+            "stock ED2K publisher source republication",
         )
     except Exception:
         live_common.close_app_cleanly(relaunched_app)
@@ -1343,14 +1391,14 @@ def recycle_stock_publisher(
         },
         "withdrawn": {
             "client": withdrawn_client,
-            "endpoint": withdrawn_endpoint,
+            "source": withdrawn_source,
         },
         "reconnected": {
             "client": reconnected_client,
         },
         "republished": {
             "file": republished_file,
-            "endpoint": republished_endpoint,
+            "source": republished_source,
         },
         "known_met": {
             "hash": transfer_hash,
@@ -1382,8 +1430,9 @@ def observe_amule_publisher(
     ec_password: str,
     client_nick: str,
     fixture_file: Path,
-    endpoint_port: int,
+    source_port: int,
     server_control: ed2k_server.Ed2kServerControl,
+    file_observer: ed2k_file_observer.Ed2kFileObserver,
     publish_timeout_seconds: float,
 ) -> tuple[str, dict[str, object]]:
     """Observes one official aMule publication without changing its session."""
@@ -1406,13 +1455,19 @@ def observe_amule_publisher(
     observed_host = str(connected.get("ip") or "")
     if not observed_host:
         raise RuntimeError(f"aMule publisher observation has no server-visible IP: {connected!r}")
-    published = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
-    endpoint = server_control.wait_for_file_endpoint(
+    file_size = fixture_file.stat().st_size
+    published = file_observer.wait_for_file(
         transfer_hash,
-        observed_host,
-        endpoint_port,
+        file_size,
         publish_timeout_seconds,
-        "aMule ED2K publisher endpoint publication",
+    )
+    source = file_observer.wait_for_source(
+        transfer_hash,
+        file_size,
+        observed_host,
+        source_port,
+        publish_timeout_seconds,
+        "aMule ED2K publisher source publication",
     )
     link = amule_client.file_link(fixture_file.name, fixture_file.stat().st_size, transfer_hash)
     return link, {
@@ -1420,7 +1475,7 @@ def observe_amule_publisher(
         "shared": shared,
         "connected": connected,
         "published": published,
-        "endpoint": endpoint,
+        "source": source,
         "observed_host": observed_host,
     }
 
@@ -1435,8 +1490,9 @@ def recycle_amule_publisher(
     ec_password: str,
     client_nick: str,
     fixture_file: Path,
-    endpoint_port: int,
+    source_port: int,
     server_control: ed2k_server.Ed2kServerControl,
+    file_observer: ed2k_file_observer.Ed2kFileObserver,
     withdraw_timeout_seconds: float,
     publish_timeout_seconds: float,
 ) -> tuple[object, str, dict[str, object]]:
@@ -1448,8 +1504,9 @@ def recycle_amule_publisher(
         ec_password=ec_password,
         client_nick=client_nick,
         fixture_file=fixture_file,
-        endpoint_port=endpoint_port,
+        source_port=source_port,
         server_control=server_control,
+        file_observer=file_observer,
         publish_timeout_seconds=publish_timeout_seconds,
     )
     transfer_hash = str(initial["shared"]["hash"])
@@ -1462,10 +1519,12 @@ def recycle_amule_publisher(
         ec_password=ec_password,
     )
     withdrawn_client = server_control.wait_for_client_absent(client_nick, withdraw_timeout_seconds)
-    withdrawn_endpoint = server_control.wait_for_file_endpoint_absent(
+    file_size = fixture_file.stat().st_size
+    withdrawn_source = file_observer.wait_for_source_absent(
         transfer_hash,
+        file_size,
         observed_host,
-        endpoint_port,
+        source_port,
         withdraw_timeout_seconds,
     )
 
@@ -1479,13 +1538,18 @@ def recycle_amule_publisher(
             timeout_seconds=publish_timeout_seconds,
         )
         reconnected_client = server_control.wait_for_client_shared_files(client_nick, 1, publish_timeout_seconds)
-        republished_file = server_control.wait_for_file(transfer_hash, publish_timeout_seconds)
-        republished_endpoint = server_control.wait_for_file_endpoint(
+        republished_file = file_observer.wait_for_file(
             transfer_hash,
-            observed_host,
-            endpoint_port,
+            file_size,
             publish_timeout_seconds,
-            "aMule ED2K publisher endpoint republication",
+        )
+        republished_source = file_observer.wait_for_source(
+            transfer_hash,
+            file_size,
+            observed_host,
+            source_port,
+            publish_timeout_seconds,
+            "aMule ED2K publisher source republication",
         )
     except Exception:
         try:
@@ -1506,7 +1570,7 @@ def recycle_amule_publisher(
         "withdrawn": {
             "shutdown": shutdown,
             "client": withdrawn_client,
-            "endpoint": withdrawn_endpoint,
+            "source": withdrawn_source,
         },
         "reconnected": {
             "control": reconnected_control,
@@ -1514,7 +1578,7 @@ def recycle_amule_publisher(
         },
         "republished": {
             "file": republished_file,
-            "endpoint": republished_endpoint,
+            "source": republished_source,
             "delay_seconds": round(time.monotonic() - republish_started, 3),
         },
     }
@@ -1541,6 +1605,7 @@ def main(argv: list[str] | None = None) -> int:
         "suite": SUITE_NAME,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "runner_revision": git_head_revision(REPO_ROOT),
         "checks": {},
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
         "offerfiles_v1_stock_fallback": {
@@ -1549,21 +1614,18 @@ def main(argv: list[str] | None = None) -> int:
     }
     server_process: subprocess.Popen | None = None
     server_control: ed2k_server.Ed2kServerControl | None = None
-    client1_app = None
+    file_observer: ed2k_file_observer.Ed2kFileObserver | None = None
+    client1_process = None
     client2_app = None
     client2_control_exe: Path | None = None
     current_phase = "initializing"
 
     try:
-        p2p_address = resolve_lan_p2p_bind_address(
-            lan_bind_addr=args.lan_bind_addr,
+        p2p_address = resolve_local_p2p_bind_address(
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
-        server_connect_address = resolve_ed2k_server_connect_address(
-            p2p_address,
-            args.ed2k_server_connect_address,
-        )
+        server_connect_address = resolve_ed2k_server_connect_address(args.ed2k_server_connect_address)
         ports = choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
@@ -1591,6 +1653,10 @@ def main(argv: list[str] | None = None) -> int:
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
         server_control = ed2k_server.ed2k_server_control(admin_base_url, args.api_key)
+        file_observer = ed2k_file_observer.Ed2kFileObserver(
+            server_address,
+            ports["ed2k_tcp"],
+        )
         report["checks"]["server_build"] = server_launch.build
         report["checks"]["ed2k_server_health"] = server_launch.health
         report["ed2k_server"] = server_launch.config
@@ -1606,11 +1672,23 @@ def main(argv: list[str] | None = None) -> int:
             "sha256": fixture_sha256,
         }
 
-        client1 = live_common.prepare_scenario_profile(
-            profile_seed_dir,
-            paths.source_artifacts_dir,
-            [],
-            CLIENT01.profile_id,
+        rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
+        rust_exe = converged_live_wire.resolve_rust_regular_exe(get_workspace_output_root())
+        rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
+        rust_output = paths.source_artifacts_dir / "rust-client.out"
+        rust_client.write_rust_profile(
+            rust_profile,
+            rust_repo=rust_repo,
+            rest_addr=args.lan_bind_addr,
+            rest_port=ports["client1_rest"],
+            api_key=args.api_key,
+            network_kademlia=False,
+            p2p_bind_ip=p2p_address,
+            ed2k_port=ports["client1_tcp"],
+            ed2k_nickname=CLIENT01.nick,
+            kad_port=ports["client1_udp"],
+            server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+            local_only_discovery=True,
         )
         if args.client2_identity == "amule":
             client2 = prepare_amule_profile(paths.source_artifacts_dir, client2_identity.profile_id)
@@ -1621,33 +1699,25 @@ def main(argv: list[str] | None = None) -> int:
                 [],
                 client2_identity.profile_id,
             )
-        client2_app_exe = resolve_client2_app_exe(
+        client2_availability = resolve_client2_availability(
             paths.workspace_root,
             args.configuration,
             args.client2_app_exe,
             args.client2_identity,
             args.client2_control_exe,
         )
-        client2_control_exe = resolve_client2_control_exe(
-            paths.workspace_root,
-            args.client2_app_exe,
-            args.client2_control_exe,
-            args.client2_identity,
-        )
-        configure_client_profile(
-            config_dir=Path(client1["config_dir"]),
-            app_exe=paths.app_exe,
-            nick=CLIENT01.nick,
-            tcp_port=ports["client1_tcp"],
-            udp_port=ports["client1_udp"],
-            ed2k_enabled=True,
-            autoconnect=False,
-            rest_api_key=args.api_key,
-            rest_port=ports["client1_rest"],
-            lan_bind_addr=args.lan_bind_addr,
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
-            p2p_bind_addr=p2p_address,
-        )
+        if not client2_availability.available or client2_availability.executable is None:
+            raise RuntimeError(
+                f"Client2 {client2_availability.identity.product} executable was not found: "
+                f"{client2_availability.reason}."
+            )
+        client2_app_exe = client2_availability.executable
+        client2_control_exe = client2_availability.control_executable
+        if args.client2_identity == "amule" and client2_control_exe is None:
+            raise RuntimeError(
+                f"Client2 {client2_availability.identity.product} control was not found: "
+                f"{client2_availability.reason}."
+            )
         if args.client2_identity == "amule":
             amule_client.configure_profile(
                 config_dir=Path(client2["config_dir"]),
@@ -1680,23 +1750,24 @@ def main(argv: list[str] | None = None) -> int:
                 Path(client2["config_dir"]) / "shareddir.dat",
                 [live_common.win_path(fixture_dir, trailing_slash=True)],
             )
-        for profile in (client1, client2):
-            write_server_met(
-                Path(profile["config_dir"]) / "server.met",
-                address=server_address,
-                port=ports["ed2k_tcp"],
-                name="emulebb-local-e2e",
-            )
+        write_server_met(
+            Path(client2["config_dir"]) / "server.met",
+            address=server_address,
+            port=ports["ed2k_tcp"],
+            name="emulebb-local-e2e",
+        )
 
         report["profiles"] = {
             CLIENT01.profile_id: {
                 "client_key": CLIENT01.key,
                 "nick": CLIENT01.nick,
-                "profile_base": str(client1["profile_base"]),
-                "config_dir": str(client1["config_dir"]),
-                "incoming_dir": str(client1["incoming_dir"]),
-                "temp_dir": str(client1["temp_dir"]),
-                "preferences": read_preferences_snapshot(Path(client1["config_dir"])),
+                "profile_dir": str(rust_profile),
+                "app_exe": str(rust_exe),
+                "app_sha256": file_sha256(rust_exe),
+                "source_repo": str(rust_repo),
+                "source_revision": git_head_revision(rust_repo),
+                "settings": str(rust_profile / rust_client.RUST_PROFILE_SETTINGS_FILE),
+                "metadata": str(rust_profile / rust_client.RUST_PROFILE_METADATA_FILE),
             },
             client2_identity.profile_id: {
                 "client_key": client2_identity.key,
@@ -1706,6 +1777,8 @@ def main(argv: list[str] | None = None) -> int:
                 "incoming_dir": str(client2["incoming_dir"]),
                 "temp_dir": str(client2["temp_dir"]),
                 "app_exe": str(client2_app_exe),
+                "app_sha256": file_sha256(client2_app_exe),
+                "availability": client2_availability.as_report(),
                 "preferences": (
                     amule_client.profile_snapshot(Path(client2["config_dir"]))
                     if args.client2_identity == "amule"
@@ -1733,8 +1806,9 @@ def main(argv: list[str] | None = None) -> int:
                 config_dir=Path(client2["config_dir"]),
                 client_nick=client2_identity.nick,
                 fixture_file=fixture_file,
-                endpoint_port=ports["client2_tcp"],
+                source_port=ports["client2_tcp"],
                 server_control=server_control,
+                file_observer=file_observer,
                 withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
                 publish_timeout_seconds=args.server_publish_timeout_seconds,
             )
@@ -1763,8 +1837,9 @@ def main(argv: list[str] | None = None) -> int:
                     ec_password=args.api_key,
                     client_nick=client2_identity.nick,
                     fixture_file=fixture_file,
-                    endpoint_port=ports["client2_tcp"],
+                    source_port=ports["client2_tcp"],
                     server_control=server_control,
+                    file_observer=file_observer,
                     withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
                     publish_timeout_seconds=args.server_publish_timeout_seconds,
                 )
@@ -1779,8 +1854,9 @@ def main(argv: list[str] | None = None) -> int:
                     ec_password=args.api_key,
                     client_nick=client2_identity.nick,
                     fixture_file=fixture_file,
-                    endpoint_port=ports["client2_tcp"],
+                    source_port=ports["client2_tcp"],
                     server_control=server_control,
+                    file_observer=file_observer,
                     publish_timeout_seconds=args.server_publish_timeout_seconds,
                 )
                 publication = amule_observation
@@ -1822,18 +1898,25 @@ def main(argv: list[str] | None = None) -> int:
                 client2_identity.nick,
                 args.server_connect_timeout_seconds,
             )
-            published_file = server_control.wait_for_file(
+            published_file = file_observer.wait_for_file(
                 transfer_hash,
+                int(link_info["size"]),
                 args.server_publish_timeout_seconds,
             )
             report["checks"]["client2_server_file"] = published_file
         if args.verify_source_lifecycle and args.client2_identity not in {"stock_emule", "amule"}:
-            current_phase = "client2_source_lifecycle_initial_endpoint"
-            source_endpoint = ed2k_server.require_published_endpoint(
-                published_file,
-                port=ports["client2_tcp"],
+            current_phase = "client2_source_lifecycle_initial_source"
+            observed_host = str(report["checks"]["client2_server_client"].get("ip") or "")
+            if not observed_host:
+                raise RuntimeError("MFC publisher server observation has no source address.")
+            published_source = file_observer.wait_for_source(
+                transfer_hash,
+                int(link_info["size"]),
+                observed_host,
+                ports["client2_tcp"],
+                args.server_publish_timeout_seconds,
             )
-            report["network"]["client2_server_observed_address"] = source_endpoint["host"]
+            report["network"]["client2_server_observed_address"] = observed_host
             current_phase = "client2_source_lifecycle_reconnect"
             client2_app, lifecycle = recycle_publisher(
                 app=client2_app,
@@ -1843,9 +1926,11 @@ def main(argv: list[str] | None = None) -> int:
                 api_key=args.api_key,
                 client_nick=client2_identity.nick,
                 transfer_hash=transfer_hash,
-                endpoint_host=str(source_endpoint["host"]),
-                endpoint_port=ports["client2_tcp"],
+                file_size=int(link_info["size"]),
+                source_host=observed_host,
+                source_port=ports["client2_tcp"],
                 server_control=server_control,
+                file_observer=file_observer,
                 rest_ready_timeout_seconds=args.rest_ready_timeout_seconds,
                 withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
                 publish_timeout_seconds=args.server_publish_timeout_seconds,
@@ -1855,32 +1940,45 @@ def main(argv: list[str] | None = None) -> int:
                 "initial": {
                     "connected": report["checks"]["client2_server_client"],
                     "published": published_file,
-                    "endpoint": source_endpoint,
+                    "source": published_source,
                 },
                 **lifecycle,
             }
+            report["checks"]["client2_server_client"] = lifecycle["reconnected"]["client"]
 
         current_phase = "launch_client1"
-        client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=True)
+        client1_process = rust_client.start_rust_client_executable(
+            rust_exe,
+            rust_profile,
+            rust_output,
+        )
         base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
-        report["checks"]["client1_rest_ready"] = rest_smoke.compact_http_result(
-            rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
+        report["checks"]["client1_rest_ready"] = rust_local_ed2k.wait_for_rest_ready(
+            base_url,
+            client1_process,
+            rust_output,
+            args.api_key,
+            args.rest_ready_timeout_seconds,
         )
         current_phase = "client1_server_connect"
-        report["checks"]["client1_server_connect"] = add_and_connect_server(
+        report["checks"]["client1_server_connect"] = rust_local_ed2k.request_json(
+            base_url,
+            "POST",
+            "/api/v1/servers/operations/connect",
+            args.api_key,
+        )
+        report["checks"]["client1_ed2k_connected"] = rust_local_ed2k.wait_for_ed2k_connected(
             base_url,
             args.api_key,
-            address=server_address,
-            port=ports["ed2k_tcp"],
-            timeout_seconds=args.server_connect_timeout_seconds,
+            args.server_connect_timeout_seconds,
         )
         report["checks"]["client1_server_client"] = server_control.wait_for_client(
             CLIENT01.nick,
             args.server_connect_timeout_seconds,
         )
 
-        current_phase = "high_id_gate"
-        report["checks"]["high_id_gate"] = require_high_id_clients(
+        current_phase = "observe_client_id_classes"
+        report["checks"]["client_id_classes"] = observe_client_id_classes(
             server_control,
             client1=report["checks"]["client1_server_client"],
             client1_port=ports["client1_tcp"],
@@ -1888,22 +1986,36 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
+        direct_source_link = rust_local_ed2k.ed2k_link_with_source(
+            exported_link,
+            p2p_address,
+            ports["client2_tcp"],
+        )
+        report["checks"]["client1_direct_source_link"] = {
+            "base_link": exported_link,
+            "transfer_link": direct_source_link,
+            "source": {"host": p2p_address, "port": ports["client2_tcp"]},
+        }
         current_phase = "add_transfer"
-        report["checks"]["client1_transfer_add"] = add_transfer(base_url, args.api_key, exported_link, transfer_hash)
-        completed_path = Path(client1["incoming_dir"]) / str(link_info["name"])
-        report["checks"]["client1_transfer_completed_file"] = wait_for_completed_file(
-            completed_path,
+        report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
+            base_url,
+            "POST",
+            "/api/v1/transfers",
+            args.api_key,
+            {
+                "link": direct_source_link,
+                "paused": False,
+                "categoryId": 0,
+            },
+        )
+        report["checks"]["client1_transfer_completed_file"] = rust_local_ed2k.wait_for_transfer_completed(
+            base_url,
+            args.api_key,
+            transfer_hash,
+            rust_profile,
             expected_size=int(link_info["size"]),
             expected_sha256=fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
-            snapshot_callback=lambda: collect_client1_transfer_snapshot(
-                base_url=base_url,
-                api_key=args.api_key,
-                transfer_hash=transfer_hash,
-                incoming_path=completed_path,
-                temp_dir=Path(client1["temp_dir"]),
-                hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
-            ),
         )
         if args.verify_source_lifecycle:
             report["source_lifecycle"]["completed"] = report["checks"]["client1_transfer_completed_file"]
@@ -1927,32 +2039,50 @@ def main(argv: list[str] | None = None) -> int:
         report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
-        if isinstance(exc, LowIdClientsError):
-            report["checks"]["high_id_gate"] = exc.evidence
         return 1
+    except KeyboardInterrupt:
+        report["status"] = "interrupted"
+        report["current_phase"] = current_phase
+        report["error"] = {"type": "KeyboardInterrupt", "message": "operator interrupted campaign"}
+        return 130
     finally:
         close_results: dict[str, object] = {}
-        for name, app in ((CLIENT01.profile_id, client1_app), (client2_identity.profile_id, client2_app)):
-            if app is None:
-                continue
+        if client1_process is not None:
             try:
-                if name == client2_identity.profile_id and args.client2_identity == "amule":
+                rust_client.stop_process_tree(client1_process)
+                close_results[CLIENT01.profile_id] = {
+                    "ok": True,
+                    "return_code": client1_process.poll(),
+                }
+            except Exception as exc:
+                close_results[CLIENT01.profile_id] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if client2_app is not None:
+            try:
+                if args.client2_identity == "amule":
                     if client2_control_exe is None:
                         raise RuntimeError("aMule cleanup requires amulecmd control.")
-                    close_results[name] = {
+                    close_results[client2_identity.profile_id] = {
                         "ok": True,
                         "result": amule_client.shutdown_daemon(
-                            app,
+                            client2_app,
                             client2_control_exe,
                             ec_port=ports["client2_ec"],
                             ec_password=args.api_key,
                         ),
                     }
                 else:
-                    live_common.close_app_cleanly(app)
-                    close_results[name] = {"ok": True}
+                    live_common.close_app_cleanly(client2_app)
+                    close_results[client2_identity.profile_id] = {"ok": True}
             except Exception as exc:
-                close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+                close_results[client2_identity.profile_id] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         ed2k_server.stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
