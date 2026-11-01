@@ -584,6 +584,66 @@ def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:
     assert report["verdict"] == "coverage-parity"
 
 
+def test_server_search_ignores_unrelated_diagnostic_family_gap() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [_pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3)]
+    mfc_packets = [_pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3)]
+
+    def ed2k_tcp_diag(ts: datetime, payload_hex: str) -> dict:
+        record = _diag(
+            "ed2k_tcp",
+            "packet",
+            ts,
+            {
+                "direction": "send",
+                "protocolMarker": 0xE3,
+                "opcode": 0x16,
+                "payloadHex": payload_hex,
+                "payloadLen": len(payload_hex) // 2,
+            },
+        )
+        record["keys"] = {"protocolMarker": 0xE3, "opcode": 0x16}
+        return record
+
+    rust_diag = [
+        ed2k_tcp_diag(_ts(1), "aa"),
+        _diag("kad_event", "lookup", _ts(1), {"milestone": "lookup_complete"}),
+    ]
+    mfc_diag = [
+        ed2k_tcp_diag(_ts(3), "bb"),
+        _diag(
+            "kad_event",
+            "lookup",
+            _ts(3),
+            {"milestone": "lookup_complete", "resultCount": 4},
+        ),
+    ]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 0},
+        rust_diag=rust_diag,
+        mfc_diag=mfc_diag,
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagOk"] is True
+    assert report["diagConformance"]["gatedFamilies"] == ["ed2k_tcp"]
+    families = {
+        family["family"]: family
+        for family in report["diagConformance"]["families"]
+    }
+    assert families["kad_event"]["ok"] is False
+
+
 def test_diff_action_fails_on_diag_oracle_body_key_gap() -> None:
     pair = sad.ActionPair(
         kind=sad.SEARCH,

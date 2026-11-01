@@ -1251,10 +1251,12 @@ def family_conformance(
     The strict record-identity diff (:func:`diff_traces` ``ok``) can NEVER pass
     across two independent live sessions — different peers, payloads and timing
     make the per-record sequences unmatchable by construction. The per-action
-    gate that IS live-meaningful is oracle conformance scoped per family: for
-    every diag family present on both sides, rust's event-type/body-key coverage
-    must be a superset of the oracle's (MFC's) on the shared events, reusing the
-    exact :func:`schema_audit` rules with no privacy-based omissions.
+    gate that IS live-meaningful is oracle conformance scoped per family. When
+    ``required_families`` is supplied, only those action-owned families affect
+    the verdict; unrelated background families remain reported for analysis.
+    Within the gated families, rust's event-type/body-key coverage must be a
+    superset of the oracle's (MFC's) on the shared events, reusing the exact
+    :func:`schema_audit` rules with no privacy-based omissions.
     Conditional keys remain excluded. Oracle events rust did not emit in-window stay
     informational (``oracleOnlyEvents``) — window/state sampling is
     indistinguishable from a real gap in a finite slice — as do families present
@@ -1331,10 +1333,17 @@ def family_conformance(
         # one side alone is vacuously ok (informational, never a failure).
         slot["ok"] = not slot["bodyKeyViolations"]
         families.append(slot)
+    gated_family_names = required or [str(family["family"]) for family in families]
+    gated_families = [
+        family for family in families if family["family"] in gated_family_names
+    ]
     return {
         "schema": DIAG_EVENT_FAMILY_CONFORMANCE_REPORT_SCHEMA,
-        "ok": bool(families) and all(f["ok"] for f in families) and required_ok,
+        "ok": bool(gated_families)
+        and all(family["ok"] for family in gated_families)
+        and required_ok,
         "families": families,
+        "gatedFamilies": gated_family_names,
         "requiredFamilies": required_presence,
         "requiredFamiliesOk": required_ok,
     }
