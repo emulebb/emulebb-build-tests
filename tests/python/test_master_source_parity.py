@@ -2655,6 +2655,82 @@ def _check_server_socket_source__diagnostics_use_attempt_transport_before_handsh
     assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in send_block
 
 
+def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality() -> None:
+    log_header = (app_source_root() / "Log.h").read_text(encoding="utf-8", errors="ignore")
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    connect_source = (app_source_root() / "ServerConnect.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+
+    assert (
+        "void DiagEventLogEd2kServerTcpPacket(\n"
+        "\tLPCTSTR pszPeerLabel,\n"
+        "\tULONGLONG ullAttemptId,"
+    ) in log_header
+    packet_logger = log_source[
+        log_source.index("static void DiagEventLogEd2kServerPacket(") :
+        log_source.index("void DiagEventLogEd2kServerUdpPacket(")
+    ]
+    assert '\\"traceId\\":%I64u' in packet_logger
+    assert socket_source.count(
+        "DiagEventLogEd2kServerTcpPacket(pszDiagnosticPeer, m_ullDiagnosticAttemptId,"
+    ) == 2
+    receive_block = socket_source[
+        socket_source.index("bool CServerSocket::PacketReceived(") :
+        socket_source.index("void CServerSocket::SetConnectionState(")
+    ]
+    assert "m_ullDiagnosticAttemptId," in receive_block
+
+    fallback_logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerTransportFallback(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        '\\"flow\\":\\"server\\"',
+        '\\"phase\\":\\"connection\\"',
+        '\\"outcome\\":\\"retrying\\"',
+        '\\"fromTransportMode\\":%s',
+        '\\"toTransportMode\\":%s',
+        '\\"error\\":%s',
+        '\\"traceId\\":%I64u',
+    ):
+        assert required_field in fallback_logger
+    assert (
+        'WriteDiagEventV2(_T("ed2k_tcp"), _T("transport_fallback"), '
+        '_T("warning"), strKeys, strBody);'
+    ) in fallback_logger
+
+    failure_block = connect_source[
+        connect_source.index("if (singleconnecting) {") :
+        connect_source.index("StopConnectionTry();", connect_source.index("if (singleconnecting) {"))
+    ]
+    failure_event = (
+        'LogServerTransportFallback(pServer, sender->m_ullDiagnosticAttemptId, '
+        '_T("connection_failed"));'
+    )
+    assert failure_event in failure_block
+    assert failure_block.index(failure_event) < failure_block.index(
+        "ConnectToServer(pServer, false, true);"
+    )
+
+    timeout_block = connect_source[
+        connect_source.index("if (curTick >= tmpkey + dwServerConnectTimeout)") :
+        connect_source.index("bool CServerConnect::Disconnect()")
+    ]
+    timeout_event = (
+        'LogServerTransportFallback(pRetryServer, tmpsock->m_ullDiagnosticAttemptId, '
+        '_T("connection_timeout"));'
+    )
+    assert timeout_event in timeout_block
+    assert timeout_block.index(timeout_event) < timeout_block.index("DestroySocket(tmpsock);")
+    assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(
+        "ConnectToServer(pRetryServer, false, true);"
+    )
+
+
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
 
 
@@ -4253,6 +4329,7 @@ _PARITY_CASES = [
     ("search_results_source::test_clean_shutdown_removes_tray_icon_before_long_teardown", _check_search_results_source__clean_shutdown_removes_tray_icon_before_long_teardown),
     ("server_list_source::test_get_server_at_rejects_invalid_indices_before_position_access", _check_server_list_source__get_server_at_rejects_invalid_indices_before_position_access),
     ("server_socket_source::test_diagnostics_use_attempt_transport_before_handshake_completion", _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion),
+    ("server_socket_source::test_fallback_diagnostics_preserve_attempt_causality", _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality),
     ("sha_hash_set_source::test_aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges", _check_sha_hash_set_source__aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges),
     ("shared_directory_rule_index_source::test_shared_directory_ops_owns_rule_index_and_key_helpers", _check_shared_directory_rule_index_source__shared_directory_ops_owns_rule_index_and_key_helpers),
     ("shared_directory_rule_index_source::test_preferences_tree_uses_shared_directory_rule_index", _check_shared_directory_rule_index_source__preferences_tree_uses_shared_directory_rule_index),
