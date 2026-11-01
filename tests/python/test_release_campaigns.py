@@ -348,7 +348,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert live_wire_id in covered_ids
     stock_oracle_evidence = scenarios[stock_oracle_id]["evidence"][0]
     assert stock_oracle_evidence["base"] == "workspace-output"
-    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 97
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 98
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed"] is True
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed"] is True
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofPackageCount"] == 5
@@ -590,7 +590,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                 "checks": {
                     "stock_protocol_oracle_requirements": {
                         "allRequirementsPassed": True,
-                        "requiredCoverageCount": 97,
+                        "requiredCoverageCount": 98,
                         "coverageGroupCount": 15,
                         "stockRecordCount": 17,
                         "binaryVectorCount": 15,

@@ -31,7 +31,7 @@ def test_build_checks_reports_complete_binary_state_and_anchor_evidence() -> Non
         "allRequirementsPassed": True,
         "validationErrorCount": 0,
         "validationErrors": [],
-        "requiredCoverageCount": 97,
+        "requiredCoverageCount": 98,
         "coverageGroupCount": 15,
         "stockRecordCount": 17,
         "binaryVectorCount": 15,

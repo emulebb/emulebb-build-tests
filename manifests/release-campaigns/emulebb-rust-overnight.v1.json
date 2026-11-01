@@ -59,7 +59,7 @@
               "statusPointer": "/status",
               "matches": {
                 "/checks/stock_protocol_oracle_requirements/allRequirementsPassed": true,
-                "/checks/stock_protocol_oracle_requirements/requiredCoverageCount": 97,
+                "/checks/stock_protocol_oracle_requirements/requiredCoverageCount": 98,
                 "/checks/stock_protocol_oracle_requirements/coverageGroupCount": 15,
                 "/checks/stock_protocol_oracle_requirements/stockRecordCount": 17,
                 "/checks/stock_protocol_oracle_requirements/binaryVectorCount": 15,

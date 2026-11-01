@@ -515,6 +515,7 @@
         "peer.startup.multipacket-ext2",
         "peer.startup.large-file",
         "peer.startup.aich",
+        "peer.startup.metadata-recovery",
         "peer.startup.crypt",
         "peer.startup.sx2"
       ],
@@ -1433,6 +1434,7 @@
         "peer.startup.multipacket-ext2",
         "peer.startup.large-file",
         "peer.startup.aich",
+        "peer.startup.metadata-recovery",
         "peer.startup.crypt",
         "peer.startup.sx2"
       ],
@@ -1796,7 +1798,7 @@
   "schema": "emulebb-build-tests.protocol-parity-catalog",
   "stockAuthority": {
     "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 97,
+    "requiredCoverageCount": 98,
     "sourcePath": "repos/emule-stock",
     "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }

@@ -39,7 +39,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         (
             ("/status", "passed"),
             ("/checks/stock_protocol_oracle_requirements/allRequirementsPassed", True),
-            ("/checks/stock_protocol_oracle_requirements/requiredCoverageCount", 97),
+            ("/checks/stock_protocol_oracle_requirements/requiredCoverageCount", 98),
             ("/checks/stock_protocol_oracle_requirements/coverageGroupCount", 15),
             ("/checks/stock_protocol_oracle_requirements/stockRecordCount", 17),
             ("/checks/stock_protocol_oracle_requirements/binaryVectorCount", 15),

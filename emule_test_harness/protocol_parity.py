@@ -139,6 +139,7 @@ REQUIRED_STOCK_COVERAGE_IDS = frozenset(
         "peer.startup.aich",
         "peer.startup.crypt",
         "peer.startup.large-file",
+        "peer.startup.metadata-recovery",
         "peer.startup.multipacket",
         "peer.startup.multipacket-ext",
         "peer.startup.multipacket-ext2",

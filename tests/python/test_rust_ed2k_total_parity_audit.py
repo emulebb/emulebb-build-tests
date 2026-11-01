@@ -42,7 +42,7 @@ def seed_complete_evidence(output_root: Path) -> None:
             "checks": {
                 "stock_protocol_oracle_requirements": {
                     "allRequirementsPassed": True,
-                    "requiredCoverageCount": 97,
+                    "requiredCoverageCount": 98,
                     "coverageGroupCount": 15,
                     "stockRecordCount": 17,
                     "binaryVectorCount": 15,
