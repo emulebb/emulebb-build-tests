@@ -42,7 +42,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
 
 
-def test_catalog_report_records_partial_per_id_evidence_without_false_group_coverage() -> None:
+def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() -> None:
     manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     validation = validate_protocol_catalog(manifest_path)
@@ -51,19 +51,19 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
 
     assert report["valid"] is True
     assert report["coverage"] == {
-        "coveredGroupCount": 0,
-        "coveredIdCount": 9,
+        "coveredGroupCount": 1,
+        "coveredIdCount": 10,
         "groupVerdictCounts": {
-            "parity": 0,
+            "parity": 1,
             "divergence": 0,
-            "evidence-incomplete": 17,
+            "evidence-incomplete": 16,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 9,
+            "parity": 10,
             "divergence": 0,
-            "evidence-incomplete": 91,
+            "evidence-incomplete": 90,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -95,6 +95,7 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
         "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+            "server.connect.fallback",
         "server.connect.obfuscated",
         "server.connect.plaintext",
         "server.login.request",
@@ -235,7 +236,7 @@ def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixtu
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
-    assert report["coverage"]["coveredGroupCount"] == 0
+    assert report["coverage"]["coveredGroupCount"] == 1
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
