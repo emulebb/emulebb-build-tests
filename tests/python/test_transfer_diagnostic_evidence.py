@@ -19,6 +19,7 @@ def record(
     return {
         "schema": "diag_event_v2",
         "client": client,
+        "seq": seq,
         "streamSeq": seq,
         "family": family,
         "event": event,
@@ -28,20 +29,53 @@ def record(
 
 
 def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    request_frame = {
+        "direction": "send",
+        "outcome": "send_succeeded",
+        "opcodeName": "OP_REQUESTPARTS",
+        "protocolMarker": 227,
+        "opcode": 71,
+        "clearFrameHex": "e31100000047aabb",
+        "attemptedLen": 8,
+        "writtenLen": 8,
+    }
+    payload_frame = {
+        "direction": "recv",
+        "outcome": "accepted",
+        "opcodeName": "OP_SENDINGPART",
+        "protocolMarker": 227,
+        "opcode": 70,
+        "clearFrameHex": "e31100000046ccdd",
+    }
     rust = [
         record("rust", 10, "sched", "source_engaged", keys={"fileHash": FILE_HASH}, body={"outcome": "engaged"}),
-        record("rust", 11, "ed2k_tcp", "packet", keys={"fileHash": FILE_HASH}),
+        record(
+            "rust",
+            11,
+            "ed2k_tcp",
+            "packet",
+            keys={"fileHash": FILE_HASH, "protocolMarker": 227, "opcode": 71},
+            body=request_frame,
+        ),
         record(
             "rust",
             12,
-            "sched",
-            "download_attempt_outcome",
-            keys={"fileHash": FILE_HASH},
-            body={"state": "completed"},
+            "ed2k_tcp",
+            "packet",
+            keys={"fileHash": FILE_HASH, "protocolMarker": 227, "opcode": 70},
+            body=payload_frame,
         ),
         record(
             "rust",
             13,
+            "sched",
+            "download_payload_accepted",
+            keys={"fileHash": FILE_HASH},
+            body={"bytes": 2048},
+        ),
+        record(
+            "rust",
+            14,
             "sched",
             "download_task_settled",
             keys={"fileHash": FILE_HASH},
@@ -56,10 +90,25 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
             "shared_publish_offer_batch",
             body={"fileHashes": [FILE_HASH]},
         ),
-        record("mfc", 21, "ed2k_tcp", "packet", keys={"fileHash": FILE_HASH}),
+        record(
+            "mfc",
+            21,
+            "ed2k_tcp",
+            "packet",
+            keys={"fileHash": FILE_HASH, "protocolMarker": 227, "opcode": 71},
+            body={**request_frame, "direction": "recv", "outcome": "accepted"},
+        ),
         record(
             "mfc",
             22,
+            "ed2k_tcp",
+            "packet",
+            keys={"fileHash": FILE_HASH, "protocolMarker": 227, "opcode": 70},
+            body={**payload_frame, "direction": "send", "outcome": "send_succeeded"},
+        ),
+        record(
+            "mfc",
+            23,
             "sched",
             "upload_slot_opened",
             keys={"fileHash": FILE_HASH},
@@ -67,7 +116,7 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         ),
         record(
             "mfc",
-            23,
+            24,
             "sched",
             "upload_request_outcome",
             keys={"fileHash": FILE_HASH},
@@ -75,7 +124,7 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         ),
         record(
             "mfc",
-            24,
+            25,
             "sched",
             "upload_payload_accounting",
             keys={"fileHash": FILE_HASH},
@@ -103,7 +152,7 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
 
 def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> None:
     rust, mfc = complete_records()
-    rust[2]["keys"] = {}
+    rust[-1]["keys"] = {}
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
@@ -112,7 +161,7 @@ def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> Non
     )
 
     assert report["ok"] is False
-    assert "Rust completed the exact download attempt" in report["failures"]
+    assert "Rust settled the exact download task as completed" in report["failures"]
     with pytest.raises(RuntimeError, match="diagnostics are incomplete"):
         evidence.require_transfer_diagnostic_evidence(report)
 
@@ -131,9 +180,24 @@ def test_build_transfer_diagnostic_evidence_rejects_zero_payload() -> None:
     assert "MFC sent payload for the exact file" in report["failures"]
 
 
+def test_build_transfer_diagnostic_evidence_rejects_unmatched_wire_frame() -> None:
+    rust, mfc = complete_records()
+    mfc[1]["body"]["clearFrameHex"] = "e31100000047ffff"
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is False
+    assert report["wireChecks"]["requestFrames"]["matchedFrameCount"] == 0
+    assert "Rust request frames exactly match MFC receive frames" in report["failures"]
+
+
 def test_build_transfer_diagnostic_evidence_rejects_out_of_order_chain() -> None:
     rust, mfc = complete_records()
-    mfc[-1]["streamSeq"] = 19
+    mfc[-1]["seq"] = 19
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,

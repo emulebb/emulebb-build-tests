@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -33,7 +34,7 @@ def record_file_hash(record: dict[str, Any]) -> str | None:
 
 
 def _sequence(record: dict[str, Any]) -> int:
-    for field in ("streamSeq", "seq"):
+    for field in ("seq", "streamSeq"):
         value = record.get(field)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
@@ -109,6 +110,94 @@ def _ordered(checks: dict[str, dict[str, Any]], names: tuple[str, ...]) -> dict[
     }
 
 
+def _packet_frame_key(record: dict[str, Any]) -> tuple[int, int, str] | None:
+    keys = record.get("keys")
+    body = _body(record)
+    if not isinstance(keys, dict):
+        return None
+    marker = keys.get("protocolMarker", body.get("protocolMarker"))
+    opcode = keys.get("opcode", body.get("opcode"))
+    clear_frame_hex = body.get("clearFrameHex")
+    if (
+        not isinstance(marker, int)
+        or isinstance(marker, bool)
+        or not isinstance(opcode, int)
+        or isinstance(opcode, bool)
+        or not isinstance(clear_frame_hex, str)
+        or not clear_frame_hex
+    ):
+        return None
+    return marker, opcode, clear_frame_hex.lower()
+
+
+def _packet_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    file_hash: str,
+    direction: str,
+    outcome: str,
+    opcode_names: set[str],
+    require_complete_write: bool = False,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for record in _matches(
+        records,
+        family="ed2k_tcp",
+        event="packet",
+        file_hash=file_hash,
+    ):
+        body = _body(record)
+        if body.get("direction") != direction or body.get("outcome") != outcome:
+            continue
+        if body.get("opcodeName") not in opcode_names or _packet_frame_key(record) is None:
+            continue
+        if require_complete_write:
+            attempted = body.get("attemptedLen")
+            written = body.get("writtenLen")
+            if (
+                not isinstance(attempted, int)
+                or isinstance(attempted, bool)
+                or attempted <= 0
+                or written != attempted
+            ):
+                continue
+        selected.append(record)
+    return selected
+
+
+def _paired_packet_check(
+    name: str,
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+) -> dict[str, Any]:
+    left_frames = Counter(
+        key for record in left if (key := _packet_frame_key(record)) is not None
+    )
+    right_frames = Counter(
+        key for record in right if (key := _packet_frame_key(record)) is not None
+    )
+    matched = left_frames & right_frames
+    matched_count = sum(matched.values())
+    left_count = sum(left_frames.values())
+    right_count = sum(right_frames.values())
+    return {
+        "name": name,
+        "ok": matched_count > 0 and matched == left_frames == right_frames,
+        "matchedFrameCount": matched_count,
+        "leftFrameCount": left_count,
+        "rightFrameCount": right_count,
+        "unmatchedLeftFrameCount": left_count - matched_count,
+        "unmatchedRightFrameCount": right_count - matched_count,
+        "opcodes": sorted(
+            {
+                str(_body(record).get("opcodeName"))
+                for record in (*left, *right)
+                if _body(record).get("opcodeName")
+            }
+        ),
+    }
+
+
 def build_transfer_diagnostic_evidence(
     *,
     file_hash: str,
@@ -129,6 +218,53 @@ def build_transfer_diagnostic_evidence(
         event="shared_publish_offer_batch",
         predicate=lambda record: _published_hash(record, normalized_hash),
     )
+    rust_request_packets = _packet_records(
+        rust,
+        file_hash=normalized_hash,
+        direction="send",
+        outcome="send_succeeded",
+        opcode_names={"OP_REQUESTPARTS"},
+        require_complete_write=True,
+    )
+    mfc_request_packets = _packet_records(
+        mfc,
+        file_hash=normalized_hash,
+        direction="recv",
+        outcome="accepted",
+        opcode_names={"OP_REQUESTPARTS"},
+    )
+    payload_opcodes = {
+        "OP_SENDINGPART",
+        "OP_COMPRESSEDPART",
+        "OP_SENDINGPART_I64",
+        "OP_COMPRESSEDPART_I64",
+    }
+    mfc_payload_packets = _packet_records(
+        mfc,
+        file_hash=normalized_hash,
+        direction="send",
+        outcome="send_succeeded",
+        opcode_names=payload_opcodes,
+    )
+    rust_payload_packets = _packet_records(
+        rust,
+        file_hash=normalized_hash,
+        direction="recv",
+        outcome="accepted",
+        opcode_names=payload_opcodes,
+    )
+    wire_checks = {
+        "requestFrames": _paired_packet_check(
+            "Rust request frames exactly match MFC receive frames",
+            rust_request_packets,
+            mfc_request_packets,
+        ),
+        "payloadFrames": _paired_packet_check(
+            "MFC payload frames exactly match Rust receive frames",
+            mfc_payload_packets,
+            rust_payload_packets,
+        ),
+    }
     rust_checks = {
         "sourceEngaged": _check(
             "Rust accepted the exact source",
@@ -140,18 +276,14 @@ def build_transfer_diagnostic_evidence(
                 predicate=lambda record: _outcome(record, "outcome", "engaged"),
             ),
         ),
-        "peerPacket": _check(
-            "Rust recorded exact-hash peer protocol traffic",
-            _matches(rust, family="ed2k_tcp", event="packet", file_hash=normalized_hash),
-        ),
-        "downloadCompleted": _check(
-            "Rust completed the exact download attempt",
+        "payloadAccepted": _check(
+            "Rust accepted payload for the exact file",
             _matches(
                 rust,
                 family="sched",
-                event="download_attempt_outcome",
+                event="download_payload_accepted",
                 file_hash=normalized_hash,
-                predicate=lambda record: _outcome(record, "state", "completed"),
+                predicate=lambda record: _positive_body_field(record, "bytes"),
             ),
         ),
         "taskSettled": _check(
@@ -167,10 +299,6 @@ def build_transfer_diagnostic_evidence(
     }
     mfc_checks = {
         "published": _check("MFC published the exact file hash", publication),
-        "peerPacket": _check(
-            "MFC recorded exact-hash peer protocol traffic",
-            _matches(mfc, family="ed2k_tcp", event="packet", file_hash=normalized_hash),
-        ),
         "uploadSlotOpened": _check(
             "MFC opened an upload slot for the exact file",
             _matches(
@@ -216,32 +344,47 @@ def build_transfer_diagnostic_evidence(
     ordering = {
         "rust": _ordered(
             rust_checks,
-            ("sourceEngaged", "downloadCompleted", "taskSettled"),
+            ("sourceEngaged", "payloadAccepted", "taskSettled"),
         ),
         "mfc": _ordered(
             mfc_checks,
             ("published", "uploadSlotOpened", "uploadRequestServed", "uploadPayloadSent"),
         ),
     }
-    required_checks = [*rust_checks.values(), *mfc_checks.values(), *ordering.values()]
+    required_checks = [
+        *wire_checks.values(),
+        *rust_checks.values(),
+        *mfc_checks.values(),
+        *ordering.values(),
+    ]
     failures = [str(check["name"]) for check in required_checks if not check["ok"]]
     return {
         "schema": SCHEMA,
         "ok": not failures,
         "fileHash": normalized_hash,
         "failures": failures,
+        "wireChecks": wire_checks,
         "clients": {
             "rust": {
                 "recordCount": len(rust),
                 "hashCorrelatedRecordCount": len(rust_hash_records),
                 "checks": rust_checks,
-                "hashCorrelatedRecords": rust_hash_records,
+                "schedRecords": [
+                    record for record in rust_hash_records if record.get("family") == "sched"
+                ],
             },
             "mfc": {
                 "recordCount": len(mfc),
                 "hashCorrelatedRecordCount": len(mfc_hash_records) + len(publication),
                 "checks": mfc_checks,
-                "hashCorrelatedRecords": [*publication, *mfc_hash_records],
+                "schedRecords": [
+                    *publication,
+                    *(
+                        record
+                        for record in mfc_hash_records
+                        if record.get("family") == "sched"
+                    ),
+                ],
             },
         },
         "ordering": ordering,
