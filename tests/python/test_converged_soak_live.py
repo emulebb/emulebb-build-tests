@@ -196,6 +196,7 @@ def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
     assert cleanup_index < recover_index < begin_index < mfc_launch_index < restore_index
     assert "artifact_store = soak_storage.BoundedArtifactStore(" in source
     assert "artifact_store=artifact_store," in source
+    assert "allow_loopback_rest=args.vpn_topology == soak_launch.hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL" in source
     assert '"rustProfileSetup": rust_profile_setup' in source
     assert 'summary["mfcProfileOverlay"] = {' in source
 

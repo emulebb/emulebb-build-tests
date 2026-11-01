@@ -1797,6 +1797,7 @@ def main(argv: list[str] | None = None) -> int:
             server_udp_port=args.mfc_server_udp_port,
             vpn_guard_mode="block", vpn_guard_allowed_public_ip_cidrs=vpn_guard_cidrs,
             secure_ident=args.secident == "on",
+            allow_loopback_rest=args.vpn_topology == soak_launch.hideme_vpn.VPN_TOPOLOGY_FULL_TUNNEL,
         )
 
         rust_proc = rust_handles["process"]
