@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
 
@@ -19,6 +20,7 @@ PROFILE_AUTHORITY = "harness-generated-ephemeral-local-profiles"
 RUN_DIRECTORY_PATTERN = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)-")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 
 
@@ -246,7 +248,124 @@ def _derived_server_search_coverage_ids(
     return []
 
 
+def _derived_server_login_coverage_ids(
+    report: dict[str, Any], diagnostics: dict[str, Any]
+) -> list[str]:
+    login_value = diagnostics.get("serverLogin")
+    if login_value is None:
+        if report.get("transfer_scenario") == SERVER_LOGIN_SCENARIO:
+            raise ValueError("server login scenario has no bilateral diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_LOGIN_SCENARIO:
+        raise ValueError("server login evidence requires the server-login-request scenario")
+    login = _object(login_value, "diagnostics.serverLogin")
+    server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(login)
+    claims = _object(login.get("coverageClaims"), "diagnostics.serverLogin.coverageClaims")
+    expected_ids = ["server.login.request"]
+    if claims.get("eligibleCoverageIds") != expected_ids:
+        raise ValueError("server login diagnostic claims are not exact")
+    if claims.get("evidenceLayers") != list(server_login_diagnostic_evidence.EVIDENCE_LAYERS):
+        raise ValueError("server login diagnostic evidence layers are not canonical")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_login_diagnostics") != login:
+        raise ValueError("server login diagnostics do not match the pre-transfer snapshot")
+    clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
+    for client in ("rust", "mfc"):
+        row = _object(clients.get(client), f"diagnostics.serverLogin.clients.{client}")
+        login_sequence = _positive_int(
+            row.get("loginSequence"),
+            f"diagnostics.serverLogin.clients.{client}.loginSequence",
+        )
+        id_change_sequence = _positive_int(
+            row.get("idChangeSequence"),
+            f"diagnostics.serverLogin.clients.{client}.idChangeSequence",
+        )
+        accepted_sequence = _positive_int(
+            row.get("loginAcceptedSequence"),
+            f"diagnostics.serverLogin.clients.{client}.loginAcceptedSequence",
+        )
+        decoded_login = _object(
+            row.get("decodedLogin"),
+            f"diagnostics.serverLogin.clients.{client}.decodedLogin",
+        )
+        decoded_id = _object(
+            row.get("decodedIdChange"),
+            f"diagnostics.serverLogin.clients.{client}.decodedIdChange",
+        )
+        if (
+            row.get("ok") is not True
+            or row.get("packetCount") != 1
+            or row.get("sendSucceeded") is not True
+            or row.get("semanticShape") is not True
+            or decoded_login.get("client_id") != 0
+            or decoded_id.get("id_kind") != "low-id"
+            or not login_sequence < id_change_sequence < accepted_sequence
+        ):
+            raise ValueError(f"{client} server login evidence is not singular and causal")
+    if clients["rust"].get("extensionTags") != {"offerfiles_v": 1}:
+        raise ValueError("Rust server login has unexpected extension tags")
+    if clients["mfc"].get("extensionTags") != {}:
+        raise ValueError("MFC server login has unexpected extension tags")
+
+    comparison = _object(login.get("comparison"), "diagnostics.serverLogin.comparison")
+    required_comparisons = {
+        "bothAccepted",
+        "versionEqual",
+        "serverFlagsEqual",
+        "udpPortsTagEqual",
+        "idKindEqual",
+        "ok",
+    }
+    if set(comparison) != required_comparisons or any(
+        comparison.get(name) is not True for name in required_comparisons
+    ):
+        raise ValueError("bilateral server login comparison is not exact")
+
+    profiles = _object(report.get("profiles"), "profiles")
+    rust_profile = _profile_by_client_key(profiles, "emulebb_rust")
+    mfc_profile = _profile_by_client_key(profiles, "mfc_oracle")
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    expected_clients = {
+        "rust": {
+            "nickname": rust_profile.get("nick"),
+            "tcpPort": ports.get("client1_tcp"),
+        },
+        "mfc": {
+            "nickname": mfc_profile.get("nick"),
+            "tcpPort": ports.get("client2_tcp"),
+        },
+    }
+    if login.get("expectedClients") != expected_clients:
+        raise ValueError("server login expected clients do not match profile provenance")
+    expected_endpoint = (
+        f"{network.get('ed2k_server_address')}:{ports.get('ed2k_tcp')}".casefold()
+    )
+    if login.get("serverEndpoint") != expected_endpoint:
+        raise ValueError("server login diagnostics use an unexpected server endpoint")
+
+    captures = _object(login.get("captures"), "diagnostics.serverLogin.captures")
+    for client in ("rust", "mfc"):
+        capture = _object(captures.get(client), f"diagnostics.serverLogin.captures.{client}")
+        _positive_int(capture.get("processId"), f"server login {client} process ID")
+        segments = capture.get("selectedSegments")
+        if not isinstance(segments, list) or not segments or not all(
+            isinstance(value, str) and value for value in segments
+        ):
+            raise ValueError(f"server login {client} capture has no selected segments")
+    return expected_ids
+
+
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == "server.login.request":
+        login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
+        clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
+        return (
+            "Rust and MFC emitted one decoded stock-core login each, followed by exact "
+            f"ID-change and accepted-session transitions at sequences "
+            f"{clients['rust']['loginSequence']}/{clients['mfc']['loginSequence']}."
+        )
     if coverage_id == "peer.startup.multipacket-ext2":
         request = _exact_startup_check(diagnostics, "multipacketRequestFrames")
         answer = _exact_startup_check(diagnostics, "multipacketAnswerFrames")
@@ -307,6 +426,7 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
     expected_ids = sorted(
         [
             *_derived_transfer_coverage_ids(diagnostics),
+            *_derived_server_login_coverage_ids(report, diagnostics),
             *_derived_server_search_coverage_ids(report, diagnostics),
         ]
     )

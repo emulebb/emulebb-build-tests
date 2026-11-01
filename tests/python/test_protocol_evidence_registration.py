@@ -12,6 +12,62 @@ from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCH
 FILE_HASH = "00112233445566778899aabbccddeeff"
 
 
+def bilateral_login_evidence() -> dict[str, object]:
+    clients = {
+        "rust": {
+            "ok": True,
+            "packetCount": 1,
+            "sendSucceeded": True,
+            "loginSequence": 2,
+            "idChangeSequence": 7,
+            "loginAcceptedSequence": 8,
+            "decodedLogin": {"client_id": 0},
+            "decodedIdChange": {"id_kind": "low-id"},
+            "extensionTags": {"offerfiles_v": 1},
+            "semanticShape": True,
+        },
+        "mfc": {
+            "ok": True,
+            "packetCount": 1,
+            "sendSucceeded": True,
+            "loginSequence": 3,
+            "idChangeSequence": 4,
+            "loginAcceptedSequence": 5,
+            "decodedLogin": {"client_id": 0},
+            "decodedIdChange": {"id_kind": "low-id"},
+            "extensionTags": {},
+            "semanticShape": True,
+        },
+    }
+    return {
+        "schema": "emulebb-build-tests.deterministic-server-login-diagnostics.v1",
+        "ok": True,
+        "serverEndpoint": "127.0.0.1:4661",
+        "expectedClients": {
+            "rust": {"nickname": "rust-test", "tcpPort": 4662},
+            "mfc": {"nickname": "mfc-test", "tcpPort": 4663},
+        },
+        "failures": [],
+        "clients": clients,
+        "comparison": {
+            "bothAccepted": True,
+            "versionEqual": True,
+            "serverFlagsEqual": True,
+            "udpPortsTagEqual": True,
+            "idKindEqual": True,
+            "ok": True,
+        },
+        "captures": {
+            "rust": {"processId": 101, "selectedSegments": ["rust.jsonl"]},
+            "mfc": {"processId": 202, "selectedSegments": ["mfc.jsonl"]},
+        },
+        "coverageClaims": {
+            "eligibleCoverageIds": ["server.login.request"],
+            "evidenceLayers": list(EVIDENCE_LAYERS),
+        },
+    }
+
+
 def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     output_root = tmp_path / "output"
     run = output_root / "reports" / "deterministic-two-client-transfer" / "20261101T183823Z-test"
@@ -215,6 +271,58 @@ def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_pat
     registration = build_transfer_registration(report_path, output_root=output_root)
 
     assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
+
+
+def test_build_transfer_registration_accepts_bilateral_server_login(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence()
+    report["transfer_scenario"] = "server-login-request"
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
+    }
+    report["profiles"]["rust"]["nick"] = "rust-test"
+    report["profiles"]["mfc"]["nick"] = "mfc-test"
+    report["checks"]["client_server_login_diagnostics"] = login
+    report["diagnostics"]["serverLogin"] = login
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        "server.login.request"
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+
+
+def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence()
+    login["clients"]["mfc"]["ok"] = False
+    report["transfer_scenario"] = "server-login-request"
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
+    }
+    report["profiles"]["rust"]["nick"] = "rust-test"
+    report["profiles"]["mfc"]["nick"] = "mfc-test"
+    report["checks"]["client_server_login_diagnostics"] = login
+    report["diagnostics"]["serverLogin"] = login
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        "server.login.request"
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mfc server login evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
 
 
 def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_path: Path) -> None:
