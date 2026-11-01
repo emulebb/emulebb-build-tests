@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import ed2k_server  # noqa: E402
 from emule_test_harness import ed2k_file_observer  # noqa: E402
+from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
@@ -83,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--app-exe")
     parser.add_argument("--client2-app-exe")
     parser.add_argument("--client2-identity", choices=["mfc_oracle", "stock_emule", "amule"], default="mfc_oracle")
+    parser.add_argument(
+        "--protocol-case",
+        choices=tuple(ed2k_protocol_cases.PROTOCOL_CASE_MAP),
+        help="Required authoritative transport case for the MFC diagnostics oracle.",
+    )
     parser.add_argument("--client2-control-exe")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
@@ -120,12 +126,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
-    if not args.verify_offerfiles_v1_stock_fallback:
-        return
-    if args.client2_identity not in {"stock_emule", "amule"}:
-        raise ValueError("OFFERFILES v1 fallback proof requires stock_emule or amule client2.")
-    if not args.verify_source_lifecycle:
-        raise ValueError("OFFERFILES v1 fallback proof requires --verify-source-lifecycle.")
+    if args.verify_offerfiles_v1_stock_fallback:
+        if args.client2_identity not in {"stock_emule", "amule"}:
+            raise ValueError("OFFERFILES v1 fallback proof requires stock_emule or amule client2.")
+        if not args.verify_source_lifecycle:
+            raise ValueError("OFFERFILES v1 fallback proof requires --verify-source-lifecycle.")
+    if args.client2_identity == "mfc_oracle" and args.protocol_case is None:
+        raise ValueError("MFC oracle transfers require an explicit --protocol-case.")
+    if args.client2_identity != "mfc_oracle" and args.protocol_case is not None:
+        raise ValueError("--protocol-case is valid only with --client2-identity mfc_oracle.")
 
 
 def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
@@ -1647,6 +1656,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     validate_args(args)
     client2_identity = CLIENT_IDENTITIES[args.client2_identity]
+    protocol_case = (
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP[args.protocol_case]
+        if args.protocol_case is not None
+        else None
+    )
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
@@ -1664,6 +1678,11 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "runner_revision": git_head_revision(REPO_ROOT),
         "checks": {},
+        "protocol_case": (
+            ed2k_protocol_cases.protocol_surface(protocol_case)
+            if protocol_case is not None
+            else None
+        ),
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
         "offerfiles_v1_stock_fallback": {
             "enabled": bool(args.verify_offerfiles_v1_stock_fallback),
@@ -1705,7 +1724,13 @@ def main(argv: list[str] | None = None) -> int:
             windows_client_address=server_connect_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
+            protocol_obfuscation=(
+                protocol_case.server_protocol_obfuscation
+                if protocol_case is not None
+                else True
+            ),
             offerfiles_v1=args.verify_offerfiles_v1_stock_fallback,
+            server_udp=(protocol_case.server_udp if protocol_case is not None else True),
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
@@ -1722,12 +1747,22 @@ def main(argv: list[str] | None = None) -> int:
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_file = fixture_dir / "deterministic-two-client-transfer.bin"
-        fixture_sha256 = write_fixture_file(fixture_file, args.fixture_size_bytes)
+        fixture_pattern = (
+            protocol_case.fixture_pattern
+            if protocol_case is not None
+            else ed2k_protocol_cases.LOW_COMPRESSIBILITY
+        )
+        fixture_sha256 = ed2k_protocol_cases.write_fixture(
+            fixture_file,
+            args.fixture_size_bytes,
+            fixture_pattern,
+        )
         report["fixture"] = {
             "path": str(fixture_file),
             "name": fixture_file.name,
             "size": args.fixture_size_bytes,
             "sha256": fixture_sha256,
+            "pattern": fixture_pattern,
         }
 
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
@@ -1736,6 +1771,15 @@ def main(argv: list[str] | None = None) -> int:
         rust_output = paths.source_artifacts_dir / "rust-client.out"
         rust_diagnostics_dir = paths.source_artifacts_dir / "diagnostics" / "rust"
         rust_diagnostics_env = rust_diagnostics_child_env(rust_diagnostics_dir)
+        rust_server_entry = (
+            ed2k_protocol_cases.rust_server_entry(
+                protocol_case,
+                server_address,
+                ports["ed2k_tcp"],
+            )
+            if protocol_case is not None
+            else None
+        )
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
@@ -1748,8 +1792,16 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_nickname=CLIENT01.nick,
             kad_port=ports["client1_udp"],
             server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+            server_entry=rust_server_entry,
+            obfuscation_enabled=(
+                protocol_case.client_crypt_supported
+                if protocol_case is not None
+                else True
+            ),
             local_only_discovery=True,
         )
+        if rust_server_entry is not None:
+            report["checks"]["rust_server_entry"] = rust_server_entry
         if args.client2_identity == "amule":
             client2 = prepare_amule_profile(paths.source_artifacts_dir, client2_identity.profile_id)
         else:
@@ -1804,6 +1856,26 @@ def main(argv: list[str] | None = None) -> int:
                 lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
+                crypt_layer_supported=(
+                    protocol_case.client_crypt_supported
+                    if protocol_case is not None
+                    else None
+                ),
+                crypt_layer_requested=(
+                    protocol_case.client_crypt_requested
+                    if protocol_case is not None
+                    else None
+                ),
+                crypt_layer_required=(
+                    protocol_case.client_crypt_required
+                    if protocol_case is not None
+                    else None
+                ),
+                crypt_tcp_padding_length=(
+                    ed2k_protocol_cases.PROTOCOL_PADDING_LENGTH
+                    if protocol_case is not None
+                    else None
+                ),
             )
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(

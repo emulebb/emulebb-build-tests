@@ -36,12 +36,6 @@ SUITE_NAME = "local-ed2k-rust-protocol-combinations"
 API_KEY = "local-ed2k-rust-protocol-combinations-key"
 CLIENT_RUST = CLIENT_IDENTITIES["emulebb_rust"]
 CLIENT_MFC_ORACLE = CLIENT_IDENTITIES["mfc_oracle"]
-SERVER_UDP_FLAG_EXT_GETSOURCES = 0x0000_0001
-SERVER_UDP_FLAG_EXT_GETFILES = 0x0000_0002
-SERVER_UDP_FLAG_EXT_GETSOURCES2 = 0x0000_0020
-SERVER_UDP_FLAG_LARGEFILES = 0x0000_0100
-SERVER_UDP_FLAG_UDPOBFUSCATION = 0x0000_0200
-SERVER_UDP_FLAG_TCPOBFUSCATION = 0x0000_0400
 ED2K_PART_SIZE_BYTES = 9_728_000
 SECONDARY_FIXTURE_SIZE_BYTES = ED2K_PART_SIZE_BYTES + 1
 HASH_ONLY_FIXTURE_SIZE_BYTES = (ED2K_PART_SIZE_BYTES * 2) + 1
@@ -74,51 +68,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
-
-
-def server_udp_flags(case: ed2k_protocol_cases.ProtocolCase) -> int:
-    """Returns the stock capability flags advertised to Rust for one server case."""
-
-    flags = (
-        SERVER_UDP_FLAG_EXT_GETSOURCES
-        | SERVER_UDP_FLAG_EXT_GETFILES
-        | SERVER_UDP_FLAG_EXT_GETSOURCES2
-        | SERVER_UDP_FLAG_LARGEFILES
-    )
-    if case.server_protocol_obfuscation:
-        flags |= SERVER_UDP_FLAG_TCPOBFUSCATION
-    if case.server_protocol_obfuscation and case.server_udp:
-        flags |= SERVER_UDP_FLAG_UDPOBFUSCATION
-    return flags
-
-
-def rust_server_entry(case: ed2k_protocol_cases.ProtocolCase, host: str, tcp_port: int) -> dict[str, object]:
-    """Builds the ED2K server-entry metadata Rust needs for obfuscated sessions."""
-
-    udp_key = 0x11223344 if case.server_protocol_obfuscation and case.server_udp else 0
-    return {
-        "host": host,
-        "port": tcp_port,
-        "name": "emulebb-local-e2e",
-        "description": "Workspace deterministic eMuleBB Rust protocol matrix server",
-        "udpFlags": server_udp_flags(case),
-        "udpKey": udp_key,
-        "udpKeyIp": 0,
-        "obfuscationPortTcp": tcp_port if case.server_protocol_obfuscation else 0,
-        "obfuscationPortUdp": tcp_port + 4 if case.server_protocol_obfuscation and case.server_udp else 0,
-    }
-
-
-def rust_protocol_surface(case: ed2k_protocol_cases.ProtocolCase) -> dict[str, object]:
-    """Returns the protocol surface covered by one Rust matrix case."""
-
-    surface = ed2k_protocol_cases.protocol_surface(case)
-    surface["rust_client_crypt"] = {
-        "obfuscation_enabled": case.client_crypt_supported,
-        "required_preference_supported": False,
-        "evidence": "emulebb-rust currently exposes one ED2K obfuscation boolean, not separate supported/requested/required bits.",
-    }
-    return surface
 
 
 def apply_mfc_protocol_preferences(
@@ -483,7 +432,7 @@ def run_protocol_case(
         "name": case.name,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "protocol_surface": rust_protocol_surface(case),
+        "protocol_surface": ed2k_protocol_cases.protocol_surface(case),
         "clients": [CLIENT_RUST.profile_id, CLIENT_MFC_ORACLE.profile_id],
         "checks": {},
     }
@@ -741,7 +690,11 @@ def run_protocol_case(
         current_phase = "launch_rust"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
         rust_profile = case_dir / "rust-profile"
-        entry = rust_server_entry(case, ed2k_server_address, ports["ed2k_tcp"])
+        entry = ed2k_protocol_cases.rust_server_entry(
+            case,
+            ed2k_server_address,
+            ports["ed2k_tcp"],
+        )
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,

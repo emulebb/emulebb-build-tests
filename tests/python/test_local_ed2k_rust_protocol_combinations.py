@@ -25,39 +25,11 @@ def load_suite_module():
     return module
 
 
-def test_rust_server_entry_advertises_obfuscated_tcp_and_udp() -> None:
-    module = load_suite_module()
-    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
-
-    entry = module.rust_server_entry(case, "192.0.2.10", 4661)
-
-    assert entry["host"] == "192.0.2.10"
-    assert entry["port"] == 4661
-    assert entry["obfuscationPortTcp"] == 4661
-    assert entry["obfuscationPortUdp"] == 4665
-    assert entry["udpKey"] == 0x11223344
-    assert entry["udpFlags"] & module.SERVER_UDP_FLAG_TCPOBFUSCATION
-    assert entry["udpFlags"] & module.SERVER_UDP_FLAG_UDPOBFUSCATION
-
-
-def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
-    module = load_suite_module()
-    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
-
-    entry = module.rust_server_entry(case, "192.0.2.10", 4661)
-
-    assert entry["obfuscationPortTcp"] == 0
-    assert entry["obfuscationPortUdp"] == 0
-    assert entry["udpKey"] == 0
-    assert not entry["udpFlags"] & module.SERVER_UDP_FLAG_TCPOBFUSCATION
-    assert not entry["udpFlags"] & module.SERVER_UDP_FLAG_UDPOBFUSCATION
-
-
 def test_rust_protocol_surface_discloses_single_obfuscation_toggle() -> None:
     module = load_suite_module()
     case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
 
-    surface = module.rust_protocol_surface(case)
+    surface = module.ed2k_protocol_cases.protocol_surface(case)
 
     assert surface["client_crypt_required"] is True
     assert surface["rust_client_crypt"]["obfuscation_enabled"] is True

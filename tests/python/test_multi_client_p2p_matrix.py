@@ -292,6 +292,7 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     assert command[command.index("--artifacts-dir") + 1].endswith("\\h2") or command[command.index("--artifacts-dir") + 1].endswith("/h2")
     assert "--p2p-bind-interface-name" not in command
     assert "--client2-app-exe" in command
+    assert option_value(command, "--protocol-case") == "obfuscated-preferred"
 
 
 def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path) -> None:
@@ -315,6 +316,7 @@ def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path
     command = captured["command"]
     assert option_value(command, "--client2-app-exe") == str(stock_executable.resolve())
     assert option_value(command, "--client2-identity") == "stock_emule"
+    assert "--protocol-case" not in command
 
 
 def test_amule_transfer_scenario_uses_daemon_and_control(monkeypatch, tmp_path: Path) -> None:

@@ -10,6 +10,12 @@ from pathlib import Path
 PROTOCOL_PADDING_LENGTH = 128
 LOW_COMPRESSIBILITY = "low-compressibility"
 COMPRESSIBLE = "compressible"
+SERVER_UDP_FLAG_EXT_GETSOURCES = 0x0000_0001
+SERVER_UDP_FLAG_EXT_GETFILES = 0x0000_0002
+SERVER_UDP_FLAG_EXT_GETSOURCES2 = 0x0000_0020
+SERVER_UDP_FLAG_LARGEFILES = 0x0000_0100
+SERVER_UDP_FLAG_UDPOBFUSCATION = 0x0000_0200
+SERVER_UDP_FLAG_TCPOBFUSCATION = 0x0000_0400
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,39 @@ def mfc_preference_snapshot(case: ProtocolCase) -> dict[str, str]:
     return dict(mfc_preference_updates(case))
 
 
+def server_udp_flags(case: ProtocolCase) -> int:
+    """Returns the stock server capability flags advertised to Rust."""
+
+    flags = (
+        SERVER_UDP_FLAG_EXT_GETSOURCES
+        | SERVER_UDP_FLAG_EXT_GETFILES
+        | SERVER_UDP_FLAG_EXT_GETSOURCES2
+        | SERVER_UDP_FLAG_LARGEFILES
+    )
+    if case.server_protocol_obfuscation:
+        flags |= SERVER_UDP_FLAG_TCPOBFUSCATION
+    if case.server_protocol_obfuscation and case.server_udp:
+        flags |= SERVER_UDP_FLAG_UDPOBFUSCATION
+    return flags
+
+
+def rust_server_entry(case: ProtocolCase, host: str, tcp_port: int) -> dict[str, object]:
+    """Builds the deterministic server metadata Rust needs for one case."""
+
+    udp_key = 0x11223344 if case.server_protocol_obfuscation and case.server_udp else 0
+    return {
+        "host": host,
+        "port": tcp_port,
+        "name": "emulebb-local-e2e",
+        "description": "Workspace deterministic eMuleBB Rust protocol campaign server",
+        "udpFlags": server_udp_flags(case),
+        "udpKey": udp_key,
+        "udpKeyIp": 0,
+        "obfuscationPortTcp": tcp_port if case.server_protocol_obfuscation else 0,
+        "obfuscationPortUdp": tcp_port + 4 if case.server_protocol_obfuscation and case.server_udp else 0,
+    }
+
+
 def write_fixture(path: Path, size_bytes: int, pattern: str) -> str:
     """Writes deterministic bytes for one protocol case and returns SHA-256."""
 
@@ -133,6 +172,14 @@ def protocol_surface(case: ProtocolCase) -> dict[str, object]:
         "evidence": (
             "eMule advertises data compression capability during client hello; "
             "the matrix varies fixture compressibility because no stock profile toggle exists."
+        ),
+    }
+    surface["rust_client_crypt"] = {
+        "obfuscation_enabled": case.client_crypt_supported,
+        "required_preference_supported": False,
+        "evidence": (
+            "emulebb-rust exposes one ED2K obfuscation boolean, not separate "
+            "supported/requested/required preferences."
         ),
     }
     return surface

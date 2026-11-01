@@ -1752,6 +1752,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     deterministic_command = commands[2]
     assert script_name(deterministic_command) == "deterministic-two-client-transfer.py"
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
+    assert option_values(deterministic_command, "--protocol-case") == ["obfuscated-preferred"]
 
     godzilla_command = commands[3]
     assert option_values(godzilla_command, "--stage") == [live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE]
@@ -2061,6 +2062,7 @@ def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: 
 
     deterministic_command = by_script["deterministic-two-client-transfer.py"]
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
+    assert option_values(deterministic_command, "--protocol-case") == ["obfuscated-preferred"]
 
 
 def test_admin_storage_suite_requires_explicit_fixture_gate(tmp_path: Path) -> None:

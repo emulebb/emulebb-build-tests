@@ -40,6 +40,34 @@ def test_protocol_surface_documents_auto_negotiated_compression() -> None:
     assert surface["fixture_pattern"] == "compressible"
     assert surface["client_data_compression"]["mode"] == "stock-auto-negotiated"
     assert surface["client_data_compression"]["preference_toggle"] is False
+    assert surface["rust_client_crypt"]["obfuscation_enabled"] is True
+    assert surface["rust_client_crypt"]["required_preference_supported"] is False
+
+
+def test_rust_server_entry_advertises_obfuscated_tcp_and_udp() -> None:
+    case = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
+
+    entry = ed2k_protocol_cases.rust_server_entry(case, "192.0.2.10", 4661)
+
+    assert entry["host"] == "192.0.2.10"
+    assert entry["port"] == 4661
+    assert entry["obfuscationPortTcp"] == 4661
+    assert entry["obfuscationPortUdp"] == 4665
+    assert entry["udpKey"] == 0x11223344
+    assert entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_TCPOBFUSCATION
+    assert entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_UDPOBFUSCATION
+
+
+def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
+    case = ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+
+    entry = ed2k_protocol_cases.rust_server_entry(case, "192.0.2.10", 4661)
+
+    assert entry["obfuscationPortTcp"] == 0
+    assert entry["obfuscationPortUdp"] == 0
+    assert entry["udpKey"] == 0
+    assert not entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_TCPOBFUSCATION
+    assert not entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_UDPOBFUSCATION
 
 
 def test_fixture_writer_is_deterministic_for_both_patterns(tmp_path: Path) -> None:

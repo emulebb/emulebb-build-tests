@@ -232,6 +232,7 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
     scenario_id = MFC_ORACLE_TRANSFER_SCENARIO_ID
     scenario_artifacts = paths.source_artifacts_dir / "h2"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    command.extend(["--protocol-case", "obfuscated-preferred"])
     if args.client2_app_exe:
         command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
 

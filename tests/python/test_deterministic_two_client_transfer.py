@@ -75,6 +75,7 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     assert defaults.verify_source_lifecycle is False
     assert defaults.verify_offerfiles_v1_stock_fallback is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
+    assert defaults.protocol_case is None
     assert enabled.verify_source_lifecycle is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
@@ -129,6 +130,41 @@ def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
         module.validate_args(wrong_client)
     with pytest.raises(ValueError, match="requires --verify-source-lifecycle"):
         module.validate_args(missing_lifecycle)
+
+
+def test_mfc_oracle_requires_explicit_protocol_case() -> None:
+    module = load_suite_module()
+    missing = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    selected = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required-compressible",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="explicit --protocol-case"):
+        module.validate_args(missing)
+    module.validate_args(selected)
+    assert selected.protocol_case == "obfuscated-required-compressible"
+
+
+def test_reference_clients_reject_mfc_protocol_case() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--protocol-case",
+            "plain-server-plain-clients",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="valid only"):
+        module.validate_args(args)
 
 
 def test_offerfiles_v1_fallback_accepts_zero_negotiation_counters() -> None:
@@ -1144,6 +1180,7 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
     assert args.client2_identity == "mfc_oracle"
+    assert args.protocol_case is None
 
 
 def test_client2_identity_accepts_stock_baseline() -> None:
