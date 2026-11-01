@@ -2624,6 +2624,27 @@ def _check_server_list_source__get_server_at_rejects_invalid_indices_before_posi
     assert "return list.GetAt(list.FindIndex(pos));" not in header
 
 
+# --- current server TCP diagnostics contract ---
+
+
+def _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion() -> None:
+    source = (app_source_root() / "ServerSocket.cpp").read_text(encoding="utf-8", errors="ignore")
+    attempt_transport = (
+        'IsServerCryptEnabledConnection() ? _T("obfuscated") : _T("plaintext")'
+    )
+
+    assert source.count(attempt_transport) == 3
+    receive_block = source[source.index("bool CServerSocket::PacketReceived(") : source.index("void CServerSocket::SetConnectionState(")]
+    state_block = source[source.index("void CServerSocket::LogConnectionStateTransition(") : source.index("void CServerSocket::SendPacket(")]
+    send_block = source[source.index("void CServerSocket::SendPacket(") :]
+    assert attempt_transport in receive_block
+    assert attempt_transport in state_block
+    assert attempt_transport in send_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in receive_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in state_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in send_block
+
+
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
 
 
@@ -4221,6 +4242,7 @@ _PARITY_CASES = [
     ("search_results_source::test_search_results_refresh_layout_after_hidden_tab_changes", _check_search_results_source__search_results_refresh_layout_after_hidden_tab_changes),
     ("search_results_source::test_clean_shutdown_removes_tray_icon_before_long_teardown", _check_search_results_source__clean_shutdown_removes_tray_icon_before_long_teardown),
     ("server_list_source::test_get_server_at_rejects_invalid_indices_before_position_access", _check_server_list_source__get_server_at_rejects_invalid_indices_before_position_access),
+    ("server_socket_source::test_diagnostics_use_attempt_transport_before_handshake_completion", _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion),
     ("sha_hash_set_source::test_aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges", _check_sha_hash_set_source__aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges),
     ("shared_directory_rule_index_source::test_shared_directory_ops_owns_rule_index_and_key_helpers", _check_shared_directory_rule_index_source__shared_directory_ops_owns_rule_index_and_key_helpers),
     ("shared_directory_rule_index_source::test_preferences_tree_uses_shared_directory_rule_index", _check_shared_directory_rule_index_source__preferences_tree_uses_shared_directory_rule_index),
