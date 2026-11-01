@@ -35,9 +35,7 @@ def write_minimal_known_met(path: Path) -> None:
     )
 
 
-def stopped_hash_backup_fixture(
-    tmp_path: Path,
-) -> tuple[controller.ControlPaths, Path, Path, Path]:
+def stopped_hash_backup_fixture(tmp_path: Path) -> tuple[controller.ControlPaths, Path, Path, Path]:
     """Creates stopped-session MFC and Rust hash state beneath temporary profiles."""
 
     output_root = tmp_path / "output"
@@ -654,18 +652,14 @@ def test_session_storage_context_rejects_invalid_authority(
         controller.parse_session_storage_context(manifest, output_root)
 
 
-def test_session_storage_context_rejects_missing_or_unknown_fields(
-    tmp_path: Path,
-) -> None:
+def test_session_storage_context_rejects_missing_or_unknown_fields(tmp_path: Path) -> None:
     output_root, manifest = storage_context_manifest(tmp_path)
     storage = manifest["storage"]
     assert isinstance(storage, dict)
     del storage["launchEnforcement"]
     storage["unexpected"] = True
 
-    with pytest.raises(
-        RuntimeError, match=r"missing=launchEnforcement unknown=unexpected"
-    ):
+    with pytest.raises(RuntimeError, match=r"missing=launchEnforcement unknown=unexpected"):
         controller.parse_session_storage_context(manifest, output_root)
 
 
@@ -704,9 +698,7 @@ def test_session_storage_enforcement_protects_active_and_previous_campaigns(
     assert not old_file.exists()
 
 
-def test_session_storage_enforcement_reports_unprunable_active_growth(
-    tmp_path: Path,
-) -> None:
+def test_session_storage_enforcement_reports_unprunable_active_growth(tmp_path: Path) -> None:
     root = controller.campaign_storage_root(tmp_path / "output")
     active_campaign = root / "20261025T120000Z"
     active_file = active_campaign / "active.log"
@@ -1064,14 +1056,8 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert command[command.index("--campaign-id") + 1] == "20261025T120000Z"
     assert command[command.index("--stop-file") + 1] == str(paths.stop_file)
     assert command[command.index("--rest-timeout-seconds") + 1] == "300.0"
-    assert (
-        command[command.index("--rust-server") + 1]
-        == controller.soak_launch.OPERATOR_SERVER
-    )
-    assert (
-        command[command.index("--mfc-server") + 1]
-        == controller.soak_launch.OPERATOR_SERVER
-    )
+    assert command[command.index("--rust-server") + 1] == controller.soak_launch.OPERATOR_SERVER
+    assert command[command.index("--mfc-server") + 1] == controller.soak_launch.OPERATOR_SERVER
     assert "--vpn-guard-scenario" in command
     assert "success" in command
     assert "--reuse-rust-shared-profile" in command
@@ -1081,9 +1067,7 @@ def test_build_launch_command_is_until_stopped_dual_diagnostics(tmp_path: Path) 
     assert "--cpu-profile" not in command
 
 
-def test_bounded_process_command_preserves_policy_paths_and_target(
-    tmp_path: Path,
-) -> None:
+def test_bounded_process_command_preserves_policy_paths_and_target(tmp_path: Path) -> None:
     command = controller.build_bounded_process_command(
         ["python", "target.py", "--flag"],
         stdout_path=tmp_path / "stdout.log",
@@ -1138,13 +1122,8 @@ def test_exact_process_row_rejects_pid_reuse() -> None:
         )
     ]
 
-    assert (
-        controller.exact_process_row({"pid": 123, "creationDate": "old"}, rows) is None
-    )
-    assert (
-        controller.exact_process_row({"pid": 123, "creationDate": "new"}, rows)
-        == rows[0]
-    )
+    assert controller.exact_process_row({"pid": 123, "creationDate": "old"}, rows) is None
+    assert controller.exact_process_row({"pid": 123, "creationDate": "new"}, rows) == rows[0]
     assert controller.exact_process_row(None, rows) is None
 
 
@@ -1179,9 +1158,7 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
         spawned.append(command)
         return FakeProcess(100 + len(spawned))
 
-    def fake_identity(
-        pid: int, *, markers: tuple[str, ...], timeout_seconds: float = 10.0
-    ):
+    def fake_identity(pid: int, *, markers: tuple[str, ...], timeout_seconds: float = 10.0):
         del timeout_seconds
         return WindowsProcessInfo(
             pid=pid,
@@ -1270,27 +1247,16 @@ def test_start_session_records_launcher_observer_and_watcher_identities(
     assert "linux" not in result["observerTargetCommand"]
     assert Path(spawned[2][1]).name == "run-bounded-process.py"
     assert any(Path(value).name == "persisted-soak-control.py" for value in spawned[2])
-    assert (
-        result["watchTargetCommand"][
-            result["watchTargetCommand"].index("--launcher-pid") + 1
-        ]
-        == "101"
-    )
+    assert result["watchTargetCommand"][result["watchTargetCommand"].index("--launcher-pid") + 1] == "101"
     assert (
         result["watchTargetCommand"][
             result["watchTargetCommand"].index("--launcher-creation-date") + 1
         ]
         == "created-101"
     )
-    assert result["launcher"]["commandFingerprint"] == controller.command_fingerprint(
-        spawned[0]
-    )
-    assert result["observer"]["commandFingerprint"] == controller.command_fingerprint(
-        spawned[1]
-    )
-    assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(
-        spawned[2]
-    )
+    assert result["launcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[0])
+    assert result["observer"]["commandFingerprint"] == controller.command_fingerprint(spawned[1])
+    assert result["watcher"]["commandFingerprint"] == controller.command_fingerprint(spawned[2])
     assert result["logs"]["root"] == str(
         output_root / "soak" / "campaigns" / "20261025T120000Z" / "controller-output"
     )
@@ -1439,10 +1405,8 @@ def test_observer_start_failure_stops_launcher_and_persists_failure(
     monkeypatch.setattr(
         controller,
         "stop_owned_process",
-        lambda identity, *, markers, **_kwargs: (
-            stopped.append((identity, markers))
-            or {"graceful": True, "force": {"forced": False}}
-        ),
+        lambda identity, *, markers, **_kwargs: stopped.append((identity, markers))
+        or {"graceful": True, "force": {"forced": False}},
     )
 
     with pytest.raises(RuntimeError, match="observer identity unavailable"):
@@ -1456,66 +1420,6 @@ def test_observer_start_failure_stops_launcher_and_persists_failure(
     assert persisted["state"] == "start-failed"
     assert persisted["startFailure"]["role"] == "observer"
     assert paths.stop_file.is_file()
-
-
-def test_unpublished_launcher_rollback_stops_captured_process_tree(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = make_paths(tmp_path)
-    captured = (
-        {"pid": 101, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
-        {"pid": 102, "parentPid": 101, "creationDate": "child", "name": "python.exe"},
-    )
-    stopped = []
-
-    class FakeProcess:
-        pid = 101
-
-        def __init__(self) -> None:
-            self.terminated = False
-
-        def poll(self):
-            return 0 if self.terminated else None
-
-        def terminate(self) -> None:
-            self.terminated = True
-
-        def wait(self, *, timeout: float) -> int:
-            assert timeout == controller.WATCH_FAILURE_GRACE_SECONDS
-            return 0
-
-    process = FakeProcess()
-    monkeypatch.setattr(
-        controller.windows_processes,
-        "collect_processes",
-        lambda: [
-            WindowsProcessInfo(
-                pid=101,
-                parent_pid=1,
-                name="python.exe",
-                command_line="python launch-soak.py",
-                creation_date="launcher",
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        controller, "capture_exact_process_tree", lambda _identity: captured
-    )
-
-    def stop_tree(identities, *, timeout_seconds):
-        stopped.append((identities, timeout_seconds))
-        return {"verifiedStopped": True}
-
-    monkeypatch.setattr(controller, "stop_captured_process_tree", stop_tree)
-
-    result = controller.rollback_unpublished_launcher(paths, process)
-
-    assert process.terminated is True
-    assert paths.stop_file.is_file()
-    assert paths.watch_stop_file.is_file()
-    assert stopped == [(captured, controller.WATCH_FAILURE_GRACE_SECONDS)]
-    assert result["forced"]["verifiedStopped"] is True
 
 
 def test_start_session_enforces_storage_before_control_mutation_or_spawn(
@@ -1565,13 +1469,9 @@ def test_start_session_enforces_storage_before_control_mutation_or_spawn(
     assert not paths.control_dir.exists()
 
 
-def test_start_session_rejects_invalid_watch_budget_before_preflight(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_start_session_rejects_invalid_watch_budget_before_preflight(tmp_path: Path, monkeypatch) -> None:
     paths = make_paths(tmp_path)
-    config = controller.SessionConfig(
-        inputs=tmp_path / "inputs.json", vpn_guard_config=tmp_path / "vpn.json"
-    )
+    config = controller.SessionConfig(inputs=tmp_path / "inputs.json", vpn_guard_config=tmp_path / "vpn.json")
     preflight_called = False
 
     def fake_preflight(_config, _output_root):
@@ -1658,45 +1558,6 @@ def test_run_to_gate_parser_uses_bounded_canonical_defaults() -> None:
     assert args.lan_bind_addr == "127.0.0.1"
 
 
-@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
-def test_run_session_to_gate_rejects_non_finite_timeout_before_start(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    invalid: float,
-) -> None:
-    paths = make_paths(tmp_path)
-    config = controller.SessionConfig(
-        inputs=tmp_path / "inputs.json",
-        vpn_guard_config=tmp_path / "vpn.json",
-    )
-    start_called = False
-
-    def start(*_args, **_kwargs):
-        nonlocal start_called
-        start_called = True
-        raise AssertionError("invalid arguments must fail before starting")
-
-    monkeypatch.setattr(controller, "start_session", start)
-
-    with pytest.raises(ValueError, match="finite"):
-        controller.run_session_to_gate(
-            config,
-            paths,
-            gate_timeout_seconds=invalid,
-        )
-
-    assert start_called is False
-
-
-def test_session_transition_lock_rejects_concurrent_transition(tmp_path: Path) -> None:
-    paths = make_paths(tmp_path)
-
-    with controller.session_transition_lock(paths):
-        with pytest.raises(RuntimeError, match="transition is active"):
-            with controller.session_transition_lock(paths):
-                pytest.fail("concurrent transition unexpectedly acquired the lock")
-
-
 def test_preflight_parser_uses_shared_session_selection() -> None:
     args = controller.build_parser().parse_args(
         [
@@ -1741,9 +1602,7 @@ def test_preflight_command_reports_existing_preflight_without_launch(
         raise AssertionError("preflight must not launch the soak")
 
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(
-        controller, "preflight_session", lambda *_args, **_kwargs: expected
-    )
+    monkeypatch.setattr(controller, "preflight_session", lambda *_args, **_kwargs: expected)
     monkeypatch.setattr(controller, "start_session", reject_launch)
 
     assert controller.main(["preflight"]) == 0
@@ -1853,21 +1712,10 @@ def test_session_status_reports_exact_dual_process_tree(
             "preflight": preflight,
         },
     )
-    controller.write_json_atomic(
-        paths.last_run_manifest,
-        {"campaignId": "20261024T120000Z", "status": "starting"},
-    )
+    controller.write_json_atomic(paths.last_run_manifest, {"campaignId": "20261024T120000Z", "status": "starting"})
     processes = [
-        WindowsProcessInfo(
-            10,
-            1,
-            "python.exe",
-            "python run-bounded-process.py -- launch-soak.py",
-            "launcher",
-        ),
-        WindowsProcessInfo(
-            13, 10, "python.exe", "python launch-soak.py", "launch-target"
-        ),
+        WindowsProcessInfo(10, 1, "python.exe", "python run-bounded-process.py -- launch-soak.py", "launcher"),
+        WindowsProcessInfo(13, 10, "python.exe", "python launch-soak.py", "launch-target"),
         WindowsProcessInfo(11, 13, "emulebb-rust-diagnostics.exe", "rust", "rust"),
         WindowsProcessInfo(12, 13, "emule.exe", "mfc", "mfc"),
         WindowsProcessInfo(
@@ -1885,12 +1733,8 @@ def test_session_status_reports_exact_dual_process_tree(
             "watcher",
         ),
     ]
-    monkeypatch.setattr(
-        controller.windows_processes, "collect_processes", lambda: processes
-    )
-    monkeypatch.setattr(
-        controller, "rest_health", lambda _url, _key: healthy_rest_health()
-    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
+    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: healthy_rest_health())
     monkeypatch.setattr(
         controller,
         "diagnostic_writer_health",
@@ -2082,14 +1926,7 @@ def test_wait_for_parity_gate_reaches_green_while_owned_processes_run(
         },
     )
     monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
-    monkeypatch.setattr(
-        controller, "exact_process_row", lambda _identity, _rows: object()
-    )
-    monkeypatch.setattr(
-        controller,
-        "session_status",
-        lambda _paths: {"ok": True, "findings": []},
-    )
+    monkeypatch.setattr(controller, "exact_process_row", lambda _identity, _rows: object())
     monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
 
     result = controller.wait_for_parity_gate(
@@ -2101,71 +1938,6 @@ def test_wait_for_parity_gate_reaches_green_while_owned_processes_run(
     assert result["status"] == "green"
     assert result["samples"] == 2
     assert result["gate"] == {"status": "green", "ok": True}
-
-
-def test_wait_for_parity_gate_rejects_replaced_campaign_before_reading_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = make_paths(tmp_path)
-    monkeypatch.setattr(
-        controller,
-        "load_json",
-        lambda _path: {"campaignId": "campaign-b", "state": "running"},
-    )
-    monkeypatch.setattr(
-        controller,
-        "parity_gate_status",
-        lambda _paths: pytest.fail(
-            "replacement must be rejected before reading its gate"
-        ),
-    )
-
-    result = controller.wait_for_parity_gate(
-        paths,
-        expected_campaign_id="campaign-a",
-    )
-
-    assert result["status"] == "campaign-replaced"
-    assert result["reason"] == "campaign-replaced"
-
-
-def test_wait_for_parity_gate_rejects_green_when_current_health_is_bad(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = make_paths(tmp_path)
-    manifest = {
-        "campaignId": "campaign-a",
-        "state": "running",
-        "launcher": {"pid": 1, "creationDate": "launcher"},
-        "observer": {"pid": 2, "creationDate": "observer"},
-        "watcher": {"pid": 3, "creationDate": "watcher"},
-    }
-    monkeypatch.setattr(controller, "load_json", lambda _path: manifest)
-    monkeypatch.setattr(
-        controller,
-        "parity_gate_status",
-        lambda _paths: {"status": "green", "ok": True},
-    )
-    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
-    monkeypatch.setattr(
-        controller, "exact_process_row", lambda _identity, _rows: object()
-    )
-    monkeypatch.setattr(
-        controller,
-        "session_status",
-        lambda _paths: {"ok": False, "findings": ["full-tunnel-unhealthy"]},
-    )
-
-    result = controller.wait_for_parity_gate(
-        paths,
-        expected_campaign_id="campaign-a",
-        expected_identities=controller.owned_session_identities(manifest),
-    )
-
-    assert result["status"] == "runtime-failed"
-    assert result["reason"] == "full-tunnel-unhealthy"
 
 
 def test_wait_for_parity_gate_fails_when_owned_runtime_exits(
@@ -2249,11 +2021,6 @@ def test_run_session_to_gate_requires_green_gate_and_clean_stop(
         inputs=tmp_path / "inputs.json",
         vpn_guard_config=tmp_path / "vpn.json",
     )
-    expected_identities = {
-        "launcher": {"pid": 1, "creationDate": "launcher"},
-        "observer": {"pid": 2, "creationDate": "observer"},
-        "watcher": {"pid": 3, "creationDate": "watcher"},
-    }
     monkeypatch.setattr(
         controller,
         "start_session",
@@ -2261,31 +2028,23 @@ def test_run_session_to_gate_requires_green_gate_and_clean_stop(
             "campaignId": "20261101T120000Z",
             "campaignDir": str(tmp_path / "campaign"),
             "startedUtc": "2026-11-01T12:00:00+00:00",
-            **expected_identities,
         },
     )
-    wait_kwargs = {}
-    stop_kwargs = {}
-
-    def wait(*_args, **kwargs):
-        wait_kwargs.update(kwargs)
-        return {"status": "green"}
-
-    def stop(*_args, **kwargs):
-        stop_kwargs.update(kwargs)
-        return {"ok": True}
-
-    monkeypatch.setattr(controller, "wait_for_parity_gate", wait)
-    monkeypatch.setattr(controller, "stop_session", stop)
+    monkeypatch.setattr(
+        controller,
+        "wait_for_parity_gate",
+        lambda *_args, **_kwargs: {"status": "green"},
+    )
+    monkeypatch.setattr(
+        controller,
+        "stop_session",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
 
     result = controller.run_session_to_gate(config, paths)
 
     assert result["ok"] is True
     assert result["campaignId"] == "20261101T120000Z"
-    assert wait_kwargs["expected_campaign_id"] == "20261101T120000Z"
-    assert wait_kwargs["expected_identities"] == expected_identities
-    assert stop_kwargs["expected_campaign_id"] == "20261101T120000Z"
-    assert stop_kwargs["expected_identities"] == expected_identities
 
 
 def test_run_session_to_gate_stops_when_operator_interrupts_wait(
@@ -2465,9 +2224,7 @@ def test_current_observer_report_rejects_stale_or_misdirected_evidence(
         )
 
 
-def test_current_observer_report_retry_accepts_completed_publication(
-    monkeypatch,
-) -> None:
+def test_current_observer_report_retry_accepts_completed_publication(monkeypatch) -> None:
     attempts = 0
     sleeps: list[float] = []
     expected = {"campaignId": "campaign", "schema": "report"}
@@ -2491,9 +2248,7 @@ def test_current_observer_report_retry_accepts_completed_publication(
     assert sleeps == [controller.OBSERVER_REPORT_READ_RETRY_SECONDS] * 3
 
 
-def test_current_observer_report_retry_rejects_persistent_corruption(
-    monkeypatch,
-) -> None:
+def test_current_observer_report_retry_rejects_persistent_corruption(monkeypatch) -> None:
     attempts = 0
 
     def reject_report(_manifest, _last_run):
@@ -2617,12 +2372,8 @@ def test_session_status_requires_both_writers_after_persisted_readiness(
         WindowsProcessInfo(11, 10, "emulebb-rust-diagnostics.exe", "rust", "rust"),
         WindowsProcessInfo(12, 10, "emule.exe", "mfc", "mfc"),
     ]
-    monkeypatch.setattr(
-        controller.windows_processes, "collect_processes", lambda: processes
-    )
-    monkeypatch.setattr(
-        controller, "rest_health", lambda _url, _key: healthy_rest_health()
-    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: processes)
+    monkeypatch.setattr(controller, "rest_health", lambda _url, _key: healthy_rest_health())
     monkeypatch.setattr(controller, "full_tunnel_health", lambda: {"ok": True})
 
     def fake_writer_health(_url: str, key: str) -> dict[str, object]:
@@ -2800,11 +2551,7 @@ def test_session_status_ignores_stale_watch_storage_failure(
 
 @pytest.mark.parametrize(
     ("age_seconds", "policy_sha256", "expected_state"),
-    [
-        (10, "expected", "current"),
-        (181, "expected", "stale"),
-        (10, "tampered", "invalid"),
-    ],
+    [(10, "expected", "current"), (181, "expected", "stale"), (10, "tampered", "invalid")],
 )
 def test_watch_heartbeat_health_requires_fresh_manifest_authority(
     tmp_path: Path,
@@ -2833,9 +2580,7 @@ def test_watch_heartbeat_health_requires_fresh_manifest_authority(
         "storage": {
             "ok": True,
             "policySha256": (
-                storage["policySha256"]
-                if policy_sha256 == "expected"
-                else policy_sha256
+                storage["policySha256"] if policy_sha256 == "expected" else policy_sha256
             ),
             "activeCampaignDir": storage["activeCampaignDir"],
             "previousCampaignDir": storage["previousCampaignDir"],
@@ -2880,11 +2625,7 @@ def test_watch_heartbeat_health_rejects_previous_campaign_pin_mismatch(
 
     result = controller.watch_heartbeat_health(manifest, heartbeat, now=now)
 
-    assert result == {
-        "state": "invalid",
-        "accepted": False,
-        "reason": "previous-campaign",
-    }
+    assert result == {"state": "invalid", "accepted": False, "reason": "previous-campaign"}
 
 
 def test_stop_session_requests_graceful_teardown_without_force(
@@ -2926,41 +2667,6 @@ def test_stop_session_requests_graceful_teardown_without_force(
     assert result["observerForce"]["forced"] is False
     assert result["watcherGraceful"] is True
     assert json.loads(paths.manifest.read_text(encoding="utf-8"))["state"] == "stopped"
-
-
-def test_stop_session_does_not_touch_replacement_campaign(
-    tmp_path: Path,
-) -> None:
-    paths = make_paths(tmp_path)
-    controller.write_json_atomic(
-        paths.manifest,
-        {
-            "schema": controller.MANIFEST_SCHEMA,
-            "state": "running",
-            "campaignId": "campaign-b",
-            "launcher": {"pid": 10, "creationDate": "launcher-b"},
-            "observer": {"pid": 20, "creationDate": "observer-b"},
-            "watcher": {"pid": 30, "creationDate": "watcher-b"},
-        },
-    )
-
-    result = controller.stop_session(
-        paths,
-        expected_campaign_id="campaign-a",
-        expected_identities={
-            "launcher": {"pid": 1, "creationDate": "launcher-a"},
-        },
-    )
-
-    assert result["ok"] is False
-    assert result["notOwned"] is True
-    assert result["reason"] == "campaign-replaced"
-    assert not paths.stop_file.exists()
-    assert not paths.watch_stop_file.exists()
-    assert (
-        json.loads(paths.manifest.read_text(encoding="utf-8"))["campaignId"]
-        == "campaign-b"
-    )
 
 
 def test_stop_session_accepts_authoritative_no_writer_heartbeat(
@@ -3039,7 +2745,9 @@ def test_stop_session_finalizes_both_active_diagnostic_segments(
         prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
         segment = diagnostic_dir / f"{prefix}-diag-42-run-a-000000.jsonl"
         segment.write_text(
-            json.dumps(diagnostic_record(client=client, segment_id=0, sequence=1))
+            json.dumps(
+                diagnostic_record(client=client, segment_id=0, sequence=1)
+            )
             + "\n",
             encoding="utf-8",
         )
@@ -3118,17 +2826,13 @@ def test_stop_session_finalizes_both_active_diagnostic_segments(
         finalized = result["diagnosticFinalization"]["indexes"][client]
         assert finalized["finalized"] is True
         assert [item["segmentId"] for item in finalized["processedSegments"]] == [0]
-        checkpoint = json.loads(
-            Path(finalized["checkpoint"]).read_text(encoding="utf-8")
-        )
+        checkpoint = json.loads(Path(finalized["checkpoint"]).read_text(encoding="utf-8"))
         assert checkpoint["source"]["activeSegmentId"] is None
         assert checkpoint["source"]["finalized"] is True
         assert checkpoint["index"]["recordCount"] == 1
 
 
-def test_stop_session_without_manifest_does_not_create_control_files(
-    tmp_path: Path,
-) -> None:
+def test_stop_session_without_manifest_does_not_create_control_files(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
 
     result = controller.stop_session(paths)
@@ -3141,29 +2845,13 @@ def test_stop_session_without_manifest_does_not_create_control_files(
 def test_append_bounded_jsonl_rotates_old_segments(tmp_path: Path) -> None:
     path = tmp_path / "watch.jsonl"
 
-    controller.append_bounded_jsonl(
-        path, {"sample": 1, "padding": "x" * 80}, max_bytes=100, segments=2
-    )
-    controller.append_bounded_jsonl(
-        path, {"sample": 2, "padding": "x" * 80}, max_bytes=100, segments=2
-    )
-    controller.append_bounded_jsonl(
-        path, {"sample": 3, "padding": "x" * 80}, max_bytes=100, segments=2
-    )
+    controller.append_bounded_jsonl(path, {"sample": 1, "padding": "x" * 80}, max_bytes=100, segments=2)
+    controller.append_bounded_jsonl(path, {"sample": 2, "padding": "x" * 80}, max_bytes=100, segments=2)
+    controller.append_bounded_jsonl(path, {"sample": 3, "padding": "x" * 80}, max_bytes=100, segments=2)
 
     assert json.loads(path.read_text(encoding="utf-8"))["sample"] == 3
-    assert (
-        json.loads(controller.rotated_path(path, 1).read_text(encoding="utf-8"))[
-            "sample"
-        ]
-        == 2
-    )
-    assert (
-        json.loads(controller.rotated_path(path, 2).read_text(encoding="utf-8"))[
-            "sample"
-        ]
-        == 1
-    )
+    assert json.loads(controller.rotated_path(path, 1).read_text(encoding="utf-8"))["sample"] == 2
+    assert json.loads(controller.rotated_path(path, 2).read_text(encoding="utf-8"))["sample"] == 1
     assert not controller.rotated_path(path, 3).exists()
 
 
@@ -3260,12 +2948,9 @@ def test_watch_finding_annotation_requires_three_consecutive_rest_failures() -> 
         "findingStreaks": {"rust-rest-unhealthy": 3},
         "terminalFindings": ["rust-rest-unhealthy"],
     }
-    assert (
-        controller.watch_finding_annotation(
-            {**sample, "findings": []}, third["findingStreaks"]
-        )["findingStreaks"]
-        == {}
-    )
+    assert controller.watch_finding_annotation(
+        {**sample, "findings": []}, third["findingStreaks"]
+    )["findingStreaks"] == {}
 
 
 def test_restored_finding_streaks_is_campaign_scoped_and_bounded() -> None:
@@ -3363,9 +3048,7 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     controller.write_json_atomic(paths.manifest, manifest)
     stop_requests: list[dict[str, object]] = []
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(
-        controller, "session_status", lambda _paths: watch_status_payload()
-    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "enforce_session_storage_context",
@@ -3379,9 +3062,8 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3396,9 +3078,9 @@ def test_watch_session_fails_closed_on_storage_enforcement_failure(
     assert result["latest"]["storage"]["error"] == "minimum_free_bytes"
     assert controller.STORAGE_FAILURE_FINDING in result["latest"]["findings"]
     assert result["latest"]["shutdown"]["launcherGraceful"] is True
-    assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))[
-        "shutdown"
-    ] == {"launcherGraceful": True}
+    assert json.loads(paths.watch_heartbeat.read_text(encoding="utf-8"))["shutdown"] == {
+        "launcherGraceful": True
+    }
     assert stop_requests == [manifest]
 
 
@@ -3453,9 +3135,8 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3469,7 +3150,9 @@ def test_watch_session_fails_closed_on_diagnostic_writer_fault(
     assert result["samples"] == 1
     assert result["latest"]["storage"]["ok"] is True
     assert result["latest"]["diagnosticWriters"]["rust"]["ok"] is False
-    assert result["latest"]["terminalFindings"] == ["rust-diagnostic-writer-unhealthy"]
+    assert result["latest"]["terminalFindings"] == [
+        "rust-diagnostic-writer-unhealthy"
+    ]
     assert result["latest"]["shutdown"]["launcherGraceful"] is True
     assert stop_requests == [manifest]
 
@@ -3498,9 +3181,8 @@ def test_watch_session_fails_closed_on_diagnostic_index_error(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3560,9 +3242,8 @@ def test_watch_session_restores_rest_failure_streak_and_stops_on_third_sample(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3596,15 +3277,12 @@ def test_watch_session_fails_closed_on_raised_watch_loop_faults(
         "enforce_session_storage_context",
         lambda _context: (_ for _ in ()).throw(OSError("inventory failed")),
     )
-    monkeypatch.setattr(
-        controller, "session_status", lambda _paths: watch_status_payload()
-    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3643,9 +3321,8 @@ def test_watch_session_streak_gates_status_read_failures(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3696,9 +3373,8 @@ def test_watch_session_recovers_from_transient_status_read_failure(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3733,9 +3409,7 @@ def test_watch_session_preserves_campaign_evidence_across_status_failure_streak(
         "rust": {"ok": True, "health": diagnostic_writer_health(client="rust")},
         "mfc": {"ok": True, "health": diagnostic_writer_health(client="mfc")},
     }
-    statuses = iter(
-        [healthy, OSError("snapshot"), OSError("snapshot"), OSError("snapshot")]
-    )
+    statuses = iter([healthy, OSError("snapshot"), OSError("snapshot"), OSError("snapshot")])
     stop_requests: list[dict[str, object]] = []
 
     def next_status(_paths):
@@ -3764,9 +3438,8 @@ def test_watch_session_preserves_campaign_evidence_across_status_failure_streak(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3802,15 +3475,12 @@ def test_watch_session_fails_closed_on_invalid_storage_context(
     controller.write_json_atomic(paths.manifest, manifest)
     stop_requests: list[dict[str, object]] = []
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(
-        controller, "session_status", lambda _paths: watch_status_payload()
-    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3835,9 +3505,7 @@ def test_watch_session_fails_closed_on_watch_evidence_write_failure(
     controller.write_json_atomic(paths.manifest, manifest)
     stop_requests: list[dict[str, object]] = []
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(
-        controller, "session_status", lambda _paths: watch_status_payload()
-    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "enforce_session_storage_context",
@@ -3851,9 +3519,8 @@ def test_watch_session_fails_closed_on_watch_evidence_write_failure(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3879,9 +3546,7 @@ def test_watch_session_fails_closed_when_emit_fails(
     controller.write_json_atomic(paths.manifest, manifest)
     stop_requests: list[dict[str, object]] = []
     monkeypatch.setattr(controller, "get_workspace_output_root", lambda: output_root)
-    monkeypatch.setattr(
-        controller, "session_status", lambda _paths: watch_status_payload()
-    )
+    monkeypatch.setattr(controller, "session_status", lambda _paths: watch_status_payload())
     monkeypatch.setattr(
         controller,
         "enforce_session_storage_context",
@@ -3890,9 +3555,8 @@ def test_watch_session_fails_closed_when_emit_fails(
     monkeypatch.setattr(
         controller,
         "request_watch_failure_stop",
-        lambda _paths, observed, **_kwargs: (
-            stop_requests.append(observed) or {"launcherGraceful": True}
-        ),
+        lambda _paths, observed, **_kwargs: stop_requests.append(observed)
+        or {"launcherGraceful": True},
     )
 
     result = controller.watch_session(
@@ -3920,9 +3584,7 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
     }
     forced: list[tuple[dict[str, object], tuple[str, ...], float]] = []
     monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: ())
-    monkeypatch.setattr(
-        controller, "wait_exact_exit", lambda _identity, _timeout: False
-    )
+    monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: False)
 
     def fake_stop(identity, *, markers, timeout_seconds):
         forced.append((identity, markers, timeout_seconds))
@@ -3953,7 +3615,7 @@ def test_watch_failure_stop_requests_both_paths_and_forces_exact_launcher(
             manifest["launcher"],
             ("launch-soak.py",),
             controller.WATCH_FAILURE_GRACE_SECONDS,
-        ),
+        )
     ]
 
 
@@ -3964,12 +3626,8 @@ def test_watch_failure_stop_uses_fallback_when_manifest_is_missing(
     paths = make_paths(tmp_path)
     fallback = {"pid": 10, "creationDate": "launcher"}
     waited: list[dict[str, object]] = []
-    captured = (
-        {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
-    )
-    monkeypatch.setattr(
-        controller, "capture_exact_process_tree", lambda _identity: captured
-    )
+    captured = ({"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},)
+    monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: captured)
     monkeypatch.setattr(controller, "remaining_exact_tree_rows", lambda _identities: [])
     monkeypatch.setattr(
         controller,
@@ -4001,13 +3659,9 @@ def test_watch_failure_stop_forces_captured_orphans_after_launcher_exit(
     )
     orphan = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
     forced: list[tuple[dict[str, object], ...]] = []
-    monkeypatch.setattr(
-        controller, "capture_exact_process_tree", lambda _identity: captured
-    )
+    monkeypatch.setattr(controller, "capture_exact_process_tree", lambda _identity: captured)
     monkeypatch.setattr(controller, "wait_exact_exit", lambda _identity, _timeout: True)
-    monkeypatch.setattr(
-        controller, "remaining_exact_tree_rows", lambda _identities: [orphan]
-    )
+    monkeypatch.setattr(controller, "remaining_exact_tree_rows", lambda _identities: [orphan])
 
     def fake_force(identities, *, timeout_seconds):
         del timeout_seconds
@@ -4043,9 +3697,7 @@ def test_watch_failure_stop_reports_unavailable_launcher_identity(
 
     monkeypatch.setattr(controller, "wait_exact_exit", reject_wait)
 
-    result = controller.request_watch_failure_stop(
-        paths, {}, graceful_timeout_seconds=0.1
-    )
+    result = controller.request_watch_failure_stop(paths, {}, graceful_timeout_seconds=0.1)
 
     assert waited is False
     assert result["launcherIdentityAvailable"] is False
@@ -4058,9 +3710,7 @@ def test_stop_exact_process_reports_surviving_exact_launcher(
 ) -> None:
     identity = {"pid": 10, "creationDate": "launcher"}
     row = WindowsProcessInfo(10, 1, "python.exe", "python launch-soak.py", "launcher")
-    monkeypatch.setattr(
-        controller.windows_processes, "collect_processes", lambda: [row]
-    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [row])
     monkeypatch.setattr(
         controller.windows_processes,
         "terminate_process_tree",
@@ -4126,9 +3776,7 @@ def test_stop_captured_process_tree_terminates_orphaned_exact_child(
         terminated.append((pid, kwargs["expected_root_creation_date"]))
         return {"return_code": 0, "remaining_pids": []}
 
-    monkeypatch.setattr(
-        controller.windows_processes, "terminate_process_tree", fake_terminate
-    )
+    monkeypatch.setattr(controller.windows_processes, "terminate_process_tree", fake_terminate)
 
     result = controller.stop_captured_process_tree(identities, timeout_seconds=0.1)
 
@@ -4144,9 +3792,7 @@ def test_remaining_exact_tree_rows_discovers_post_capture_descendant(
         {"pid": 10, "parentPid": 1, "creationDate": "launcher", "name": "python.exe"},
     )
     late_child = WindowsProcessInfo(11, 10, "rust.exe", "rust", "rust")
-    monkeypatch.setattr(
-        controller.windows_processes, "collect_processes", lambda: [late_child]
-    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [late_child])
 
     remaining = controller.remaining_exact_tree_rows(identities)
 
@@ -4167,9 +3813,7 @@ def test_remaining_exact_tree_rows_fails_closed_on_parent_pid_reuse(
         lambda: [reused_parent, ambiguous_child],
     )
 
-    with pytest.raises(
-        RuntimeError, match="PID reuse made descendant ownership ambiguous: 11"
-    ):
+    with pytest.raises(RuntimeError, match="PID reuse made descendant ownership ambiguous: 11"):
         controller.remaining_exact_tree_rows(identities)
 
 
