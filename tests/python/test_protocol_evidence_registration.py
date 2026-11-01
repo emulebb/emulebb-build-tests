@@ -217,6 +217,94 @@ def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_pat
     assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
 
 
+def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-keyword-search"
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {"ed2k_tcp": 4661},
+    }
+    report["checks"]["client2_server_file"] = {
+        "indexed": True,
+        "hash": FILE_HASH.upper(),
+        "name": "fixture.bin",
+        "size": report["fixture"]["size"],
+    }
+    report["checks"]["client1_server_search"] = {
+        "result": {
+            "hash": FILE_HASH.upper(),
+            "displayName": "fixture.bin",
+            "sizeBytes": report["fixture"]["size"],
+        }
+    }
+    report["diagnostics"]["serverSearch"] = {
+        "schema": "emulebb-build-tests.deterministic-server-search-diagnostics.v1",
+        "ok": True,
+        "query": "deterministicparitysearch",
+        "serverEndpoint": "127.0.0.1:4661",
+        "expectedFile": {
+            "hash": FILE_HASH,
+            "name": "fixture.bin",
+            "size": report["fixture"]["size"],
+        },
+        "failures": [],
+        "checks": {
+            "request": {
+                "ok": True,
+                "endpointRequestCount": 1,
+                "exactRequestCount": 1,
+                "sendSucceeded": True,
+                "sequence": 20,
+            },
+            "reply": {
+                "ok": True,
+                "responseCount": 1,
+                "malformedResponseCount": 0,
+                "decodedRowCount": 1,
+                "exactRowCount": 1,
+                "exactRow": {
+                    "hash": FILE_HASH.upper(),
+                    "name": "fixture.bin",
+                    "size": report["fixture"]["size"],
+                },
+                "firstResponseSequence": 22,
+            },
+            "restResult": {"ok": True},
+        },
+        "coverageClaims": {
+            "eligibleCoverageIds": ["server.reply.search", "server.search.keyword"],
+            "evidenceLayers": list(EVIDENCE_LAYERS),
+        },
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        ["server.reply.search", "server.search.keyword"]
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
+        "transfer.block.uncompressed",
+    ]
+
+
+def test_build_transfer_registration_rejects_server_search_without_exact_publication(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-keyword-search"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
 def test_build_transfer_registration_rejects_mutated_delivered_file(tmp_path: Path) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     delivered = Path(report["checks"]["client1_transfer_completed_file"]["deliveredPath"])

@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -18,6 +19,7 @@ PROFILE_AUTHORITY = "harness-generated-ephemeral-local-profiles"
 RUN_DIRECTORY_PATTERN = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)-")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 
 
 def _object(value: Any, field: str) -> dict[str, Any]:
@@ -143,7 +145,120 @@ def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
     return sorted(coverage_ids)
 
 
+def _derived_server_search_coverage_ids(
+    report: dict[str, Any], diagnostics: dict[str, Any]
+) -> list[str]:
+    search_value = diagnostics.get("serverSearch")
+    if search_value is None:
+        if report.get("transfer_scenario") == SERVER_KEYWORD_SEARCH_SCENARIO:
+            raise ValueError("server keyword search scenario has no diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_KEYWORD_SEARCH_SCENARIO:
+        raise ValueError("server search evidence requires the server keyword search scenario")
+    search = _object(search_value, "diagnostics.serverSearch")
+    server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(search)
+    claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
+    expected_ids = ["server.reply.search", "server.search.keyword"]
+    if claims.get("eligibleCoverageIds") != expected_ids:
+        raise ValueError("server search diagnostic claims are not exact")
+    if claims.get("evidenceLayers") != list(server_search_diagnostic_evidence.EVIDENCE_LAYERS):
+        raise ValueError("server search diagnostic evidence layers are not canonical")
+
+    search_checks = _object(search.get("checks"), "diagnostics.serverSearch.checks")
+    request = _object(search_checks.get("request"), "diagnostics.serverSearch.checks.request")
+    reply = _object(search_checks.get("reply"), "diagnostics.serverSearch.checks.reply")
+    rest_result = _object(
+        search_checks.get("restResult"),
+        "diagnostics.serverSearch.checks.restResult",
+    )
+    request_sequence = _positive_int(request.get("sequence"), "server search request sequence")
+    response_sequence = _positive_int(
+        reply.get("firstResponseSequence"),
+        "server search response sequence",
+    )
+    if (
+        request.get("ok") is not True
+        or request.get("endpointRequestCount") != 1
+        or request.get("exactRequestCount") != 1
+        or request.get("sendSucceeded") is not True
+    ):
+        raise ValueError("server search request is not singular and exact")
+    if (
+        reply.get("ok") is not True
+        or not isinstance(reply.get("responseCount"), int)
+        or reply.get("responseCount") < 1
+        or reply.get("malformedResponseCount") != 0
+        or reply.get("exactRowCount") != 1
+        or response_sequence <= request_sequence
+    ):
+        raise ValueError("server search reply is not exact and causally ordered")
+    if rest_result.get("ok") is not True:
+        raise ValueError("server search REST result does not match the wire result")
+
+    expected_file = _object(
+        search.get("expectedFile"),
+        "diagnostics.serverSearch.expectedFile",
+    )
+    fixture = _object(report.get("fixture"), "fixture")
+    if (
+        expected_file.get("hash") != diagnostics.get("fileHash")
+        or expected_file.get("name") != fixture.get("name")
+        or expected_file.get("size") != fixture.get("size")
+    ):
+        raise ValueError("server search expected file does not match the transfer fixture")
+    exact_row = _object(reply.get("exactRow"), "diagnostics.serverSearch.checks.reply.exactRow")
+    if (
+        str(exact_row.get("hash") or "").casefold() != expected_file.get("hash")
+        or exact_row.get("name") != expected_file.get("name")
+        or exact_row.get("size") != expected_file.get("size")
+    ):
+        raise ValueError("server search decoded row does not match the expected file")
+
+    checks = _object(report.get("checks"), "checks")
+    driven = _object(checks.get("client1_server_search"), "checks.client1_server_search")
+    driven_result = _object(driven.get("result"), "checks.client1_server_search.result")
+    if (
+        str(driven_result.get("hash") or "").casefold() != expected_file.get("hash")
+        or driven_result.get("displayName", driven_result.get("name"))
+        != expected_file.get("name")
+        or driven_result.get("sizeBytes", driven_result.get("size"))
+        != expected_file.get("size")
+    ):
+        raise ValueError("driven server search result does not match the expected file")
+    publication = _object(checks.get("client2_server_file"), "checks.client2_server_file")
+    if (
+        publication.get("indexed") is not True
+        or str(publication.get("hash") or "").casefold() != expected_file.get("hash")
+        or publication.get("name") != expected_file.get("name")
+        or publication.get("size") != expected_file.get("size")
+    ):
+        raise ValueError("MFC publication authority does not match the searched file")
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    expected_endpoint = (
+        f"{network.get('ed2k_server_address')}:{ports.get('ed2k_tcp')}".casefold()
+    )
+    if search.get("serverEndpoint") != expected_endpoint:
+        raise ValueError("server search diagnostics use an unexpected server endpoint")
+    return expected_ids
+
+
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id in {"server.search.keyword", "server.reply.search"}:
+        search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
+        checks = _object(search.get("checks"), "diagnostics.serverSearch.checks")
+        if coverage_id == "server.search.keyword":
+            request = _object(checks.get("request"), "server search request")
+            return (
+                f"Rust sent one exact keyword request at sequence {request['sequence']} "
+                "to the deterministic server after MFC publication."
+            )
+        reply = _object(checks.get("reply"), "server search reply")
+        return (
+            f"Rust decoded the one exact hash/name/size result from "
+            f"{reply['responseCount']} causally ordered server reply frame(s)."
+        )
     if coverage_id == "peer.startup.multipacket-ext2":
         request = _exact_startup_check(diagnostics, "multipacketRequestFrames")
         answer = _exact_startup_check(diagnostics, "multipacketAnswerFrames")
@@ -201,7 +316,12 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
     transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(diagnostics)
     claims = _object(diagnostics.get("coverageClaims"), "diagnostics.coverageClaims")
     claim_ids = claims.get("eligibleCoverageIds")
-    expected_ids = _derived_transfer_coverage_ids(diagnostics)
+    expected_ids = sorted(
+        [
+            *_derived_transfer_coverage_ids(diagnostics),
+            *_derived_server_search_coverage_ids(report, diagnostics),
+        ]
+    )
     if claim_ids != expected_ids:
         raise ValueError("diagnostic coverage claims do not match the decisive wire evidence")
     expected_layers = list(transfer_diagnostic_evidence.EVIDENCE_LAYERS)
