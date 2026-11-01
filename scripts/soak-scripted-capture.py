@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import urllib.request
@@ -83,7 +84,10 @@ from emule_test_harness.native_windows_network import (  # noqa: E402
     resolve_windows_adapter_hints,
     verify_upnp_port_mappings,
 )
-from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness.paths import (  # noqa: E402
+    get_required_emule_workspace_root,
+    get_workspace_output_root,
+)
 from emule_test_harness.rust_client import stop_process_tree  # noqa: E402
 from emule_test_harness.soak_launch import (  # noqa: E402
     DEFAULT_MFC_SEED_CONFIG_DIR,
@@ -106,6 +110,74 @@ MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES = 1 * 1024 * 1024
 MFC_DIAGNOSTIC_RETAINED_SEGMENTS = 128
 MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS = 60 * 60
 MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS = 7 * 24 * 60 * 60
+
+
+def diagnostics_build_command(
+    client: str,
+    *,
+    mfc_variant: str = "main",
+    mfc_arch: str = "x64",
+    mfc_configuration: str = "Release",
+) -> list[str]:
+    """Return the official incremental diagnostics build for one capture client."""
+
+    common = [sys.executable, "-m", "emule_workspace", "build"]
+    if client == "rust":
+        return [
+            *common,
+            "clients",
+            "--client",
+            "emulebb-rust",
+            "--config",
+            "Release",
+            "--platform",
+            "x64",
+            "--build-output-mode",
+            "ErrorsOnly",
+            "--diagnostics",
+        ]
+    if client == "mfc":
+        if mfc_configuration != "Release":
+            raise RuntimeError("MFC diagnostics captures require --mfc-configuration Release.")
+        return [
+            *common,
+            "app",
+            "--variant",
+            mfc_variant,
+            "--config",
+            mfc_configuration,
+            "--platform",
+            mfc_arch,
+            "--build-output-mode",
+            "ErrorsOnly",
+            "--diagnostics",
+        ]
+    raise ValueError(f"Unsupported capture client: {client}")
+
+
+def refresh_diagnostics_build(
+    workspace_root: Path,
+    client: str,
+    *,
+    mfc_variant: str = "main",
+    mfc_arch: str = "x64",
+    mfc_configuration: str = "Release",
+) -> None:
+    """Run the selected client's canonical incremental build and fail on errors."""
+
+    build_repo = workspace_root / "repos" / "emulebb-build"
+    if not build_repo.is_dir():
+        raise RuntimeError(f"Workspace build orchestrator repo was not found: {build_repo}")
+    command = diagnostics_build_command(
+        client,
+        mfc_variant=mfc_variant,
+        mfc_arch=mfc_arch,
+        mfc_configuration=mfc_configuration,
+    )
+    log(f"refreshing {client} diagnostics build through emulebb-build")
+    completed = subprocess.run(command, cwd=build_repo, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"{client} diagnostics build failed with exit code {completed.returncode}.")
 
 
 def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
@@ -1645,14 +1717,22 @@ def main(argv: list[str] | None = None) -> int:
     campaign = _campaign_leaf(args.campaign)
     report_dir = soak_root / "reports" / campaign / f"{client}-{_utc_stamp()}"
     report_dir.mkdir(parents=True, exist_ok=True)
-    rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
-    mfc_exe = clw.resolve_mfc_diagnostics_exe(
-        output_root,
-        variant=args.mfc_variant,
-        arch=args.mfc_arch,
-        configuration=args.mfc_configuration,
+    refresh_diagnostics_build(
+        get_required_emule_workspace_root(),
+        client,
+        mfc_variant=args.mfc_variant,
+        mfc_arch=args.mfc_arch,
+        mfc_configuration=args.mfc_configuration,
     )
-    exe = rust_exe if client == "rust" else mfc_exe
+    if client == "rust":
+        exe = clw.resolve_rust_diagnostics_exe(output_root)
+    else:
+        exe = clw.resolve_mfc_diagnostics_exe(
+            output_root,
+            variant=args.mfc_variant,
+            arch=args.mfc_arch,
+            configuration=args.mfc_configuration,
+        )
 
     log(f"scripted capture: client={client} campaign={campaign} report={report_dir}")
     if native_config is None:
@@ -1766,7 +1846,7 @@ def main(argv: list[str] | None = None) -> int:
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
                 rust_mod=rust_mod,
-                exe_path=rust_exe,
+                exe_path=exe,
                 bind_ip=bind_ip,
                 rest_addr=rest_addr,
                 rest_port=rest_port,
@@ -1796,7 +1876,7 @@ def main(argv: list[str] | None = None) -> int:
                 live_common=mods["live_common"],
                 rest_smoke=mods["rest_smoke"],
                 shared_dirs_mod=mods["shared_dirs"],
-                exe_path=mfc_exe,
+                exe_path=exe,
                 seed_config_dir=Path(args.profile_seed_dir).resolve()
                 if args.profile_seed_dir
                 else DEFAULT_MFC_SEED_CONFIG_DIR,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -56,6 +57,91 @@ def test_search_methods_allow_explicit_transfer_only_capture() -> None:
 
     assert module.normalized_search_methods("") == ()
     assert module.normalized_search_methods("server, kad") == ("server", "kad")
+
+
+def test_diagnostics_build_command_uses_canonical_rust_incremental_build() -> None:
+    module = _load_capture()
+
+    command = module.diagnostics_build_command("rust")
+
+    assert command == [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "clients",
+        "--client",
+        "emulebb-rust",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+        "--build-output-mode",
+        "ErrorsOnly",
+        "--diagnostics",
+    ]
+
+
+def test_diagnostics_build_command_uses_selected_mfc_diagnostics_build() -> None:
+    module = _load_capture()
+
+    command = module.diagnostics_build_command(
+        "mfc",
+        mfc_variant="main",
+        mfc_arch="x64",
+        mfc_configuration="Release",
+    )
+
+    assert command == [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "app",
+        "--variant",
+        "main",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+        "--build-output-mode",
+        "ErrorsOnly",
+        "--diagnostics",
+    ]
+
+
+def test_refresh_diagnostics_build_runs_from_workspace_orchestrator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_capture()
+    build_repo = tmp_path / "repos" / "emulebb-build"
+    build_repo.mkdir(parents=True)
+    calls: list[tuple[list[str], Path, bool]] = []
+
+    def fake_run(command, *, cwd, check):
+        calls.append((list(command), Path(cwd), check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    module.refresh_diagnostics_build(tmp_path, "rust")
+
+    assert calls == [(module.diagnostics_build_command("rust"), build_repo, False)]
+
+
+def test_refresh_diagnostics_build_aborts_on_build_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_capture()
+    (tmp_path / "repos" / "emulebb-build").mkdir(parents=True)
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=7),
+    )
+
+    with pytest.raises(RuntimeError, match="rust diagnostics build failed with exit code 7"):
+        module.refresh_diagnostics_build(tmp_path, "rust")
 
 
 def test_full_tunnel_control_uses_loopback_without_local_ip(
