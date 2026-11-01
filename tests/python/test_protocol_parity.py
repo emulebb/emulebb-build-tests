@@ -52,7 +52,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 1,
-        "coveredIdCount": 10,
+        "coveredIdCount": 12,
         "groupVerdictCounts": {
             "parity": 1,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 10,
+            "parity": 12,
             "divergence": 0,
-            "evidence-incomplete": 90,
+            "evidence-incomplete": 88,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -95,10 +95,12 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-            "server.connect.fallback",
+        "server.connect.fallback",
         "server.connect.obfuscated",
         "server.connect.plaintext",
         "server.login.request",
+        "server.reply.search",
+        "server.search.keyword",
         "transfer.block.compressed",
         "transfer.block.uncompressed",
     ]
@@ -144,6 +146,22 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "queue.admission",
         "server.connect.obfuscated",
         "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][7]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.fallback",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][8]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
         "transfer.block.uncompressed",
     ]
 

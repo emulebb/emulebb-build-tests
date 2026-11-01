@@ -253,7 +253,8 @@
         "rust-mfc-transfer-20261101t194032z",
         "rust-mfc-transfer-20261101t194931z",
         "rust-mfc-transfer-20261101t195457z",
-        "rust-mfc-transfer-20261101t204626z"
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t212829z"
       ],
       "verdict": "parity"
     },
@@ -274,7 +275,8 @@
         "rust-mfc-transfer-20261101t194032z",
         "rust-mfc-transfer-20261101t194931z",
         "rust-mfc-transfer-20261101t195457z",
-        "rust-mfc-transfer-20261101t204626z"
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t212829z"
       ],
       "verdict": "parity"
     },
@@ -290,7 +292,8 @@
         "rust-mfc-transfer-20261101t194032z",
         "rust-mfc-transfer-20261101t194931z",
         "rust-mfc-transfer-20261101t195457z",
-        "rust-mfc-transfer-20261101t204626z"
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t212829z"
       ],
       "verdict": "parity"
     },
@@ -328,6 +331,20 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "server.reply.search",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded and applied the same exact server-search result at reply sequences 20/14.",
+      "receiptIds": ["rust-mfc-transfer-20261101t212829z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.search.keyword",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical encoded keyword request over obfuscated server transport at sequences 18/13.",
+      "receiptIds": ["rust-mfc-transfer-20261101t212829z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "transfer.block.compressed",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "All 58 compressed payload frames matched exactly before manifest-backed completion.",
@@ -345,7 +362,8 @@
         "rust-mfc-transfer-20261101t194032z",
         "rust-mfc-transfer-20261101t194931z",
         "rust-mfc-transfer-20261101t195457z",
-        "rust-mfc-transfer-20261101t204626z"
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t212829z"
       ],
       "verdict": "parity"
     }
@@ -1433,6 +1451,35 @@
           "authorityId": "mfc-oracle",
           "executableSha256": "1ca1adf48b9d0d9310601e9eb2d0eda1acdd8b34cffba85df8b1c8fac29db258",
           "sourceRevision": "acc007d07a0107b5a20557d8648dd172f83bd163"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "3fca4e29e4bc18426491cf729f45eadbff4b269dc34761802fe37695277b2545",
+          "sourceRevision": "b365ba140f5db9ba28bbc1138eb9e1512d6e9803"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T212829Z-emulebb-main-release-14724/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "8e5b9d419aa755a0913855ed69a11745e1c339979ceef6e4167c513b07f72059",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t212829z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "f68cf4c259fb936991dd80efc65b256c3ad1a150",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "d3fb07ad2865c6909dffb865b58e91e8f4538844016242448af4a1447df398d5",
+          "sourceRevision": "6db52beecf725d9248bee1bffb0809160c932d02"
         },
         {
           "authorityId": "rust-product",
