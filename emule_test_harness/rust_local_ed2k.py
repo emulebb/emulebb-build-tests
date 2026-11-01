@@ -132,14 +132,13 @@ def wait_for_current_server_metadata(
     expected_name: str,
     expected_description: str,
     timeout_seconds: float,
-    status_path: str = "/api/v1/status",
 ) -> dict[str, object]:
     """Waits until one client exposes the exact applied current-server metadata."""
 
     last_status: dict[str, object] = {}
 
     def probe() -> dict[str, object] | None:
-        status = request_json(base_url, "GET", status_path, api_key)
+        status = request_json(base_url, "GET", "/api/v1/status", api_key)
         nested = status.get("servers")
         data = nested if isinstance(nested, dict) else status
         last_status.clear()

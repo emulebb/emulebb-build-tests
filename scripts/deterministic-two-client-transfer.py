@@ -2512,7 +2512,6 @@ def main(argv: list[str] | None = None) -> int:
                     expected_name=SERVER_IDENT_NAME,
                     expected_description=SERVER_IDENT_DESCRIPTION,
                     timeout_seconds=args.server_connect_timeout_seconds,
-                    status_path="/api/v1/servers/status",
                 ),
                 "mfc": rust_local_ed2k.wait_for_current_server_metadata(
                     client2_base_url,
