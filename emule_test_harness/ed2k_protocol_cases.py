@@ -104,6 +104,18 @@ def mfc_preference_snapshot(case: ProtocolCase) -> dict[str, str]:
     return dict(mfc_preference_updates(case))
 
 
+def expected_peer_transport_mode(case: ProtocolCase) -> str:
+    """Returns the transport mode required for the case's peer session."""
+
+    return "obfuscated" if case.client_crypt_supported else "plaintext"
+
+
+def expected_payload_encoding(case: ProtocolCase) -> str:
+    """Returns the exact payload opcode family required for one fixture."""
+
+    return "compressed" if case.fixture_pattern == COMPRESSIBLE else "uncompressed"
+
+
 def server_udp_flags(case: ProtocolCase) -> int:
     """Returns the stock server capability flags advertised to Rust."""
 

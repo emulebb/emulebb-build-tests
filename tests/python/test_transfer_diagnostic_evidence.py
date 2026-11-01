@@ -38,6 +38,8 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         "clearFrameHex": "e31100000047aabb",
         "attemptedLen": 8,
         "writtenLen": 8,
+        "transportMode": "plaintext",
+        "obfuscated": False,
     }
     payload_frame = {
         "direction": "recv",
@@ -46,6 +48,8 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         "protocolMarker": 227,
         "opcode": 70,
         "clearFrameHex": "e31100000046ccdd",
+        "transportMode": "plaintext",
+        "obfuscated": False,
     }
     rust = [
         record("rust", 10, "sched", "source_engaged", keys={"fileHash": FILE_HASH}, body={"outcome": "engaged"}),
@@ -139,6 +143,8 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH.upper(),
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -146,6 +152,10 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     assert report["ok"] is True
     assert report["fileHash"] == FILE_HASH
     assert report["failures"] == []
+    assert report["expectedTransportMode"] == "plaintext"
+    assert report["expectedPayloadEncoding"] == "uncompressed"
+    assert report["wireChecks"]["requestTransport"]["ok"] is True
+    assert report["wireChecks"]["payloadTransport"]["ok"] is True
     assert report["coverageClaims"] == {
         "eligibleCoverageIds": ["queue.admission", "transfer.block.uncompressed"],
         "evidenceLayers": [
@@ -164,6 +174,8 @@ def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> Non
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -181,6 +193,8 @@ def test_build_transfer_diagnostic_evidence_rejects_zero_payload() -> None:
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -199,6 +213,8 @@ def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_var
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="compressed",
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -210,6 +226,7 @@ def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_var
     ]
     assert "transfer.block.invalid-zlib" not in report["coverageClaims"]["eligibleCoverageIds"]
     assert "queue.rank-transition" not in report["coverageClaims"]["eligibleCoverageIds"]
+    assert report["wireChecks"]["payloadEncoding"]["ok"] is True
 
 
 def test_build_transfer_diagnostic_evidence_rejects_unmatched_wire_frame() -> None:
@@ -218,6 +235,8 @@ def test_build_transfer_diagnostic_evidence_rejects_unmatched_wire_frame() -> No
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -233,12 +252,67 @@ def test_build_transfer_diagnostic_evidence_rejects_out_of_order_chain() -> None
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
         rust_records=rust,
         mfc_records=mfc,
     )
 
     assert report["ok"] is False
     assert report["ordering"]["mfc"]["ok"] is False
+
+
+def test_build_transfer_diagnostic_evidence_accepts_bilateral_obfuscated_transport() -> None:
+    rust, mfc = complete_records()
+    for packet in (rust[1], rust[2], mfc[1], mfc[2]):
+        packet["body"]["transportMode"] = "obfuscated"
+        packet["body"]["obfuscated"] = True
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_transport_mode="obfuscated",
+        expected_payload_encoding="uncompressed",
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is True
+    assert report["wireChecks"]["requestTransport"]["expectedObfuscated"] is True
+    assert report["wireChecks"]["payloadTransport"]["ok"] is True
+
+
+def test_build_transfer_diagnostic_evidence_rejects_transport_mismatch() -> None:
+    rust, mfc = complete_records()
+    rust[2]["body"]["transportMode"] = "obfuscated"
+    rust[2]["body"]["obfuscated"] = True
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is False
+    assert report["wireChecks"]["payloadTransport"]["ok"] is False
+    assert "Payload frames used the selected peer transport on both clients" in report["failures"]
+
+
+def test_build_transfer_diagnostic_evidence_rejects_wrong_payload_encoding() -> None:
+    rust, mfc = complete_records()
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="compressed",
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is False
+    assert report["wireChecks"]["payloadEncoding"]["observedOpcodes"] == ["OP_SENDINGPART"]
+    assert "Payload frames used only the selected encoding" in report["failures"]
 
 
 @pytest.mark.parametrize("value", ["", "xyz", "0" * 31, "0" * 33])

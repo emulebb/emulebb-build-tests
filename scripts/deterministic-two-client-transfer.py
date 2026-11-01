@@ -149,6 +149,8 @@ def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
 def collect_transfer_diagnostics(
     *,
     file_hash: str,
+    expected_transport_mode: str,
+    expected_payload_encoding: str,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -170,6 +172,8 @@ def collect_transfer_diagnostics(
     )
     evidence = transfer_diagnostic_evidence.build_transfer_diagnostic_evidence(
         file_hash=file_hash,
+        expected_transport_mode=expected_transport_mode,
+        expected_payload_encoding=expected_payload_encoding,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
     )
@@ -2176,6 +2180,12 @@ def main(argv: list[str] | None = None) -> int:
             current_phase = "collect_transfer_diagnostics"
             diagnostics = collect_transfer_diagnostics(
                 file_hash=transfer_hash,
+                expected_transport_mode=ed2k_protocol_cases.expected_peer_transport_mode(
+                    protocol_case
+                ),
+                expected_payload_encoding=ed2k_protocol_cases.expected_payload_encoding(
+                    protocol_case
+                ),
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),

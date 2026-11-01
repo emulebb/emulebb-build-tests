@@ -91,3 +91,14 @@ def test_mfc_preferences_are_derived_from_the_same_case() -> None:
         "CryptLayerRequired": "1",
         "CryptTCPPaddingLength": str(ed2k_protocol_cases.PROTOCOL_PADDING_LENGTH),
     }
+
+
+def test_expected_peer_transport_mode_is_derived_from_case() -> None:
+    plain = ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    obfuscated = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred"]
+
+    assert ed2k_protocol_cases.expected_peer_transport_mode(plain) == "plaintext"
+    assert ed2k_protocol_cases.expected_peer_transport_mode(obfuscated) == "obfuscated"
+    assert ed2k_protocol_cases.expected_payload_encoding(plain) == "uncompressed"
+    compressible = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
+    assert ed2k_protocol_cases.expected_payload_encoding(compressible) == "compressed"

@@ -16,6 +16,8 @@ EVIDENCE_LAYERS = (
 )
 UNCOMPRESSED_PAYLOAD_OPCODES = frozenset({"OP_SENDINGPART", "OP_SENDINGPART_I64"})
 COMPRESSED_PAYLOAD_OPCODES = frozenset({"OP_COMPRESSEDPART", "OP_COMPRESSEDPART_I64"})
+TRANSPORT_MODES = frozenset({"plaintext", "obfuscated"})
+PAYLOAD_ENCODINGS = frozenset({"uncompressed", "compressed"})
 
 
 def normalize_ed2k_hash(value: str) -> str:
@@ -205,15 +207,79 @@ def _paired_packet_check(
     }
 
 
+def _transport_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    modes = Counter(str(_body(record).get("transportMode") or "") for record in records)
+    obfuscated = Counter(str(_body(record).get("obfuscated")).lower() for record in records)
+    return {
+        "recordCount": len(records),
+        "transportModes": dict(sorted(modes.items())),
+        "obfuscatedValues": dict(sorted(obfuscated.items())),
+    }
+
+
+def _paired_transport_check(
+    name: str,
+    *,
+    expected_transport_mode: str,
+    left_label: str,
+    left: list[dict[str, Any]],
+    right_label: str,
+    right: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected_obfuscated = expected_transport_mode == "obfuscated"
+
+    def matches(record: dict[str, Any]) -> bool:
+        body = _body(record)
+        return (
+            body.get("transportMode") == expected_transport_mode
+            and body.get("obfuscated") is expected_obfuscated
+        )
+
+    return {
+        "name": name,
+        "ok": bool(left) and bool(right) and all(matches(record) for record in (*left, *right)),
+        "expectedTransportMode": expected_transport_mode,
+        "expectedObfuscated": expected_obfuscated,
+        "clients": {
+            left_label: _transport_summary(left),
+            right_label: _transport_summary(right),
+        },
+    }
+
+
+def _payload_encoding_check(
+    observed_opcodes: set[str],
+    expected_payload_encoding: str,
+) -> dict[str, Any]:
+    expected_opcodes = (
+        COMPRESSED_PAYLOAD_OPCODES
+        if expected_payload_encoding == "compressed"
+        else UNCOMPRESSED_PAYLOAD_OPCODES
+    )
+    return {
+        "name": "Payload frames used only the selected encoding",
+        "ok": bool(observed_opcodes) and observed_opcodes.issubset(expected_opcodes),
+        "expectedPayloadEncoding": expected_payload_encoding,
+        "expectedOpcodes": sorted(expected_opcodes),
+        "observedOpcodes": sorted(observed_opcodes),
+    }
+
+
 def build_transfer_diagnostic_evidence(
     *,
     file_hash: str,
+    expected_transport_mode: str,
+    expected_payload_encoding: str,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
     """Builds the mandatory hash-correlated diagnostics gate for Rust <- MFC."""
 
     normalized_hash = normalize_ed2k_hash(file_hash)
+    if expected_transport_mode not in TRANSPORT_MODES:
+        raise ValueError(f"Unsupported peer transport mode: {expected_transport_mode!r}.")
+    if expected_payload_encoding not in PAYLOAD_ENCODINGS:
+        raise ValueError(f"Unsupported payload encoding: {expected_payload_encoding!r}.")
     rust = list(rust_records)
     mfc = list(mfc_records)
 
@@ -260,6 +326,11 @@ def build_transfer_diagnostic_evidence(
         outcome="accepted",
         opcode_names=payload_opcodes,
     )
+    observed_payload_opcodes = {
+        str(_body(record).get("opcodeName"))
+        for record in (*mfc_payload_packets, *rust_payload_packets)
+        if _body(record).get("opcodeName")
+    }
     wire_checks = {
         "requestFrames": _paired_packet_check(
             "Rust request frames exactly match MFC receive frames",
@@ -270,6 +341,26 @@ def build_transfer_diagnostic_evidence(
             "MFC payload frames exactly match Rust receive frames",
             mfc_payload_packets,
             rust_payload_packets,
+        ),
+        "requestTransport": _paired_transport_check(
+            "Request frames used the selected peer transport on both clients",
+            expected_transport_mode=expected_transport_mode,
+            left_label="rustSend",
+            left=rust_request_packets,
+            right_label="mfcReceive",
+            right=mfc_request_packets,
+        ),
+        "payloadTransport": _paired_transport_check(
+            "Payload frames used the selected peer transport on both clients",
+            expected_transport_mode=expected_transport_mode,
+            left_label="mfcSend",
+            left=mfc_payload_packets,
+            right_label="rustReceive",
+            right=rust_payload_packets,
+        ),
+        "payloadEncoding": _payload_encoding_check(
+            observed_payload_opcodes,
+            expected_payload_encoding,
         ),
     }
     rust_checks = {
@@ -368,7 +459,6 @@ def build_transfer_diagnostic_evidence(
     eligible_coverage_ids: list[str] = []
     if not failures:
         eligible_coverage_ids.append("queue.admission")
-        observed_payload_opcodes = set(wire_checks["payloadFrames"]["opcodes"])
         if observed_payload_opcodes.intersection(UNCOMPRESSED_PAYLOAD_OPCODES):
             eligible_coverage_ids.append("transfer.block.uncompressed")
         if observed_payload_opcodes.intersection(COMPRESSED_PAYLOAD_OPCODES):
@@ -377,6 +467,8 @@ def build_transfer_diagnostic_evidence(
         "schema": SCHEMA,
         "ok": not failures,
         "fileHash": normalized_hash,
+        "expectedTransportMode": expected_transport_mode,
+        "expectedPayloadEncoding": expected_payload_encoding,
         "failures": failures,
         "coverageClaims": {
             "eligibleCoverageIds": sorted(eligible_coverage_ids),
