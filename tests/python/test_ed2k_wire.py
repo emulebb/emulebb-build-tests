@@ -82,6 +82,43 @@ def test_server_session_reply_decoders_are_exact() -> None:
 
 
 @pytest.mark.unit
+def test_server_ident_decoder_preserves_identity_and_tags() -> None:
+    payload = (
+        bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+        + bytes([192, 0, 2, 10])
+        + struct.pack("<H", 4661)
+        + struct.pack("<I", 3)
+        + bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_STRING, ed2k_wire.ST_SERVERNAME])
+        + struct.pack("<H", 12)
+        + b"local-server"
+        + bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_STRING, ed2k_wire.ST_DESCRIPTION])
+        + struct.pack("<H", 13)
+        + b"deterministic"
+        + bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_UINT32, 0x87])
+        + struct.pack("<I", 1000)
+    )
+
+    assert ed2k_wire.decode_server_ident(payload) == {
+        "server_hash": "00112233445566778899AABBCCDDEEFF",
+        "advertised_ip": "192.0.2.10",
+        "advertised_port": 4661,
+        "name": "local-server",
+        "description": "deterministic",
+        "tags": [
+            {"name": ed2k_wire.ST_SERVERNAME, "value": "local-server"},
+            {"name": ed2k_wire.ST_DESCRIPTION, "value": "deterministic"},
+            {"name": 0x87, "value": 1000},
+        ],
+    }
+
+
+@pytest.mark.unit
+def test_server_ident_decoder_rejects_trailing_bytes() -> None:
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="trailing bytes"):
+        ed2k_wire.decode_server_ident(bytes(16 + 4 + 2) + struct.pack("<I", 0) + b"\x00")
+
+
+@pytest.mark.unit
 def test_search_result_decoder_preserves_hash_size_and_source_counts() -> None:
     file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
     tags = b"".join(

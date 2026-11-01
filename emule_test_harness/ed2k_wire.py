@@ -23,6 +23,7 @@ OP_GETSOURCES_OBFU = 0x23
 OP_SEARCHRESULT = 0x33
 OP_SERVERSTATUS = 0x34
 OP_IDCHANGE = 0x40
+OP_SERVERIDENT = 0x41
 OP_FOUNDSOURCES = 0x42
 OP_FOUNDSOURCES_OBFU = 0x44
 
@@ -33,6 +34,8 @@ FT_FILESIZE = 0x02
 FT_SOURCES = 0x15
 FT_COMPLETE_SOURCES = 0x30
 FT_FILESIZE_HI = 0x3A
+ST_SERVERNAME = 0x01
+ST_DESCRIPTION = 0x0B
 
 TAGTYPE_HASH = 0x01
 TAGTYPE_STRING = 0x02
@@ -254,6 +257,35 @@ def decode_server_status(payload: bytes) -> dict[str, int]:
     if reader.remaining:
         raise Ed2kWireError(f"SERVERSTATUS has {reader.remaining} trailing bytes.")
     return {"users": users, "files": files}
+
+
+def decode_server_ident(payload: bytes) -> dict[str, object]:
+    """Decodes one complete stock ``OP_SERVERIDENT`` payload."""
+
+    reader = _Reader(payload)
+    server_hash = reader.take(16)
+    advertised_ip = ipaddress.IPv4Address(reader.take(4))
+    advertised_port = reader.u16()
+    tags: list[dict[str, object]] = []
+    for _ in range(reader.u32()):
+        name, value = _decode_tag(reader)
+        tags.append(
+            {
+                "name": name,
+                "value": value.hex().upper() if isinstance(value, bytes) else value,
+            }
+        )
+    if reader.remaining:
+        raise Ed2kWireError(f"SERVERIDENT has {reader.remaining} trailing bytes.")
+    by_name = {row["name"]: row["value"] for row in tags}
+    return {
+        "server_hash": server_hash.hex().upper(),
+        "advertised_ip": str(advertised_ip),
+        "advertised_port": advertised_port,
+        "name": by_name.get(ST_SERVERNAME),
+        "description": by_name.get(ST_DESCRIPTION),
+        "tags": tags,
+    }
 
 
 def encode_offer_file(*, file_hash: bytes, name: str, size: int) -> bytes:

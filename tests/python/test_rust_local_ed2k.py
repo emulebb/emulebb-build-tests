@@ -46,6 +46,61 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
+def test_wait_for_current_server_metadata_requires_applied_identity_and_counters(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "connected": True,
+                "currentServer": {
+                    "current": True,
+                    "address": "127.0.0.1",
+                    "port": 4661,
+                    "name": "seed-before-server-ident",
+                    "description": "seed",
+                    "users": 2,
+                    "files": 1,
+                },
+            },
+            {
+                "connected": True,
+                "currentServer": {
+                    "current": True,
+                    "address": "127.0.0.1",
+                    "port": 4661,
+                    "name": "emulebb-local-e2e",
+                    "description": "deterministic server",
+                    "users": 2,
+                    "files": 1,
+                },
+            },
+        ]
+    )
+    calls: list[tuple[str, str]] = []
+
+    def request(_base_url, method, path, _api_key, _body=None):
+        calls.append((method, path))
+        return next(responses)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
+
+    result = rust_local_ed2k.wait_for_current_server_metadata(
+        "http://127.0.0.1:4711",
+        "key",
+        expected_address="127.0.0.1",
+        expected_port=4661,
+        expected_name="emulebb-local-e2e",
+        expected_description="deterministic server",
+        timeout_seconds=1.0,
+    )
+
+    assert result["currentServer"]["name"] == "emulebb-local-e2e"
+    assert calls == [
+        ("GET", "/api/v1/servers/status"),
+        ("GET", "/api/v1/servers/status"),
+    ]
+
+
 def test_wait_for_server_search_result_reads_unwrapped_payload(monkeypatch) -> None:
     expected_hash = "00112233445566778899aabbccddeeff"
     monkeypatch.setattr(

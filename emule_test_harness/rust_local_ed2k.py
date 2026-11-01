@@ -123,6 +123,47 @@ def wait_for_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float)
     )
 
 
+def wait_for_current_server_metadata(
+    base_url: str,
+    api_key: str,
+    *,
+    expected_address: str,
+    expected_port: int,
+    expected_name: str,
+    expected_description: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until one client exposes the exact applied current-server metadata."""
+
+    def probe() -> dict[str, object] | None:
+        data = request_json(base_url, "GET", "/api/v1/servers/status", api_key)
+        current = data.get("currentServer") if isinstance(data.get("currentServer"), dict) else {}
+        users = current.get("users")
+        files = current.get("files")
+        counters_valid = all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (users, files)
+        )
+        if (
+            data.get("connected") is True
+            and current.get("current") is True
+            and str(current.get("address") or "").casefold() == expected_address.casefold()
+            and current.get("port") == expected_port
+            and current.get("name") == expected_name
+            and current.get("description") == expected_description
+            and counters_valid
+        ):
+            return data
+        return None
+
+    return wait_for(
+        probe,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.25,
+        description="applied current ED2K server metadata",
+    )
+
+
 def wait_for_server_search_result(
     base_url: str,
     api_key: str,
