@@ -12,6 +12,7 @@ from . import diag_event_runs
 from .diag_event_schema import DIAG_EVENT_SCHEMA
 
 SCHEMA = "emulebb-build-tests.transfer-coverage-evidence.v1"
+CONTRACT = "focused-client-udp-request-lifecycle"
 
 PROOF_SLOTS = (
     "download_attempt_started",
@@ -27,8 +28,21 @@ PROOF_SLOTS = (
     "client_udp_send_failure",
     "client_udp_terminal",
     "reask_sent",
+    "udp_reask_schedule_eligible",
+    "udp_reask_transport_sent",
 )
-TARGET_SLOTS = ("client_udp_attempt", "client_udp_terminal")
+TARGET_SLOTS_BY_CLIENT = {
+    "rust": (
+        "client_udp_attempt",
+        "client_udp_terminal",
+    ),
+    "mfc": (
+        "udp_reask_schedule_eligible",
+        "udp_reask_transport_sent",
+        "client_udp_attempt",
+        "client_udp_terminal",
+    ),
+}
 PROTOCOL_CHAIN_SLOTS = (
     "download_attempt_started",
     "source_engaged",
@@ -54,12 +68,8 @@ _SOURCE_RESPONSE_OPCODES = (
     "OP_ANSWERSOURCES2",
 )
 _QUEUE_OPCODES = frozenset({"OP_QUEUERANK", "OP_QUEUERANKING"})
-_CLIENT_UDP_REQUEST_OPCODES = frozenset(
-    {"OP_REASKFILEPING", "OP_REASKCALLBACKUDP"}
-)
-_CLIENT_UDP_REQUEST_ROLES = frozenset(
-    {"reask_request", "buddy_relay_request"}
-)
+_CLIENT_UDP_REQUEST_OPCODES = frozenset({"OP_REASKFILEPING", "OP_REASKCALLBACKUDP"})
+_CLIENT_UDP_REQUEST_ROLES = frozenset({"reask_request", "buddy_relay_request"})
 
 
 class TransferCoverageEvidenceError(ValueError):
@@ -100,8 +110,8 @@ def new_evidence(
         "proof": {},
         "coverage": {slot: False for slot in PROOF_SLOTS},
         "target": {
-            "name": "client-udp-request-lifecycle",
-            "requiredSlots": list(TARGET_SLOTS),
+            "name": CONTRACT,
+            "requiredSlots": list(TARGET_SLOTS_BY_CLIENT[client]),
             "complete": False,
         },
         "protocolChainComplete": False,
@@ -125,7 +135,11 @@ def advance_evidence(
         segment_provenance = _segment_provenance(metadata)
         for record in segment.records:
             _require_record_identity(updated, record)
-            slot = _proof_slot(record, fixture_hashes=updated["fixtureHashes"])
+            slot = _proof_slot(
+                record,
+                fixture_hashes=updated["fixtureHashes"],
+                proof=updated["proof"],
+            )
             if slot is None:
                 continue
             _retain_record(updated["proof"], slot, record, segment_provenance)
@@ -169,9 +183,7 @@ def load_evidence(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
-        raise TransferCoverageEvidenceError(
-            f"could not load transfer coverage evidence {path}: {error}"
-        ) from error
+        raise TransferCoverageEvidenceError(f"could not load transfer coverage evidence {path}: {error}") from error
     return _validated_copy(payload)
 
 
@@ -191,7 +203,10 @@ def _retain_record(
 ) -> None:
     if slot == "client_udp_attempt":
         if "client_udp_terminal" not in proof:
-            proof[slot] = {"segment": copy.deepcopy(segment), "record": copy.deepcopy(record)}
+            proof[slot] = {
+                "segment": copy.deepcopy(segment),
+                "record": copy.deepcopy(record),
+            }
         return
     if slot == "client_udp_terminal":
         attempt = proof.get("client_udp_attempt")
@@ -214,75 +229,83 @@ def _retain_record(
 
 
 def _proof_slot(
-    record: dict[str, Any], *, fixture_hashes: Iterable[str]
+    record: dict[str, Any],
+    *,
+    fixture_hashes: Iterable[str],
+    proof: dict[str, Any] | None = None,
 ) -> str | None:
-    if not _record_matches_fixture(record, fixture_hashes):
-        return None
     family = record.get("family")
     event = record.get("event")
+    slot: str | None = None
     if family == "sched":
-        return {
-            "download_attempt_started": "download_attempt_started",
-            "source_engaged": "source_engaged",
-            "download_payload_accepted": "download_payload_accepted",
-            "reask_sent": "reask_sent",
-        }.get(event)
-    if family == "kad_event" and event == "lookup" and _field(record, "searchKind") == "file":
+        if event == "udp_reask_schedule_decision" and _field(record, "outcome") == "eligible":
+            slot = "udp_reask_schedule_eligible"
+        elif event == "udp_reask_decision" and _field(record, "outcome") == "sent":
+            slot = "udp_reask_transport_sent"
+        else:
+            slot = {
+                "download_attempt_started": "download_attempt_started",
+                "source_engaged": "source_engaged",
+                "download_payload_accepted": "download_payload_accepted",
+                "reask_sent": "reask_sent",
+            }.get(event)
+    elif family == "kad_event" and event == "lookup" and _field(record, "searchKind") == "file":
         milestone = _field(record, "milestone")
         if milestone == "lookup_started":
-            return "kad_file_lookup_started"
-        if milestone in {"lookup_complete", "lookup_not_dispatched"}:
-            return "kad_file_lookup_complete"
-    if family in {"ed2k_tcp", "ed2k_server_udp"}:
+            slot = "kad_file_lookup_started"
+        elif milestone in {"lookup_complete", "lookup_not_dispatched"}:
+            slot = "kad_file_lookup_complete"
+    elif family in {"ed2k_tcp", "ed2k_server_udp"}:
         opcode_name = str(_field(record, "opcodeName") or "")
         if any(opcode_name.startswith(prefix) for prefix in _SOURCE_REQUEST_OPCODES):
-            return "server_source_request"
-        if any(opcode_name.startswith(prefix) for prefix in _SOURCE_RESPONSE_OPCODES):
-            return "server_source_response"
-        if family == "ed2k_tcp" and opcode_name in _QUEUE_OPCODES:
-            return "queue_rank"
-        if (
-            family == "ed2k_tcp"
-            and event == "state"
-            and _field(record, "phase") == "queued_detached_udp_reask"
-        ):
-            return "queued_detached_udp_reask"
-    if family == "ed2k_client_udp":
+            slot = "server_source_request"
+        elif any(opcode_name.startswith(prefix) for prefix in _SOURCE_RESPONSE_OPCODES):
+            slot = "server_source_response"
+        elif family == "ed2k_tcp" and opcode_name in _QUEUE_OPCODES:
+            slot = "queue_rank"
+        elif family == "ed2k_tcp" and event == "state" and _field(record, "phase") == "queued_detached_udp_reask":
+            slot = "queued_detached_udp_reask"
+    elif family == "ed2k_client_udp":
         role = _field(record, "role")
         opcode_name = _field(record, "opcodeName")
         if (
             event == "packet"
             and _field(record, "direction") == "send"
-            and (
-                role in _CLIENT_UDP_REQUEST_ROLES
-                or opcode_name in _CLIENT_UDP_REQUEST_OPCODES
-            )
+            and (role in _CLIENT_UDP_REQUEST_ROLES or opcode_name in _CLIENT_UDP_REQUEST_OPCODES)
         ):
-            return "client_udp_attempt"
-        if event == "send_outcome" and _field(record, "direction") == "send":
-            if (
-                _field(record, "outcome") == "send_succeeded"
-                and _field(record, "deliveryKnown") is True
-            ):
-                return "client_udp_terminal"
-            return "client_udp_send_failure"
-    return None
+            slot = "client_udp_attempt"
+        elif event == "send_outcome" and _field(record, "direction") == "send":
+            if _field(record, "outcome") == "send_succeeded" and _field(record, "deliveryKnown") is True:
+                slot = "client_udp_terminal"
+            else:
+                slot = "client_udp_send_failure"
+    if slot is None:
+        return None
+    if slot in {"client_udp_terminal", "client_udp_send_failure"}:
+        return slot if _terminal_matches_attempt(record, proof or {}) else None
+    return slot if _record_matches_fixture(record, fixture_hashes) else None
 
 
-def _record_matches_fixture(
-    record: dict[str, Any], fixture_hashes: Iterable[str]
-) -> bool:
+def _record_matches_fixture(record: dict[str, Any], fixture_hashes: Iterable[str]) -> bool:
     expected = set(fixture_hashes)
     observed = {
         value.lower()
         for container in (record.get("keys"), record.get("body"))
         if isinstance(container, dict)
         for name, value in container.items()
-        if name in {"fileHash", "file_hash"}
-        and isinstance(value, str)
-        and len(value) == 32
+        if name in {"fileHash", "file_hash"} and isinstance(value, str) and len(value) == 32
     }
-    return not observed or bool(observed & expected)
+    return bool(observed & expected)
+
+
+def _terminal_matches_attempt(record: dict[str, Any], proof: dict[str, Any]) -> bool:
+    """Links a hashless socket terminal to an exact fixture-owned attempt."""
+
+    attempt = proof.get("client_udp_attempt")
+    if not isinstance(attempt, dict) or not isinstance(attempt.get("record"), dict):
+        return False
+    attempt_id = _field(attempt["record"], "sendAttemptId")
+    return attempt_id is not None and _field(record, "sendAttemptId") == attempt_id
 
 
 def _field(record: dict[str, Any], name: str) -> object:
@@ -293,7 +316,9 @@ def _field(record: dict[str, Any], name: str) -> object:
     return None
 
 
-def _segment_snapshot(metadata: dict[str, Any]) -> diag_event_runs.DiagnosticSegmentSnapshot:
+def _segment_snapshot(
+    metadata: dict[str, Any],
+) -> diag_event_runs.DiagnosticSegmentSnapshot:
     if not isinstance(metadata, dict):
         raise TransferCoverageEvidenceError("processed segment metadata must be an object")
     source = metadata.get("source")
@@ -325,9 +350,7 @@ def _require_snapshot_metadata(
         if metadata.get(name) != value
     }
     if mismatches:
-        raise TransferCoverageEvidenceError(
-            f"processed diagnostic segment changed after indexing: {mismatches}"
-        )
+        raise TransferCoverageEvidenceError(f"processed diagnostic segment changed after indexing: {mismatches}")
 
 
 def _segment_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -349,20 +372,17 @@ def _require_record_identity(evidence: dict[str, Any], record: dict[str, Any]) -
         record.get("runId"),
     )
     if actual != expected:
-        raise TransferCoverageEvidenceError(
-            f"diagnostic record identity mismatch: {actual!r} != {expected!r}"
-        )
+        raise TransferCoverageEvidenceError(f"diagnostic record identity mismatch: {actual!r} != {expected!r}")
 
 
 def _refresh_coverage(evidence: dict[str, Any]) -> None:
     proof = evidence["proof"]
     coverage = {slot: slot in proof for slot in PROOF_SLOTS}
-    target_complete = all(coverage[slot] for slot in TARGET_SLOTS)
+    target_slots = TARGET_SLOTS_BY_CLIENT[evidence["client"]]
+    target_complete = all(coverage[slot] for slot in target_slots)
     evidence["coverage"] = coverage
     evidence["target"]["complete"] = target_complete
-    evidence["protocolChainComplete"] = all(
-        coverage[slot] for slot in PROTOCOL_CHAIN_SLOTS
-    )
+    evidence["protocolChainComplete"] = all(coverage[slot] for slot in PROTOCOL_CHAIN_SLOTS)
     evidence["complete"] = target_complete
 
 
@@ -425,10 +445,11 @@ def _validated_copy(value: object) -> dict[str, Any]:
     if value.get("coverage") != expected_coverage:
         raise TransferCoverageEvidenceError("transfer coverage flags are inconsistent")
     target = value.get("target")
-    target_complete = all(expected_coverage[slot] for slot in TARGET_SLOTS)
+    target_slots = TARGET_SLOTS_BY_CLIENT[client]
+    target_complete = all(expected_coverage[slot] for slot in target_slots)
     if target != {
-        "name": "client-udp-request-lifecycle",
-        "requiredSlots": list(TARGET_SLOTS),
+        "name": CONTRACT,
+        "requiredSlots": list(target_slots),
         "complete": target_complete,
     }:
         raise TransferCoverageEvidenceError("transfer coverage target is inconsistent")
@@ -440,9 +461,7 @@ def _validated_copy(value: object) -> dict[str, Any]:
     return copy.deepcopy(value)
 
 
-def _validate_proof_item(
-    evidence: dict[str, Any], slot: str, item: object
-) -> None:
+def _validate_proof_item(evidence: dict[str, Any], slot: str, item: object) -> None:
     if not isinstance(item, dict) or set(item) != {"segment", "record"}:
         raise TransferCoverageEvidenceError(f"transfer coverage proof {slot} is invalid")
     segment = item["segment"]
@@ -461,7 +480,14 @@ def _validate_proof_item(
     _require_record_identity(evidence, record)
     if record.get("segmentId") != segment.get("segmentId"):
         raise TransferCoverageEvidenceError(f"transfer coverage proof {slot} segment is inconsistent")
-    if _proof_slot(record, fixture_hashes=evidence["fixtureHashes"]) != slot:
+    if (
+        _proof_slot(
+            record,
+            fixture_hashes=evidence["fixtureHashes"],
+            proof=evidence["proof"],
+        )
+        != slot
+    ):
         raise TransferCoverageEvidenceError(f"transfer coverage proof {slot} classification is invalid")
 
 

@@ -43,9 +43,7 @@ def test_capture_secident_knob_defaults_on() -> None:
 def test_direct_capture_parser_exposes_connectivity_and_total_download_deadline() -> None:
     module = _load_capture()
 
-    args = module.build_parser().parse_args(
-        ["--client", "rust", "--route", "direct", "--connectivity", "firewalled"]
-    )
+    args = module.build_parser().parse_args(["--client", "rust", "--route", "direct", "--connectivity", "firewalled"])
 
     assert args.route == "direct"
     assert args.connectivity == "firewalled"
@@ -189,10 +187,7 @@ def test_focused_mfc_segment_bytes_caps_fixed_ring_to_focused_budget(
     segment_bytes = module.focused_mfc_segment_bytes(inputs)
 
     assert segment_bytes == 2 * 1024 * 1024
-    assert (
-        segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS
-        == 256 * 1024 * 1024
-    )
+    assert segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS == 256 * 1024 * 1024
 
 
 def test_focused_mfc_segment_bytes_rejects_budget_below_writer_minimum(
@@ -238,8 +233,7 @@ def test_require_focused_mfc_writer_ready_matches_fixed_ring(
             "maxSegmentBytes": segment_bytes,
             "maxSegmentSeconds": module.MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS,
             "retainedSegments": module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
-            "maxTotalBytes": segment_bytes
-            * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+            "maxTotalBytes": segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
             "maxRetainedSeconds": module.MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS,
             "minimumFreeBytes": 0,
         }
@@ -312,7 +306,10 @@ def _coverage_record(
         "family": "ed2k_client_udp",
         "event": event,
         "severity": "info",
-        "keys": {"sendAttemptId": send_attempt_id},
+        "keys": {
+            **({"fileHash": "a" * 32} if event == "packet" else {}),
+            "sendAttemptId": send_attempt_id,
+        },
         "body": body,
     }
 
@@ -371,6 +368,7 @@ def test_transfer_coverage_wait_stops_on_exact_client_udp_lifecycle(
     )
 
     assert summary["complete"] is True
+    assert summary["contract"] == module.transfer_coverage_evidence.CONTRACT
     assert summary["finalized"] is False
     assert checkpoint["source"]["lastClosedSegmentId"] == 0
     assert evidence["complete"] is True
@@ -540,9 +538,7 @@ def test_campaign_fixtures_reuses_exact_snapshot(tmp_path: Path) -> None:
 
     fixtures = module.campaign_fixtures(
         campaign_dir=tmp_path,
-        approved_fixtures=(
-            {"hash": "b" * 32, "name": "changed.iso", "size": 2048},
-        ),
+        approved_fixtures=({"hash": "b" * 32, "name": "changed.iso", "size": 2048},),
         count=1,
     )
 
@@ -555,16 +551,23 @@ def test_campaign_fixtures_fails_when_approved_set_is_too_small(tmp_path: Path) 
     with pytest.raises(RuntimeError, match="enough approved direct bootstrap transfers"):
         module.campaign_fixtures(
             campaign_dir=tmp_path,
-            approved_fixtures=(
-                {"hash": "a" * 32, "name": "first.iso", "size": 1024},
-            ),
+            approved_fixtures=({"hash": "a" * 32, "name": "first.iso", "size": 1024},),
             count=2,
         )
 
 
 @pytest.mark.parametrize(
     "value",
-    ("../escape", "nested/case", r"nested\case", r"C:\absolute", ".", "..", "case..escape", "CON"),
+    (
+        "../escape",
+        "nested/case",
+        r"nested\case",
+        r"C:\absolute",
+        ".",
+        "..",
+        "case..escape",
+        "CON",
+    ),
 )
 def test_campaign_leaf_rejects_paths_and_unsafe_windows_names(value: str) -> None:
     module = _load_capture()
@@ -600,16 +603,13 @@ def test_cli_reports_post_run_failure_taxonomy(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_capture()
-    error = module.PostRunSafetyError(
-        [("upnp-absence-audit", RuntimeError("private router detail"))]
-    )
+    error = module.PostRunSafetyError([("upnp-absence-audit", RuntimeError("private router detail"))])
     monkeypatch.setattr(module, "main", lambda: (_ for _ in ()).throw(error))
 
     assert module._cli_main() == 2
     stderr = capsys.readouterr().err
     assert stderr == (
-        "harness-failure: PostRunSafetyError: Post-run safety failures: "
-        "upnp-absence-audit:RuntimeError\n"
+        "harness-failure: PostRunSafetyError: Post-run safety failures: upnp-absence-audit:RuntimeError\n"
     )
     assert "private router detail" not in stderr
 
@@ -632,8 +632,7 @@ def test_native_capture_filter_selects_only_exact_protocol_ports() -> None:
     )
 
     assert capture_filter == (
-        "host 192.0.2.10 and not tcp port 4731 and "
-        "(tcp port 4661 or tcp port 4662 or udp port 1900 or udp port 4665 or udp port 4672)"
+        "host 192.0.2.10 and not tcp port 4731 and (tcp port 4661 or tcp port 4662 or udp port 1900 or udp port 4665 or udp port 4672)"
     )
 
 
@@ -651,9 +650,7 @@ def test_gather_recording_preserves_relative_paths(tmp_path: Path) -> None:
     assert copied == 3
     assert (tmp_path / "recording" / "tcp" / "events.jsonl").read_text(encoding="utf-8") == "tcp\n"
     assert (tmp_path / "recording" / "udp" / "events.jsonl").read_text(encoding="utf-8") == "udp\n"
-    assert (tmp_path / "recording" / "emulebb-mfc-diag-health.json").read_text(
-        encoding="utf-8"
-    ) == "{}"
+    assert (tmp_path / "recording" / "emulebb-mfc-diag-health.json").read_text(encoding="utf-8") == "{}"
 
 
 def test_validate_recorded_diagnostics_rejects_unhealthy_mfc_writer(
@@ -716,22 +713,22 @@ def test_gather_recording_fails_on_destination_collision(tmp_path: Path) -> None
     assert (destination / "events.jsonl").read_text(encoding="utf-8") == "old\n"
 
 
-def test_gather_recording_fails_on_copy_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gather_recording_fails_on_copy_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     source = tmp_path / "source"
     source.mkdir()
     (source / "events.jsonl").write_text("event\n", encoding="utf-8")
-    monkeypatch.setattr(module.shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        module.shutil,
+        "copy2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
 
     with pytest.raises(RuntimeError, match="Could not copy"):
         module.gather_recording(source, tmp_path / "recording", 0.0)
 
 
-def test_gather_recording_fails_on_entry_stat_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gather_recording_fails_on_entry_stat_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     source = tmp_path / "source"
     source.mkdir()
@@ -750,7 +747,9 @@ def test_gather_recording_fails_on_entry_stat_error(
         module.gather_recording(source, tmp_path / "recording", 0.0)
 
 
-def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_path: Path) -> None:
+def test_native_completion_verifies_fixture_without_retaining_name_or_hash(
+    tmp_path: Path,
+) -> None:
     module = _load_capture()
     incoming = tmp_path / "incoming"
     incoming.mkdir()
@@ -798,7 +797,9 @@ def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_p
     ]
 
 
-def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: Path) -> None:
+def test_recording_archive_is_sanitized_and_retains_private_artifacts(
+    tmp_path: Path,
+) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     (report / "rust-profile" / "incoming").mkdir(parents=True)
@@ -857,9 +858,7 @@ def test_recording_retains_nested_mfc_incoming_payloads(tmp_path: Path) -> None:
     assert retained.read_bytes() == b"payload"
 
 
-def test_pack_recording_fails_closed_when_private_move_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pack_recording_fails_closed_when_private_move_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     report.mkdir()
@@ -882,15 +881,17 @@ def test_pack_recording_fails_closed_when_private_move_fails(
     assert not report.with_suffix(".zip").exists()
 
 
-def test_pack_recording_reports_source_tree_cleanup_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pack_recording_reports_source_tree_cleanup_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     report.mkdir()
     (report / "results.json").write_text("{}", encoding="utf-8")
     (report / "markers.jsonl").write_text("", encoding="utf-8")
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        module.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
 
     with pytest.raises(RuntimeError, match="source tree could not be removed"):
         module.pack_recording(report)
@@ -907,24 +908,34 @@ def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
     (shared / "nested").mkdir(parents=True)
     (shared / "one.bin").write_bytes(b"1")
     (shared / "nested" / "two.bin").write_bytes(b"2")
-    assert module._approved_shared_file_count(
-        [{"path": str(shared), "recursive": True}]
-    ) == 2
+    assert module._approved_shared_file_count([{"path": str(shared), "recursive": True}]) == 2
 
-    expected = module._approved_shared_file_identities(
-        [{"path": str(shared), "recursive": True}]
-    )
+    expected = module._approved_shared_file_identities([{"path": str(shared), "recursive": True}])
     first_identity, second_identity = sorted(expected)
     replies = iter(
         [
-            {"data": {"runtimeDiagnostics": {"sharedFileCount": 1, "sharedHashingCount": 1}}},
+            {
+                "data": {
+                    "runtimeDiagnostics": {
+                        "sharedFileCount": 1,
+                        "sharedHashingCount": 1,
+                    }
+                }
+            },
             {
                 "data": {
                     "items": [{"hash": first_identity[0], "sizeBytes": first_identity[1]}],
                     "total": 1,
                 }
             },
-            {"data": {"runtimeDiagnostics": {"sharedFileCount": 2, "sharedHashingCount": 0}}},
+            {
+                "data": {
+                    "runtimeDiagnostics": {
+                        "sharedFileCount": 2,
+                        "sharedHashingCount": 0,
+                    }
+                }
+            },
             {
                 "data": {
                     "items": [
@@ -1082,9 +1093,7 @@ def test_shared_inventory_wait_bounds_persistently_incoherent_snapshots(
         }
 
     monkeypatch.setattr(module, "_http", request)
-    monkeypatch.setattr(
-        module, "MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS", 2
-    )
+    monkeypatch.setattr(module, "MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS", 2)
 
     with pytest.raises(module.SharedInventoryPollingError):
         module._wait_for_shared_inventory(
@@ -1220,7 +1229,11 @@ def test_post_run_audits_attempt_every_invariant_after_failures(
         "compare_forbidden_root_fingerprints",
         lambda *_args: SimpleNamespace(changed_root_indices=()),
     )
-    monkeypatch.setattr(module, "summarize_forbidden_root_metadata_audit", lambda _audit: {"passed": True})
+    monkeypatch.setattr(
+        module,
+        "summarize_forbidden_root_metadata_audit",
+        lambda _audit: {"passed": True},
+    )
     results: dict[str, object] = {}
 
     failures = module._run_post_run_safety_audits(
@@ -1325,9 +1338,7 @@ def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     monkeypatch.setattr(
         module,
         "_http",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("private shutdown detail")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private shutdown detail")),
     )
 
     failures = module._teardown_client(
@@ -1342,7 +1353,9 @@ def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     assert failures == []
 
 
-def test_rust_teardown_confirms_shutdown_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rust_teardown_confirms_shutdown_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_capture()
 
     class Process:
@@ -1403,9 +1416,7 @@ def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
     monkeypatch.setattr(
         module,
         "_http",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("private shutdown detail")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private shutdown detail")),
     )
     monkeypatch.setattr(module, "stop_process_tree", stopped.append)
 
@@ -1419,9 +1430,7 @@ def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
         sleep=lambda _seconds: None,
     )
 
-    assert [(stage, type(error).__name__) for stage, error in failures] == [
-        ("rust-clean-teardown", "RuntimeError")
-    ]
+    assert [(stage, type(error).__name__) for stage, error in failures] == [("rust-clean-teardown", "RuntimeError")]
     assert stopped == [process]
     assert "private shutdown detail" not in str(module.PostRunSafetyError(failures))
 
@@ -1451,6 +1460,4 @@ def test_connectivity_state_normalizes_rust_and_mfc_firewall_signals() -> None:
 
 def test_linux_document_term_selection_accepts_operator_phrase() -> None:
     module = _load_capture()
-    assert module._select_linux_document_term(("public linux documents", "other")) == (
-        "public linux documents"
-    )
+    assert module._select_linux_document_term(("public linux documents", "other")) == ("public linux documents")

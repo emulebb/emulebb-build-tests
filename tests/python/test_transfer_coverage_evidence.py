@@ -18,10 +18,11 @@ def _record(
     event: str,
     keys: dict[str, object] | None = None,
     body: dict[str, object] | None = None,
+    client: str = "rust",
 ) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
-        "client": "rust",
+        "client": client,
         "processId": 42,
         "runId": "run-a",
         "segmentId": segment_id,
@@ -35,10 +36,10 @@ def _record(
     }
 
 
-def _segment(
-    tmp_path: Path, segment_id: int, records: list[dict[str, object]]
-) -> dict[str, object]:
-    path = tmp_path / f"emulebb-rust-diag-42-run-a-{segment_id:06}.jsonl"
+def _segment(tmp_path: Path, segment_id: int, records: list[dict[str, object]]) -> dict[str, object]:
+    client = str(records[0]["client"])
+    prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
+    path = tmp_path / f"{prefix}-diag-42-run-a-{segment_id:06}.jsonl"
     path.write_text(
         "".join(json.dumps(record) + "\n" for record in records),
         encoding="utf-8",
@@ -90,6 +91,7 @@ def test_advance_retains_exact_bounded_protocol_chain(tmp_path: Path) -> None:
                 segment_id=0,
                 family="ed2k_tcp",
                 event="packet",
+                keys={"fileHash": "a" * 32},
                 body={"opcodeName": "OP_QUEUERANKING", "direction": "recv"},
             ),
             _record(
@@ -97,6 +99,7 @@ def test_advance_retains_exact_bounded_protocol_chain(tmp_path: Path) -> None:
                 segment_id=0,
                 family="ed2k_tcp",
                 event="state",
+                keys={"fileHash": "a" * 32},
                 body={"phase": "queued_detached_udp_reask"},
             ),
             _record(
@@ -104,7 +107,7 @@ def test_advance_retains_exact_bounded_protocol_chain(tmp_path: Path) -> None:
                 segment_id=0,
                 family="ed2k_client_udp",
                 event="packet",
-                keys={"sendAttemptId": 7},
+                keys={"fileHash": "a" * 32, "sendAttemptId": 7},
                 body={
                     "direction": "send",
                     "outcome": "attempted",
@@ -121,12 +124,18 @@ def test_advance_retains_exact_bounded_protocol_chain(tmp_path: Path) -> None:
                 body={
                     "direction": "send",
                     "outcome": "send_succeeded",
-                        "deliveryKnown": True,
+                    "deliveryKnown": True,
                     "role": "reask_request",
                     "sendAttemptId": 7,
                 },
             ),
-            _record(7, segment_id=0, family="sched", event="reask_sent"),
+            _record(
+                7,
+                segment_id=0,
+                family="sched",
+                event="reask_sent",
+                keys={"fileHash": "a" * 32},
+            ),
             _record(8, segment_id=0, family="noise", event="ignored"),
         ],
     )
@@ -168,6 +177,7 @@ def test_attempt_is_replaced_until_a_matching_terminal_is_observed(
                 segment_id=0,
                 family="ed2k_client_udp",
                 event="packet",
+                keys={"fileHash": "a" * 32},
                 body={"direction": "send", "role": "reask_request", "sendAttemptId": 7},
             )
         ],
@@ -181,6 +191,7 @@ def test_attempt_is_replaced_until_a_matching_terminal_is_observed(
                 segment_id=1,
                 family="ed2k_client_udp",
                 event="packet",
+                keys={"fileHash": "a" * 32},
                 body={
                     "direction": "send",
                     "role": "reask_request",
@@ -224,6 +235,7 @@ def test_failed_send_is_retained_without_completing_target(tmp_path: Path) -> No
                 segment_id=0,
                 family="ed2k_client_udp",
                 event="packet",
+                keys={"fileHash": "a" * 32},
                 body={"direction": "send", "role": "reask_request", "sendAttemptId": 7},
             ),
             _record(
@@ -251,6 +263,121 @@ def test_failed_send_is_retained_without_completing_target(tmp_path: Path) -> No
     assert evidence["coverage"]["client_udp_send_failure"] is True
     assert evidence["coverage"]["client_udp_terminal"] is False
     assert evidence["complete"] is False
+
+
+def test_hashless_udp_activity_cannot_satisfy_fixture_target(tmp_path: Path) -> None:
+    segment = _segment(
+        tmp_path,
+        0,
+        [
+            _record(
+                1,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="packet",
+                body={"direction": "send", "role": "reask_request", "sendAttemptId": 7},
+            ),
+            _record(
+                2,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="send_outcome",
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 7,
+                    "outcome": "send_succeeded",
+                    "deliveryKnown": True,
+                },
+            ),
+        ],
+    )
+
+    evidence = transfer_coverage_evidence.advance_evidence(
+        _empty(),
+        (segment,),
+        observed_utc="2026-10-31T00:01:00Z",
+    )
+
+    assert evidence["proof"] == {}
+    assert evidence["complete"] is False
+
+
+def test_mfc_target_requires_fixture_owned_decisions_and_socket_lifecycle(
+    tmp_path: Path,
+) -> None:
+    segment = _segment(
+        tmp_path,
+        0,
+        [
+            _record(
+                1,
+                segment_id=0,
+                family="sched",
+                event="udp_reask_schedule_decision",
+                keys={"fileHash": "a" * 32},
+                body={"outcome": "eligible"},
+                client="mfc",
+            ),
+            _record(
+                2,
+                segment_id=0,
+                family="sched",
+                event="udp_reask_decision",
+                keys={"fileHash": "a" * 32},
+                body={"outcome": "sent"},
+                client="mfc",
+            ),
+            _record(
+                3,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="packet",
+                keys={"fileHash": "a" * 32, "sendAttemptId": 7},
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 7,
+                },
+                client="mfc",
+            ),
+            _record(
+                4,
+                segment_id=0,
+                family="ed2k_client_udp",
+                event="send_outcome",
+                body={
+                    "direction": "send",
+                    "role": "reask_request",
+                    "sendAttemptId": 7,
+                    "outcome": "send_succeeded",
+                    "deliveryKnown": True,
+                },
+                client="mfc",
+            ),
+        ],
+    )
+    evidence = transfer_coverage_evidence.new_evidence(
+        client="mfc",
+        process_id=42,
+        run_id="run-a",
+        fixture_hashes=("a" * 32,),
+        observed_utc="2026-10-31T00:00:00Z",
+    )
+
+    evidence = transfer_coverage_evidence.advance_evidence(
+        evidence,
+        (segment,),
+        observed_utc="2026-10-31T00:01:00Z",
+    )
+
+    assert evidence["complete"] is True
+    assert evidence["target"]["requiredSlots"] == [
+        "udp_reask_schedule_eligible",
+        "udp_reask_transport_sent",
+        "client_udp_attempt",
+        "client_udp_terminal",
+    ]
 
 
 def test_fixture_hash_excludes_unrelated_transfer_events(tmp_path: Path) -> None:

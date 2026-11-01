@@ -49,7 +49,10 @@ from emule_test_harness import (  # noqa: E402
     transfer_coverage_evidence,
 )
 from emule_test_harness import hideme_vpn  # noqa: E402
-from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
+from emule_test_harness.kad_nodes import (  # noqa: E402
+    DEFAULT_NODES_DAT_URL,
+    fetch_bootstrap_endpoints,
+)
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
     audit_client_processes,
@@ -115,10 +118,7 @@ def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
     else:
         raise ValueError(f"unsupported capture client: {client!r}")
     if profile_dir is None:
-        raise RuntimeError(
-            f"Persisted {client} capture requires {client}_profile.profile_dir "
-            "in the live-wire inputs."
-        )
+        raise RuntimeError(f"Persisted {client} capture requires {client}_profile.profile_dir in the live-wire inputs.")
     return profile_dir.resolve()
 
 
@@ -129,9 +129,7 @@ def focused_capture_writer_policy(
 
     storage = inputs.soak_storage
     if storage is None:
-        raise RuntimeError(
-            "Focused persisted capture requires soak_storage in the live-wire inputs."
-        )
+        raise RuntimeError("Focused persisted capture requires soak_storage in the live-wire inputs.")
     source = storage.rust_diagnostics
     bundle = storage.stream("diagnostic_bundles")
     pins = storage.stream("diagnostic_pins")
@@ -143,9 +141,7 @@ def focused_capture_writer_policy(
         pin_capacity_bytes // max_segment_bytes,
     )
     if retained_segments < 2:
-        raise RuntimeError(
-            "Focused persisted capture storage cannot retain two diagnostic segments."
-        )
+        raise RuntimeError("Focused persisted capture storage cannot retain two diagnostic segments.")
     max_total_bytes = min(
         source.max_total_bytes,
         pin_capacity_bytes,
@@ -174,18 +170,13 @@ def focused_mfc_segment_bytes(inputs: LiveWireInputs) -> int:
     )
     if remainder:
         raise RuntimeError(
-            "Focused persisted capture storage cannot divide the diagnostic budget "
-            "across MFC's fixed retained segment count."
+            "Focused persisted capture storage cannot divide the diagnostic budget across MFC's fixed retained segment count."
         )
     if segment_bytes < MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES:
-        raise RuntimeError(
-            "Focused persisted capture storage cannot satisfy MFC's minimum "
-            "diagnostic segment size."
-        )
+        raise RuntimeError("Focused persisted capture storage cannot satisfy MFC's minimum diagnostic segment size.")
     if segment_bytes > focused_policy.max_segment_bytes:
         raise RuntimeError(
-            "Focused persisted capture storage cannot keep MFC segments within "
-            "the incremental scan bound."
+            "Focused persisted capture storage cannot keep MFC segments within the incremental scan bound."
         )
     return segment_bytes
 
@@ -218,23 +209,23 @@ def require_focused_mfc_writer_ready(
     ]
     active_file_name = health.get("activeFileName")
     expected_prefix = f"emulebb-mfc-diag-{process_id}-"
-    if not isinstance(active_file_name, str) or not active_file_name.startswith(
-        expected_prefix
-    ):
-        mismatches.append(
-            f"activeFileName={active_file_name!r} expected prefix {expected_prefix!r}"
-        )
+    if not isinstance(active_file_name, str) or not active_file_name.startswith(expected_prefix):
+        mismatches.append(f"activeFileName={active_file_name!r} expected prefix {expected_prefix!r}")
     if mismatches:
         raise RuntimeError(
-            "MFC diagnostic writer health does not satisfy the focused capture policy: "
-            + "; ".join(mismatches)
+            "MFC diagnostic writer health does not satisfy the focused capture policy: " + "; ".join(mismatches)
         )
     return health
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--client", required=True, choices=("rust", "mfc"), help="Which client to capture (solo).")
+    parser.add_argument(
+        "--client",
+        required=True,
+        choices=("rust", "mfc"),
+        help="Which client to capture (solo).",
+    )
     parser.add_argument(
         "--route",
         choices=("vpn", "direct"),
@@ -247,9 +238,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="upnp",
         help="Direct-route inbound connectivity case.",
     )
-    parser.add_argument("--campaign", default=None, help="Report subfolder name (default: UTC timestamp).")
+    parser.add_argument(
+        "--campaign",
+        default=None,
+        help="Report subfolder name (default: UTC timestamp).",
+    )
     parser.add_argument("--inputs", help="live-wire-inputs.local.json. Default: repo-root copy.")
-    parser.add_argument("--rest-port", type=int, default=None, help="REST port (default 4731 rust / 4732 mfc).")
+    parser.add_argument(
+        "--rest-port",
+        type=int,
+        default=None,
+        help="REST port (default 4731 rust / 4732 mfc).",
+    )
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
@@ -271,8 +271,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="How many approved direct_bootstrap_transfers to use.",
     )
-    parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
-    parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
+    parser.add_argument(
+        "--spacing-seconds",
+        type=float,
+        default=scripted_actions.DEFAULT_SPACING_SECONDS,
+    )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=90.0,
+        help="Post-action wait for source-acquisition.",
+    )
     parser.add_argument(
         "--transfer-coverage-timeout-seconds",
         type=float,
@@ -320,7 +329,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="After connect/actions, hold the client open and poll REST server status for this many seconds.",
     )
-    parser.add_argument("--hold-poll-seconds", type=float, default=5.0, help="REST poll cadence for --hold-seconds.")
+    parser.add_argument(
+        "--hold-poll-seconds",
+        type=float,
+        default=5.0,
+        help="REST poll cadence for --hold-seconds.",
+    )
     parser.add_argument(
         "--fresh-profile",
         action="store_true",
@@ -390,6 +404,7 @@ def _transfer_coverage_summary(
     assert isinstance(proof, dict)
     assert isinstance(source, dict)
     return {
+        "contract": transfer_coverage_evidence.CONTRACT,
         "enabled": True,
         "complete": bool(evidence["complete"]),
         "protocolChainComplete": bool(evidence["protocolChainComplete"]),
@@ -450,9 +465,7 @@ def observe_transfer_coverage(
                     route_lost = True
                     break
             observed_utc = now_utc()
-            health = converged_observer.diagnostic_writer_health(
-                diagnostic_base_url, api_key
-            )
+            health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
             advanced = diagnostic_run_scan.scan_closed_segments(
                 profile_dir=diagnostics_dir,
                 client=client,
@@ -552,13 +565,27 @@ def _campaign_leaf(value: str | None) -> str:
         or value.rstrip(". ") != value
     ):
         raise RuntimeError("--campaign must be one safe report-directory leaf.")
-    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
     if value.split(".", 1)[0].upper() in reserved:
         raise RuntimeError("--campaign must be one safe report-directory leaf.")
     return value
 
 
-def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: object = None, timeout: float = 20.0) -> dict:
+def _http(
+    base_url: str,
+    api_key: str,
+    path: str,
+    method: str = "GET",
+    body: object = None,
+    timeout: float = 20.0,
+) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"X-API-Key": api_key}
     if body is not None:
@@ -611,7 +638,12 @@ def observe_operator_hold(
     while time.monotonic() < deadline:
         started = time.monotonic()
         try:
-            payload = _http(base_url, api_key, "/api/v1/status", timeout=min(10.0, max(2.0, poll_seconds)))
+            payload = _http(
+                base_url,
+                api_key,
+                "/api/v1/status",
+                timeout=min(10.0, max(2.0, poll_seconds)),
+            )
             elapsed = time.monotonic() - started
             snapshot = _server_status_snapshot(payload, request_seconds=elapsed)
         except Exception as exc:  # noqa: BLE001
@@ -686,9 +718,7 @@ def campaign_fixtures(
     if count <= 0:
         raise RuntimeError("--fixture-count must be greater than zero.")
     if len(approved_fixtures) < count:
-        raise RuntimeError(
-            "Live-wire inputs do not contain enough approved direct bootstrap transfers."
-        )
+        raise RuntimeError("Live-wire inputs do not contain enough approved direct bootstrap transfers.")
     fixtures = [dict(fixture) for fixture in approved_fixtures[:count]]
     for fixture in fixtures:
         scripted_actions.build_ed2k_link(fixture)
@@ -724,11 +754,7 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
         if not stat.S_ISREG(source_info.st_mode):
             continue
         name = path.name.lower()
-        if not (
-            name.endswith(".jsonl")
-            or name.endswith(".log")
-            or name == clw.EMULE_DIAG_HEALTH_FILE
-        ):
+        if not (name.endswith(".jsonl") or name.endswith(".log") or name == clw.EMULE_DIAG_HEALTH_FILE):
             continue
         if source_info.st_mtime < since:
             continue
@@ -754,9 +780,7 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
     return copied
 
 
-def validate_recorded_diagnostics(
-    dumps_dir: Path, *, client: str, process_id: int
-) -> dict[str, object]:
+def validate_recorded_diagnostics(dumps_dir: Path, *, client: str, process_id: int) -> dict[str, object]:
     """Require a nonempty current run and lossless MFC writer health."""
 
     if client not in {"rust", "mfc"}:
@@ -811,7 +835,11 @@ def pack_recording(
             raise RuntimeError("Could not inspect the native incoming directory.") from None
         if incoming_has_files:
             private_moves.append(
-                (resolved_incoming, artifact_dir / "downloaded-payloads", "downloaded payloads")
+                (
+                    resolved_incoming,
+                    artifact_dir / "downloaded-payloads",
+                    "downloaded payloads",
+                )
             )
     for private_evidence_path in private_evidence_paths:
         if not private_evidence_path.is_file():
@@ -1032,9 +1060,7 @@ def _resolve_native_capture_interface(local_address: str, override: str | None):
 def _select_linux_document_term(terms: tuple[str, ...]) -> str:
     matches = [term for term in terms if "linux" in term.casefold().split()]
     if not matches:
-        raise RuntimeError(
-            "Native parity inputs must include the requested Linux document search term."
-        )
+        raise RuntimeError("Native parity inputs must include the requested Linux document search term.")
     return matches[0]
 
 
@@ -1194,8 +1220,7 @@ def _teardown_client(
                 failures.append(
                     (
                         "rust-clean-teardown",
-                        shutdown_error
-                        or TimeoutError("Rust process remained alive after graceful shutdown."),
+                        shutdown_error or TimeoutError("Rust process remained alive after graceful shutdown."),
                     )
                 )
                 stop_process_tree(process)
@@ -1280,9 +1305,7 @@ def _run_post_run_safety_audits(
         )
         if metadata_audit.changed_root_indices:
             raise RuntimeError("A configured forbidden legacy root changed during the campaign.")
-        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(
-            metadata_audit
-        )
+        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(metadata_audit)
     except Exception as error:  # noqa: BLE001 - this is the final independent audit
         failures.append(("forbidden-root-metadata-audit", error))
     results_meta["upnpMappingAudits"] = upnp_audits
@@ -1343,7 +1366,9 @@ def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
     return len(_approved_shared_files(shared_roots))
 
 
-def _shared_inventory_page(payload: dict[str, object]) -> tuple[list[dict[str, object]], int]:
+def _shared_inventory_page(
+    payload: dict[str, object],
+) -> tuple[list[dict[str, object]], int]:
     inventory = _status_data(payload)
     if not isinstance(inventory, dict):
         raise RuntimeError("Client returned an invalid shared-inventory page.")
@@ -1357,9 +1382,7 @@ def _shared_inventory_page(payload: dict[str, object]) -> tuple[list[dict[str, o
 
 
 def _shared_file_identity(row: dict[str, object]) -> tuple[str, int]:
-    raw_hash = str(
-        row.get("hash") or row.get("fileHash") or row.get("ed2kHash") or ""
-    ).strip().casefold()
+    raw_hash = str(row.get("hash") or row.get("fileHash") or row.get("ed2kHash") or "").strip().casefold()
     raw_size = row.get("sizeBytes", row.get("size"))
     if re.fullmatch(r"[0-9a-f]{32}", raw_hash) is None:
         raise RuntimeError("Client returned an invalid shared-file identity.")
@@ -1389,26 +1412,18 @@ def _read_shared_inventory_identities(
         if total is None:
             total = page_total
         elif page_total != total:
-            raise SharedInventorySnapshotError(
-                "Client shared-inventory total changed during paging."
-            )
+            raise SharedInventorySnapshotError("Client shared-inventory total changed during paging.")
         if not rows:
             if offset != total:
-                raise SharedInventorySnapshotError(
-                    "Client shared inventory ended before its reported total."
-                )
+                raise SharedInventorySnapshotError("Client shared inventory ended before its reported total.")
             break
         identities.extend(_shared_file_identity(row) for row in rows)
         offset += len(rows)
         if offset > total:
-            raise SharedInventorySnapshotError(
-                "Client shared inventory exceeded its reported total."
-            )
+            raise SharedInventorySnapshotError("Client shared inventory exceeded its reported total.")
     assert total is not None
     if offset != total:
-        raise SharedInventorySnapshotError(
-            "Client shared inventory did not match its reported total."
-        )
+        raise SharedInventorySnapshotError("Client shared inventory did not match its reported total.")
     identity_set = frozenset(identities)
     if len(identity_set) != len(identities):
         raise SharedInventorySafetyError("Client shared inventory contains duplicate identities.")
@@ -1472,9 +1487,7 @@ def _wait_for_shared_inventory(
             hashing = int(data.get("sharedHashingCount") or 0)
             unexpected = identities - expected_identities
             if unexpected or advertised > expected_count:
-                raise SharedInventorySafetyError(
-                    "Client advertised content outside the approved shared identity set."
-                )
+                raise SharedInventorySafetyError("Client advertised content outside the approved shared identity set.")
         except SharedInventorySafetyError:
             raise
         except (json.JSONDecodeError, OSError, SharedInventorySnapshotError) as error:
@@ -1483,13 +1496,8 @@ def _wait_for_shared_inventory(
             # transient REST reads boundedly, but never retry a safety mismatch.
             read_error_count += 1
             consecutive_read_errors += 1
-            max_consecutive_read_errors_observed = max(
-                max_consecutive_read_errors_observed, consecutive_read_errors
-            )
-            if (
-                consecutive_read_errors
-                >= MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS
-            ):
+            max_consecutive_read_errors_observed = max(max_consecutive_read_errors_observed, consecutive_read_errors)
+            if consecutive_read_errors >= MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS:
                 raise SharedInventoryPollingError(
                     "Client repeatedly returned incoherent shared-inventory snapshots."
                 ) from error
@@ -1575,10 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--hold-poll-seconds must be > 0.")
     if args.download_timeout_seconds <= 0:
         raise RuntimeError("--download-timeout-seconds must be > 0.")
-    if (
-        args.transfer_coverage_timeout_seconds is not None
-        and args.transfer_coverage_timeout_seconds < 0
-    ):
+    if args.transfer_coverage_timeout_seconds is not None and args.transfer_coverage_timeout_seconds < 0:
         raise RuntimeError("--transfer-coverage-timeout-seconds must be >= 0.")
     if args.transfer_coverage_poll_seconds <= 0:
         raise RuntimeError("--transfer-coverage-poll-seconds must be > 0.")
@@ -1605,14 +1610,10 @@ def main(argv: list[str] | None = None) -> int:
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
     rust_diagnostic_writer_policy = (
-        focused_capture_writer_policy(inputs)
-        if native_config is None and client == "rust"
-        else None
+        focused_capture_writer_policy(inputs) if native_config is None and client == "rust" else None
     )
     mfc_diagnostic_segment_bytes = (
-        focused_mfc_segment_bytes(inputs)
-        if native_config is None and client == "mfc"
-        else None
+        focused_mfc_segment_bytes(inputs) if native_config is None and client == "mfc" else None
     )
     native_fixtures: list[dict[str, object]] = []
     expected_shared_identities: frozenset[tuple[str, int]] = frozenset()
@@ -1646,7 +1647,10 @@ def main(argv: list[str] | None = None) -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
     mfc_exe = clw.resolve_mfc_diagnostics_exe(
-        output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
+        output_root,
+        variant=args.mfc_variant,
+        arch=args.mfc_arch,
+        configuration=args.mfc_configuration,
     )
     exe = rust_exe if client == "rust" else mfc_exe
 
@@ -1677,9 +1681,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.transfer_coverage_timeout_seconds is not None and (
         native_config is not None or args.fresh_profile or args.skip_actions
     ):
-        raise RuntimeError(
-            "Transfer coverage waiting requires persisted VPN capture with actions enabled."
-        )
+        raise RuntimeError("Transfer coverage waiting requires persisted VPN capture with actions enabled.")
     transfer_coverage_path = report_dir / "transfer-coverage-evidence.json"
     transfer_coverage_checkpoint: dict[str, object] | None = None
     transfer_coverage_evidence_payload: dict[str, object] | None = None
@@ -1718,11 +1720,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.connectivity == "firewalled":
             tcp_ports = (args.rust_ed2k_port,) if client == "rust" else (args.mfc_ed2k_port,)
-            udp_ports = (
-                (args.rust_kad_port,)
-                if client == "rust"
-                else (args.mfc_kad_port, args.mfc_server_udp_port)
-            )
+            udp_ports = (args.rust_kad_port,) if client == "rust" else (args.mfc_kad_port, args.mfc_server_udp_port)
             network_stack.enter_context(
                 WindowsInboundBlockRules(
                     case_id=f"{client}-{args.connectivity}",
@@ -1763,19 +1761,26 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if client == "rust":
             rust_profile_dir = (
-                report_dir / "rust-profile"
-                if args.fresh_profile
-                else persisted_profile_dir(inputs, "rust")
+                report_dir / "rust-profile" if args.fresh_profile else persisted_profile_dir(inputs, "rust")
             )
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
-                rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-                rest_port=rest_port, profile_dir=rust_profile_dir, packet_dump_dir=dump_dir,
+                rust_mod=rust_mod,
+                exe_path=rust_exe,
+                bind_ip=bind_ip,
+                rest_addr=rest_addr,
+                rest_port=rest_port,
+                profile_dir=rust_profile_dir,
+                packet_dump_dir=dump_dir,
                 incoming_dir=rust_profile_dir / "incoming",
-                bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
-                server_met_url=args.server_met_url, server_endpoint=OPERATOR_SERVER,
-                obfuscation=obfuscation, timeouts=timeouts,
-                ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
+                bootstrap_nodes=bootstrap_nodes,
+                shared_roots=shared_roots,
+                server_met_url=args.server_met_url,
+                server_endpoint=OPERATOR_SERVER,
+                obfuscation=obfuscation,
+                timeouts=timeouts,
+                ed2k_port=args.rust_ed2k_port,
+                kad_port=args.rust_kad_port,
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
@@ -1786,19 +1791,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
-            mfc_profile_dir = (
-                None
-                if args.fresh_profile
-                else persisted_profile_dir(inputs, "mfc")
-            )
+            mfc_profile_dir = None if args.fresh_profile else persisted_profile_dir(inputs, "mfc")
             handles = bring_up_mfc(
-                live_common=mods["live_common"], rest_smoke=mods["rest_smoke"],
-                shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
-                seed_config_dir=Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR,
-                artifacts_dir=mfc_artifacts_dir, direct_profile_dir=mfc_profile_dir,
-                rest_host=rest_addr, rest_port=rest_port, shared_roots=shared_roots,
-                server_endpoint=OPERATOR_SERVER, obfuscation=obfuscation, timeouts=timeouts,
-                ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
+                live_common=mods["live_common"],
+                rest_smoke=mods["rest_smoke"],
+                shared_dirs_mod=mods["shared_dirs"],
+                exe_path=mfc_exe,
+                seed_config_dir=Path(args.profile_seed_dir).resolve()
+                if args.profile_seed_dir
+                else DEFAULT_MFC_SEED_CONFIG_DIR,
+                artifacts_dir=mfc_artifacts_dir,
+                direct_profile_dir=mfc_profile_dir,
+                rest_host=rest_addr,
+                rest_port=rest_port,
+                shared_roots=shared_roots,
+                server_endpoint=OPERATOR_SERVER,
+                obfuscation=obfuscation,
+                timeouts=timeouts,
+                ed2k_port=args.mfc_ed2k_port,
+                kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
                 secure_ident=args.secident == "on",
                 p2p_bind_ip=rest_addr if native_config is not None else None,
@@ -1865,14 +1876,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.share_ready_timeout_seconds,
             )
             log(
-                "shared inventory: "
-                f"ready={sharing_state['ready']} "
-                f"advertised={sharing_state['advertisedFileCount']}/"
-                f"{sharing_state['expectedFileCount']}"
+                f"shared inventory: ready={sharing_state['ready']} advertised={sharing_state['advertisedFileCount']}/{sharing_state['expectedFileCount']}"
             )
 
         markers_path = report_dir / "markers.jsonl"
         with markers_path.open("w", encoding="utf-8") as fh:
+
             def _write(marker: dict) -> None:
                 fh.write(json.dumps(marker) + "\n")
                 fh.flush()
@@ -1898,14 +1907,14 @@ def main(argv: list[str] | None = None) -> int:
                     download_fixtures,
                     methods=search_methods,
                     search_options=(
-                        {"type": "doc", "extension": "pdf", "minAvailability": 1}
-                        if native_config is not None
-                        else None
+                        {"type": "doc", "extension": "pdf", "minAvailability": 1} if native_config is not None else None
                     ),
                 )
                 log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
                 results = scripted_actions.execute_action_set(
-                    actions, scripted_actions.make_rest_runner(base_url, api_key), _write,
+                    actions,
+                    scripted_actions.make_rest_runner(base_url, api_key),
+                    _write,
                     spacing_seconds=args.spacing_seconds,
                 )
                 if native_config is not None:
@@ -1922,9 +1931,7 @@ def main(argv: list[str] | None = None) -> int:
             assert handles is not None
             assert inputs.soak_storage is not None
             fixture_hashes = tuple(str(fixture["hash"]) for fixture in download_fixtures)
-            log(
-                "actions done; scanning closed diagnostic segments for exact transfer coverage..."
-            )
+            log("actions done; scanning closed diagnostic segments for exact transfer coverage...")
             (
                 transfer_coverage_summary,
                 transfer_coverage_checkpoint,
@@ -1940,11 +1947,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
                 timeout_seconds=args.transfer_coverage_timeout_seconds,
                 poll_seconds=args.transfer_coverage_poll_seconds,
-                route_guard=(
-                    hideme_vpn.require_full_tunnel_ready
-                    if native_config is None
-                    else None
-                ),
+                route_guard=(hideme_vpn.require_full_tunnel_ready if native_config is None else None),
             )
             log(
                 "transfer coverage wait done: "
@@ -1981,8 +1984,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         results_meta = {
-            "client": client, "campaign": campaign, "kadConnected": kad_ok,
-            "restPort": rest_port, "obfuscation": obfuscation,
+            "client": client,
+            "campaign": campaign,
+            "kadConnected": kad_ok,
+            "restPort": rest_port,
+            "obfuscation": obfuscation,
             "serverEndpoint": OPERATOR_SERVER,
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
@@ -2097,10 +2103,7 @@ def main(argv: list[str] | None = None) -> int:
             observed_utc=_utc_now(),
         )
         results_meta["transferCoverage"] = transfer_coverage_summary
-        if (
-            not transfer_coverage_summary["complete"]
-            or transfer_coverage_summary["routeLost"]
-        ):
+        if not transfer_coverage_summary["complete"] or transfer_coverage_summary["routeLost"]:
             results_meta["externalInconclusive"] = True
 
     if native_config is not None:
@@ -2147,16 +2150,12 @@ def main(argv: list[str] | None = None) -> int:
     results_meta["diagnostics"] = validate_recorded_diagnostics(
         dumps_dest, client=client, process_id=client_process_ids[0]
     )
-    (report_dir / "results.json").write_text(
-        json.dumps(results_meta, indent=2), encoding="utf-8"
-    )
+    (report_dir / "results.json").write_text(json.dumps(results_meta, indent=2), encoding="utf-8")
     archive = pack_recording(
         report_dir,
         incoming_dir=(Path(handles["incomingDir"]) if native_config is not None and handles else None),
         private_evidence_paths=tuple(
-            path
-            for path in (private_completion_path, transfer_coverage_path)
-            if path is not None and path.is_file()
+            path for path in (private_completion_path, transfer_coverage_path) if path is not None and path.is_file()
         ),
     )
     log(f"recording packed: {archive}")
