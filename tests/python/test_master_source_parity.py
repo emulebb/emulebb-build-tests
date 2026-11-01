@@ -2144,6 +2144,16 @@ def _check_packet_diagnostics_source__packet_diagnostics_logging_api_is_compile_
 
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n#include \"Opcodes.h\"\n#endif" in log_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nvoid DiagEventLogInvalidSubOpcode(" in log_source
+    assert (
+        "#if EMULEBB_HAS_DIAG_EVENT_V2\n"
+        "\tInitializeDiagEventV2Writer(strDiagnosticsLogDir, thePrefs.GetMaxLogFileSize());\n"
+        "#endif"
+    ) in emule_source
+    assert (
+        "#if EMULEBB_HAS_DIAG_EVENT_V2\n"
+        "\tShutdownDiagEventV2Writer();\n"
+        "#endif"
+    ) in emule_source
     assert "void DiagEventLogInvalidSubOpcode(" in log_header
     assert '\\"direction\\":\\"recv\\",\\"outcome\\":\\"dropped\\",\\"flow\\":\\"listener\\"' in log_source
     assert '\\"packetFamily\\":%s' in log_source
