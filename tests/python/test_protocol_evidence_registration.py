@@ -9,6 +9,7 @@ import pytest
 
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_search_diagnostic_evidence
+from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
@@ -27,6 +28,12 @@ SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
 SERVER_UDP_METADATA_PUBLISHER_NICK = "emulebb-harness-udp-metadata-publisher"
+SERVER_SOURCE_FILE_HASH = "22334455667788990011aabbccddeeff"
+SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
+SERVER_SOURCE_FILE_SIZE = 67_890
+SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
+SERVER_SOURCE_PUBLISHER_ID = 7
+SERVER_SOURCE_PUBLISHER_PORT = 48_017
 
 
 def bilateral_login_evidence(
@@ -560,6 +567,310 @@ def attach_server_tcp_metadata(report: dict[str, object]) -> dict[str, object]:
         server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
+def _server_source_records(
+    *, client: str, process_id: int, run_id: str, trace_id: int
+) -> list[dict[str, object]]:
+    endpoint = "127.0.0.1:4661"
+    request_payload = ed2k_wire.encode_source_request(
+        bytes.fromhex(SERVER_SOURCE_FILE_HASH),
+        SERVER_SOURCE_FILE_SIZE,
+    )
+    reply_payload = (
+        bytes.fromhex(SERVER_SOURCE_FILE_HASH)
+        + b"\x01"
+        + struct.pack("<IH", SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)
+    )
+
+    def row(
+        sequence: int,
+        event: str,
+        *,
+        keys: dict[str, object],
+        body: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "schema": DIAG_EVENT_SCHEMA,
+            "client": client,
+            "runId": run_id,
+            "processId": process_id,
+            "segmentId": 0,
+            "seq": sequence,
+            "streamSeq": sequence,
+            "family": "ed2k_tcp",
+            "event": event,
+            "keys": keys,
+            "body": body,
+        }
+
+    packet_keys = {
+        "peer": endpoint,
+        "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
+    }
+    request = row(
+        1,
+        "packet",
+        keys={
+            **packet_keys,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "traceId": trace_id,
+        },
+        body={
+            "flow": "server",
+            "direction": "send",
+            "outcome": "attempted",
+            "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "traceId": trace_id,
+            "payloadLen": len(request_payload),
+            "payloadHex": request_payload.hex(),
+            "payloadHexTruncated": False,
+        },
+    )
+    send_outcome = row(
+        2,
+        "send_outcome",
+        keys={
+            **packet_keys,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+        },
+        body={
+            "flow": "server",
+            "direction": "send",
+            "outcome": "send_succeeded",
+            "deliveryKnown": True,
+            "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "traceId": trace_id,
+        },
+    )
+    reply = row(
+        3,
+        "packet",
+        keys={
+            **packet_keys,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "traceId": trace_id,
+        },
+        body={
+            "flow": "server",
+            "direction": "recv",
+            "outcome": "accepted",
+            "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "traceId": trace_id,
+            "payloadLen": len(reply_payload),
+            "payloadHex": reply_payload.hex(),
+            "payloadHexTruncated": False,
+        },
+    )
+    applied = row(
+        4,
+        "source_result_applied",
+        keys={
+            **packet_keys,
+            "fileHash": SERVER_SOURCE_FILE_HASH,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "traceId": trace_id,
+        },
+        body={
+            "flow": "server",
+            "phase": "source_search",
+            "direction": "recv",
+            "outcome": "applied",
+            "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
+            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "traceId": trace_id,
+            "stateId": "server.source.result_applied",
+            "milestone": "result_applied",
+            "wireSourceCount": 1,
+            "sourceCountBefore": 0,
+            "sourceCountAfter": 1,
+        },
+    )
+    return [request, send_outcome, reply, applied]
+
+
+def _write_server_source_segment(
+    path: Path, records: list[dict[str, object]]
+) -> None:
+    path.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def attach_server_source(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    del monkeypatch
+    endpoint = "127.0.0.1:4661"
+    records = {
+        "rust": _server_source_records(
+            client="rust",
+            process_id=101,
+            run_id="rust-source-run",
+            trace_id=101,
+        ),
+        "mfc": _server_source_records(
+            client="mfc",
+            process_id=202,
+            run_id="mfc-source-run",
+            trace_id=202,
+        ),
+    }
+    captures: dict[str, dict[str, object]] = {}
+    for client, process_id, run_id in (
+        ("rust", 101, "rust-source-run"),
+        ("mfc", 202, "mfc-source-run"),
+    ):
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{run_id}-000000.jsonl"
+        _write_server_source_segment(segment, records[client])
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+
+    transfer_rows = {
+        "rust": {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "displayName": SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+        "mfc": {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "name": SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+    }
+    evidence = server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
+        expected_file_hash=SERVER_SOURCE_FILE_HASH,
+        expected_file_name=SERVER_SOURCE_FILE_NAME,
+        expected_file_size=SERVER_SOURCE_FILE_SIZE,
+        server_endpoint=endpoint,
+        publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
+        publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        transfer_rows=transfer_rows,
+    )
+    evidence["captures"] = captures
+
+    expected_source = {
+        "kind": "low-id",
+        "client_id": SERVER_SOURCE_PUBLISHER_ID,
+        "host": None,
+        "port": SERVER_SOURCE_PUBLISHER_PORT,
+        "crypt_options": 0,
+        "user_hash": None,
+    }
+    report["transfer_scenario"] = "server-tcp-source"
+    report["protocol_case"] = {"name": "plain-server-plain-clients"}
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {
+            "ed2k_tcp": 4661,
+            "source_publisher_tcp": SERVER_SOURCE_PUBLISHER_PORT,
+        },
+    }
+    report["server_source_fixture"] = {
+        "hash": SERVER_SOURCE_FILE_HASH,
+        "name": SERVER_SOURCE_FILE_NAME,
+        "size": SERVER_SOURCE_FILE_SIZE,
+        "publisher": {
+            "nickname": SERVER_SOURCE_PUBLISHER_NICK,
+            "tcpPort": SERVER_SOURCE_PUBLISHER_PORT,
+            "login": {
+                "assigned_id": SERVER_SOURCE_PUBLISHER_ID,
+                "id_kind": "low-id",
+            },
+            "client": {
+                "client_name": SERVER_SOURCE_PUBLISHER_NICK,
+                "nick": SERVER_SOURCE_PUBLISHER_NICK,
+                "high_id": False,
+                "shared_files": 1,
+            },
+        },
+        "publication": {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "requested_size": SERVER_SOURCE_FILE_SIZE,
+            "indexed": True,
+            "name": SERVER_SOURCE_FILE_NAME,
+            "size": SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+            "search_sources": 1,
+            "complete_sources": 1,
+            "endpoints": [expected_source],
+            "search_source": {
+                "kind": "low-id-search-reference",
+                "id": SERVER_SOURCE_PUBLISHER_ID,
+                "port": SERVER_SOURCE_PUBLISHER_PORT,
+            },
+            "search_result": {
+                "hash": SERVER_SOURCE_FILE_HASH.upper(),
+                "name": SERVER_SOURCE_FILE_NAME,
+                "size": SERVER_SOURCE_FILE_SIZE,
+                "sources": 1,
+                "complete_sources": 1,
+                "result_source_id": SERVER_SOURCE_PUBLISHER_ID,
+                "result_source_port": SERVER_SOURCE_PUBLISHER_PORT,
+            },
+            "source_reply": {
+                "hash": SERVER_SOURCE_FILE_HASH.upper(),
+                "source_count": 1,
+                "sources": [expected_source],
+            },
+        },
+    }
+    report["checks"]["client_server_source_stimulus"] = {
+        "mode": "plain-ed2k-link-without-source-hints",
+        "link": (
+            f"ed2k://|file|{SERVER_SOURCE_FILE_NAME}|{SERVER_SOURCE_FILE_SIZE}|"
+            f"{SERVER_SOURCE_FILE_HASH}|/"
+        ),
+        "hash": SERVER_SOURCE_FILE_HASH,
+        "name": SERVER_SOURCE_FILE_NAME,
+        "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+    }
+    report["checks"]["client_server_source_transfers"] = transfer_rows
+    report["checks"]["client_server_source_diagnostics"] = evidence
+    report["checks"]["mfc_diagnostics_shutdown"] = {
+        "ok": True,
+        "processId": 202,
+    }
+    report["diagnostics"]["serverSource"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: {
+            "diagnosticsDir": capture["diagnosticsDir"],
+            "processId": capture["processId"],
+            "selectedSegments": list(capture["selectedSegments"]),
+        }
+        for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+
     return evidence
 
 
@@ -1653,6 +1964,288 @@ def test_build_transfer_registration_rejects_wrong_tcp_metadata_send_outcome(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="request or decode result is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_accepts_exact_server_tcp_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.tcp-plain",
+        "transfer.block.uncompressed",
+    ]
+    reasons = {
+        row["coverageId"]: row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"]
+        in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    }
+    assert "singular LowID source" in reasons["server.reply.sources"]
+    assert "plaintext GETSOURCES" in reasons["server.source.tcp-plain"]
+
+
+def test_build_transfer_registration_rejects_source_scenario_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-tcp-source"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_source_evidence_in_wrong_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    report["transfer_scenario"] = "full-metadata-link"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires its dedicated scenario"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_server_source_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    evidence["schema"] = "emulebb-build-tests.deterministic-server-source-diagnostics.v0"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_server_source_segment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    segment = Path(evidence["captures"]["rust"]["selectedSegments"][0])
+    rows = [json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()]
+    rows[0]["schema"] = "diag_event_v1"
+    _write_server_source_segment(segment, rows)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected diagnostic schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_source_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    evidence["clients"]["rust"]["wire"]["application"]["sourceCountAfter"] = 2
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hash", "ff" * 16),
+        ("name", "wrong-source.bin"),
+        ("size", SERVER_SOURCE_FILE_SIZE + 1),
+    ],
+)
+def test_build_transfer_registration_rejects_noncanonical_source_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    report["server_source_fixture"][field] = value
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical source fixture"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rebuilds_source_evidence_from_raw_rest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    report["checks"]["client_server_source_transfers"]["rust"]["sources"] = 0
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("assigned_id", SERVER_SOURCE_PUBLISHER_ID + 1),
+        ("tcpPort", SERVER_SOURCE_PUBLISHER_PORT + 1),
+    ],
+)
+def test_build_transfer_registration_rejects_wrong_source_publisher_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: int,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    publisher = report["server_source_fixture"]["publisher"]
+    if field == "assigned_id":
+        publisher["login"][field] = value
+    else:
+        publisher[field] = value
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact LowID publisher"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_stale_source_capture_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    diagnostics_dir = Path(evidence["captures"]["rust"]["diagnosticsDir"])
+    stale_segment = diagnostics_dir / "emulebb-rust-diag-101-stale-run-000000.jsonl"
+    _write_server_source_segment(
+        stale_segment,
+        _server_source_records(
+            client="rust",
+            process_id=101,
+            run_id="stale-run",
+            trace_id=101,
+        ),
+    )
+    evidence["captures"]["rust"]["selectedSegments"] = [str(stale_segment)]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="final process selection"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_source_capture_outside_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    outside = tmp_path / "emulebb-rust-diag-101-rust-source-run-000000.jsonl"
+    outside.write_text("{}\n", encoding="utf-8")
+    evidence["captures"]["rust"]["selectedSegments"] = [str(outside)]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="under the immutable run directory"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_wrong_source_capture_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    evidence["captures"]["mfc"]["processId"] = 203
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="final process selection"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["rust", "mfc", "runner"],
+)
+def test_build_transfer_registration_rejects_malformed_source_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    subject: str,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    if subject == "rust":
+        report["profiles"]["rust"]["source_revision"] = "invalid"
+        error = "Rust source revision"
+    elif subject == "mfc":
+        report["profiles"]["mfc"]["availability"]["source_revision"] = "invalid"
+        error = "MFC source revision"
+    else:
+        report["runner_revision"] = "invalid"
+        error = "runner_revision"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=error):
         build_transfer_registration(report_path, output_root=output_root)
 
 

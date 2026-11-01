@@ -14,6 +14,7 @@ from typing import Any
 from emule_test_harness import diag_event_runs
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
+from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
@@ -27,6 +28,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
+SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
 SERVER_TCP_METADATA_SCENARIO = "server-tcp-metadata"
 SERVER_UDP_METADATA_SCENARIO = "server-udp-metadata"
 SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
@@ -36,6 +38,10 @@ SERVER_SEARCH_EVIDENCE_LAYERS = (
     "deterministic-state-machine",
     "local-cross-client",
 )
+SERVER_SOURCE_FILE_HASH = "22334455667788990011aabbccddeeff"
+SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
+SERVER_SOURCE_FILE_SIZE = 67_890
+SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_DESCRIPTION = "seed metadata before server reply"
@@ -642,6 +648,292 @@ def _derived_server_search_coverage_ids(
             or not all(isinstance(value, str) and value for value in segments)
         ):
             raise ValueError(f"server search {client} capture has no selected segments")
+    return expected_ids
+
+
+def _load_server_source_capture(
+    capture_value: Any,
+    final_capture_value: Any,
+    *,
+    client: str,
+    run_directory: Path,
+) -> list[dict[str, Any]]:
+    field = f"server source {client}"
+    capture = _object(
+        capture_value,
+        f"diagnostics.serverSource.captures.{client}",
+    )
+    final_capture = _object(
+        final_capture_value,
+        f"diagnostics.captures.{client}",
+    )
+    expected_shape = {"diagnosticsDir", "processId", "selectedSegments"}
+    if set(capture) != expected_shape or set(final_capture) != expected_shape:
+        raise ValueError(f"{field} capture has an unexpected shape")
+
+    process_id = _positive_int(capture.get("processId"), f"{field} process ID")
+    final_process_id = _positive_int(
+        final_capture.get("processId"),
+        f"final {client} process ID",
+    )
+    diagnostics_dir = _directory_within(
+        capture.get("diagnosticsDir"),
+        run_directory,
+        f"{field} diagnosticsDir",
+    )
+    final_diagnostics_dir = _directory_within(
+        final_capture.get("diagnosticsDir"),
+        run_directory,
+        f"final {client} diagnosticsDir",
+    )
+
+    def selected_paths(value: Any, selected_field: str) -> list[Path]:
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"{selected_field} has no selected segments")
+        paths = [
+            _path_within(item, run_directory, f"{selected_field} selected segment")
+            for item in value
+        ]
+        if len(paths) != len(set(paths)):
+            raise ValueError(f"{selected_field} contains duplicate selected segments")
+        return paths
+
+    segments = selected_paths(capture.get("selectedSegments"), field)
+    final_segments = selected_paths(
+        final_capture.get("selectedSegments"),
+        f"final {client} capture",
+    )
+    if (
+        process_id != final_process_id
+        or diagnostics_dir != final_diagnostics_dir
+        or any(not path.is_relative_to(diagnostics_dir) for path in segments)
+        or any(not path.is_relative_to(final_diagnostics_dir) for path in final_segments)
+        or not set(segments).issubset(final_segments)
+    ):
+        raise ValueError(f"{field} capture does not match the final process selection")
+
+    identities = [
+        diag_event_runs.diag_segment_identity(path, client=client) for path in segments
+    ]
+    final_identities = [
+        diag_event_runs.diag_segment_identity(path, client=client)
+        for path in final_segments
+    ]
+    if any(identity is None for identity in (*identities, *final_identities)):
+        raise ValueError(f"{field} selected segment is not current-schema")
+    typed_identities = [identity for identity in identities if identity is not None]
+    typed_final_identities = [
+        identity for identity in final_identities if identity is not None
+    ]
+    run_ids = {identity[1] for identity in typed_identities}
+    final_run_ids = {identity[1] for identity in typed_final_identities}
+    if (
+        len(run_ids) != 1
+        or len(final_run_ids) != 1
+        or run_ids != final_run_ids
+        or any(identity[0] != process_id for identity in typed_identities)
+        or any(identity[0] != process_id for identity in typed_final_identities)
+        or [identity[2] for identity in typed_identities]
+        != sorted(identity[2] for identity in typed_identities)
+    ):
+        raise ValueError(f"{field} selected segments mix or stale the run identity")
+
+    run_id = next(iter(run_ids))
+    snapshot = diag_event_runs.load_exact_diag_run_snapshot(
+        segments,
+        client=client,
+        process_id=process_id,
+        run_id=run_id,
+    )
+    if not snapshot.records:
+        raise ValueError(f"{field} capture is empty")
+    return list(snapshot.records)
+
+
+def _derived_server_source_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    source_value = diagnostics.get("serverSource")
+    if source_value is None:
+        if report.get("transfer_scenario") == SERVER_TCP_SOURCE_SCENARIO:
+            raise ValueError("server TCP source scenario has no diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_TCP_SOURCE_SCENARIO:
+        raise ValueError("server source evidence requires its dedicated scenario")
+
+    source = _object(source_value, "diagnostics.serverSource")
+    if source.get("schema") != server_source_diagnostic_evidence.SCHEMA:
+        raise ValueError("server source diagnostics use an unexpected schema")
+    try:
+        server_source_diagnostic_evidence.require_server_source_diagnostic_evidence(
+            source
+        )
+    except RuntimeError as exc:
+        raise ValueError("server source diagnostics are not complete") from exc
+    expected_ids = list(server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    if protocol_case.get("name") != "plain-server-plain-clients":
+        raise ValueError("server source scenario requires the canonical plaintext case")
+
+    fixture = _object(report.get("server_source_fixture"), "server_source_fixture")
+    if (
+        str(fixture.get("hash") or "").casefold() != SERVER_SOURCE_FILE_HASH
+        or fixture.get("name") != SERVER_SOURCE_FILE_NAME
+        or fixture.get("size") != SERVER_SOURCE_FILE_SIZE
+    ):
+        raise ValueError("server source fixture is not the canonical source fixture")
+    publisher = _object(fixture.get("publisher"), "server_source_fixture.publisher")
+    publisher_login = _object(
+        publisher.get("login"),
+        "server_source_fixture.publisher.login",
+    )
+    publisher_client = _object(
+        publisher.get("client"),
+        "server_source_fixture.publisher.client",
+    )
+    publisher_id = _positive_int(
+        publisher_login.get("assigned_id"),
+        "server source publisher assigned ID",
+    )
+    publisher_port = _positive_int(
+        publisher.get("tcpPort"),
+        "server source publisher TCP port",
+    )
+    if (
+        publisher_id >= ed2k_wire.LOW_ID_CEILING
+        or publisher_port > 0xFFFF
+        or publisher.get("nickname") != SERVER_SOURCE_PUBLISHER_NICK
+        or publisher_login.get("id_kind") != "low-id"
+        or publisher_client.get("client_name") != SERVER_SOURCE_PUBLISHER_NICK
+        or publisher_client.get("nick") != SERVER_SOURCE_PUBLISHER_NICK
+        or publisher_client.get("high_id") is not False
+        or publisher_client.get("shared_files") != 1
+    ):
+        raise ValueError("server source publisher is not the canonical LowID fixture")
+
+    publication = _object(
+        fixture.get("publication"),
+        "server_source_fixture.publication",
+    )
+    publication_result = _object(
+        publication.get("search_result"),
+        "server_source_fixture.publication.search_result",
+    )
+    publication_search_source = _object(
+        publication.get("search_source"),
+        "server_source_fixture.publication.search_source",
+    )
+    if (
+        str(publication.get("hash") or "").casefold() != SERVER_SOURCE_FILE_HASH
+        or publication.get("requested_size") != SERVER_SOURCE_FILE_SIZE
+        or publication.get("indexed") is not True
+        or publication.get("name") != SERVER_SOURCE_FILE_NAME
+        or publication.get("size") != SERVER_SOURCE_FILE_SIZE
+        or publication.get("sources") != 1
+        or publication.get("search_sources") != 1
+        or publication.get("complete_sources") != 1
+        or publication_search_source
+        != {
+            "kind": "low-id-search-reference",
+            "id": publisher_id,
+            "port": publisher_port,
+        }
+        or str(publication_result.get("hash") or "").casefold()
+        != SERVER_SOURCE_FILE_HASH
+        or publication_result.get("name") != SERVER_SOURCE_FILE_NAME
+        or publication_result.get("size") != SERVER_SOURCE_FILE_SIZE
+        or publication_result.get("sources") != 1
+        or publication_result.get("complete_sources") != 1
+        or publication_result.get("result_source_id") != publisher_id
+        or publication_result.get("result_source_port") != publisher_port
+    ):
+        raise ValueError("server source publication is not joined to the exact LowID publisher")
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    server_port = _positive_int(ports.get("ed2k_tcp"), "network.ports.ed2k_tcp")
+    server_address = network.get("ed2k_server_address")
+    server_host, endpoint_port = _canonical_ipv4_endpoint(
+        source.get("serverEndpoint"),
+        "server source endpoint",
+    )
+    if (
+        server_address != server_host
+        or server_port != endpoint_port
+        or ports.get("source_publisher_tcp") != publisher_port
+    ):
+        raise ValueError("server source endpoints do not match the managed topology")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_source_diagnostics") != source:
+        raise ValueError("server source diagnostics do not match the retained snapshot")
+    stimulus = _object(
+        checks.get("client_server_source_stimulus"),
+        "checks.client_server_source_stimulus",
+    )
+    expected_link = (
+        f"ed2k://|file|{SERVER_SOURCE_FILE_NAME}|{SERVER_SOURCE_FILE_SIZE}|"
+        f"{SERVER_SOURCE_FILE_HASH}|/"
+    )
+    if stimulus != {
+        "mode": "plain-ed2k-link-without-source-hints",
+        "link": expected_link,
+        "hash": SERVER_SOURCE_FILE_HASH,
+        "name": SERVER_SOURCE_FILE_NAME,
+        "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+    }:
+        raise ValueError("server source stimulus is not the exact source-free eD2K link")
+    transfer_rows = _object(
+        checks.get("client_server_source_transfers"),
+        "checks.client_server_source_transfers",
+    )
+    if set(transfer_rows) != {"rust", "mfc"}:
+        raise ValueError("server source transfer rows must contain exactly rust and mfc")
+
+    captures = _object(source.get("captures"), "diagnostics.serverSource.captures")
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("server source captures must contain exactly rust and mfc")
+    records = {
+        client: _load_server_source_capture(
+            captures.get(client),
+            final_captures.get(client),
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if (
+        mfc_shutdown.get("ok") is not True
+        or mfc_shutdown.get("processId") != captures["mfc"].get("processId")
+    ):
+        raise ValueError("server source MFC capture is not joined to the stopped oracle process")
+
+    rebuilt = server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
+        expected_file_hash=SERVER_SOURCE_FILE_HASH,
+        expected_file_name=SERVER_SOURCE_FILE_NAME,
+        expected_file_size=SERVER_SOURCE_FILE_SIZE,
+        server_endpoint=f"{server_host}:{server_port}",
+        publisher_client_id=publisher_id,
+        publisher_tcp_port=publisher_port,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        transfer_rows=transfer_rows,
+    )
+    retained_without_capture = {
+        key: value for key, value in source.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError("server source receipt does not match its immutable captures")
+
     return expected_ids
 
 
@@ -1594,6 +1886,43 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             f"status reply at sequences {sequences['rust']['statusReply']}/"
             f"{sequences['mfc']['statusReply']}."
         )
+    if coverage_id in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS:
+        source = _object(diagnostics.get("serverSource"), "diagnostics.serverSource")
+        clients = _object(source.get("clients"), "diagnostics.serverSource.clients")
+        wires = {
+            client: _object(
+                _object(clients.get(client), f"server source {client}").get("wire"),
+                f"server source {client} wire",
+            )
+            for client in ("rust", "mfc")
+        }
+        if coverage_id == "server.source.tcp-plain":
+            requests = {
+                client: _object(wire.get("request"), f"server source {client} request")
+                for client, wire in wires.items()
+            }
+            return (
+                "Rust and MFC each emitted one identical plaintext GETSOURCES request and "
+                f"confirmed delivery at sequences {requests['rust']['sequence']}/"
+                f"{requests['mfc']['sequence']}."
+            )
+        replies = {
+            client: _object(wire.get("reply"), f"server source {client} reply")
+            for client, wire in wires.items()
+        }
+        applications = {
+            client: _object(
+                wire.get("application"),
+                f"server source {client} application",
+            )
+            for client, wire in wires.items()
+        }
+        return (
+            "Rust and MFC each decoded the same singular LowID source and applied the exact "
+            f"0-to-1 source-state transition at sequences "
+            f"{replies['rust']['sequence']}->{applications['rust']['sequence']}/"
+            f"{replies['mfc']['sequence']}->{applications['mfc']['sequence']}."
+        )
     if coverage_id in SERVER_SEARCH_COVERAGE_IDS:
         search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
         clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
@@ -1689,6 +2018,11 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
             *_derived_transfer_coverage_ids(diagnostics),
             *_derived_server_login_coverage_ids(report, diagnostics),
             *_derived_server_search_coverage_ids(report, diagnostics),
+            *_derived_server_source_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
             *_derived_server_tcp_metadata_coverage_ids(report, diagnostics),
             *_derived_server_udp_metadata_coverage_ids(
                 report,
