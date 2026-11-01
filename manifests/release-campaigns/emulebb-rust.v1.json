@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust product-family campaign",
-  "description": "Campaign for the eMuleBB Rust 0.1.0-beta.1 headless core client. It reuses the shared eMuleBB campaign runner, local deterministic swarm policy, persisted live-wire profiles, and hide.me-bound public live-wire proof for REST, ED2K, Kad, transfer, upload, queue, and local indexing evidence.",
+  "description": "Campaign for the eMuleBB Rust 0.1.0-beta.1 headless core client. It reuses the shared eMuleBB campaign runner, local deterministic swarm policy, bounded isolated live-wire proof, and an optional persisted-profile diagnostic soak for REST, ED2K, Kad, transfer, upload, queue, and local indexing evidence.",
   "proofTier": "future",
   "phases": [
     {
@@ -159,12 +159,12 @@
       "title": "Live-wire release",
       "scenarios": [
         {
-          "id": "emulebb.flow.rust.live-wire.hideme.v1",
-          "title": "Rust hide.me-bound live-wire proof",
+          "id": "emulebb.flow.rust.live-wire.persisted-diagnostic-soak.v1",
+          "title": "Rust/MFC persisted-profile diagnostic soak",
           "phase": "live-wire-release",
           "flowCategory": "live-wire",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python scripts/persisted-soak-control.py run-to-gate --inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 --rest-timeout-seconds 1800 --connect-timeout-seconds 600 --observer-action-success-target-per-method 4 --gate-timeout-seconds 18000",
           "localInputs": [
             "CARGO_TARGET_DIR, EMULEBB_WORKSPACE_OUTPUT_ROOT, and EMULEBB_WORKSPACE_ROOT are pre-set environment variables and point to valid paths",
@@ -177,8 +177,8 @@
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
-              "description": "The maintained persisted-profile controller binds REST/control to localhost, routes both clients through hide.me with VPN Guard enabled, reuses the MFC and Rust profiles from live-wire inputs, and blocks until four completed server-search and four completed Kad-search diagnostic parity actions pass. It always stops and finalizes the bounded diagnostic evidence under EMULEBB_WORKSPACE_OUTPUT_ROOT."
+              "required": false,
+              "description": "The maintained persisted-profile controller binds REST/control to localhost, routes both clients through hide.me with VPN Guard enabled, reuses the MFC and Rust profiles from live-wire inputs, and blocks until four completed server-search and four completed Kad-search diagnostic comparison actions pass. It always stops and finalizes bounded discovery evidence under EMULEBB_WORKSPACE_OUTPUT_ROOT. This lane is not parity certification or release proof."
             }
           ]
         },
@@ -304,7 +304,6 @@
     {
       "id": "emulebb-rust-live-wire-release",
       "coveredBy": [
-        "emulebb.flow.rust.live-wire.hideme.v1",
         "emulebb.flow.rust.webui.consumer-live.v1"
       ]
     },

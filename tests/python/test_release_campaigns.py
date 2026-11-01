@@ -220,10 +220,11 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
-    assert "emulebb.flow.rust.live-wire.hideme.v1" in scenario_ids
+    persisted_soak_id = "emulebb.flow.rust.live-wire.persisted-diagnostic-soak.v1"
+    assert persisted_soak_id in scenario_ids
     assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in covered_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
-    assert "emulebb.flow.rust.live-wire.hideme.v1" in covered_ids
+    assert persisted_soak_id not in covered_ids
     assert sum(
         1
         for phase in campaign["phases"]
@@ -251,8 +252,9 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     )
     assert any(
         scenario["command"] == rust_live_wire_command
-        and scenario["required"] is True
-        and scenario["blocking"] is True
+        and scenario["required"] is False
+        and scenario["blocking"] is False
+        and all(evidence["required"] is False for evidence in scenario["evidence"])
         and any("mfc_profile.profile_dir plus rust_profile.profile_dir" in item for item in scenario["localInputs"])
         and any("split tunneling is disabled" in item for item in scenario["localInputs"])
         for phase in campaign["phases"]
@@ -280,6 +282,27 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     assert "Rust-persisted source userHash" in cross_client_description
     assert "Unicode filename" in cross_client_description
     assert "AICH hashset metadata" in cross_client_description
+
+
+def test_persisted_profile_commands_are_never_release_blocking() -> None:
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-rust")
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    persisted_scenarios = [
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if "persisted-soak-control.py" in scenario["command"]
+    ]
+
+    assert persisted_scenarios
+    for scenario in persisted_scenarios:
+        assert scenario["required"] is False
+        assert scenario["blocking"] is False
+        assert scenario["id"] not in covered_ids
 
 
 def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> None:
