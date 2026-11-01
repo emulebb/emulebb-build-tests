@@ -108,7 +108,10 @@ def build_observer_action_report(
         ),
         action_window=evidence.window,
     )
-    driver_complete = pending_action["driverOutcome"]["ok"] is True
+    driver_complete = bool(
+        pending_action["driverOutcome"]["ok"] is True
+        and _driver_searches_completed(pending_action["driverOutcome"])
+    )
     verdict = (
         assessment["verdict"]
         if evidence.complete and driver_complete
@@ -258,7 +261,11 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
         raise ObserverActionReportError("Observer action assessment verdict is invalid.")
     expected_verdict = (
         "evidence-incomplete"
-        if evidence_status == "incomplete" or not driver["ok"]
+        if (
+            evidence_status == "incomplete"
+            or not driver["ok"]
+            or not _driver_searches_completed(driver)
+        )
         else assessment["verdict"]
     )
     if report["verdict"] != expected_verdict:
@@ -304,6 +311,7 @@ def classify_validated_parity_gate_outcome(report: dict[str, Any]) -> str:
     terminal_complete = bool(
         driver["ok"] is True
         and not driver["errors"]
+        and _driver_searches_completed(driver)
         and diagnostic_evidence["status"] == "complete"
     )
     if not terminal_complete:
@@ -317,6 +325,24 @@ def classify_validated_parity_gate_outcome(report: dict[str, Any]) -> str:
     ):
         return GATE_SUCCESS
     return GATE_RETRYABLE
+
+
+def _driver_searches_completed(driver: object) -> bool:
+    """Whether both clients authoritatively completed the requested search."""
+
+    if not isinstance(driver, dict):
+        return False
+    searches = driver.get("searches")
+    if not isinstance(searches, dict) or set(searches) != set(_CLIENTS):
+        return False
+    for client in _CLIENTS:
+        search = searches[client]
+        if not isinstance(search, dict):
+            return False
+        results = search.get("results")
+        if not isinstance(results, dict) or results.get("completed") is not True:
+            return False
+    return True
 
 
 def validate_observer_action_report_for_pending(

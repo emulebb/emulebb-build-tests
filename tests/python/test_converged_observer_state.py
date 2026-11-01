@@ -112,7 +112,14 @@ def action_report(
         "coverageOk": successful,
         "byteMatch": False,
         "diagOk": successful,
-        "driverOutcome": {"ok": True, "errors": []},
+        "driverOutcome": {
+            "ok": True,
+            "errors": [],
+            "searches": {
+                "rust": {"results": {"completed": True}},
+                "mfc": {"results": {"completed": True}},
+            },
+        },
         "diagnosticEvidence": {"status": "complete"},
     }
 
