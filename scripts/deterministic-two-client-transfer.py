@@ -327,7 +327,6 @@ def collect_server_login_diagnostics(
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
     )
-    server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(evidence)
     evidence["captures"] = {
         "rust": {
             "processId": rust_process_id,
@@ -2353,6 +2352,9 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["client_server_login_diagnostics"] = (
                 server_login_evidence
             )
+            server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
+                server_login_evidence
+            )
 
         if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
             current_phase = "client1_server_keyword_search"
@@ -2515,6 +2517,9 @@ def main(argv: list[str] | None = None) -> int:
         report["status"] = "failed"
         report["current_phase"] = current_phase
         report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+        if server_login_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverLogin"] = server_login_evidence
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
         return 1

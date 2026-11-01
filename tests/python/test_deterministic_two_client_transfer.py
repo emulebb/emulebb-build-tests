@@ -99,6 +99,57 @@ def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> N
     assert module.resolve_ed2k_server_connect_address(overridden.ed2k_server_connect_address) == "172.20.32.2"
 
 
+def test_server_login_collection_returns_failed_snapshot_with_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    failed_evidence = {
+        "schema": "emulebb-build-tests.deterministic-server-login-diagnostics",
+        "ok": False,
+        "failures": ["client.rust"],
+    }
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[], selected_segments=[segment])
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_login_diagnostic_evidence,
+        "build_server_login_diagnostic_evidence",
+        lambda **_kwargs: dict(failed_evidence),
+    )
+
+    result = module.collect_server_login_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        rust_nickname="rust",
+        rust_tcp_port=4662,
+        mfc_nickname="mfc",
+        mfc_tcp_port=4663,
+        expected_transport_plan=("obfuscated", "plaintext"),
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert result["ok"] is False
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
 @pytest.mark.parametrize("address", ["0.0.0.0", "ff02::1", "not-an-address"])
 def test_ed2k_server_connect_address_rejects_non_unicast_ipv4(address: str) -> None:
     module = load_suite_module()
