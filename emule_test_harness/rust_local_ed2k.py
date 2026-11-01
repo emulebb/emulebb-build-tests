@@ -136,7 +136,9 @@ def wait_for_current_server_metadata(
     """Waits until one client exposes the exact applied current-server metadata."""
 
     def probe() -> dict[str, object] | None:
-        data = request_json(base_url, "GET", "/api/v1/servers/status", api_key)
+        status = request_json(base_url, "GET", "/api/v1/status", api_key)
+        nested = status.get("servers")
+        data = nested if isinstance(nested, dict) else status
         current = data.get("currentServer") if isinstance(data.get("currentServer"), dict) else {}
         users = current.get("users")
         files = current.get("files")
