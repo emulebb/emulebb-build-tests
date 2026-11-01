@@ -15,6 +15,7 @@ STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
     "emulebb-rust-reask-capture-emulebb.py": "lan",
     "emulebb-rust-reask-cross-client.py": "lan",
     "fake-kad-trust-soak.py": "vpn",
+    "local-ed2k-protocol-combinations.py": "lan",
     "local-ed2k-rust-protocol-combinations.py": "lan",
     "radarr-sonarr-emulebb-live.py": "vpn",
 }
