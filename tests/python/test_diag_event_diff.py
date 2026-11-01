@@ -522,6 +522,38 @@ def test_kad_event_multiset_match() -> None:
     assert _family(report, "kad_event")["totals"]["matched"] == 1
 
 
+def test_kad_event_lookup_target_hex_is_comparable() -> None:
+    common = {
+        "milestone": "lookup_started",
+        "action": "search",
+        "searchKind": "keyword",
+        "resultCount": 0,
+    }
+    rust = [
+        _env(
+            "kad_event",
+            "lookup",
+            keys={"searchId": "search-1"},
+            body={**common, "targetHex": "00112233445566778899aabbccddeeff"},
+        )
+    ]
+    mfc = [
+        _env(
+            "kad_event",
+            "lookup",
+            keys={"searchId": "search-1"},
+            body={**common, "targetHex": "ffeeddccbbaa99887766554433221100"},
+        )
+    ]
+
+    report = diff_traces(rust, mfc)
+
+    assert report["ok"] is False
+    family = _family(report, "kad_event")
+    assert family["totals"]["onlyRust"] == 1
+    assert family["totals"]["onlyMfc"] == 1
+
+
 @pytest.mark.parametrize("field", ["outcome", "reason"])
 def test_kad_event_buddy_request_terminal_fields_are_comparable(field) -> None:
     shared = {

@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from datetime import datetime
 import json
+import re
+import unicodedata
 from typing import Any
 
 from . import diag_event_diff, observer_action_evidence, soak_action_diff
@@ -14,6 +16,7 @@ GATE_SUCCESS = "success"
 GATE_RETRYABLE = "retryable"
 GATE_CONFIRMED_DIVERGENCE = "confirmed-divergence"
 _CLIENTS = ("rust", "mfc")
+_KAD_TARGET_HEX = re.compile(r"^[0-9a-f]{32}$")
 _VERDICTS = {
     "coverage-parity",
     "divergence",
@@ -55,6 +58,7 @@ _ASSESSMENT_FIELDS = {
     "observed",
     "packets",
     "assessmentRecords",
+    "actionAttribution",
     "verdict",
     "coverageOk",
     "fullCoverageOk",
@@ -259,6 +263,30 @@ def validate_observer_action_report(report: object) -> dict[str, Any]:
             )
     if assessment.get("verdict") not in _VERDICTS:
         raise ObserverActionReportError("Observer action assessment verdict is invalid.")
+    action_attribution = _validate_action_attribution_payload(
+        assessment.get("actionAttribution"),
+        method=report["method"],
+        label=report["label"],
+        server_endpoints=server_endpoints,
+        search_ids=driver.get("searchIds"),
+    )
+    if (
+        report["method"]
+        in {
+            soak_action_diff.SEARCH_METHOD_SERVER,
+            soak_action_diff.SEARCH_METHOD_KAD,
+        }
+        and (
+            action_attribution["required"] is not True
+            or action_attribution["status"] not in {
+                "attributed",
+                "evidence-incomplete",
+            }
+        )
+    ):
+        raise ObserverActionReportError(
+            "Observer action attribution authority is invalid."
+        )
     expected_verdict = (
         "evidence-incomplete"
         if (
@@ -315,6 +343,9 @@ def classify_validated_parity_gate_outcome(report: dict[str, Any]) -> str:
         and diagnostic_evidence["status"] == "complete"
     )
     if not terminal_complete:
+        return GATE_RETRYABLE
+    attribution = report.get("assessment", {}).get("actionAttribution", {})
+    if attribution.get("status") != "attributed":
         return GATE_RETRYABLE
     if report["verdict"] == "divergence":
         return GATE_CONFIRMED_DIVERGENCE
@@ -433,6 +464,191 @@ def _validate_server_endpoints_payload(value: object) -> dict[str, dict[str, Any
             )
         validated[client] = {"host": host, "port": port}
     return validated
+
+
+def _validate_action_attribution_payload(
+    value: object,
+    *,
+    method: str,
+    label: str,
+    server_endpoints: dict[str, dict[str, Any]],
+    search_ids: object,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "required",
+        "status",
+        "reasons",
+        "clients",
+    }:
+        raise ObserverActionReportError(
+            "Observer action attribution payload is invalid."
+        )
+    required = value.get("required")
+    status = value.get("status")
+    aggregate_reasons = value.get("reasons")
+    clients = value.get("clients")
+    if not isinstance(required, bool) or status not in {
+        "attributed",
+        "evidence-incomplete",
+        "not-required",
+    }:
+        raise ObserverActionReportError(
+            "Observer action attribution status is invalid."
+        )
+    if not isinstance(aggregate_reasons, list) or any(
+        not isinstance(reason, str) or not reason for reason in aggregate_reasons
+    ):
+        raise ObserverActionReportError(
+            "Observer action attribution reasons are invalid."
+        )
+    if not isinstance(clients, dict) or set(clients) != set(_CLIENTS):
+        raise ObserverActionReportError(
+            "Observer action attribution clients are invalid."
+        )
+    client_statuses: list[str] = []
+    client_targets: list[str | None] = []
+    for client in _CLIENTS:
+        payload = clients[client]
+        if not isinstance(payload, dict):
+            raise ObserverActionReportError(
+                f"Observer action attribution {client} payload is invalid."
+            )
+        client_status = payload.get("status")
+        reasons = payload.get("reasons")
+        if client_status not in {
+            "attributed",
+            "evidence-incomplete",
+            "not-required",
+        } or not isinstance(reasons, list) or any(
+            not isinstance(reason, str) or not reason for reason in reasons
+        ):
+            raise ObserverActionReportError(
+                f"Observer action attribution {client} status is invalid."
+            )
+        client_statuses.append(client_status)
+        if method == soak_action_diff.SEARCH_METHOD_SERVER:
+            expected_fields = {
+                "status",
+                "reasons",
+                "query",
+                "serverEndpoint",
+                "endpointRequestCount",
+                "exactQueryRequestCount",
+                "endpointResponseCount",
+            }
+            if set(payload) != expected_fields:
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} server fields are invalid."
+                )
+            if (
+                payload.get("query") != unicodedata.normalize("NFC", label)
+                or payload.get("serverEndpoint") != server_endpoints[client]
+            ):
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} server authority is invalid."
+                )
+            for count_name in (
+                "endpointRequestCount",
+                "exactQueryRequestCount",
+                "endpointResponseCount",
+            ):
+                _require_nonnegative_integer(
+                    payload.get(count_name),
+                    f"actionAttribution.clients.{client}.{count_name}",
+                )
+            if client_status == "attributed" and (
+                reasons
+                or payload["endpointRequestCount"] != 1
+                or payload["exactQueryRequestCount"] != 1
+            ):
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} server proof is invalid."
+                )
+        elif method == soak_action_diff.SEARCH_METHOD_KAD:
+            expected_fields = {
+                "status",
+                "reasons",
+                "searchId",
+                "targetHex",
+                "lifecycleRecordCount",
+                "lookupStartCount",
+                "lookupCompleteCount",
+                "matchingRequestCount",
+                "matchingResponseCount",
+                "competingSearchIds",
+            }
+            if set(payload) != expected_fields:
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} Kad fields are invalid."
+                )
+            expected_search_id = (
+                search_ids.get(client) if isinstance(search_ids, dict) else None
+            )
+            if payload.get("searchId") != expected_search_id:
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} search ID is invalid."
+                )
+            target_hex = payload.get("targetHex")
+            if target_hex is not None and (
+                not isinstance(target_hex, str)
+                or not _KAD_TARGET_HEX.fullmatch(target_hex)
+            ):
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} target is invalid."
+                )
+            for count_name in (
+                "lifecycleRecordCount",
+                "lookupStartCount",
+                "lookupCompleteCount",
+                "matchingRequestCount",
+                "matchingResponseCount",
+            ):
+                _require_nonnegative_integer(
+                    payload.get(count_name),
+                    f"actionAttribution.clients.{client}.{count_name}",
+                )
+            competing = payload.get("competingSearchIds")
+            if not isinstance(competing, list) or any(
+                not isinstance(item, str) for item in competing
+            ):
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} overlap is invalid."
+                )
+            if client_status == "attributed" and (
+                reasons
+                or target_hex is None
+                or payload["lifecycleRecordCount"] != 2
+                or payload["lookupStartCount"] != 1
+                or payload["lookupCompleteCount"] != 1
+                or payload["matchingRequestCount"] < 1
+                or competing
+            ):
+                raise ObserverActionReportError(
+                    f"Observer action attribution {client} Kad proof is invalid."
+                )
+            client_targets.append(target_hex)
+    expected_status = (
+        "attributed"
+        if required
+        and not aggregate_reasons
+        and all(item == "attributed" for item in client_statuses)
+        else "evidence-incomplete"
+        if required
+        else "not-required"
+    )
+    if status != expected_status:
+        raise ObserverActionReportError(
+            "Observer action attribution aggregate status is inconsistent."
+        )
+    if (
+        status == "attributed"
+        and method == soak_action_diff.SEARCH_METHOD_KAD
+        and len(set(client_targets)) != 1
+    ):
+        raise ObserverActionReportError(
+            "Observer action attribution bilateral Kad target is inconsistent."
+        )
+    return copy.deepcopy(value)
 
 
 def _action_pair(pending_action: dict[str, Any]) -> soak_action_diff.ActionPair:

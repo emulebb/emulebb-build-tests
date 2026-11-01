@@ -807,6 +807,11 @@ def test_global_search_action_is_not_assessable_without_mfc_udp_evidence() -> No
 
 def test_kad_search_action_assessed_from_kad_stream() -> None:
     mod = _load_offline_diff()
+    target_hex = "00112233445566778899aabbccddeeff"
+    target = bytes.fromhex(target_hex)
+    wire_target = b"".join(
+        target[offset : offset + 4][::-1] for offset in range(0, 16, 4)
+    ).hex()
 
     def _kad(opcode: int, at: float) -> dict:
         return {
@@ -814,8 +819,13 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
             "ts": _ts(at),
             "family": "kad_udp",
             "event": "packet",
-            "keys": {"opcode": opcode},
-            "body": {"direction": "send", "opcode": opcode},
+            "keys": {"protocolMarker": 0xE4, "opcode": opcode},
+            "body": {
+                "direction": "send",
+                "protocolMarker": 0xE4,
+                "opcode": opcode,
+                "decodedHex": f"e4{opcode:02x}{wire_target}0000",
+            },
         }
 
     def _lookup(search_id: str, milestone: str, result_count: int, at: float) -> dict:
@@ -830,6 +840,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
                 "action": "search",
                 "searchKind": "keyword",
                 "resultCount": result_count,
+                "targetHex": target_hex,
             },
         }
 

@@ -112,6 +112,9 @@ def action_report(
         "coverageOk": successful,
         "byteMatch": False,
         "diagOk": successful,
+        "assessment": {
+            "actionAttribution": {"status": "attributed"},
+        },
         "driverOutcome": {
             "ok": True,
             "errors": [],

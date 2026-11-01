@@ -19,6 +19,7 @@ SERVER_ENDPOINTS = {
     "rust": "198.51.100.2:4661",
     "mfc": "203.0.113.3:5687",
 }
+KAD_TARGET = "00112233445566778899aabbccddeeff"
 
 
 def _ts(seconds: float) -> datetime:
@@ -31,6 +32,14 @@ def _utc(seconds: float) -> str:
     return _ts(seconds).isoformat()
 
 
+def _kad_wire_target(target_hex: str) -> str:
+    target = bytes.fromhex(target_hex)
+    assert len(target) == 16
+    return b"".join(
+        target[offset : offset + 4][::-1] for offset in range(0, 16, 4)
+    ).hex()
+
+
 def _kad_record(
     *,
     client: str,
@@ -40,7 +49,14 @@ def _kad_record(
     seconds: float,
     opcode: int,
     direction: str,
+    target_hex: str = KAD_TARGET,
 ) -> dict[str, object]:
+    wire_target = _kad_wire_target(target_hex)
+    decoded_hex = (
+        f"e4{opcode:02x}{'00' * 16}{wire_target}0000"
+        if opcode == soak_action_diff.KAD2_SEARCH_RES
+        else f"e4{opcode:02x}{wire_target}0000"
+    )
     return {
         "schema": "diag_event_v2",
         "client": client,
@@ -58,6 +74,7 @@ def _kad_record(
             "direction": direction,
             "protocolMarker": 0xE4,
             "opcode": opcode,
+            "decodedHex": decoded_hex,
         },
     }
 
@@ -71,6 +88,7 @@ def _kad_lifecycle_record(
     seconds: float,
     milestone: str,
     result_count: int,
+    target_hex: str = KAD_TARGET,
 ) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
@@ -90,6 +108,7 @@ def _kad_lifecycle_record(
             "action": "search",
             "searchKind": "keyword",
             "resultCount": result_count,
+            "targetHex": target_hex,
         },
     }
 

@@ -71,6 +71,7 @@ _COMPARABLE_BODY: dict[str, tuple[str, ...]] = {
         "searchType",
         "resultCount",
         "expectedCount",
+        "targetHex",
     ),
     "bad_peer": (
         "behavior",
