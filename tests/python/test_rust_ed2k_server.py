@@ -466,7 +466,7 @@ def test_stop_process_signals_wsl_pid_even_after_proxy_exit(monkeypatch, tmp_pat
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("windows_client_address", "expected_client_address"),
-    [(None, "127.0.0.1"), ("192.0.2.10", "192.0.2.10")],
+    [(None, "172.20.0.2"), ("192.0.2.10", "192.0.2.10")],
 )
 def test_rust_server_launches_wsl_with_selected_connect_address(
     monkeypatch,

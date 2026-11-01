@@ -95,7 +95,7 @@ def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> N
     )
 
     assert defaults.ed2k_server_connect_address is None
-    assert module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address) == "127.0.0.1"
+    assert module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address) is None
     assert module.resolve_ed2k_server_connect_address(overridden.ed2k_server_connect_address) == "172.20.32.2"
 
 
@@ -1028,6 +1028,60 @@ def test_resolve_local_p2p_bind_address_accepts_explicit_loopback() -> None:
     module = load_suite_module()
 
     assert module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1") == "127.0.0.1"
+
+
+def test_resolve_managed_server_p2p_bind_address_uses_non_loopback_route(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, int]] = []
+
+    def resolve_route(host: str, port: int) -> str:
+        calls.append((host, port))
+        return "172.20.16.1"
+
+    monkeypatch.setattr(module.ed2k_server, "resolve_route_bind_ip", resolve_route)
+
+    assert (
+        module.resolve_managed_server_p2p_bind_address(
+            current_address="127.0.0.1",
+            server_address="172.20.32.2",
+            server_port=4661,
+        )
+        == "172.20.16.1"
+    )
+    assert calls == [("172.20.32.2", 4661)]
+
+
+@pytest.mark.parametrize(
+    ("server_address", "interface_name", "interface_address"),
+    [
+        ("127.0.0.1", "", None),
+        ("172.20.32.2", "Ethernet", None),
+        ("172.20.32.2", "", "192.0.2.10"),
+    ],
+)
+def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bind(
+    monkeypatch,
+    server_address: str,
+    interface_name: str,
+    interface_address: str | None,
+) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(
+        module.ed2k_server,
+        "resolve_route_bind_ip",
+        lambda *_args: pytest.fail("explicit and loopback binds must not resolve a route"),
+    )
+
+    assert (
+        module.resolve_managed_server_p2p_bind_address(
+            current_address="192.0.2.10",
+            server_address=server_address,
+            server_port=4661,
+            p2p_bind_interface_name=interface_name,
+            p2p_bind_interface_address=interface_address,
+        )
+        == "192.0.2.10"
+    )
 
 
 def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> None:

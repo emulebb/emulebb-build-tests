@@ -780,7 +780,7 @@ def launch_server(
     if _is_windows_host():
         advertised_address = wsl_ipv4_address(distribution)
         listen_address = "0.0.0.0"
-        client_address = str(windows_client_address or "127.0.0.1").strip()
+        client_address = str(windows_client_address or advertised_address).strip()
     else:
         advertised_address = ed2k_address
         listen_address = ed2k_address

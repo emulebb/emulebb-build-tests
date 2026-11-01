@@ -1343,12 +1343,33 @@ def resolve_local_p2p_bind_address(
     return "127.0.0.1"
 
 
-def resolve_ed2k_server_connect_address(override: str | None) -> str:
-    """Resolves the Windows endpoint used to reach the WSL ED2K server."""
+def resolve_ed2k_server_connect_address(override: str | None) -> str | None:
+    """Validates an optional Windows override for the managed WSL endpoint."""
 
+    value = str(override or "").strip()
+    if not value:
+        return None
+    return require_unicast_ipv4(value, option_name="--ed2k-server-connect-address")
+
+
+def resolve_managed_server_p2p_bind_address(
+    *,
+    current_address: str,
+    server_address: str,
+    server_port: int,
+    p2p_bind_interface_name: str = "",
+    p2p_bind_interface_address: str | None = None,
+) -> str:
+    """Uses the host route to a non-loopback managed server unless explicitly bound."""
+
+    if p2p_bind_interface_name.strip() or str(p2p_bind_interface_address or "").strip():
+        return current_address
+    server_ip = ipaddress.ip_address(server_address)
+    if server_ip.is_loopback:
+        return current_address
     return require_unicast_ipv4(
-        str(override or "127.0.0.1"),
-        option_name="--ed2k-server-connect-address",
+        ed2k_server.resolve_route_bind_ip(server_address, server_port),
+        option_name="managed ED2K server route",
     )
 
 
@@ -2205,6 +2226,13 @@ def main(argv: list[str] | None = None) -> int:
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
+        p2p_address = resolve_managed_server_p2p_bind_address(
+            current_address=p2p_address,
+            server_address=server_address,
+            server_port=ports["ed2k_tcp"],
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_address=args.p2p_bind_interface_address,
+        )
         server_control = ed2k_server.ed2k_server_control(admin_base_url, args.api_key)
         file_observer = ed2k_file_observer.Ed2kFileObserver(
             server_address,
@@ -2213,6 +2241,8 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["server_build"] = server_launch.build
         report["checks"]["ed2k_server_health"] = server_launch.health
         report["ed2k_server"] = server_launch.config
+        report["network"]["p2p_bind_interface_address"] = p2p_address
+        report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
 
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -2225,7 +2255,7 @@ def main(argv: list[str] | None = None) -> int:
                 token=args.api_key,
                 admin_address=args.lan_bind_addr,
                 ed2k_address=p2p_address,
-                windows_client_address=server_connect_address,
+                windows_client_address=server_address,
                 repo_override=args.ed2k_server_repo,
                 exe_override=str(server_launch.server_exe),
                 protocol_obfuscation=False,
