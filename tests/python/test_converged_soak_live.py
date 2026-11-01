@@ -182,6 +182,8 @@ def test_converged_soak_parser_accepts_lan_bind_addr() -> None:
 def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
     source = SOAK_RUNNER.read_text(encoding="utf-8")
 
+    refresh_index = source.index('for client in ("rust", "mfc"):')
+    resolve_index = source.index("rust_exe = clw.resolve_rust_diagnostics_exe(output_root)")
     vpn_index = source.index("soak_launch.prepare_hideme_routing(")
     import_index = source.index("mfc_profile_import.ensure_persisted_rust_profile(")
     cleanup_index = source.index("soak_run_layout.prepare_clean_run(")
@@ -189,7 +191,7 @@ def test_converged_soak_wires_persisted_profile_import_before_cleanup() -> None:
     begin_index = source.index("profile_overlay.begin_file_overlay(")
     mfc_launch_index = source.index("mfc_handles = bring_up_mfc(")
     restore_index = source.index('summary["mfcProfileOverlay"]["restore"] = mfc_preferences_overlay.restore()')
-    assert vpn_index < import_index
+    assert refresh_index < resolve_index < vpn_index < import_index
     assert import_index < cleanup_index
     assert cleanup_index < recover_index < begin_index < mfc_launch_index < restore_index
     assert '"rustProfileSetup": rust_profile_setup' in source

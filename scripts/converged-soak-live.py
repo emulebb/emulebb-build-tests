@@ -62,8 +62,13 @@ from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch, soak_run_layout, vpn_guard_live
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
-from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
+from emule_test_harness.paths import (
+    get_required_emule_workspace_root,
+    get_workspace_output_root,
+    reject_windows_temp_path,
+)
 from emule_test_harness.rust_client import RUST_PROFILE_METADATA_FILE, stop_process_tree
+from emule_test_harness.soak_build_refresh import refresh_diagnostics_build
 from emule_test_harness.soak_launch import (
     DEFAULT_LOG_TRIM_BYTES,
     DEFAULT_MFC_SEED_CONFIG_DIR,
@@ -1436,6 +1441,17 @@ def main(argv: list[str] | None = None) -> int:
         vpn_topology=args.vpn_topology,
     )
     output_root = get_workspace_output_root()
+
+    workspace_root = get_required_emule_workspace_root()
+    for client in ("rust", "mfc"):
+        log(f"refreshing {client} diagnostics build through emulebb-build")
+        refresh_diagnostics_build(
+            workspace_root,
+            client,
+            mfc_variant=args.mfc_variant,
+            mfc_arch=args.mfc_arch,
+            mfc_configuration=args.mfc_configuration,
+        )
 
     rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
     mfc_exe = clw.resolve_mfc_diagnostics_exe(

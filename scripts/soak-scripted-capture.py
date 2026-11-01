@@ -27,7 +27,6 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import time
 import urllib.request
@@ -89,6 +88,7 @@ from emule_test_harness.paths import (  # noqa: E402
     get_workspace_output_root,
 )
 from emule_test_harness.rust_client import stop_process_tree  # noqa: E402
+from emule_test_harness.soak_build_refresh import refresh_diagnostics_build  # noqa: E402
 from emule_test_harness.soak_launch import (  # noqa: E402
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
@@ -110,74 +110,6 @@ MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES = 1 * 1024 * 1024
 MFC_DIAGNOSTIC_RETAINED_SEGMENTS = 128
 MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS = 60 * 60
 MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS = 7 * 24 * 60 * 60
-
-
-def diagnostics_build_command(
-    client: str,
-    *,
-    mfc_variant: str = "main",
-    mfc_arch: str = "x64",
-    mfc_configuration: str = "Release",
-) -> list[str]:
-    """Return the official incremental diagnostics build for one capture client."""
-
-    common = [sys.executable, "-m", "emule_workspace", "build"]
-    if client == "rust":
-        return [
-            *common,
-            "clients",
-            "--client",
-            "emulebb-rust",
-            "--config",
-            "Release",
-            "--platform",
-            "x64",
-            "--build-output-mode",
-            "ErrorsOnly",
-            "--diagnostics",
-        ]
-    if client == "mfc":
-        if mfc_configuration != "Release":
-            raise RuntimeError("MFC diagnostics captures require --mfc-configuration Release.")
-        return [
-            *common,
-            "app",
-            "--variant",
-            mfc_variant,
-            "--config",
-            mfc_configuration,
-            "--platform",
-            mfc_arch,
-            "--build-output-mode",
-            "ErrorsOnly",
-            "--diagnostics",
-        ]
-    raise ValueError(f"Unsupported capture client: {client}")
-
-
-def refresh_diagnostics_build(
-    workspace_root: Path,
-    client: str,
-    *,
-    mfc_variant: str = "main",
-    mfc_arch: str = "x64",
-    mfc_configuration: str = "Release",
-) -> None:
-    """Run the selected client's canonical incremental build and fail on errors."""
-
-    build_repo = workspace_root / "repos" / "emulebb-build"
-    if not build_repo.is_dir():
-        raise RuntimeError(f"Workspace build orchestrator repo was not found: {build_repo}")
-    command = diagnostics_build_command(
-        client,
-        mfc_variant=mfc_variant,
-        mfc_arch=mfc_arch,
-        mfc_configuration=mfc_configuration,
-    )
-    log(f"refreshing {client} diagnostics build through emulebb-build")
-    completed = subprocess.run(command, cwd=build_repo, check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(f"{client} diagnostics build failed with exit code {completed.returncode}.")
 
 
 def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
@@ -1758,6 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
     campaign = _campaign_leaf(args.campaign)
     report_dir = soak_root / "reports" / campaign / f"{client}-{_utc_stamp()}"
     report_dir.mkdir(parents=True, exist_ok=True)
+    log(f"refreshing {client} diagnostics build through emulebb-build")
     refresh_diagnostics_build(
         get_required_emule_workspace_root(),
         client,

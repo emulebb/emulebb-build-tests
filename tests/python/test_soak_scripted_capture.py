@@ -13,7 +13,7 @@ import pytest
 
 from emule_test_harness.scripted_actions import ScriptedAction
 from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
-from emule_test_harness import soak_storage
+from emule_test_harness import soak_build_refresh, soak_storage
 from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 pytestmark = pytest.mark.unit
@@ -60,9 +60,7 @@ def test_search_methods_allow_explicit_transfer_only_capture() -> None:
 
 
 def test_diagnostics_build_command_uses_canonical_rust_incremental_build() -> None:
-    module = _load_capture()
-
-    command = module.diagnostics_build_command("rust")
+    command = soak_build_refresh.diagnostics_build_command("rust")
 
     assert command == [
         sys.executable,
@@ -83,9 +81,7 @@ def test_diagnostics_build_command_uses_canonical_rust_incremental_build() -> No
 
 
 def test_diagnostics_build_command_uses_selected_mfc_diagnostics_build() -> None:
-    module = _load_capture()
-
-    command = module.diagnostics_build_command(
+    command = soak_build_refresh.diagnostics_build_command(
         "mfc",
         mfc_variant="main",
         mfc_arch="x64",
@@ -122,11 +118,11 @@ def test_refresh_diagnostics_build_runs_from_workspace_orchestrator(
         calls.append((list(command), Path(cwd), check))
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(soak_build_refresh.subprocess, "run", fake_run)
 
     module.refresh_diagnostics_build(tmp_path, "rust")
 
-    assert calls == [(module.diagnostics_build_command("rust"), build_repo, False)]
+    assert calls == [(soak_build_refresh.diagnostics_build_command("rust"), build_repo, False)]
 
 
 def test_refresh_diagnostics_build_aborts_on_build_failure(
@@ -135,7 +131,7 @@ def test_refresh_diagnostics_build_aborts_on_build_failure(
     module = _load_capture()
     (tmp_path / "repos" / "emulebb-build").mkdir(parents=True)
     monkeypatch.setattr(
-        module.subprocess,
+        soak_build_refresh.subprocess,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=7),
     )
