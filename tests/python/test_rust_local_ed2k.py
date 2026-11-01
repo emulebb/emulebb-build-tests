@@ -70,6 +70,83 @@ def test_wait_for_server_search_result_reads_unwrapped_payload(monkeypatch) -> N
     assert result["result"]["name"] == "fixture.bin"
 
 
+def test_single_server_search_issues_only_one_exact_request(monkeypatch) -> None:
+    expected_hash = "00112233445566778899aabbccddeeff"
+    calls: list[tuple[str, str, object]] = []
+    responses = iter(
+        [
+            {"id": "search-1", "status": "running", "items": []},
+            {"id": "search-1", "status": "running", "items": []},
+            {
+                "id": "search-1",
+                "status": "complete",
+                "items": [
+                    {
+                        "hash": expected_hash.upper(),
+                        "displayName": "fixture.bin",
+                        "sizeBytes": 4096,
+                    }
+                ],
+            },
+        ]
+    )
+
+    def request(_base_url, method, path, _api_key, payload=None):
+        calls.append((method, path, payload))
+        return next(responses)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
+
+    result = rust_local_ed2k.run_single_server_search(
+        "http://192.0.2.10:4711",
+        "key",
+        query="deterministicparitysearch",
+        expected_hash=expected_hash,
+        expected_name="fixture.bin",
+        expected_size=4096,
+        timeout_seconds=1.0,
+    )
+
+    assert result["searchId"] == "search-1"
+    assert result["result"]["hash"] == expected_hash.upper()
+    assert [call[0] for call in calls].count("POST") == 1
+    assert calls[0][2] == {
+        "query": "deterministicparitysearch",
+        "method": "server",
+        "type": "",
+    }
+
+
+def test_single_server_search_does_not_retry_empty_terminal_search(monkeypatch) -> None:
+    calls: list[str] = []
+    responses = iter(
+        [
+            {"id": "search-1", "status": "running", "items": []},
+            {"id": "search-1", "status": "complete", "items": []},
+        ]
+    )
+
+    def request(_base_url, method, _path, _api_key, _payload=None):
+        calls.append(method)
+        return next(responses)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+
+    with pytest.raises(RuntimeError, match="completed without the exact published file"):
+        rust_local_ed2k.run_single_server_search(
+            "http://192.0.2.10:4711",
+            "key",
+            query="deterministicparitysearch",
+            expected_hash="00112233445566778899aabbccddeeff",
+            expected_name="fixture.bin",
+            expected_size=4096,
+            timeout_seconds=1.0,
+        )
+
+    assert calls.count("POST") == 1
+
+
 def test_start_client_prefers_staged_executable(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, Path, Path, Path]] = []
 

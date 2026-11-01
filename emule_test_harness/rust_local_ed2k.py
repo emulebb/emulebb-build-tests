@@ -188,6 +188,75 @@ def wait_for_server_search_result(
     )
 
 
+def run_single_server_search(
+    base_url: str,
+    api_key: str,
+    *,
+    query: str,
+    expected_hash: str,
+    expected_name: str,
+    expected_size: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs exactly one server search and requires one exact result row."""
+
+    created = request_json(
+        base_url,
+        "POST",
+        "/api/v1/searches",
+        api_key,
+        {"query": query, "method": "server", "type": ""},
+    )
+    search_id = str(created.get("id") or "")
+    if not search_id:
+        raise RuntimeError("Deterministic server search creation returned no search ID.")
+    normalized_hash = expected_hash.casefold()
+    deadline = time.time() + timeout_seconds
+    observations: list[dict[str, object]] = []
+    while True:
+        search = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/searches/{search_id}?limit=200&offset=0",
+            api_key,
+        )
+        items = search.get("items")
+        rows = items if isinstance(items, list) else []
+        observations.append(
+            {
+                "status": str(search.get("status") or ""),
+                "resultCount": len(rows),
+                "observedAt": round(time.time(), 3),
+            }
+        )
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("hash") or "").casefold() == normalized_hash
+            and row.get("displayName", row.get("name")) == expected_name
+            and row.get("sizeBytes", row.get("size")) == expected_size
+        ]
+        if len(matches) == 1:
+            return {
+                "searchId": search_id,
+                "created": created,
+                "search": search,
+                "result": matches[0],
+                "observations": observations[-20:],
+            }
+        if len(matches) > 1:
+            raise RuntimeError("Deterministic server search returned duplicate exact result rows.")
+        status = str(search.get("status") or "").casefold()
+        if status in {"complete", "completed", "error"}:
+            raise RuntimeError(
+                "Deterministic server search completed without the exact published file."
+            )
+        if time.time() >= deadline:
+            raise RuntimeError("Deterministic server search timed out before an exact result.")
+        time.sleep(0.25)
+
+
 def file_sha256(path: Path) -> str:
     """Returns the SHA-256 digest of one file."""
 
