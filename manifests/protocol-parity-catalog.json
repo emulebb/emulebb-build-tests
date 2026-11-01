@@ -67,10 +67,10 @@
       "reason": "Upstream-clean server dependency gate with causal wire transcripts; proves harness infrastructure only, never Rust product parity."
     },
     {
-      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
-      "classification": "canonical",
+      "campaignIds": [],
+      "classification": "historical",
       "path": "scripts/local-ed2k-rust-protocol-combinations.py",
-      "reason": "Rust protocol-variant transfer matrix."
+      "reason": "Legacy aggregate Rust matrix retained only for server-search extraction; its transport and metadata-recovery states now belong to diagnostics-gated canonical scenarios."
     },
     {
       "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
@@ -106,7 +106,7 @@
       "campaignIds": [],
       "classification": "historical",
       "path": "scripts/local-ed2k-protocol-combinations.py",
-      "reason": "Retired MFC-versus-MFC protocol matrix retained only for extraction by the historical aggregate campaign; shared cases now belong to the harness and Rust-owned matrix."
+      "reason": "Retired MFC-versus-MFC matrix retained only until historical aggregate callers are removed; it cannot own parity evidence."
     },
     {
       "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
@@ -792,7 +792,7 @@
       "groupId": "lowid-callbacks",
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["source-queue-callback"],
-      "deterministicRunner": "scripts/local-ed2k-rust-protocol-combinations.py",
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
       "protocolDomain": "ed2k.lowid.callback",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
