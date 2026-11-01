@@ -46,6 +46,30 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
+def test_wait_for_server_search_result_reads_unwrapped_payload(monkeypatch) -> None:
+    expected_hash = "00112233445566778899aabbccddeeff"
+    monkeypatch.setattr(
+        rust_local_ed2k,
+        "request_json",
+        lambda *_args, **_kwargs: {
+            "id": "search-1",
+            "status": "complete",
+            "items": [{"hash": expected_hash.upper(), "name": "fixture.bin"}],
+        },
+    )
+
+    result = rust_local_ed2k.wait_for_server_search_result(
+        "http://192.0.2.10:4711",
+        "key",
+        query="fixture",
+        transfer_hash=expected_hash,
+        timeout_seconds=1.0,
+    )
+
+    assert result["search"]["id"] == "search-1"
+    assert result["result"]["name"] == "fixture.bin"
+
+
 def test_start_client_prefers_staged_executable(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, Path, Path, Path]] = []
 

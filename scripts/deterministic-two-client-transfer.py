@@ -2130,28 +2130,50 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
-        direct_source_link = rust_local_ed2k.ed2k_link_with_source(
-            exported_link,
-            p2p_address,
-            ports["client2_tcp"],
-        )
-        report["checks"]["client1_direct_source_link"] = {
-            "base_link": exported_link,
-            "transfer_link": direct_source_link,
-            "source": {"host": p2p_address, "port": ports["client2_tcp"]},
-        }
         current_phase = "add_transfer"
-        report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
-            base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {
-                "link": direct_source_link,
-                "paused": False,
-                "categoryId": 0,
-            },
-        )
+        if protocol_case is not None:
+            search_result = rust_local_ed2k.wait_for_server_search_result(
+                base_url,
+                args.api_key,
+                query=fixture_file.name,
+                transfer_hash=transfer_hash,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            search_id = str(search_result["search"]["id"])
+            report["checks"]["client1_transfer_stimulus"] = {
+                "mode": "server-search-result",
+                **search_result,
+            }
+            report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
+                base_url,
+                "POST",
+                f"/api/v1/searches/{search_id}/results/{transfer_hash}/operations/download",
+                args.api_key,
+                {"paused": False},
+            )
+        else:
+            direct_source_link = rust_local_ed2k.ed2k_link_with_source(
+                exported_link,
+                p2p_address,
+                ports["client2_tcp"],
+            )
+            report["checks"]["client1_transfer_stimulus"] = {
+                "mode": "direct-source-link",
+                "baseLink": exported_link,
+                "transferLink": direct_source_link,
+                "source": {"host": p2p_address, "port": ports["client2_tcp"]},
+            }
+            report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
+                base_url,
+                "POST",
+                "/api/v1/transfers",
+                args.api_key,
+                {
+                    "link": direct_source_link,
+                    "paused": False,
+                    "categoryId": 0,
+                },
+            )
         report["checks"]["client1_transfer_completed_file"] = rust_local_ed2k.wait_for_transfer_completed(
             base_url,
             args.api_key,
@@ -2193,7 +2215,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             diagnostics["externalAuthorities"] = {
                 "wirePublication": report["checks"]["client2_server_file"],
-                "directSource": report["checks"]["client1_direct_source_link"],
+                "transferStimulus": report["checks"]["client1_transfer_stimulus"],
                 "completedFile": report["checks"]["client1_transfer_completed_file"],
             }
             report["diagnostics"] = diagnostics

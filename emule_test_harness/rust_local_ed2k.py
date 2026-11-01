@@ -115,6 +115,79 @@ def wait_for_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float)
     )
 
 
+def wait_for_server_search_result(
+    base_url: str,
+    api_key: str,
+    *,
+    query: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until a fresh Rust server search returns the exact file hash."""
+
+    observations: list[dict[str, object]] = []
+    normalized_hash = transfer_hash.lower()
+
+    def probe() -> dict[str, object] | None:
+        created = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            api_key,
+            {"query": query, "method": "server", "type": ""},
+        )
+        search_id = str(created.get("id") or "")
+        if not search_id:
+            return None
+        search = created
+        result_count = 0
+        deadline = time.time() + 35.0
+        while True:
+            search = request_json(
+                base_url,
+                "GET",
+                f"/api/v1/searches/{search_id}?limit=200&offset=0",
+                api_key,
+            )
+            items = search.get("items")
+            result_count = len(items) if isinstance(items, list) else 0
+            if isinstance(items, list):
+                for result in items:
+                    if (
+                        isinstance(result, dict)
+                        and str(result.get("hash") or "").lower() == normalized_hash
+                    ):
+                        observations.append(
+                            {
+                                "result_count": result_count,
+                                "observed_at": round(time.time(), 3),
+                            }
+                        )
+                        return {
+                            "search": search,
+                            "result": result,
+                            "observations": observations[-20:],
+                        }
+            status = str(search.get("status") or "")
+            if status in {"complete", "completed", "error"} or time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        observations.append(
+            {
+                "result_count": result_count,
+                "observed_at": round(time.time(), 3),
+            }
+        )
+        return None
+
+    return wait_for(
+        probe,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=1.0,
+        description=f"emulebb-rust server search result {normalized_hash}",
+    )
+
+
 def file_sha256(path: Path) -> str:
     """Returns the SHA-256 digest of one file."""
 

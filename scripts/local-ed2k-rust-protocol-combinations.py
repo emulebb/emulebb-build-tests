@@ -19,6 +19,7 @@ from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness.rust_local_ed2k import ed2k_link_with_source  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -741,7 +742,7 @@ def run_protocol_case(
         )
 
         current_phase = "rust_search_and_download"
-        rust_search = rust_emulebb.wait_for_rust_search_result(
+        rust_search = rust_local_ed2k.wait_for_server_search_result(
             rust_base_url,
             args.api_key,
             query=decoded_link_name,

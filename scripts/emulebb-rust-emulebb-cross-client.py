@@ -21,6 +21,7 @@ from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import diag_event_diff  # noqa: E402
 from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -651,67 +652,6 @@ def wait_for_rust_transfer_completed(
     return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust transfer {transfer_hash} completion")
 
 
-def wait_for_rust_search_result(
-    base_url: str,
-    api_key: str,
-    *,
-    query: str,
-    transfer_hash: str,
-    timeout_seconds: float,
-) -> dict[str, object]:
-    """Waits until Rust server search returns the expected file hash."""
-
-    observations: list[dict[str, object]] = []
-    normalized_hash = transfer_hash.lower()
-
-    def resolve():
-        # eMuleBB search is asynchronous: POST /searches creates the search
-        # (empty first page, status "running"); results are polled from GET
-        # /searches/{id} under the canonical "items" key. A single server
-        # search can race server-side publish propagation, so each attempt
-        # issues a fresh search and polls it to a terminal status, and the
-        # outer wait_for re-issues until the result appears or it times out.
-        created = request_json(
-            base_url,
-            "POST",
-            "/api/v1/searches",
-            api_key,
-            {"query": query, "method": "server", "type": ""},
-        )
-        search_id = str(created.get("id") or "") if isinstance(created, dict) else ""
-        if not search_id:
-            return None
-        search: dict[str, object] = created
-        result_count = 0
-        deadline = time.time() + 35.0
-        while True:
-            search = request_json(
-                base_url,
-                "GET",
-                f"/api/v1/searches/{search_id}?limit=200&offset=0",
-                api_key,
-            )
-            items = search.get("items") if isinstance(search, dict) else None
-            result_count = len(items) if isinstance(items, list) else 0
-            if isinstance(items, list):
-                for result in items:
-                    if isinstance(result, dict) and str(result.get("hash") or "").lower() == normalized_hash:
-                        observations.append({"result_count": result_count, "observed_at": round(time.time(), 3)})
-                        return {
-                            "search": search,
-                            "result": result,
-                            "observations": observations[-20:],
-                        }
-            status = str(search.get("status") or "") if isinstance(search, dict) else ""
-            if status in ("complete", "completed", "error") or time.time() >= deadline:
-                break
-            time.sleep(0.5)
-        observations.append({"result_count": result_count, "observed_at": round(time.time(), 3)})
-        return None
-
-    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust server search result {normalized_hash}")
-
-
 def download_emulebb_fixture_to_rust(
     *,
     emulebb_base_url: str,
@@ -744,7 +684,7 @@ def download_emulebb_fixture_to_rust(
         transfer_hash,
         server_publish_timeout_seconds,
     )
-    search = wait_for_rust_search_result(
+    search = rust_local_ed2k.wait_for_server_search_result(
         rust_base_url,
         api_key,
         query="emulebb-to-emulebb-rust",
@@ -1603,7 +1543,6 @@ def main(argv: list[str] | None = None) -> int:
             paths.source_artifacts_dir / "rust-shared-tree",
             args.fixture_size_bytes,
         )
-        fixture_path = Path(str(rust_shared_tree["path"]))
         fixture_sha256 = str(rust_shared_tree["sha256"])
         report["fixture"] = dict(rust_shared_tree)
         report["rust_shared_tree"] = dict(rust_shared_tree)

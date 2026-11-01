@@ -52,33 +52,6 @@ def test_wait_for_rust_ed2k_connected_reads_canonical_status_stats(monkeypatch) 
     assert status["stats"]["ed2kConnected"] is True
 
 
-def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch) -> None:
-    module = load_suite_module()
-
-    expected_hash = "00112233445566778899aabbccddeeff"
-    monkeypatch.setattr(
-        module,
-        "request_json",
-        lambda *_args, **_kwargs: {
-            "id": "search-1",
-            "status": "complete",
-            "items": [{"hash": expected_hash.upper(), "name": "fixture.bin"}],
-        },
-    )
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
-
-    result = module.wait_for_rust_search_result(
-        "http://192.0.2.10:4711",
-        "key",
-        query="fixture",
-        transfer_hash=expected_hash,
-        timeout_seconds=1.0,
-    )
-
-    assert result["search"]["id"] == "search-1"
-    assert result["result"]["name"] == "fixture.bin"
-
-
 def test_disconnect_mfc_servers_accepts_successful_rest_response(monkeypatch) -> None:
     module = load_suite_module()
     calls: list[tuple[str, str, dict[str, object]]] = []
