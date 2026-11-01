@@ -2643,7 +2643,7 @@ def _check_server_socket_source__diagnostics_use_attempt_transport_before_handsh
         'IsServerCryptEnabledConnection() ? _T("obfuscated") : _T("plaintext")'
     )
 
-    assert source.count(attempt_transport) == 3
+    assert source.count(attempt_transport) == 5
     receive_block = source[source.index("bool CServerSocket::PacketReceived(") : source.index("void CServerSocket::SetConnectionState(")]
     state_block = source[source.index("void CServerSocket::LogConnectionStateTransition(") : source.index("void CServerSocket::SendPacket(")]
     send_block = source[source.index("void CServerSocket::SendPacket(") :]
@@ -2790,6 +2790,55 @@ def _check_server_socket_source__search_result_diagnostics_join_post_parse_state
         'bExpectedReply ? _T("\\"accepted\\"") : _T("\\"late\\"")',
     ):
         assert required_field in applied_logger
+
+
+def _check_server_socket_source__server_metadata_diagnostics_follow_state_application() -> None:
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    status_block = socket_source[
+        socket_source.index("case OP_SERVERSTATUS:") : socket_source.index("case OP_SERVERIDENT:")
+    ]
+    ident_block = socket_source[
+        socket_source.index("case OP_SERVERIDENT:") : socket_source.index("case OP_SERVERLIST:")
+    ]
+
+    assert status_block.index("pServer->SetUserCount(cur_user);") < status_block.index(
+        "DiagEventLogEd2kServerStatusApplied("
+    )
+    assert status_block.index("pServer->SetFileCount(cur_files);") < status_block.index(
+        "DiagEventLogEd2kServerStatusApplied("
+    )
+    assert ident_block.index("pServer->SetListName(strName);") < ident_block.index(
+        "DiagEventLogEd2kServerIdentApplied("
+    )
+    assert ident_block.index("pServer->SetDescription(strDescription);") < ident_block.index(
+        "DiagEventLogEd2kServerIdentApplied("
+    )
+
+    logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerMetadataApplied(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        '\\"direction\\":\\"meta\\"',
+        '\\"outcome\\":\\"applied\\"',
+        '\\"protocolMarker\\":%u',
+        '\\"opcode\\":%u',
+        '\\"transportMode\\":%s',
+        '\\"flow\\":\\"server\\"',
+        '\\"traceId\\":%I64u',
+        '_T("server_status_applied")',
+        '_T("server_ident_applied")',
+        '_T("OP_SERVERSTATUS")',
+        '_T("OP_SERVERIDENT")',
+        '\\"users\\":%u',
+        '\\"files\\":%u',
+        '\\"name\\":%s',
+        '\\"description\\":%s',
+    ):
+        assert required_field in logger
 
 
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
@@ -4392,6 +4441,7 @@ _PARITY_CASES = [
     ("server_socket_source::test_diagnostics_use_attempt_transport_before_handshake_completion", _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion),
     ("server_socket_source::test_fallback_diagnostics_preserve_attempt_causality", _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality),
     ("server_socket_source::test_search_result_diagnostics_join_post_parse_state", _check_server_socket_source__search_result_diagnostics_join_post_parse_state),
+    ("server_socket_source::test_server_metadata_diagnostics_follow_state_application", _check_server_socket_source__server_metadata_diagnostics_follow_state_application),
     ("sha_hash_set_source::test_aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges", _check_sha_hash_set_source__aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges),
     ("shared_directory_rule_index_source::test_shared_directory_ops_owns_rule_index_and_key_helpers", _check_shared_directory_rule_index_source__shared_directory_ops_owns_rule_index_and_key_helpers),
     ("shared_directory_rule_index_source::test_preferences_tree_uses_shared_directory_rule_index", _check_shared_directory_rule_index_source__preferences_tree_uses_shared_directory_rule_index),
