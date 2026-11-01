@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from emule_test_harness import diag_event_runs
+from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -42,6 +43,7 @@ SERVER_SOURCE_FILE_HASH = "22334455667788990011aabbccddeeff"
 SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
 SERVER_SOURCE_FILE_SIZE = 67_890
 SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
+SERVER_SOURCE_PUBLISHER_HASH = "32547698badcfe1021436587a9cbed0f"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_DESCRIPTION = "seed metadata before server reply"
@@ -803,17 +805,114 @@ def _derived_server_source_coverage_ids(
         publisher.get("tcpPort"),
         "server source publisher TCP port",
     )
+    try:
+        publisher_host = str(ipaddress.IPv4Address(str(publisher_client.get("ip") or "")))
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("server source publisher has no canonical IPv4 identity") from exc
+    encoded_publisher_id = int.from_bytes(
+        ipaddress.IPv4Address(publisher_host).packed,
+        "little",
+    )
     if (
-        publisher_id >= ed2k_wire.LOW_ID_CEILING
+        publisher_id < ed2k_wire.LOW_ID_CEILING
+        or publisher_id != encoded_publisher_id
         or publisher_port > 0xFFFF
         or publisher.get("nickname") != SERVER_SOURCE_PUBLISHER_NICK
-        or publisher_login.get("id_kind") != "low-id"
+        or publisher_login.get("id_kind") != "high-id"
         or publisher_client.get("client_name") != SERVER_SOURCE_PUBLISHER_NICK
         or publisher_client.get("nick") != SERVER_SOURCE_PUBLISHER_NICK
-        or publisher_client.get("high_id") is not False
+        or publisher_client.get("high_id") is not True
         or publisher_client.get("shared_files") != 1
     ):
-        raise ValueError("server source publisher is not the canonical LowID fixture")
+        raise ValueError("server source publisher is not the canonical HighID fixture")
+
+    runtime = _object(
+        publisher.get("runtime"),
+        "server_source_fixture.publisher.runtime",
+    )
+    runtime_server = _object(
+        runtime.get("server"),
+        "server_source_fixture.publisher.runtime.server",
+    )
+    runtime_publisher = _object(
+        runtime.get("publisher"),
+        "server_source_fixture.publisher.runtime.publisher",
+    )
+    runtime_file = _object(
+        runtime.get("file"),
+        "server_source_fixture.publisher.runtime.file",
+    )
+    runtime_login = _object(
+        runtime.get("login"),
+        "server_source_fixture.publisher.runtime.login",
+    )
+    runtime_transcript = runtime.get("transcript")
+    if not isinstance(runtime_transcript, list):
+        raise ValueError("server source publisher runtime transcript is not a list")
+    login_payload = ed2k_wire.encode_login_request(
+        user_hash=bytes.fromhex(SERVER_SOURCE_PUBLISHER_HASH),
+        tcp_port=publisher_port,
+        nickname=SERVER_SOURCE_PUBLISHER_NICK,
+        server_flags=docker_ed2k_source_publisher.SERVER_FLAGS,
+    ).hex()
+    offer_payload = ed2k_wire.encode_offer_file(
+        file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
+        name=SERVER_SOURCE_FILE_NAME,
+        size=SERVER_SOURCE_FILE_SIZE,
+    ).hex()
+    exact_login_frames = [
+        row
+        for row in runtime_transcript
+        if isinstance(row, dict)
+        and row.get("direction") == "send"
+        and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
+        and row.get("opcode") == ed2k_wire.OP_LOGINREQUEST
+        and row.get("payloadHex") == login_payload
+    ]
+    exact_offer_frames = [
+        row
+        for row in runtime_transcript
+        if isinstance(row, dict)
+        and row.get("direction") == "send"
+        and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
+        and row.get("opcode") == ed2k_wire.OP_OFFERFILES
+        and row.get("payloadHex") == offer_payload
+    ]
+    runtime_network = _object(report.get("network"), "network")
+    runtime_ports = _object(runtime_network.get("ports"), "network.ports")
+    if (
+        runtime.get("schema") != docker_ed2k_source_publisher.RECEIPT_SCHEMA
+        or runtime.get("status") != "ready"
+        or not isinstance(runtime.get("runId"), str)
+        or not runtime.get("runId")
+        or runtime.get("publisherIp") != publisher_host
+        or runtime.get("expectedHighId") != publisher_id
+        or runtime_server
+        != {
+            "host": str(runtime_network.get("ed2k_server_address") or ""),
+            "port": runtime_ports.get("ed2k_tcp"),
+        }
+        or runtime_publisher
+        != {
+            "nickname": SERVER_SOURCE_PUBLISHER_NICK,
+            "tcpPort": publisher_port,
+            "userHash": SERVER_SOURCE_PUBLISHER_HASH.upper(),
+            "serverFlags": docker_ed2k_source_publisher.SERVER_FLAGS,
+        }
+        or runtime_file
+        != {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "name": SERVER_SOURCE_FILE_NAME,
+            "size": SERVER_SOURCE_FILE_SIZE,
+        }
+        or runtime_login != publisher_login
+        or not isinstance(runtime.get("identityProbeAnswers"), int)
+        or isinstance(runtime.get("identityProbeAnswers"), bool)
+        or runtime.get("identityProbeAnswers") < 0
+        or len(exact_login_frames) != 1
+        or len(exact_offer_frames) != 1
+    ):
+        raise ValueError("server source publisher runtime receipt is not canonical")
 
     publication = _object(
         fixture.get("publication"),
@@ -827,6 +926,18 @@ def _derived_server_source_coverage_ids(
         publication.get("search_source"),
         "server_source_fixture.publication.search_source",
     )
+    expected_source = {
+        "kind": "high-id",
+        "client_id": publisher_id,
+        "host": publisher_host,
+        "port": publisher_port,
+        "crypt_options": 0,
+        "user_hash": None,
+    }
+    publication_source_reply = _object(
+        publication.get("source_reply"),
+        "server_source_fixture.publication.source_reply",
+    )
     if (
         str(publication.get("hash") or "").casefold() != SERVER_SOURCE_FILE_HASH
         or publication.get("requested_size") != SERVER_SOURCE_FILE_SIZE
@@ -836,11 +947,18 @@ def _derived_server_source_coverage_ids(
         or publication.get("sources") != 1
         or publication.get("search_sources") != 1
         or publication.get("complete_sources") != 1
+        or publication.get("endpoints") != [expected_source]
         or publication_search_source
         != {
-            "kind": "low-id-search-reference",
+            "kind": "high-id-search-reference",
             "id": publisher_id,
             "port": publisher_port,
+        }
+        or publication_source_reply
+        != {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "source_count": 1,
+            "sources": [expected_source],
         }
         or str(publication_result.get("hash") or "").casefold()
         != SERVER_SOURCE_FILE_HASH
@@ -851,7 +969,7 @@ def _derived_server_source_coverage_ids(
         or publication_result.get("result_source_id") != publisher_id
         or publication_result.get("result_source_port") != publisher_port
     ):
-        raise ValueError("server source publication is not joined to the exact LowID publisher")
+        raise ValueError("server source publication is not joined to the exact HighID publisher")
 
     network = _object(report.get("network"), "network")
     ports = _object(network.get("ports"), "network.ports")
@@ -923,6 +1041,7 @@ def _derived_server_source_coverage_ids(
         expected_file_size=SERVER_SOURCE_FILE_SIZE,
         server_endpoint=f"{server_host}:{server_port}",
         publisher_client_id=publisher_id,
+        publisher_host=publisher_host,
         publisher_tcp_port=publisher_port,
         rust_records=records["rust"],
         mfc_records=records["mfc"],
@@ -1918,7 +2037,7 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             for client, wire in wires.items()
         }
         return (
-            "Rust and MFC each decoded the same singular LowID source and applied the exact "
+            "Rust and MFC each decoded the same singular HighID source and applied the exact "
             f"0-to-1 source-state transition at sequences "
             f"{replies['rust']['sequence']}->{applications['rust']['sequence']}/"
             f"{replies['mfc']['sequence']}->{applications['mfc']['sequence']}."

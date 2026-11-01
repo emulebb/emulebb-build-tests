@@ -28,6 +28,7 @@ from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import ed2k_wire  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
@@ -487,6 +488,7 @@ def collect_server_source_diagnostics(
     expected_file_size: int,
     server_endpoint: str,
     publisher_client_id: int,
+    publisher_host: str,
     publisher_tcp_port: int,
     transfer_rows: dict[str, dict[str, object]],
     rust_diagnostics_dir: Path,
@@ -514,6 +516,7 @@ def collect_server_source_diagnostics(
         expected_file_size=expected_file_size,
         server_endpoint=server_endpoint,
         publisher_client_id=publisher_client_id,
+        publisher_host=publisher_host,
         publisher_tcp_port=publisher_tcp_port,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
@@ -2307,7 +2310,9 @@ def main(argv: list[str] | None = None) -> int:
     client2_control_exe: Path | None = None
     client2_process_id: int | None = None
     server_search_publisher: ed2k_wire.Ed2kWireClient | None = None
-    server_source_publisher: ed2k_wire.Ed2kWireClient | None = None
+    server_source_publisher: (
+        docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
+    ) = None
     source_publisher_login: dict[str, object] | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     server_login_evidence: dict[str, object] | None = None
@@ -2501,31 +2506,51 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.transfer_scenario == SERVER_TCP_SOURCE:
             current_phase = "publish_server_source_fixture"
-            server_source_publisher = ed2k_wire.Ed2kWireClient(
-                server_address,
-                ports["ed2k_tcp"],
-                args.server_publish_timeout_seconds,
+            server_source_publisher = (
+                docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(
+                    server_host=server_address,
+                    server_port=ports["ed2k_tcp"],
+                    publisher_port=ports["source_publisher_tcp"],
+                    user_hash=SERVER_SOURCE_PUBLISHER_HASH,
+                    file_hash=SERVER_SOURCE_FILE_HASH,
+                    file_name=SERVER_SOURCE_FILE_NAME,
+                    file_size=SERVER_SOURCE_FILE_SIZE,
+                    run_dir=server_dir / "source-publisher",
+                    repo_root=REPO_ROOT,
+                    nickname=SERVER_SOURCE_PUBLISHER_NICK,
+                    wsl_distribution=(
+                        os.environ.get("EMULEBB_TEST_WSL_DISTRIBUTION", "").strip()
+                        or None
+                    ),
+                    readiness_timeout_seconds=args.server_publish_timeout_seconds,
+                )
             )
-            server_source_publisher.connect()
-            source_publisher_login = server_source_publisher.login(
-                user_hash=SERVER_SOURCE_PUBLISHER_HASH,
-                tcp_port=ports["source_publisher_tcp"],
-                nickname=SERVER_SOURCE_PUBLISHER_NICK,
+            source_publisher_login = dict(
+                server_source_publisher.receipt["login"]
             )
-            if source_publisher_login.get("id_kind") != "low-id":
+            if (
+                source_publisher_login.get("id_kind") != "high-id"
+                or source_publisher_login.get("assigned_id")
+                != docker_ed2k_source_publisher.PUBLISHER_HIGH_ID
+            ):
                 raise RuntimeError(
-                    "Deterministic server-source publisher must receive a server-assigned LowID: "
+                    "Deterministic server-source publisher must receive its exact HighID: "
                     f"{source_publisher_login!r}"
                 )
-            server_source_publisher.offer_file(
-                file_hash=SERVER_SOURCE_FILE_HASH,
-                name=SERVER_SOURCE_FILE_NAME,
-                size=SERVER_SOURCE_FILE_SIZE,
-            )
             source_publisher_client = server_control.wait_for_client(
                 SERVER_SOURCE_PUBLISHER_NICK,
                 args.server_publish_timeout_seconds,
             )
+            if (
+                source_publisher_client.get("high_id") is not True
+                or source_publisher_client.get("ip")
+                != docker_ed2k_source_publisher.PUBLISHER_IP
+                or source_publisher_client.get("shared_files") != 1
+            ):
+                raise RuntimeError(
+                    "Managed server did not observe the exact HighID source publisher: "
+                    f"{source_publisher_client!r}"
+                )
             source_publication = file_observer.wait_for_file(
                 SERVER_SOURCE_FILE_HASH.hex(),
                 SERVER_SOURCE_FILE_SIZE,
@@ -2555,6 +2580,7 @@ def main(argv: list[str] | None = None) -> int:
                     "tcpPort": ports["source_publisher_tcp"],
                     "login": source_publisher_login,
                     "client": source_publisher_client,
+                    "runtime": server_source_publisher.receipt,
                 },
                 "publication": source_publication,
             }
@@ -3274,6 +3300,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_file_size=SERVER_SOURCE_FILE_SIZE,
                 server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
                 publisher_client_id=publisher_client_id,
+                publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP,
                 publisher_tcp_port=ports["source_publisher_tcp"],
                 transfer_rows=source_transfer_rows,
                 rust_diagnostics_dir=rust_diagnostics_dir,
@@ -3461,7 +3488,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
         if server_source_publisher is not None:
             try:
-                server_source_publisher.close()
+                server_source_publisher.cleanup()
                 close_results["server_source_publisher"] = {"ok": True}
             except Exception as exc:
                 close_results["server_source_publisher"] = {

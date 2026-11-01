@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any, Iterable
 
 from emule_test_harness import ed2k_wire
@@ -200,6 +201,7 @@ def _reply_evidence(
     send_sequence: int | None,
     expected_hash: str,
     expected_client_id: int,
+    expected_host: str,
     expected_tcp_port: int,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
@@ -228,9 +230,9 @@ def _reply_evidence(
         decoded_rows.append((record, decoded))
 
     expected_source = {
-        "kind": "low-id",
+        "kind": "high-id",
         "client_id": expected_client_id,
-        "host": None,
+        "host": expected_host,
         "port": expected_tcp_port,
         "crypt_options": 0,
         "user_hash": None,
@@ -372,6 +374,7 @@ def build_server_source_diagnostic_evidence(
     expected_file_size: int,
     server_endpoint: str,
     publisher_client_id: int,
+    publisher_host: str,
     publisher_tcp_port: int,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
@@ -393,13 +396,18 @@ def build_server_source_diagnostic_evidence(
         raise ValueError("Plain GETSOURCES file size must be a positive u32 integer.")
     if not server_endpoint or ":" not in server_endpoint:
         raise ValueError("Source server endpoint must be host:port.")
+    try:
+        publisher_address = ipaddress.IPv4Address(publisher_host)
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("Publisher host must be one canonical IPv4 address.") from exc
+    expected_client_id = int.from_bytes(publisher_address.packed, "little")
     if (
         not isinstance(publisher_client_id, int)
         or isinstance(publisher_client_id, bool)
-        or publisher_client_id <= 0
-        or publisher_client_id >= ed2k_wire.LOW_ID_CEILING
+        or publisher_client_id < ed2k_wire.LOW_ID_CEILING
+        or publisher_client_id != expected_client_id
     ):
-        raise ValueError("Publisher client ID must be a positive LowID value.")
+        raise ValueError("Publisher client ID must be the HighID encoded by publisher_host.")
     if (
         not isinstance(publisher_tcp_port, int)
         or isinstance(publisher_tcp_port, bool)
@@ -435,6 +443,7 @@ def build_server_source_diagnostic_evidence(
             send_sequence=send_outcome.get("sequence"),
             expected_hash=normalized_hash,
             expected_client_id=publisher_client_id,
+            expected_host=str(publisher_address),
             expected_tcp_port=publisher_tcp_port,
         )
         application = _application_evidence(
@@ -496,9 +505,9 @@ def build_server_source_diagnostic_evidence(
             == mfc_source
             == [
                 {
-                    "kind": "low-id",
+                    "kind": "high-id",
                     "client_id": publisher_client_id,
-                    "host": None,
+                    "host": str(publisher_address),
                     "port": publisher_tcp_port,
                     "crypt_options": 0,
                     "user_hash": None,
@@ -537,8 +546,9 @@ def build_server_source_diagnostic_evidence(
             "sizeBytes": expected_file_size,
         },
         "expectedPublisher": {
-            "kind": "low-id",
+            "kind": "high-id",
             "clientId": publisher_client_id,
+            "host": str(publisher_address),
             "tcpPort": publisher_tcp_port,
         },
         "failures": failures,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 from pathlib import Path
 import struct
@@ -8,6 +9,7 @@ import struct
 import pytest
 
 from emule_test_harness import ed2k_wire
+from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
@@ -32,7 +34,12 @@ SERVER_SOURCE_FILE_HASH = "22334455667788990011aabbccddeeff"
 SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
 SERVER_SOURCE_FILE_SIZE = 67_890
 SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
-SERVER_SOURCE_PUBLISHER_ID = 7
+SERVER_SOURCE_PUBLISHER_HASH = bytes.fromhex("32547698BADCFE1021436587A9CBED0F")
+SERVER_SOURCE_PUBLISHER_HOST = "198.18.240.2"
+SERVER_SOURCE_PUBLISHER_ID = int.from_bytes(
+    ipaddress.IPv4Address(SERVER_SOURCE_PUBLISHER_HOST).packed,
+    "little",
+)
 SERVER_SOURCE_PUBLISHER_PORT = 48_017
 
 
@@ -768,6 +775,7 @@ def attach_server_source(
         expected_file_size=SERVER_SOURCE_FILE_SIZE,
         server_endpoint=endpoint,
         publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
+        publisher_host=SERVER_SOURCE_PUBLISHER_HOST,
         publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
         rust_records=records["rust"],
         mfc_records=records["mfc"],
@@ -776,9 +784,9 @@ def attach_server_source(
     evidence["captures"] = captures
 
     expected_source = {
-        "kind": "low-id",
+        "kind": "high-id",
         "client_id": SERVER_SOURCE_PUBLISHER_ID,
-        "host": None,
+        "host": SERVER_SOURCE_PUBLISHER_HOST,
         "port": SERVER_SOURCE_PUBLISHER_PORT,
         "crypt_options": 0,
         "user_hash": None,
@@ -801,13 +809,59 @@ def attach_server_source(
             "tcpPort": SERVER_SOURCE_PUBLISHER_PORT,
             "login": {
                 "assigned_id": SERVER_SOURCE_PUBLISHER_ID,
-                "id_kind": "low-id",
+                "id_kind": "high-id",
             },
             "client": {
                 "client_name": SERVER_SOURCE_PUBLISHER_NICK,
                 "nick": SERVER_SOURCE_PUBLISHER_NICK,
-                "high_id": False,
+                "high_id": True,
+                "ip": SERVER_SOURCE_PUBLISHER_HOST,
                 "shared_files": 1,
+            },
+            "runtime": {
+                "schema": docker_ed2k_source_publisher.RECEIPT_SCHEMA,
+                "status": "ready",
+                "runId": "source-publisher-run",
+                "publisherIp": SERVER_SOURCE_PUBLISHER_HOST,
+                "expectedHighId": SERVER_SOURCE_PUBLISHER_ID,
+                "server": {"host": "127.0.0.1", "port": 4661},
+                "publisher": {
+                    "nickname": SERVER_SOURCE_PUBLISHER_NICK,
+                    "tcpPort": SERVER_SOURCE_PUBLISHER_PORT,
+                    "userHash": SERVER_SOURCE_PUBLISHER_HASH.hex().upper(),
+                    "serverFlags": docker_ed2k_source_publisher.SERVER_FLAGS,
+                },
+                "file": {
+                    "hash": SERVER_SOURCE_FILE_HASH.upper(),
+                    "name": SERVER_SOURCE_FILE_NAME,
+                    "size": SERVER_SOURCE_FILE_SIZE,
+                },
+                "login": {
+                    "assigned_id": SERVER_SOURCE_PUBLISHER_ID,
+                    "id_kind": "high-id",
+                },
+                "identityProbeAnswers": 0,
+                "transcript": [
+                    ed2k_wire.Ed2kFrame(
+                        ed2k_wire.PROTO_EDONKEY,
+                        ed2k_wire.OP_LOGINREQUEST,
+                        ed2k_wire.encode_login_request(
+                            user_hash=SERVER_SOURCE_PUBLISHER_HASH,
+                            tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+                            nickname=SERVER_SOURCE_PUBLISHER_NICK,
+                            server_flags=docker_ed2k_source_publisher.SERVER_FLAGS,
+                        ),
+                    ).evidence("send"),
+                    ed2k_wire.Ed2kFrame(
+                        ed2k_wire.PROTO_EDONKEY,
+                        ed2k_wire.OP_OFFERFILES,
+                        ed2k_wire.encode_offer_file(
+                            file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
+                            name=SERVER_SOURCE_FILE_NAME,
+                            size=SERVER_SOURCE_FILE_SIZE,
+                        ),
+                    ).evidence("send"),
+                ],
             },
         },
         "publication": {
@@ -821,7 +875,7 @@ def attach_server_source(
             "complete_sources": 1,
             "endpoints": [expected_source],
             "search_source": {
-                "kind": "low-id-search-reference",
+                "kind": "high-id-search-reference",
                 "id": SERVER_SOURCE_PUBLISHER_ID,
                 "port": SERVER_SOURCE_PUBLISHER_PORT,
             },
@@ -1995,7 +2049,7 @@ def test_build_transfer_registration_accepts_exact_server_tcp_source(
         if row["coverageId"]
         in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     }
-    assert "singular LowID source" in reasons["server.reply.sources"]
+    assert "singular HighID source" in reasons["server.reply.sources"]
     assert "plaintext GETSOURCES" in reasons["server.source.tcp-plain"]
 
 
@@ -2151,7 +2205,32 @@ def test_build_transfer_registration_rejects_wrong_source_publisher_provenance(
         publisher[field] = value
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact LowID publisher"):
+    with pytest.raises(ValueError, match="(HighID|runtime receipt)"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize("mutation", ["identity", "login-frame", "offer-frame"])
+def test_build_transfer_registration_rejects_mutated_source_publisher_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    runtime = report["server_source_fixture"]["publisher"]["runtime"]
+    if mutation == "identity":
+        runtime["publisherIp"] = "198.18.240.3"
+    elif mutation == "login-frame":
+        runtime["transcript"][0]["payloadHex"] = "00"
+    else:
+        runtime["transcript"][1]["payloadHex"] = "00"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime receipt is not canonical"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

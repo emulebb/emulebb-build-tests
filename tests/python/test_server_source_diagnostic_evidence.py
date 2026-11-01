@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import struct
 
 import pytest
@@ -13,7 +14,8 @@ FILE_HASH = "22334455667788990011aabbccddeeff"
 FILE_NAME = "deterministic-server-source.bin"
 FILE_SIZE = 67_890
 ENDPOINT = "127.0.0.1:4661"
-PUBLISHER_CLIENT_ID = 7
+PUBLISHER_HOST = "198.18.240.2"
+PUBLISHER_CLIENT_ID = int.from_bytes(ipaddress.IPv4Address(PUBLISHER_HOST).packed, "little")
 PUBLISHER_TCP_PORT = 48_017
 
 
@@ -197,6 +199,7 @@ def build(
         expected_file_size=FILE_SIZE,
         server_endpoint=ENDPOINT,
         publisher_client_id=PUBLISHER_CLIENT_ID,
+        publisher_host=PUBLISHER_HOST,
         publisher_tcp_port=PUBLISHER_TCP_PORT,
         rust_records=client_records("rust", 101) if rust is None else rust,
         mfc_records=client_records("mfc", 202) if mfc is None else mfc,
@@ -221,9 +224,9 @@ def test_exact_bilateral_plaintext_source_lookup_is_claimable() -> None:
         "source_count": 1,
         "sources": [
             {
-                "kind": "low-id",
+                "kind": "high-id",
                 "client_id": PUBLISHER_CLIENT_ID,
-                "host": None,
+                "host": PUBLISHER_HOST,
                 "port": PUBLISHER_TCP_PORT,
                 "crypt_options": 0,
                 "user_hash": None,
@@ -353,10 +356,10 @@ def test_reply_must_follow_successful_send() -> None:
         found_sources_payload(file_hash="ff" * 16),
         found_sources_payload(client_id=PUBLISHER_CLIENT_ID + 1),
         found_sources_payload(tcp_port=PUBLISHER_TCP_PORT + 1),
-        bytes.fromhex(FILE_HASH) + b"\x01" + struct.pack("<IH", 0xC000020A, PUBLISHER_TCP_PORT),
+        bytes.fromhex(FILE_HASH) + b"\x01" + struct.pack("<IH", 7, PUBLISHER_TCP_PORT),
         found_sources_payload() + b"\x00",
     ],
-    ids=["hash", "client-id", "tcp-port", "high-id", "trailing-byte"],
+    ids=["hash", "client-id", "tcp-port", "low-id", "trailing-byte"],
 )
 def test_wrong_reply_hash_or_source_fails_closed(payload: bytes) -> None:
     records = client_records("rust", 101)
@@ -496,6 +499,35 @@ def test_invalid_plain_source_fixture_is_rejected() -> None:
             expected_file_size=0x1_0000_0000,
             server_endpoint=ENDPOINT,
             publisher_client_id=PUBLISHER_CLIENT_ID,
+            publisher_host=PUBLISHER_HOST,
+            publisher_tcp_port=PUBLISHER_TCP_PORT,
+            rust_records=[],
+            mfc_records=[],
+            transfer_rows={"rust": {}, "mfc": {}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("publisher_host", "publisher_client_id", "message"),
+    [
+        ("not-an-ip", PUBLISHER_CLIENT_ID, "canonical IPv4"),
+        (PUBLISHER_HOST, PUBLISHER_CLIENT_ID + 1, "HighID encoded"),
+        (PUBLISHER_HOST, 7, "HighID encoded"),
+    ],
+)
+def test_publisher_identity_must_be_one_exact_high_id(
+    publisher_host: str,
+    publisher_client_id: int,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        evidence.build_server_source_diagnostic_evidence(
+            expected_file_hash=FILE_HASH,
+            expected_file_name=FILE_NAME,
+            expected_file_size=FILE_SIZE,
+            server_endpoint=ENDPOINT,
+            publisher_client_id=publisher_client_id,
+            publisher_host=publisher_host,
             publisher_tcp_port=PUBLISHER_TCP_PORT,
             rust_records=[],
             mfc_records=[],

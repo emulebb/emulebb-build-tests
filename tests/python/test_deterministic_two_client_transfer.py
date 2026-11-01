@@ -1235,14 +1235,16 @@ def test_server_keyword_search_is_bilateral_and_uses_a_neutral_fixture() -> None
     assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
 
 
-def test_server_tcp_source_uses_neutral_low_id_fixture_and_causal_bilateral_gate() -> None:
+def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_gate() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert module.SERVER_SOURCE_FILE_NAME != "deterministicserversource-transfer.bin"
     assert "include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE" in script_text
-    assert "server_source_publisher.offer_file(" in script_text
-    assert 'source_publisher_login.get("id_kind") != "low-id"' in script_text
+    assert "docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(" in script_text
+    assert 'source_publisher_login.get("id_kind") != "high-id"' in script_text
+    assert "!= docker_ed2k_source_publisher.PUBLISHER_HIGH_ID" in script_text
+    assert "publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP" in script_text
     assert '"mode": "plain-ed2k-link-without-source-hints"' in script_text
     assert script_text.count("wait_for_transfer_sources(") == 3
     assert "collect_server_source_diagnostics(" in script_text
