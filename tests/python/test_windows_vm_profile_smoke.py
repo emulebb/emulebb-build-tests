@@ -40,7 +40,7 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "--harness-root",
             "C:/tmp/harness",
             "--client2-app-exe",
-            "C:/tmp/harness/tools/tracing-harness/emule.exe",
+            "C:/tmp/harness/tools/mfc-oracle/emulebb.exe",
             "--prowlarr-exe",
             "C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe",
             "--radarr-exe",
@@ -57,7 +57,7 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert args.swarm_tier == 2
     assert str(args.harness_root).replace("\\", "/").endswith("C:/tmp/harness")
     assert not hasattr(args, "ed2k_server_exe")
-    assert str(args.client2_app_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/tracing-harness/emule.exe")
+    assert str(args.client2_app_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/mfc-oracle/emulebb.exe")
     assert str(args.prowlarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe")
     assert str(args.radarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/radarr/Radarr/Radarr.exe")
     assert str(args.sonarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/sonarr/Sonarr/Sonarr.exe")
@@ -163,7 +163,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     app_root = tmp_path / "expanded" / "eMuleBB"
     app_root.mkdir(parents=True)
     (app_root / "emulebb.exe").write_text("", encoding="utf-8")
-    client2_app_exe = tmp_path / "harness" / "tools" / "tracing-harness" / "emule.exe"
+    client2_app_exe = tmp_path / "harness" / "tools" / "mfc-oracle" / "emulebb.exe"
     for path in (client2_app_exe,):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
@@ -240,7 +240,7 @@ def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) 
     app_root = tmp_path / "expanded" / "eMuleBB"
     app_root.mkdir(parents=True)
     (app_root / "emulebb.exe").write_text("", encoding="utf-8")
-    client2_app_exe = tmp_path / "harness" / "tools" / "tracing-harness" / "emule.exe"
+    client2_app_exe = tmp_path / "harness" / "tools" / "mfc-oracle" / "emulebb.exe"
     for path in (client2_app_exe,):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")

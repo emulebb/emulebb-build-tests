@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 WORKSPACE_NAME = "workspace"
-DEFAULT_APP_VARIANTS = ("community", "main", "tracing-harness")
+DEFAULT_APP_VARIANTS = ("community", "main")
 
 
 @dataclass(frozen=True)

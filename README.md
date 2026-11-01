@@ -200,11 +200,10 @@ External parity references in the multi-client matrix:
 Workspace quick reference:
 
 - default canonical workspace: `EMULEBB_WORKSPACE_ROOT\workspaces\workspace`
-- canonical target app paths are `app\emulebb-main`, `app\emulebb-community-baseline`, and `app\emulebb-community-tracing-harness`
+- canonical target app paths are `app\emulebb-main` and `app\emulebb-community-baseline`
 - workspace orchestration commands use variant keys, not folder names:
   `main` maps to `app\emulebb-main`, `community` maps to
-  `app\emulebb-community-baseline`, and `tracing-harness` maps to
-  `app\emulebb-community-tracing-harness`
+  `app\emulebb-community-baseline`
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
@@ -229,9 +228,8 @@ Harness output roots:
 
 The default seam-enabled baseline for 0.72a comparisons is materialized as
 `app\emulebb-community-baseline`. It is test-only and should stay
-behavior-preserving during normal app execution. The tracing-harness workspace
-is reserved for explicit variant-client parity work and is not the default
-regression baseline.
+behavior-preserving during normal app execution. The MFC diagnostics oracle is
+the current `app\emulebb-main` build; there is no separate tracing worktree.
 
 Standalone probe mode:
 

@@ -636,7 +636,7 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
         configuration="Release",
         artifacts_dir=tmp_path / "artifacts",
         ed2k_server_exe=tmp_path / "tools" / "ed2k-server",
-        client2_app_exe=tmp_path / "tools" / "tracing-harness" / "emule.exe",
+        client2_app_exe=tmp_path / "tools" / "mfc-oracle" / "emulebb.exe",
         p2p_bind_interface_name="hide.me",
         admin_volume_fixtures=True,
         vhd_size_mb=384,
@@ -647,7 +647,7 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert "--admin-volume-fixtures" in radarr_local_command
     assert option_values(radarr_local_command, "--mount-root") == [str(mount_root.resolve())]
     assert option_values(radarr_local_command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "ed2k-server").resolve())]
-    assert option_values(radarr_local_command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
+    assert option_values(radarr_local_command, "--client2-app-exe") == [str((tmp_path / "tools" / "mfc-oracle" / "emulebb.exe").resolve())]
     assert option_values(radarr_local_command, "--p2p-bind-interface-name") == []
     sonarr_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("sonarr-emulebb"),
@@ -1272,7 +1272,7 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
             "--ed2k-server-exe",
             str(tmp_path / "tools" / "ed2k-server"),
             "--client2-app-exe",
-            str(tmp_path / "tools" / "tracing-harness" / "emule.exe"),
+            str(tmp_path / "tools" / "mfc-oracle" / "emulebb.exe"),
             "--godzilla-stage",
             "launch-scale",
             "--godzilla-total-client-count",
@@ -1288,11 +1288,11 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
     assert summary["suites"][0]["status"] == "planned"
     assert script_name(command) == "godzilla-local-swarm.py"
     assert option_values(command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "ed2k-server").resolve())]
-    assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
+    assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "mfc-oracle" / "emulebb.exe").resolve())]
     assert option_values(command, "--stage") == ["launch-scale"]
     assert option_values(command, "--total-client-count") == ["4"]
     assert summary["local_dependency_overrides"]["ed2k_server_exe"] == str(tmp_path / "tools" / "ed2k-server")
-    assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "tracing-harness" / "emule.exe")
+    assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "mfc-oracle" / "emulebb.exe")
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:

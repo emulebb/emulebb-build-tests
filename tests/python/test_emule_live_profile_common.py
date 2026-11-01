@@ -162,15 +162,6 @@ def test_main_window_detection_accepts_runtime_speed_prefix(monkeypatch) -> None
     assert module.is_main_emule_window(1001)
 
 
-def test_main_window_detection_accepts_tracing_harness_title(monkeypatch) -> None:
-    module = load_live_common_module()
-
-    monkeypatch.setattr(module.win32gui, "GetClassName", lambda hwnd: "#32770")
-    monkeypatch.setattr(module.win32gui, "GetWindowText", lambda hwnd: "eMule harness v0.72a x64")
-
-    assert module.is_main_emule_window(1002)
-
-
 def test_main_window_detection_rejects_generic_startup_dialog(monkeypatch) -> None:
     module = load_live_common_module()
 
