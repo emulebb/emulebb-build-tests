@@ -40,7 +40,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
 
 
-def test_catalog_report_derives_missing_per_id_evidence_without_false_group_coverage() -> None:
+def test_catalog_report_records_partial_per_id_evidence_without_false_group_coverage() -> None:
     manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     validation = validate_protocol_catalog(manifest_path)
@@ -50,7 +50,7 @@ def test_catalog_report_derives_missing_per_id_evidence_without_false_group_cove
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 0,
-        "coveredIdCount": 0,
+        "coveredIdCount": 2,
         "groupVerdictCounts": {
             "parity": 0,
             "divergence": 0,
@@ -59,9 +59,9 @@ def test_catalog_report_derives_missing_per_id_evidence_without_false_group_cove
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 0,
+            "parity": 2,
             "divergence": 0,
-            "evidence-incomplete": 97,
+            "evidence-incomplete": 95,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -89,6 +89,14 @@ def test_catalog_report_derives_missing_per_id_evidence_without_false_group_cove
         group for group in payload["coverageGroups"] if group["groupId"] == "server-query-reply"
     )
     assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
+    assert [row["coverageId"] for row in payload["coverageEvidence"]] == [
+        "queue.admission",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][0]["coverageIds"] == [
+        "queue.admission",
+        "transfer.block.uncompressed",
+    ]
 
 
 def test_catalog_report_keeps_partially_proven_group_incomplete() -> None:

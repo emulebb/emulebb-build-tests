@@ -259,7 +259,22 @@
       "intentional-difference"
     ]
   },
-  "coverageEvidence": [],
+  "coverageEvidence": [
+    {
+      "coverageId": "queue.admission",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "MFC recorded 58 exact-hash upload admissions in the causally ordered completed transfer.",
+      "receiptIds": ["rust-mfc-transfer-20261101t183823z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "transfer.block.uncompressed",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "All 1024 uncompressed payload frames matched exactly before manifest-backed completion.",
+      "receiptIds": ["rust-mfc-transfer-20261101t183823z"],
+      "verdict": "parity"
+    }
+  ],
   "coverageGroups": [
     {
       "coverageIds": [
@@ -1053,7 +1068,30 @@
     }
   ],
   "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
-  "evidenceReceipts": [],
+  "evidenceReceipts": [
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T183823Z-emulebb-main-release-15004/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "4d26bd2319ec9eafaee3d84c2800e609a1f6765a2fc05b0139ac9ee5db8ab91a",
+      "coverageIds": ["queue.admission", "transfer.block.uncompressed"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t183823z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "4417566425047daaf8968adfae6db9eded056f97",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    }
+  ],
   "records": [
     {
       "direction": "send",
