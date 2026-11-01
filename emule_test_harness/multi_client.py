@@ -247,28 +247,30 @@ def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
     )
 
 
-def resolve_mfc_oracle_client(workspace_root: Path, configuration: str, override: str | None = None) -> ClientAvailability:
+def resolve_mfc_oracle_client(
+    workspace_root: Path,
+    configuration: str,
+    override: str | None = None,
+    output_root: Path | None = None,
+) -> ClientAvailability:
     """Resolves the maintained MFC diagnostics-oracle executable."""
 
     identity = CLIENT_IDENTITIES["mfc_oracle"]
+    base_dir = (
+        output_root.resolve() if output_root is not None else get_workspace_output_root()
+    ) / "builds" / "app" / "main" / "x64" / configuration / "standard" / "bin"
     if override:
         executable = first_existing_file([Path(override)])
+        expected_location = Path(override).resolve()
     else:
-        base_dir = (
-            workspace_root
-            / "app"
-            / "emulebb-main"
-            / "srchybrid"
-            / "x64"
-            / configuration
-        )
-        executable = first_existing_file([base_dir / "emulebb.exe", base_dir / "emule.exe"])
+        executable = first_existing_file([base_dir / "emulebb.exe"])
+        expected_location = base_dir
     reason = "available" if executable is not None else "missing eMuleBB main executable"
     return ClientAvailability(
         identity=identity,
         available=executable is not None,
         executable=executable,
-        reason=reason if executable is not None else f"{reason} under {workspace_root / 'app' / 'emulebb-main'}",
+        reason=reason if executable is not None else f"{reason} under {expected_location}",
         launch_adapter="emulebb-main-rest-profile",
         deterministic_transfer_adapter=True,
     )

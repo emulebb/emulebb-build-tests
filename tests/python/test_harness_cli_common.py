@@ -232,8 +232,20 @@ def test_prepare_run_paths_defaults_to_output_roots(monkeypatch, tmp_path: Path)
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main"
-    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    output_root = tmp_path.parent / f"{tmp_path.name}-emulebb-output"
+    app_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "standard"
+        / "bin"
+        / "emulebb.exe"
+    )
     seed_dir.mkdir(parents=True)
+    app_root.mkdir(parents=True)
     app_exe.parent.mkdir(parents=True)
     app_exe.write_text("exe", encoding="utf-8")
 
@@ -244,7 +256,6 @@ def test_prepare_run_paths_defaults_to_output_roots(monkeypatch, tmp_path: Path)
     monkeypatch.setenv("TMP", r"C:\not-the-workspace-temp")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\not-the-workspace-localappdata")
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
-    output_root = tmp_path.parent / "emulebb-output"
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
     paths = module.prepare_run_paths(
@@ -274,15 +285,28 @@ def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, 
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main"
-    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    output_root = tmp_path.parent / f"{tmp_path.name}-emulebb-output"
+    app_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "standard"
+        / "bin"
+        / "emulebb.exe"
+    )
     local_temp = tmp_path / "Users" / "tester" / "AppData" / "Local" / "Temp"
     seed_dir.mkdir(parents=True)
+    app_root.mkdir(parents=True)
     app_exe.parent.mkdir(parents=True)
     app_exe.write_text("exe", encoding="utf-8")
     local_temp.mkdir(parents=True)
 
     monkeypatch.setenv("LOCALAPPDATA", str(local_temp.parent))
     monkeypatch.setenv("TEMP", str(local_temp))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     monkeypatch.setattr(module, "configure_local_dumps", lambda **_kwargs: {"enabled": False})
 
     with pytest.raises(RuntimeError, match="not Windows temp"):

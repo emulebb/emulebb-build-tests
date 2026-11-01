@@ -50,13 +50,17 @@ def test_workspace_parent_root_honors_env_override(tmp_path: Path, monkeypatch) 
 
 def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
+    output_root = tmp_path / "output"
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))
-    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     workspace = root / "workspaces" / "workspace"
     app_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    oracle_exe = output_root / "builds" / "app" / "main" / "x64" / "Release" / "standard" / "bin" / "emulebb.exe"
     app_exe.parent.mkdir(parents=True)
+    oracle_exe.parent.mkdir(parents=True)
     write_workspace_manifest(workspace, root)
     app_exe.write_bytes(b"")
+    oracle_exe.write_bytes(b"")
 
     inventory = multi_client.resolve_windows_client_inventory(
         workspace_root=workspace,
@@ -80,19 +84,22 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["amule"].launch_adapter == "amule-ec"
 
 
-def test_resolve_mfc_oracle_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
+def test_resolve_mfc_oracle_client_uses_canonical_external_build(tmp_path: Path) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
-    oracle_dir = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release"
+    output_root = tmp_path / "output"
+    oracle_dir = output_root / "builds" / "app" / "main" / "x64" / "Release" / "standard" / "bin"
     oracle_dir.mkdir(parents=True)
-    renamed_exe = oracle_dir / "emulebb.exe"
-    legacy_exe = oracle_dir / "emule.exe"
+    oracle_exe = oracle_dir / "emulebb.exe"
 
-    renamed_exe.write_bytes(b"")
-    assert multi_client.resolve_mfc_oracle_client(workspace, "Release").executable == renamed_exe.resolve()
-
-    renamed_exe.unlink()
-    legacy_exe.write_bytes(b"")
-    assert multi_client.resolve_mfc_oracle_client(workspace, "Release").executable == legacy_exe.resolve()
+    oracle_exe.write_bytes(b"")
+    assert (
+        multi_client.resolve_mfc_oracle_client(
+            workspace,
+            "Release",
+            output_root=output_root,
+        ).executable
+        == oracle_exe.resolve()
+    )
 
 
 def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, monkeypatch) -> None:
