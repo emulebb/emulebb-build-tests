@@ -106,3 +106,18 @@ def test_expected_peer_transport_mode_is_derived_from_case() -> None:
     assert ed2k_protocol_cases.client_connect_options(plain) == 0
     assert ed2k_protocol_cases.client_connect_options(obfuscated) == 0x03
     assert ed2k_protocol_cases.client_connect_options(required) == 0x07
+
+
+def test_required_server_transport_mode_rejects_fallback_case() -> None:
+    plain = ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    required = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
+    preferred = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred"]
+
+    assert ed2k_protocol_cases.required_server_transport_mode(plain) == "plaintext"
+    assert ed2k_protocol_cases.required_server_transport_mode(required) == "obfuscated"
+    try:
+        ed2k_protocol_cases.required_server_transport_mode(preferred)
+    except ValueError as exc:
+        assert "does not force one server transport mode" in str(exc)
+    else:
+        raise AssertionError("preferred transport must not be treated as deterministic")

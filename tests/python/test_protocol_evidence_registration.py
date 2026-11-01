@@ -12,7 +12,7 @@ from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCH
 FILE_HASH = "00112233445566778899aabbccddeeff"
 
 
-def bilateral_login_evidence() -> dict[str, object]:
+def bilateral_login_evidence(transport_mode: str = "plaintext") -> dict[str, object]:
     clients = {
         "rust": {
             "ok": True,
@@ -25,6 +25,12 @@ def bilateral_login_evidence() -> dict[str, object]:
             "decodedIdChange": {"id_kind": "low-id"},
             "extensionTags": {"offerfiles_v": 1},
             "semanticShape": True,
+            "transportExact": True,
+            "transportObservation": {
+                "login": transport_mode,
+                "idChange": transport_mode,
+                "accepted": transport_mode,
+            },
         },
         "mfc": {
             "ok": True,
@@ -37,12 +43,19 @@ def bilateral_login_evidence() -> dict[str, object]:
             "decodedIdChange": {"id_kind": "low-id"},
             "extensionTags": {},
             "semanticShape": True,
+            "transportExact": True,
+            "transportObservation": {
+                "login": transport_mode,
+                "idChange": transport_mode,
+                "accepted": transport_mode,
+            },
         },
     }
     return {
-        "schema": "emulebb-build-tests.deterministic-server-login-diagnostics.v1",
+        "schema": "emulebb-build-tests.deterministic-server-login-diagnostics",
         "ok": True,
         "serverEndpoint": "127.0.0.1:4661",
+        "expectedTransportMode": transport_mode,
         "expectedClients": {
             "rust": {"nickname": "rust-test", "tcpPort": 4662},
             "mfc": {"nickname": "mfc-test", "tcpPort": 4663},
@@ -55,6 +68,7 @@ def bilateral_login_evidence() -> dict[str, object]:
             "serverFlagsEqual": True,
             "udpPortsTagEqual": True,
             "idKindEqual": True,
+            "transportModeExact": True,
             "ok": True,
         },
         "captures": {
@@ -62,9 +76,23 @@ def bilateral_login_evidence() -> dict[str, object]:
             "mfc": {"processId": 202, "selectedSegments": ["mfc.jsonl"]},
         },
         "coverageClaims": {
-            "eligibleCoverageIds": ["server.login.request"],
+            "eligibleCoverageIds": [
+                f"server.connect.{transport_mode}",
+                "server.login.request",
+            ],
             "evidenceLayers": list(EVIDENCE_LAYERS),
         },
+    }
+
+
+def forced_server_protocol_case(transport_mode: str) -> dict[str, object]:
+    obfuscated = transport_mode == "obfuscated"
+    return {
+        "name": "obfuscated-required" if obfuscated else "plain-server-plain-clients",
+        "server_protocol_obfuscation": obfuscated,
+        "client_crypt_supported": obfuscated,
+        "client_crypt_requested": obfuscated,
+        "client_crypt_required": obfuscated,
     }
 
 
@@ -273,10 +301,14 @@ def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_pat
     assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
 
 
-def test_build_transfer_registration_accepts_bilateral_server_login(tmp_path: Path) -> None:
+@pytest.mark.parametrize("transport_mode", ["plaintext", "obfuscated"])
+def test_build_transfer_registration_accepts_bilateral_server_login(
+    tmp_path: Path, transport_mode: str
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
-    login = bilateral_login_evidence()
+    login = bilateral_login_evidence(transport_mode)
     report["transfer_scenario"] = "server-login-request"
+    report["protocol_case"] = forced_server_protocol_case(transport_mode)
     report["network"] = {
         "ed2k_server_address": "127.0.0.1",
         "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
@@ -285,8 +317,8 @@ def test_build_transfer_registration_accepts_bilateral_server_login(tmp_path: Pa
     report["profiles"]["mfc"]["nick"] = "mfc-test"
     report["checks"]["client_server_login_diagnostics"] = login
     report["diagnostics"]["serverLogin"] = login
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
-        "server.login.request"
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        login["coverageClaims"]["eligibleCoverageIds"]
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -297,6 +329,7 @@ def test_build_transfer_registration_accepts_bilateral_server_login(tmp_path: Pa
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+        f"server.connect.{transport_mode}",
         "server.login.request",
         "transfer.block.uncompressed",
     ]
@@ -307,6 +340,7 @@ def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Pa
     login = bilateral_login_evidence()
     login["clients"]["mfc"]["ok"] = False
     report["transfer_scenario"] = "server-login-request"
+    report["protocol_case"] = forced_server_protocol_case("plaintext")
     report["network"] = {
         "ed2k_server_address": "127.0.0.1",
         "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
@@ -315,8 +349,8 @@ def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Pa
     report["profiles"]["mfc"]["nick"] = "mfc-test"
     report["checks"]["client_server_login_diagnostics"] = login
     report["diagnostics"]["serverLogin"] = login
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
-        "server.login.request"
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        login["coverageClaims"]["eligibleCoverageIds"]
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     report_path.write_text(json.dumps(report), encoding="utf-8")

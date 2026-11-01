@@ -186,9 +186,9 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.transfer_scenario == SERVER_LOGIN_REQUEST:
         if args.client2_identity != "mfc_oracle":
             raise ValueError("Server login proof requires the MFC diagnostics oracle.")
-        if args.protocol_case != "plain-server-plain-clients":
+        if args.protocol_case not in {"plain-server-plain-clients", "obfuscated-required"}:
             raise ValueError(
-                "Server login proof uses the single canonical plain-server-plain-clients case."
+                "Server login proof requires plain-server-plain-clients or obfuscated-required."
             )
 
 
@@ -293,6 +293,7 @@ def collect_server_login_diagnostics(
     rust_tcp_port: int,
     mfc_nickname: str,
     mfc_tcp_port: int,
+    expected_transport_mode: str,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -318,6 +319,7 @@ def collect_server_login_diagnostics(
         rust_tcp_port=rust_tcp_port,
         mfc_nickname=mfc_nickname,
         mfc_tcp_port=mfc_tcp_port,
+        expected_transport_mode=expected_transport_mode,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
     )
@@ -2336,6 +2338,9 @@ def main(argv: list[str] | None = None) -> int:
                 rust_tcp_port=ports["client1_tcp"],
                 mfc_nickname=client2_identity.nick,
                 mfc_tcp_port=ports["client2_tcp"],
+                expected_transport_mode=ed2k_protocol_cases.required_server_transport_mode(
+                    protocol_case
+                ),
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),

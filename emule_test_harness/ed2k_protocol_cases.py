@@ -110,6 +110,16 @@ def expected_peer_transport_mode(case: ProtocolCase) -> str:
     return "obfuscated" if case.client_crypt_supported else "plaintext"
 
 
+def required_server_transport_mode(case: ProtocolCase) -> str:
+    """Returns the server transport forced by a non-fallback protocol case."""
+
+    if not case.server_protocol_obfuscation and not case.client_crypt_supported:
+        return "plaintext"
+    if case.server_protocol_obfuscation and case.client_crypt_required:
+        return "obfuscated"
+    raise ValueError(f"Protocol case {case.name!r} does not force one server transport mode.")
+
+
 def expected_payload_encoding(case: ProtocolCase) -> str:
     """Returns the exact payload opcode family required for one fixture."""
 

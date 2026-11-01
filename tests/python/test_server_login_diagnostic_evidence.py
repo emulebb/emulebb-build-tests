@@ -113,10 +113,9 @@ def packet(
     )
 
 
-def canonical_records(client: str) -> list[dict[str, object]]:
+def canonical_records(client: str, transport: str = "plaintext") -> list[dict[str, object]]:
     nickname = RUST_NICKNAME if client == "rust" else MFC_NICKNAME
     tcp_port = RUST_PORT if client == "rust" else MFC_PORT
-    transport = "obfuscated" if client == "rust" else "plaintext"
     login = packet(
         client,
         2,
@@ -181,6 +180,7 @@ def canonical_records(client: str) -> list[dict[str, object]]:
 
 def build(
     *,
+    expected_transport_mode: str = "plaintext",
     rust_records: list[dict[str, object]] | None = None,
     mfc_records: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -190,18 +190,23 @@ def build(
         rust_tcp_port=RUST_PORT,
         mfc_nickname=MFC_NICKNAME,
         mfc_tcp_port=MFC_PORT,
-        rust_records=canonical_records("rust") if rust_records is None else rust_records,
-        mfc_records=canonical_records("mfc") if mfc_records is None else mfc_records,
+        expected_transport_mode=expected_transport_mode,
+        rust_records=(
+            canonical_records("rust", expected_transport_mode) if rust_records is None else rust_records
+        ),
+        mfc_records=(
+            canonical_records("mfc", expected_transport_mode) if mfc_records is None else mfc_records
+        ),
     )
 
 
-def test_bilateral_stock_core_login_is_claimable() -> None:
+def test_bilateral_plaintext_stock_core_login_and_connection_are_claimable() -> None:
     report = build()
 
     assert report["ok"] is True
     assert report["clients"]["rust"]["extensionTags"] == {"offerfiles_v": 1}
     assert report["clients"]["mfc"]["extensionTags"] == {}
-    assert report["clients"]["rust"]["transportObservation"]["login"] == "obfuscated"
+    assert report["clients"]["rust"]["transportObservation"]["login"] == "plaintext"
     assert report["clients"]["mfc"]["transportObservation"]["login"] == "plaintext"
     assert report["comparison"] == {
         "bothAccepted": True,
@@ -209,13 +214,39 @@ def test_bilateral_stock_core_login_is_claimable() -> None:
         "serverFlagsEqual": True,
         "udpPortsTagEqual": True,
         "idKindEqual": True,
+        "transportModeExact": True,
         "ok": True,
     }
     assert report["coverageClaims"] == {
-        "eligibleCoverageIds": ["server.login.request"],
+        "eligibleCoverageIds": ["server.connect.plaintext", "server.login.request"],
         "evidenceLayers": list(evidence.EVIDENCE_LAYERS),
     }
     evidence.require_server_login_diagnostic_evidence(report)
+
+
+def test_bilateral_required_obfuscated_login_and_connection_are_claimable() -> None:
+    report = build(expected_transport_mode="obfuscated")
+
+    assert report["ok"] is True
+    assert report["expectedTransportMode"] == "obfuscated"
+    assert report["clients"]["rust"]["transportExact"] is True
+    assert report["clients"]["mfc"]["transportExact"] is True
+    assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "server.connect.obfuscated",
+        "server.login.request",
+    ]
+
+
+def test_mixed_transport_observations_are_evidence_incomplete() -> None:
+    report = build(
+        expected_transport_mode="obfuscated",
+        rust_records=canonical_records("rust", "obfuscated"),
+        mfc_records=canonical_records("mfc", "plaintext"),
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["mfc"]["transportExact"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
 def test_missing_mfc_login_is_evidence_incomplete() -> None:
@@ -312,6 +343,7 @@ def test_expected_profile_identity_must_match_wire() -> None:
         rust_tcp_port=RUST_PORT,
         mfc_nickname=MFC_NICKNAME,
         mfc_tcp_port=MFC_PORT,
+        expected_transport_mode="plaintext",
         rust_records=canonical_records("rust"),
         mfc_records=canonical_records("mfc"),
     )

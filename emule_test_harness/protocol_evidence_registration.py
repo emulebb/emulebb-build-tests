@@ -260,8 +260,40 @@ def _derived_server_login_coverage_ids(
         raise ValueError("server login evidence requires the server-login-request scenario")
     login = _object(login_value, "diagnostics.serverLogin")
     server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(login)
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    case_name = protocol_case.get("name")
+    if case_name == "plain-server-plain-clients":
+        expected_transport_mode = "plaintext"
+        expected_case_flags = {
+            "server_protocol_obfuscation": False,
+            "client_crypt_supported": False,
+            "client_crypt_requested": False,
+            "client_crypt_required": False,
+        }
+    elif case_name == "obfuscated-required":
+        expected_transport_mode = "obfuscated"
+        expected_case_flags = {
+            "server_protocol_obfuscation": True,
+            "client_crypt_supported": True,
+            "client_crypt_requested": True,
+            "client_crypt_required": True,
+        }
+    else:
+        raise ValueError("server login evidence requires one forced transport protocol case")
+    if any(protocol_case.get(name) is not value for name, value in expected_case_flags.items()):
+        raise ValueError("server login protocol case flags do not match its named transport case")
+    if login.get("expectedTransportMode") != expected_transport_mode:
+        raise ValueError("server login expected transport does not match the protocol case")
+
     claims = _object(login.get("coverageClaims"), "diagnostics.serverLogin.coverageClaims")
-    expected_ids = ["server.login.request"]
+    expected_ids = sorted(
+        [
+            "server.login.request",
+            server_login_diagnostic_evidence.CONNECTION_COVERAGE_ID_BY_TRANSPORT[
+                expected_transport_mode
+            ],
+        ]
+    )
     if claims.get("eligibleCoverageIds") != expected_ids:
         raise ValueError("server login diagnostic claims are not exact")
     if claims.get("evidenceLayers") != list(server_login_diagnostic_evidence.EVIDENCE_LAYERS):
@@ -298,11 +330,18 @@ def _derived_server_login_coverage_ids(
             or row.get("packetCount") != 1
             or row.get("sendSucceeded") is not True
             or row.get("semanticShape") is not True
+            or row.get("transportExact") is not True
             or decoded_login.get("client_id") != 0
             or decoded_id.get("id_kind") != "low-id"
             or not login_sequence < id_change_sequence < accepted_sequence
         ):
             raise ValueError(f"{client} server login evidence is not singular and causal")
+        if row.get("transportObservation") != {
+            "login": expected_transport_mode,
+            "idChange": expected_transport_mode,
+            "accepted": expected_transport_mode,
+        }:
+            raise ValueError(f"{client} server login transport observations are not exact")
     if clients["rust"].get("extensionTags") != {"offerfiles_v": 1}:
         raise ValueError("Rust server login has unexpected extension tags")
     if clients["mfc"].get("extensionTags") != {}:
@@ -315,6 +354,7 @@ def _derived_server_login_coverage_ids(
         "serverFlagsEqual",
         "udpPortsTagEqual",
         "idKindEqual",
+        "transportModeExact",
         "ok",
     }
     if set(comparison) != required_comparisons or any(
@@ -358,6 +398,15 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id in {"server.connect.plaintext", "server.connect.obfuscated"}:
+        login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
+        clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
+        mode = login.get("expectedTransportMode")
+        return (
+            f"Rust and MFC each recorded {mode} transport on login, ID-change, and "
+            f"accepted-session transitions at sequences "
+            f"{clients['rust']['loginSequence']}/{clients['mfc']['loginSequence']}."
+        )
     if coverage_id == "server.login.request":
         login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
         clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")

@@ -6,8 +6,12 @@ from typing import Any, Iterable
 
 from emule_test_harness import ed2k_wire
 
-SCHEMA = "emulebb-build-tests.deterministic-server-login-diagnostics.v1"
+SCHEMA = "emulebb-build-tests.deterministic-server-login-diagnostics"
 EVIDENCE_LAYERS = ("codec-transcript", "deterministic-state-machine", "local-cross-client")
+CONNECTION_COVERAGE_ID_BY_TRANSPORT = {
+    "obfuscated": "server.connect.obfuscated",
+    "plaintext": "server.connect.plaintext",
+}
 SERVER_PROTOCOL_MARKER = ed2k_wire.PROTO_EDONKEY
 LOGIN_OPCODE = ed2k_wire.OP_LOGINREQUEST
 ID_CHANGE_OPCODE = ed2k_wire.OP_IDCHANGE
@@ -146,6 +150,7 @@ def _client_evidence(
     endpoint: str,
     expected_nickname: str,
     expected_tcp_port: int,
+    expected_transport_mode: str,
 ) -> dict[str, Any]:
     login_packets = [
         record
@@ -224,6 +229,12 @@ def _client_evidence(
         and accepted is not None
         and _sequence(login) < _sequence(id_change) < _sequence(accepted)
     )
+    transport_observation = {
+        "login": _body(login).get("transportMode") if login is not None else None,
+        "idChange": _body(id_change).get("transportMode") if id_change is not None else None,
+        "accepted": _body(accepted).get("transportMode") if accepted is not None else None,
+    }
+    transport_exact = set(transport_observation.values()) == {expected_transport_mode}
     ok = bool(
         len(login_packets) == 1
         and semantic_shape
@@ -231,6 +242,7 @@ def _client_evidence(
         and len(id_change_packets) == 1
         and len(accepted_records) == 1
         and lifecycle_ok
+        and transport_exact
     )
     return {
         "ok": ok,
@@ -245,11 +257,8 @@ def _client_evidence(
         "stockTags": stock_tags,
         "extensionTags": extension_tags,
         "semanticShape": semantic_shape,
-        "transportObservation": {
-            "login": _body(login).get("transportMode") if login is not None else None,
-            "idChange": _body(id_change).get("transportMode") if id_change is not None else None,
-            "accepted": _body(accepted).get("transportMode") if accepted is not None else None,
-        },
+        "transportObservation": transport_observation,
+        "transportExact": transport_exact,
     }
 
 
@@ -260,6 +269,7 @@ def build_server_login_diagnostic_evidence(
     rust_tcp_port: int,
     mfc_nickname: str,
     mfc_tcp_port: int,
+    expected_transport_mode: str,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -267,6 +277,8 @@ def build_server_login_diagnostic_evidence(
 
     if not server_endpoint or ":" not in server_endpoint:
         raise ValueError("Server login endpoint must be host:port.")
+    if expected_transport_mode not in CONNECTION_COVERAGE_ID_BY_TRANSPORT:
+        raise ValueError("Expected server transport mode must be plaintext or obfuscated.")
     for nickname, name in ((rust_nickname, "Rust"), (mfc_nickname, "MFC")):
         if not nickname:
             raise ValueError(f"Expected {name} server-login nickname must not be empty.")
@@ -281,6 +293,7 @@ def build_server_login_diagnostic_evidence(
             endpoint=server_endpoint,
             expected_nickname=rust_nickname,
             expected_tcp_port=rust_tcp_port,
+            expected_transport_mode=expected_transport_mode,
         ),
         "mfc": _client_evidence(
             client="mfc",
@@ -288,6 +301,7 @@ def build_server_login_diagnostic_evidence(
             endpoint=server_endpoint,
             expected_nickname=mfc_nickname,
             expected_tcp_port=mfc_tcp_port,
+            expected_transport_mode=expected_transport_mode,
         ),
     }
     rust_tags = clients["rust"]["stockTags"]
@@ -302,6 +316,7 @@ def build_server_login_diagnostic_evidence(
             (clients["rust"].get("decodedIdChange") or {}).get("id_kind")
             == (clients["mfc"].get("decodedIdChange") or {}).get("id_kind")
         ),
+        "transportModeExact": all(row["transportExact"] is True for row in clients.values()),
     }
     comparison["ok"] = all(comparison.values())
     failures = [
@@ -312,6 +327,7 @@ def build_server_login_diagnostic_evidence(
         "schema": SCHEMA,
         "ok": not failures,
         "serverEndpoint": server_endpoint.casefold(),
+        "expectedTransportMode": expected_transport_mode,
         "expectedClients": {
             "rust": {"nickname": rust_nickname, "tcpPort": rust_tcp_port},
             "mfc": {"nickname": mfc_nickname, "tcpPort": mfc_tcp_port},
@@ -320,7 +336,14 @@ def build_server_login_diagnostic_evidence(
         "clients": clients,
         "comparison": comparison,
         "coverageClaims": {
-            "eligibleCoverageIds": ["server.login.request"] if not failures else [],
+            "eligibleCoverageIds": sorted(
+                [
+                    "server.login.request",
+                    CONNECTION_COVERAGE_ID_BY_TRANSPORT[expected_transport_mode],
+                ]
+            )
+            if not failures
+            else [],
             "evidenceLayers": list(EVIDENCE_LAYERS),
         },
     }
