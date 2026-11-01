@@ -13,6 +13,14 @@ from pathlib import Path
 from . import rust_client
 
 
+class ServerSearchFailure(RuntimeError):
+    """Carries the terminal REST snapshot for a failed deterministic search."""
+
+    def __init__(self, message: str, evidence: dict[str, object]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
+
+
 def request_json(
     base_url: str,
     method: str,
@@ -200,26 +208,71 @@ def run_single_server_search(
 ) -> dict[str, object]:
     """Runs exactly one server search and requires one exact result row."""
 
-    created = request_json(
-        base_url,
-        "POST",
-        "/api/v1/searches",
-        api_key,
-        {"query": query, "method": "server", "type": ""},
-    )
+    try:
+        created = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            api_key,
+            {"query": query, "method": "server", "type": ""},
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the failed REST stimulus
+        raise ServerSearchFailure(
+            f"Deterministic server search creation failed: {exc}",
+            {
+                "searchId": None,
+                "created": {},
+                "search": {},
+                "result": None,
+                "observations": [],
+            },
+        ) from exc
     search_id = str(created.get("id") or "")
     if not search_id:
-        raise RuntimeError("Deterministic server search creation returned no search ID.")
+        raise ServerSearchFailure(
+            "Deterministic server search creation returned no search ID.",
+            {
+                "searchId": None,
+                "created": created,
+                "search": {},
+                "result": None,
+                "observations": [],
+            },
+        )
     normalized_hash = expected_hash.casefold()
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
-    while True:
-        search = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/searches/{search_id}?limit=200&offset=0",
-            api_key,
+
+    def failure(
+        message: str,
+        search: dict[str, object],
+        matches: list[dict[str, object]],
+    ) -> ServerSearchFailure:
+        return ServerSearchFailure(
+            message,
+            {
+                "searchId": search_id,
+                "created": created,
+                "search": search,
+                "result": matches[0] if len(matches) == 1 else None,
+                "observations": observations[-20:],
+            },
         )
+
+    while True:
+        try:
+            search = request_json(
+                base_url,
+                "GET",
+                f"/api/v1/searches/{search_id}?limit=200&offset=0",
+                api_key,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve the created search identity
+            raise failure(
+                f"Deterministic server search result request failed: {exc}",
+                {},
+                [],
+            ) from exc
         items = search.get("items")
         rows = items if isinstance(items, list) else []
         observations.append(
@@ -237,7 +290,14 @@ def run_single_server_search(
             and row.get("displayName", row.get("name")) == expected_name
             and row.get("sizeBytes", row.get("size")) == expected_size
         ]
-        if len(matches) == 1:
+        if len(matches) > 1:
+            raise failure(
+                "Deterministic server search returned duplicate exact result rows.",
+                search,
+                matches,
+            )
+        status = str(search.get("status") or "").casefold()
+        if len(matches) == 1 and status in {"complete", "completed"}:
             return {
                 "searchId": search_id,
                 "created": created,
@@ -245,15 +305,18 @@ def run_single_server_search(
                 "result": matches[0],
                 "observations": observations[-20:],
             }
-        if len(matches) > 1:
-            raise RuntimeError("Deterministic server search returned duplicate exact result rows.")
-        status = str(search.get("status") or "").casefold()
         if status in {"complete", "completed", "error"}:
-            raise RuntimeError(
-                "Deterministic server search completed without the exact published file."
+            raise failure(
+                "Deterministic server search completed without the exact published file.",
+                search,
+                matches,
             )
         if time.time() >= deadline:
-            raise RuntimeError("Deterministic server search timed out before an exact result.")
+            raise failure(
+                "Deterministic server search timed out before an exact result.",
+                search,
+                matches,
+            )
         time.sleep(0.25)
 
 

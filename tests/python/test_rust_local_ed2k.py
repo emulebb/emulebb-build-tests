@@ -133,7 +133,10 @@ def test_single_server_search_does_not_retry_empty_terminal_search(monkeypatch) 
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
 
-    with pytest.raises(RuntimeError, match="completed without the exact published file"):
+    with pytest.raises(
+        rust_local_ed2k.ServerSearchFailure,
+        match="completed without the exact published file",
+    ) as failure:
         rust_local_ed2k.run_single_server_search(
             "http://192.0.2.10:4711",
             "key",
@@ -145,6 +148,92 @@ def test_single_server_search_does_not_retry_empty_terminal_search(monkeypatch) 
         )
 
     assert calls.count("POST") == 1
+    assert failure.value.evidence["searchId"] == "search-1"
+    assert failure.value.evidence["search"]["status"] == "complete"
+    assert failure.value.evidence["observations"][-1]["status"] == "complete"
+
+
+def test_single_server_search_waits_for_terminal_state_after_exact_result(monkeypatch) -> None:
+    expected_hash = "00112233445566778899aabbccddeeff"
+    result = {
+        "hash": expected_hash.upper(),
+        "displayName": "fixture.bin",
+        "sizeBytes": 4096,
+    }
+    responses = iter(
+        [
+            {"id": "search-1", "status": "running", "items": []},
+            {"id": "search-1", "status": "running", "items": [result]},
+            {"id": "search-1", "status": "completed", "items": [result]},
+        ]
+    )
+    calls: list[str] = []
+
+    def request(_base_url, method, _path, _api_key, _payload=None):
+        calls.append(method)
+        return next(responses)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
+
+    observed = rust_local_ed2k.run_single_server_search(
+        "http://192.0.2.10:4711",
+        "key",
+        query="deterministicparitysearch",
+        expected_hash=expected_hash,
+        expected_name="fixture.bin",
+        expected_size=4096,
+        timeout_seconds=1.0,
+    )
+
+    assert observed["search"]["status"] == "completed"
+    assert calls == ["POST", "GET", "GET"]
+
+
+def test_single_server_search_preserves_missing_creation_id(monkeypatch) -> None:
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args, **_kwargs: {"status": "running"})
+
+    with pytest.raises(rust_local_ed2k.ServerSearchFailure, match="returned no search ID") as failure:
+        rust_local_ed2k.run_single_server_search(
+            "http://192.0.2.10:4711",
+            "key",
+            query="deterministicparitysearch",
+            expected_hash="00112233445566778899aabbccddeeff",
+            expected_name="fixture.bin",
+            expected_size=4096,
+            timeout_seconds=1.0,
+        )
+
+    assert failure.value.evidence["searchId"] is None
+    assert failure.value.evidence["created"] == {"status": "running"}
+
+
+def test_single_server_search_preserves_get_failure_after_creation(monkeypatch) -> None:
+    calls = 0
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"id": "search-1", "status": "running", "items": []}
+        raise RuntimeError("REST unavailable")
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+
+    with pytest.raises(rust_local_ed2k.ServerSearchFailure, match="result request failed") as failure:
+        rust_local_ed2k.run_single_server_search(
+            "http://192.0.2.10:4711",
+            "key",
+            query="deterministicparitysearch",
+            expected_hash="00112233445566778899aabbccddeeff",
+            expected_name="fixture.bin",
+            expected_size=4096,
+            timeout_seconds=1.0,
+        )
+
+    assert failure.value.evidence["searchId"] == "search-1"
+    assert failure.value.evidence["created"]["id"] == "search-1"
+    assert failure.value.evidence["observations"] == []
 
 
 def test_start_client_prefers_staged_executable(monkeypatch, tmp_path: Path) -> None:

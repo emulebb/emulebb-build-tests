@@ -10,8 +10,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
-from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -20,8 +20,16 @@ PROFILE_AUTHORITY = "harness-generated-ephemeral-local-profiles"
 RUN_DIRECTORY_PATTERN = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)-")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
+SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
+SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
+SERVER_SEARCH_EVIDENCE_LAYERS = (
+    "codec-transcript",
+    "deterministic-state-machine",
+    "local-cross-client",
+)
 SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
@@ -184,94 +192,419 @@ def _derived_server_search_coverage_ids(
     if report.get("transfer_scenario") != SERVER_KEYWORD_SEARCH_SCENARIO:
         raise ValueError("server search evidence requires the server keyword search scenario")
     search = _object(search_value, "diagnostics.serverSearch")
-    server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(search)
+    if search.get("schema") != SERVER_SEARCH_SCHEMA:
+        raise ValueError("server search diagnostics use an unexpected schema")
+    if search.get("ok") is not True or search.get("failures") != []:
+        raise ValueError("server search diagnostics are not complete")
+
+    expected_ids = list(SERVER_SEARCH_COVERAGE_IDS)
     claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
-    observed_ids = ["server.reply.search", "server.search.keyword"]
-    if search.get("observedCoverageIds") != observed_ids:
+    if search.get("observedCoverageIds") != expected_ids:
         raise ValueError("server search diagnostic observations are not exact")
-    if claims.get("eligibleCoverageIds") != []:
-        raise ValueError("unilateral server search diagnostics cannot claim parity coverage")
-    if claims.get("evidenceLayers") != list(server_search_diagnostic_evidence.EVIDENCE_LAYERS):
+    if claims.get("eligibleCoverageIds") != expected_ids:
+        raise ValueError("server search diagnostic claims are not exact")
+    if claims.get("evidenceLayers") != list(SERVER_SEARCH_EVIDENCE_LAYERS):
         raise ValueError("server search diagnostic evidence layers are not canonical")
 
-    search_checks = _object(search.get("checks"), "diagnostics.serverSearch.checks")
-    request = _object(search_checks.get("request"), "diagnostics.serverSearch.checks.request")
-    reply = _object(search_checks.get("reply"), "diagnostics.serverSearch.checks.reply")
-    rest_result = _object(
-        search_checks.get("restResult"),
-        "diagnostics.serverSearch.checks.restResult",
-    )
-    request_sequence = _positive_int(request.get("sequence"), "server search request sequence")
-    response_sequence = _positive_int(
-        reply.get("firstResponseSequence"),
-        "server search response sequence",
-    )
-    if (
-        request.get("ok") is not True
-        or request.get("endpointRequestCount") != 1
-        or request.get("exactRequestCount") != 1
-        or request.get("sendSucceeded") is not True
-    ):
-        raise ValueError("server search request is not singular and exact")
-    if (
-        reply.get("ok") is not True
-        or not isinstance(reply.get("responseCount"), int)
-        or reply.get("responseCount") < 1
-        or reply.get("malformedResponseCount") != 0
-        or reply.get("exactRowCount") != 1
-        or response_sequence <= request_sequence
-    ):
-        raise ValueError("server search reply is not exact and causally ordered")
-    if rest_result.get("ok") is not True:
-        raise ValueError("server search REST result does not match the wire result")
-
-    expected_file = _object(
-        search.get("expectedFile"),
-        "diagnostics.serverSearch.expectedFile",
-    )
-    fixture = _object(report.get("fixture"), "fixture")
-    if (
-        expected_file.get("hash") != diagnostics.get("fileHash")
-        or expected_file.get("name") != fixture.get("name")
-        or expected_file.get("size") != fixture.get("size")
-    ):
-        raise ValueError("server search expected file does not match the transfer fixture")
-    exact_row = _object(reply.get("exactRow"), "diagnostics.serverSearch.checks.reply.exactRow")
-    if (
-        str(exact_row.get("hash") or "").casefold() != expected_file.get("hash")
-        or exact_row.get("name") != expected_file.get("name")
-        or exact_row.get("size") != expected_file.get("size")
-    ):
-        raise ValueError("server search decoded row does not match the expected file")
-
     checks = _object(report.get("checks"), "checks")
-    driven = _object(checks.get("client1_server_search"), "checks.client1_server_search")
-    driven_result = _object(driven.get("result"), "checks.client1_server_search.result")
+    if checks.get("client_server_search_diagnostics") != search:
+        raise ValueError("server search diagnostics do not match the pre-transfer snapshot")
+
+    fixture = _object(report.get("server_search_fixture"), "server_search_fixture")
+    fixture_hash = _lower_hex(
+        fixture.get("hash"),
+        ED2K_HASH_PATTERN,
+        "server_search_fixture.hash",
+    )
+    fixture_name = fixture.get("name")
+    if not isinstance(fixture_name, str) or not fixture_name:
+        raise ValueError("server_search_fixture.name must be a non-empty string")
+    fixture_size = _positive_int(fixture.get("size"), "server_search_fixture.size")
+    expected_file = {
+        "hash": fixture_hash,
+        "name": fixture_name,
+        "size": fixture_size,
+    }
+    if search.get("expectedFile") != expected_file:
+        raise ValueError("server search expected file does not match server_search_fixture")
+    transfer_fixture = _object(report.get("fixture"), "fixture")
     if (
-        str(driven_result.get("hash") or "").casefold() != expected_file.get("hash")
-        or driven_result.get("displayName", driven_result.get("name"))
-        != expected_file.get("name")
-        or driven_result.get("sizeBytes", driven_result.get("size"))
-        != expected_file.get("size")
+        fixture_hash == str(diagnostics.get("fileHash") or "").casefold()
+        or fixture_name == transfer_fixture.get("name")
     ):
-        raise ValueError("driven server search result does not match the expected file")
-    publication = _object(checks.get("client2_server_file"), "checks.client2_server_file")
+        raise ValueError("server search fixture is not isolated from the MFC transfer fixture")
+
+    def require_fixture_row(value: Any, field: str) -> dict[str, Any]:
+        row = _object(value, field)
+        names = [row[key] for key in ("name", "displayName") if key in row]
+        sizes = [row[key] for key in ("size", "sizeBytes") if key in row]
+        if (
+            str(row.get("hash") or "").casefold() != fixture_hash
+            or not names
+            or any(value != fixture_name for value in names)
+            or not sizes
+            or any(value != fixture_size for value in sizes)
+        ):
+            raise ValueError(f"{field} does not match server_search_fixture")
+        return row
+
+    publication = require_fixture_row(
+        fixture.get("publication"),
+        "server_search_fixture.publication",
+    )
+    if publication.get("indexed") is not True or publication.get("requested_size") != fixture_size:
+        raise ValueError("server_search_fixture publication is not an exact indexed observation")
+    publication_result = require_fixture_row(
+        publication.get("search_result"),
+        "server_search_fixture.publication.search_result",
+    )
+    publisher = _object(fixture.get("publisher"), "server_search_fixture.publisher")
+    if not isinstance(publisher.get("nickname"), str) or not publisher["nickname"]:
+        raise ValueError("server_search_fixture.publisher.nickname must be a non-empty string")
+    publisher_port = _positive_int(
+        publisher.get("tcpPort"),
+        "server_search_fixture.publisher.tcpPort",
+    )
+    publisher_login = _object(publisher.get("login"), "server_search_fixture.publisher.login")
+    publisher_id = _positive_int(
+        publisher_login.get("assigned_id"),
+        "server_search_fixture.publisher.login.assigned_id",
+    )
+    expected_id_kind = "low-id" if publisher_id < ed2k_wire.LOW_ID_CEILING else "high-id"
+    if publisher_login.get("id_kind") != expected_id_kind:
+        raise ValueError("server search publisher login ID class is inconsistent")
     if (
-        publication.get("indexed") is not True
-        or str(publication.get("hash") or "").casefold() != expected_file.get("hash")
-        or publication.get("name") != expected_file.get("name")
-        or publication.get("size") != expected_file.get("size")
+        publication_result.get("result_source_id") != publisher_id
+        or publication_result.get("result_source_port") != publisher_port
     ):
-        raise ValueError("MFC publication authority does not match the searched file")
+        raise ValueError("server search publication is not joined to the neutral publisher")
+    publication_source = _object(
+        publication.get("search_source"),
+        "server_search_fixture.publication.search_source",
+    )
+    if publication_source.get("id") != publisher_id or publication_source.get("port") != publisher_port:
+        raise ValueError("server search publication source reference is not the neutral publisher")
+    if publication.get("hash") is None:
+        raise ValueError("server_search_fixture publication has no hash")
 
     network = _object(report.get("network"), "network")
     ports = _object(network.get("ports"), "network.ports")
-    expected_endpoint = (
-        f"{network.get('ed2k_server_address')}:{ports.get('ed2k_tcp')}".casefold()
-    )
+    server_port = _positive_int(ports.get("ed2k_tcp"), "network.ports.ed2k_tcp")
+    if ports.get("search_publisher_tcp") != publisher_port:
+        raise ValueError("server search publisher port does not match network provenance")
+    server_address = network.get("ed2k_server_address")
+    if not isinstance(server_address, str) or not server_address:
+        raise ValueError("network.ed2k_server_address must be a non-empty string")
+    expected_endpoint = f"{server_address}:{server_port}".casefold()
     if search.get("serverEndpoint") != expected_endpoint:
         raise ValueError("server search diagnostics use an unexpected server endpoint")
-    return []
+
+    query = search.get("query")
+    if not isinstance(query, str) or not query:
+        raise ValueError("server search query must be a non-empty string")
+    expected_payload_hex = ed2k_wire.encode_term_search(query).hex()
+    driven_searches = _object(
+        checks.get("client_server_searches"),
+        "checks.client_server_searches",
+    )
+    if set(driven_searches) != {"rust", "mfc"}:
+        raise ValueError("driven server searches must contain exactly rust and mfc")
+    clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
+    if set(clients) != {"rust", "mfc"}:
+        raise ValueError("server search diagnostics must contain exactly rust and mfc")
+
+    comparable_wire_rows: dict[str, dict[str, Any]] = {}
+    comparable_rest_rows: dict[str, dict[str, Any]] = {}
+    request_payloads: dict[str, str] = {}
+    transport_modes: dict[str, tuple[Any, Any]] = {}
+    for client in ("rust", "mfc"):
+        driven = _object(
+            driven_searches.get(client),
+            f"checks.client_server_searches.{client}",
+        )
+        search_id = driven.get("searchId")
+        if not isinstance(search_id, str) or not search_id:
+            raise ValueError(f"{client} driven server search has no search ID")
+        created = _object(
+            driven.get("created"),
+            f"checks.client_server_searches.{client}.created",
+        )
+        final_search = _object(
+            driven.get("search"),
+            f"checks.client_server_searches.{client}.search",
+        )
+        result = require_fixture_row(
+            driven.get("result"),
+            f"checks.client_server_searches.{client}.result",
+        )
+        items = final_search.get("items")
+        if not isinstance(items, list) or len(items) != 1 or items[0] != result:
+            raise ValueError(f"{client} driven server search does not contain one exact result")
+        require_fixture_row(
+            items[0],
+            f"checks.client_server_searches.{client}.search.items[0]",
+        )
+        status = final_search.get("status")
+        common_rest_exact = bool(
+            str(created.get("id") or "") == search_id
+            and created.get("query") == query
+            and str(final_search.get("id") or "") == search_id
+            and final_search.get("query") == query
+            and str(status or "").casefold() in {"complete", "completed"}
+            and final_search.get("total") == 1
+            and str(result.get("searchId") or "") == search_id
+        )
+        rust_method_exact = bool(
+            created.get("requestedMethod") == "server"
+            and final_search.get("requestedMethod") == "server"
+            and final_search.get("resolvedMethod") == "server"
+            and "method" not in created
+            and "method" not in final_search
+        )
+        mfc_method_exact = bool(
+            created.get("method") == "server"
+            and final_search.get("method") == "server"
+            and "requestedMethod" not in created
+            and "requestedMethod" not in final_search
+            and "resolvedMethod" not in created
+            and "resolvedMethod" not in final_search
+        )
+        if not common_rest_exact or not (rust_method_exact if client == "rust" else mfc_method_exact):
+            raise ValueError(f"{client} driven server search is not exact")
+
+        client_evidence = _object(
+            clients.get(client),
+            f"diagnostics.serverSearch.clients.{client}",
+        )
+        if client_evidence.get("ok") is not True:
+            raise ValueError(f"{client} server search evidence is not green")
+        rest = _object(
+            client_evidence.get("rest"),
+            f"diagnostics.serverSearch.clients.{client}.rest",
+        )
+        rest_result = require_fixture_row(
+            rest.get("result"),
+            f"diagnostics.serverSearch.clients.{client}.rest.result",
+        )
+        expected_rest_method = (
+            {
+                "createdRequested": "server",
+                "finalRequested": "server",
+                "finalResolved": "server",
+            }
+            if client == "rust"
+            else {"created": "server", "final": "server"}
+        )
+        if (
+            rest.get("ok") is not True
+            or rest.get("searchId") != search_id
+            or rest.get("status") != status
+            or rest.get("method") != expected_rest_method
+            or rest.get("total") != 1
+            or rest.get("exactResultCount") != 1
+            or rest_result != result
+        ):
+            raise ValueError(f"{client} REST search evidence is not joined to the driven search")
+
+        wire = _object(
+            client_evidence.get("wire"),
+            f"diagnostics.serverSearch.clients.{client}.wire",
+        )
+        request = _object(
+            wire.get("request"),
+            f"diagnostics.serverSearch.clients.{client}.wire.request",
+        )
+        reply = _object(
+            wire.get("reply"),
+            f"diagnostics.serverSearch.clients.{client}.wire.reply",
+        )
+        request_sequence = _positive_int(
+            request.get("sequence"),
+            f"{client} server search request sequence",
+        )
+        reply_sequence = _positive_int(
+            reply.get("sequence"),
+            f"{client} server search reply sequence",
+        )
+        _positive_int(request.get("traceId"), f"{client} server search trace ID")
+        if client == "rust":
+            _positive_int(
+                request.get("sendAttemptId"),
+                "rust server search send attempt ID",
+            )
+        if (
+            wire.get("ok") is not True
+            or request.get("ok") is not True
+            or request.get("endpointRequestCount") != 1
+            or request.get("exactRequestCount") != 1
+            or request.get("payloadHex") != expected_payload_hex
+            or request.get("transportMode") != "obfuscated"
+        ):
+            raise ValueError(f"{client} server search request is not singular and exact")
+        exact_row = require_fixture_row(
+            reply.get("exactRow"),
+            f"diagnostics.serverSearch.clients.{client}.wire.reply.exactRow",
+        )
+        if (
+            exact_row.get("result_source_id") != publisher_id
+            or exact_row.get("result_source_port") != publisher_port
+        ):
+            raise ValueError(f"{client} server search reply is not sourced by the neutral publisher")
+        if (
+            reply.get("ok") is not True
+            or reply.get("endpointResponseCount") != 1
+            or reply.get("traceResponseCount") != 1
+            or reply.get("malformedResponseCount") != 0
+            or reply.get("decodedRowCount") != 1
+            or reply.get("exactRowCount") != 1
+            or reply_sequence <= request_sequence
+            or reply.get("transportMode") != "obfuscated"
+        ):
+            raise ValueError(f"{client} server search reply is not singular and causal")
+
+        lifecycle = _object(
+            client_evidence.get("lifecycle"),
+            f"diagnostics.serverSearch.clients.{client}.lifecycle",
+        )
+        if lifecycle.get("ok") is not True:
+            raise ValueError(f"{client} server search lifecycle is not green")
+        if client == "rust":
+            active_sequence = _positive_int(
+                lifecycle.get("searchActiveSequence"),
+                "rust server search active sequence",
+            )
+            send_sequence = _positive_int(
+                lifecycle.get("sendOutcomeSequence"),
+                "rust server search send outcome sequence",
+            )
+            completed_sequence = _positive_int(
+                lifecycle.get("completedSequence"),
+                "rust server search completed sequence",
+            )
+            scheduler_sequence = _positive_int(
+                lifecycle.get("schedulerSequence"),
+                "rust server search scheduler sequence",
+            )
+            if (
+                lifecycle.get("sendOutcomeCount") != 1
+                or lifecycle.get("searchActiveCount") != 1
+                or lifecycle.get("completedCount") != 1
+                or lifecycle.get("schedulerCompletionCount") != 1
+                or not (
+                    active_sequence
+                    < request_sequence
+                    < send_sequence
+                    < reply_sequence
+                    < completed_sequence
+                    < scheduler_sequence
+                )
+            ):
+                raise ValueError("rust server search lifecycle is not causally ordered")
+        else:
+            applied_sequence = _positive_int(
+                lifecycle.get("appliedSequence"),
+                "mfc server search applied sequence",
+            )
+            cumulative_after = _positive_int(
+                lifecycle.get("cumulativeSourceCountAfter"),
+                "mfc server search cumulative source count after",
+            )
+            if (
+                lifecycle.get("appliedCount") != 1
+                or applied_sequence <= reply_sequence
+                or lifecycle.get("expectedReply") is not True
+                or lifecycle.get("wireResultCount") != 1
+                or lifecycle.get("cumulativeSourceCountBefore") != 0
+                or cumulative_after < 1
+                or lifecycle.get("distinctFileCountBefore") != 0
+                or lifecycle.get("distinctFileCountAfter") != 1
+                or lifecycle.get("moreResultsAvailable") is not False
+                or lifecycle.get("outcome") != "accepted"
+            ):
+                raise ValueError("mfc server search lifecycle is not causally ordered")
+
+        comparable_wire_rows[client] = {
+            "hash": str(exact_row.get("hash") or "").casefold(),
+            "name": exact_row.get("name", exact_row.get("displayName")),
+            "size": exact_row.get("size", exact_row.get("sizeBytes")),
+            "sources": _nonnegative_int(
+                exact_row.get("sources"),
+                f"{client} server search wire source count",
+            ),
+            "completeSources": _nonnegative_int(
+                exact_row.get("complete_sources", exact_row.get("completeSources")),
+                f"{client} server search wire complete-source count",
+            ),
+            "resultSourceId": exact_row.get("result_source_id"),
+            "resultSourcePort": exact_row.get("result_source_port"),
+        }
+        comparable_rest_rows[client] = {
+            "hash": str(rest_result.get("hash") or "").casefold(),
+            "name": rest_result.get("name", rest_result.get("displayName")),
+            "size": rest_result.get("size", rest_result.get("sizeBytes")),
+            "sources": _nonnegative_int(
+                rest_result.get("sources"),
+                f"{client} server search REST source count",
+            ),
+            "completeSources": _nonnegative_int(
+                rest_result.get("complete_sources", rest_result.get("completeSources")),
+                f"{client} server search REST complete-source count",
+            ),
+        }
+        comparable_wire_rest_row = {
+            key: value
+            for key, value in comparable_wire_rows[client].items()
+            if key not in {"resultSourceId", "resultSourcePort"}
+        }
+        if (
+            client_evidence.get("wireRestEqual") is not True
+            or comparable_wire_rest_row != comparable_rest_rows[client]
+        ):
+            raise ValueError(f"{client} wire result is not joined to its applied REST result")
+        request_payloads[client] = request["payloadHex"]
+        transport_modes[client] = (
+            request.get("transportMode"),
+            reply.get("transportMode"),
+        )
+
+    comparison = _object(search.get("comparison"), "diagnostics.serverSearch.comparison")
+    comparison_fields = {
+        "ok",
+        "requestPayloadEqual",
+        "replyRowEqual",
+        "restResultEqual",
+        "transportModeEqual",
+        "rustWireRestEqual",
+        "mfcWireRestEqual",
+    }
+    if set(comparison) != comparison_fields or any(comparison.get(field) is not True for field in comparison_fields):
+        raise ValueError("bilateral server search comparison is not exact")
+    if (
+        request_payloads["rust"] != request_payloads["mfc"]
+        or comparable_wire_rows["rust"] != comparable_wire_rows["mfc"]
+        or comparable_rest_rows["rust"] != comparable_rest_rows["mfc"]
+        or transport_modes["rust"] != transport_modes["mfc"]
+        or transport_modes["rust"] != ("obfuscated", "obfuscated")
+    ):
+        raise ValueError("bilateral server search evidence does not compare exactly")
+
+    captures = _object(search.get("captures"), "diagnostics.serverSearch.captures")
+    if set(captures) != {"rust", "mfc"}:
+        raise ValueError("server search captures must contain exactly rust and mfc")
+    for client in ("rust", "mfc"):
+        capture = _object(
+            captures.get(client),
+            f"diagnostics.serverSearch.captures.{client}",
+        )
+        _positive_int(capture.get("processId"), f"server search {client} process ID")
+        segments = capture.get("selectedSegments")
+        if (
+            not isinstance(segments, list)
+            or not segments
+            or not all(isinstance(value, str) and value for value in segments)
+        ):
+            raise ValueError(f"server search {client} capture has no selected segments")
+    return expected_ids
 
 
 def _derived_server_login_coverage_ids(
@@ -683,6 +1016,39 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             "Rust and MFC emitted one decoded stock-core login each, followed by exact "
             f"ID-change and accepted-session transitions at sequences "
             f"{clients['rust']['loginSequence']}/{clients['mfc']['loginSequence']}."
+        )
+    if coverage_id in SERVER_SEARCH_COVERAGE_IDS:
+        search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
+        clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
+        rust = _object(clients.get("rust"), "diagnostics.serverSearch.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.serverSearch.clients.mfc")
+        rust_wire = _object(rust.get("wire"), "diagnostics.serverSearch.clients.rust.wire")
+        mfc_wire = _object(mfc.get("wire"), "diagnostics.serverSearch.clients.mfc.wire")
+        rust_request = _object(
+            rust_wire.get("request"),
+            "diagnostics.serverSearch.clients.rust.wire.request",
+        )
+        mfc_request = _object(
+            mfc_wire.get("request"),
+            "diagnostics.serverSearch.clients.mfc.wire.request",
+        )
+        if coverage_id == "server.search.keyword":
+            return (
+                "Rust and MFC each emitted one identical encoded keyword request over "
+                f"obfuscated server transport at sequences "
+                f"{rust_request['sequence']}/{mfc_request['sequence']}."
+            )
+        rust_reply = _object(
+            rust_wire.get("reply"),
+            "diagnostics.serverSearch.clients.rust.wire.reply",
+        )
+        mfc_reply = _object(
+            mfc_wire.get("reply"),
+            "diagnostics.serverSearch.clients.mfc.wire.reply",
+        )
+        return (
+            "Rust and MFC each decoded and applied the same exact server-search result "
+            f"at reply sequences {rust_reply['sequence']}/{mfc_reply['sequence']}."
         )
     if coverage_id == "peer.startup.multipacket-ext2":
         request = _exact_startup_check(diagnostics, "multipacketRequestFrames")

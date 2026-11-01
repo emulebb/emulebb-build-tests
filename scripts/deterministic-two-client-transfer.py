@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import ed2k_server  # noqa: E402
 from emule_test_harness import ed2k_file_observer  # noqa: E402
 from emule_test_harness import ed2k_protocol_cases  # noqa: E402
+from emule_test_harness import ed2k_wire  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
@@ -70,6 +71,11 @@ HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_SEARCH_QUERY = "deterministicparitysearch"
+SERVER_SEARCH_FILE_HASH = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+SERVER_SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
+SERVER_SEARCH_FILE_SIZE = 12_345
+SERVER_SEARCH_PUBLISHER_HASH = bytes.fromhex("102132435465768798A9BACBDCEDFE0F")
+SERVER_SEARCH_PUBLISHER_NICK = "emulebb-harness-search-publisher"
 TRANSFER_SCENARIOS = (
     FULL_METADATA_LINK,
     HASH_ONLY_METADATA_RECOVERY,
@@ -178,7 +184,7 @@ def validate_args(args: argparse.Namespace) -> None:
             )
     if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
         if args.client2_identity != "mfc_oracle":
-            raise ValueError("Server keyword search requires the MFC diagnostics oracle publisher.")
+            raise ValueError("Server keyword search requires the MFC diagnostics oracle.")
         if args.protocol_case != "obfuscated-required":
             raise ValueError(
                 "Server keyword search uses the single canonical obfuscated-required case."
@@ -349,16 +355,24 @@ def collect_server_search_diagnostics(
     expected_file_name: str,
     expected_file_size: int,
     server_endpoint: str,
-    rest_result: dict[str, object],
+    driven_searches: dict[str, dict[str, object]],
     rust_diagnostics_dir: Path,
     rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
 ) -> dict[str, object]:
-    """Snapshots search evidence before a later transfer can rotate its segment."""
+    """Snapshots bilateral search evidence before transfer traffic can rotate it."""
 
     rust_capture = converged_live_wire.load_current_diag_capture(
         rust_diagnostics_dir,
         side="rust",
         process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
         allow_incomplete_active_tail=True,
     )
     evidence = server_search_diagnostic_evidence.build_server_search_diagnostic_evidence(
@@ -368,13 +382,20 @@ def collect_server_search_diagnostics(
         expected_file_size=expected_file_size,
         server_endpoint=server_endpoint,
         rust_records=rust_capture.records,
-        rest_result=rest_result,
+        mfc_records=mfc_capture.records,
+        driven_searches=driven_searches,
     )
-    server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(evidence)
-    evidence["capture"] = {
-        "processId": rust_process_id,
-        "diagnosticsDir": str(rust_diagnostics_dir),
-        "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
     }
     return evidence
 
@@ -564,7 +585,11 @@ def choose_available_local_port(
     raise RuntimeError("Could not allocate a local port in the ED2K harness range.")
 
 
-def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
+def choose_distinct_ports(
+    lan_bind_addr: str | None = None,
+    *,
+    include_search_publisher: bool = False,
+) -> dict[str, int]:
     """Allocates the suite's local ports without intentional reuse."""
 
     ports: dict[str, int] = {}
@@ -589,6 +614,7 @@ def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
         "client2_tcp",
         "client2_udp",
         "client2_ec",
+        *(("search_publisher_tcp",) if include_search_publisher else ()),
     ):
         try:
             availability_host = "127.0.0.1" if name == "client2_ec" else lan_bind_addr
@@ -1887,6 +1913,7 @@ def main(argv: list[str] | None = None) -> int:
     client2_app = None
     client2_control_exe: Path | None = None
     client2_process_id: int | None = None
+    server_search_publisher: ed2k_wire.Ed2kWireClient | None = None
     server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     current_phase = "initializing"
@@ -1897,7 +1924,10 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
         server_connect_address = resolve_ed2k_server_connect_address(args.ed2k_server_connect_address)
-        ports = choose_distinct_ports(args.lan_bind_addr)
+        ports = choose_distinct_ports(
+            args.lan_bind_addr,
+            include_search_publisher=args.transfer_scenario == SERVER_KEYWORD_SEARCH,
+        )
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
@@ -1939,13 +1969,64 @@ def main(argv: list[str] | None = None) -> int:
         report["ed2k_server"] = server_launch.config
         report["network"]["ed2k_server_address"] = server_address
 
+        if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+            current_phase = "publish_server_search_fixture"
+            server_search_publisher = ed2k_wire.Ed2kWireClient(
+                server_address,
+                ports["ed2k_tcp"],
+                args.server_publish_timeout_seconds,
+            )
+            server_search_publisher.connect()
+            publisher_login = server_search_publisher.login(
+                user_hash=SERVER_SEARCH_PUBLISHER_HASH,
+                tcp_port=ports["search_publisher_tcp"],
+                nickname=SERVER_SEARCH_PUBLISHER_NICK,
+            )
+            server_search_publisher.offer_file(
+                file_hash=SERVER_SEARCH_FILE_HASH,
+                name=SERVER_SEARCH_FILE_NAME,
+                size=SERVER_SEARCH_FILE_SIZE,
+            )
+            search_publication = file_observer.wait_for_file(
+                SERVER_SEARCH_FILE_HASH.hex(),
+                SERVER_SEARCH_FILE_SIZE,
+                args.server_publish_timeout_seconds,
+            )
+            report["server_search_fixture"] = {
+                "hash": SERVER_SEARCH_FILE_HASH.hex(),
+                "name": SERVER_SEARCH_FILE_NAME,
+                "size": SERVER_SEARCH_FILE_SIZE,
+                "publisher": {
+                    "nickname": SERVER_SEARCH_PUBLISHER_NICK,
+                    "tcpPort": ports["search_publisher_tcp"],
+                    "login": publisher_login,
+                },
+                "publication": search_publication,
+            }
+            search_publication_row = search_publication.get("search_result")
+            if (
+                search_publication.get("indexed") is not True
+                or str(search_publication.get("hash") or "").casefold()
+                != SERVER_SEARCH_FILE_HASH.hex()
+                or search_publication.get("name") != SERVER_SEARCH_FILE_NAME
+                or search_publication.get("size") != SERVER_SEARCH_FILE_SIZE
+                or not isinstance(search_publication_row, dict)
+                or search_publication_row.get("result_source_id")
+                != publisher_login.get("assigned_id")
+                or search_publication_row.get("result_source_port")
+                != ports["search_publisher_tcp"]
+            ):
+                raise RuntimeError(
+                    f"Deterministic server search fixture differs after publication: {search_publication!r}"
+                )
+
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_name = (
             "deterministic-transfer-Unicode-é-漢.bin"
             if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
             else "deterministicserverlogin-fixture.bin"
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
-            else "deterministicparitysearch-fixture.bin"
+            else "deterministicserversearch-transfer.bin"
             if args.transfer_scenario == SERVER_KEYWORD_SEARCH
             else "deterministic-two-client-transfer.bin"
         )
@@ -2357,30 +2438,67 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
-            current_phase = "client1_server_keyword_search"
-            report["checks"]["client1_server_search"] = (
-                rust_local_ed2k.run_single_server_search(
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral server-search diagnostics require the MFC process identity."
+                )
+            driven_searches: dict[str, dict[str, object]] = {}
+            report["checks"]["client_server_searches"] = driven_searches
+            search_failures: dict[str, dict[str, str]] = {}
+            current_phase = "rust_server_keyword_search"
+            try:
+                driven_searches["rust"] = rust_local_ed2k.run_single_server_search(
                     base_url,
                     args.api_key,
                     query=SERVER_SEARCH_QUERY,
-                    expected_hash=transfer_hash,
-                    expected_name=fixture_file.name,
-                    expected_size=int(link_info["size"]),
+                    expected_hash=SERVER_SEARCH_FILE_HASH.hex(),
+                    expected_name=SERVER_SEARCH_FILE_NAME,
+                    expected_size=SERVER_SEARCH_FILE_SIZE,
                     timeout_seconds=args.server_publish_timeout_seconds,
                 )
-            )
+            except rust_local_ed2k.ServerSearchFailure as exc:
+                driven_searches["rust"] = exc.evidence
+                search_failures["rust"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            current_phase = "mfc_server_keyword_search"
+            try:
+                driven_searches["mfc"] = rust_local_ed2k.run_single_server_search(
+                    client2_base_url,
+                    args.api_key,
+                    query=SERVER_SEARCH_QUERY,
+                    expected_hash=SERVER_SEARCH_FILE_HASH.hex(),
+                    expected_name=SERVER_SEARCH_FILE_NAME,
+                    expected_size=SERVER_SEARCH_FILE_SIZE,
+                    timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            except rust_local_ed2k.ServerSearchFailure as exc:
+                driven_searches["mfc"] = exc.evidence
+                search_failures["mfc"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
             current_phase = "collect_server_search_diagnostics"
             server_search_evidence = collect_server_search_diagnostics(
                 query=SERVER_SEARCH_QUERY,
-                expected_file_hash=transfer_hash,
-                expected_file_name=fixture_file.name,
-                expected_file_size=int(link_info["size"]),
+                expected_file_hash=SERVER_SEARCH_FILE_HASH.hex(),
+                expected_file_name=SERVER_SEARCH_FILE_NAME,
+                expected_file_size=SERVER_SEARCH_FILE_SIZE,
                 server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
-                rest_result=report["checks"]["client1_server_search"]["result"],
+                driven_searches=driven_searches,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=int(client2_process_id),
             )
-            report["checks"]["client1_server_search_diagnostics"] = (
+            report["checks"]["client_server_search_diagnostics"] = server_search_evidence
+            if search_failures:
+                report["checks"]["client_server_search_failures"] = search_failures
+                raise RuntimeError(
+                    f"Deterministic bilateral server search failed: {search_failures!r}"
+                )
+            server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(
                 server_search_evidence
             )
 
@@ -2520,6 +2638,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_login_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverLogin"] = server_login_evidence
+        if server_search_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverSearch"] = server_search_evidence
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
         return 1
@@ -2530,6 +2651,16 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     finally:
         close_results: dict[str, object] = {}
+        if server_search_publisher is not None:
+            try:
+                server_search_publisher.close()
+                close_results["server_search_publisher"] = {"ok": True}
+            except Exception as exc:
+                close_results["server_search_publisher"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         if client1_process is not None:
             try:
                 rust_client.stop_process_tree(client1_process)

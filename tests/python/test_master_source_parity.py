@@ -2756,6 +2756,42 @@ def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality
     assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(automatic_timeout_retry)
 
 
+def _check_server_socket_source__search_result_diagnostics_join_post_parse_state() -> None:
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(encoding="utf-8", errors="ignore")
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    search_header = (app_source_root() / "SearchDlg.h").read_text(encoding="utf-8", errors="ignore")
+    result_block = socket_source[
+        socket_source.index("case OP_SEARCHRESULT:") : socket_source.index("case OP_FOUNDSOURCES_OBFU:")
+    ]
+
+    assert "bool IsSearchRunning(uint32 uSearchID) const;" in search_header
+    assert "GetCurrentED2KSearchID()" in result_block
+    assert "GetResultCount(uSearchId)" in result_block
+    assert "GetFoundFiles(uSearchId)" in result_block
+    assert "IsSearchRunning(uSearchId)" in result_block
+    assert result_block.index("ProcessSearchAnswer(") < result_block.index("DiagEventLogEd2kServerSearchResultApplied(")
+    assert result_block.count("GetResultCount(uSearchId)") == 2
+    assert result_block.count("GetFoundFiles(uSearchId)") == 2
+
+    applied_logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerSearchResultApplied(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        'WriteDiagEventV2(_T("ed2k_tcp"), _T("search_result_applied")',
+        '\\"stateId\\":\\"server.search.result_applied\\"',
+        '\\"wireResultCount\\":%u',
+        '\\"cumulativeSourceCountBefore\\":%u',
+        '\\"cumulativeSourceCountAfter\\":%u',
+        '\\"distinctFileCountBefore\\":%u',
+        '\\"distinctFileCountAfter\\":%u',
+        '\\"expectedReply\\":%s',
+        '\\"moreResultsAvailable\\":%s',
+        'bExpectedReply ? _T("\\"accepted\\"") : _T("\\"late\\"")',
+    ):
+        assert required_field in applied_logger
+
+
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
 
 
@@ -4355,6 +4391,7 @@ _PARITY_CASES = [
     ("server_list_source::test_get_server_at_rejects_invalid_indices_before_position_access", _check_server_list_source__get_server_at_rejects_invalid_indices_before_position_access),
     ("server_socket_source::test_diagnostics_use_attempt_transport_before_handshake_completion", _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion),
     ("server_socket_source::test_fallback_diagnostics_preserve_attempt_causality", _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality),
+    ("server_socket_source::test_search_result_diagnostics_join_post_parse_state", _check_server_socket_source__search_result_diagnostics_join_post_parse_state),
     ("sha_hash_set_source::test_aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges", _check_sha_hash_set_source__aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges),
     ("shared_directory_rule_index_source::test_shared_directory_ops_owns_rule_index_and_key_helpers", _check_shared_directory_rule_index_source__shared_directory_ops_owns_rule_index_and_key_helpers),
     ("shared_directory_rule_index_source::test_preferences_tree_uses_shared_directory_rule_index", _check_shared_directory_rule_index_source__preferences_tree_uses_shared_directory_rule_index),

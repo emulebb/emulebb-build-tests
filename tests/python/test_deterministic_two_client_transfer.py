@@ -280,7 +280,7 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
         ]
     )
 
-    with pytest.raises(ValueError, match="MFC diagnostics oracle publisher"):
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
         module.validate_args(wrong_client)
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
         module.validate_args(wrong_case)
@@ -630,6 +630,23 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert (6209, "127.0.0.1", False) in availability_checks
 
 
+def test_choose_distinct_ports_adds_dedicated_search_publisher(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_search_publisher=True,
+    )
+
+    assert ports["search_publisher_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
     observed: dict[str, str | None] = {}
@@ -770,6 +787,25 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert script_text.count("client2_process_id = live_common.resolve_app_process_id(client2_app)") == 2
     assert 'current_phase = "stop_mfc_for_diagnostics"' in script_text
     assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
+
+
+def test_server_keyword_search_is_bilateral_and_uses_a_neutral_fixture() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_SEARCH_QUERY in module.SERVER_SEARCH_FILE_NAME
+    assert module.SERVER_SEARCH_FILE_NAME != "deterministicserversearch-transfer.bin"
+    assert module.SERVER_SEARCH_QUERY not in "deterministicserversearch-transfer.bin"
+    assert script_text.count("rust_local_ed2k.run_single_server_search(") == 2
+    assert 'report["checks"]["client_server_searches"] = driven_searches' in script_text
+    assert '"client1_server_search"' not in script_text
+    assert "ed2k_wire.Ed2kWireClient(" in script_text
+    assert "server_search_publisher.offer_file(" in script_text
+    assert "file_observer.wait_for_file(" in script_text
+    assert "server_control.wait_for_file(" not in script_text
+    assert script_text.count("except rust_local_ed2k.ServerSearchFailure as exc:") == 2
+    assert 'report["checks"]["client_server_search_failures"] = search_failures' in script_text
+    assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
 
 
 def test_rust_diagnostics_child_env_does_not_mutate_parent(

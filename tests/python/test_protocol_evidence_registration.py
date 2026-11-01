@@ -6,10 +6,16 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness import ed2k_wire
+from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness.protocol_evidence_registration import build_transfer_registration
 from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCHEMA
 
 FILE_HASH = "00112233445566778899aabbccddeeff"
+SEARCH_FILE_HASH = "ffeeddccbbaa99887766554433221100"
+SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
+SEARCH_FILE_SIZE = 12_345
+SEARCH_QUERY = "deterministicparitysearch"
 
 
 def bilateral_login_evidence(
@@ -194,6 +200,218 @@ def attach_server_login(
         login["coverageClaims"]["eligibleCoverageIds"]
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+
+
+def driven_server_search(client: str, search_id: str) -> dict[str, object]:
+    result = {
+        "hash": SEARCH_FILE_HASH.upper(),
+        "sizeBytes": SEARCH_FILE_SIZE,
+        "sources": 1,
+        "completeSources": 1,
+        "searchId": search_id,
+    }
+    result["displayName" if client == "rust" else "name"] = SEARCH_FILE_NAME
+    created_method = {"requestedMethod": "server"} if client == "rust" else {"method": "server"}
+    result_method = (
+        {"requestedMethod": "server", "resolvedMethod": "server"} if client == "rust" else {"method": "server"}
+    )
+    return {
+        "searchId": search_id,
+        "created": {
+            "id": search_id,
+            "query": SEARCH_QUERY,
+            **created_method,
+        },
+        "search": {
+            "id": search_id,
+            "query": SEARCH_QUERY,
+            **result_method,
+            "status": "completed",
+            "total": 1,
+            "items": [result],
+        },
+        "result": result,
+        "observations": [{"status": "completed", "resultCount": 1}],
+    }
+
+
+def bilateral_search_evidence(
+    driven_searches: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    payload_hex = ed2k_wire.encode_term_search(SEARCH_QUERY).hex()
+    wire_result = {
+        "hash": SEARCH_FILE_HASH.upper(),
+        "name": SEARCH_FILE_NAME,
+        "size": SEARCH_FILE_SIZE,
+        "sources": 1,
+        "complete_sources": 1,
+        "result_source_id": 1,
+        "result_source_port": 4664,
+    }
+
+    def client_row(client: str) -> dict[str, object]:
+        rust = client == "rust"
+        request_sequence = 20 if rust else 30
+        reply_sequence = 23 if rust else 31
+        search_id = str(driven_searches[client]["searchId"])
+        driven_result = driven_searches[client]["result"]
+        return {
+            "ok": True,
+            "rest": {
+                "ok": True,
+                "searchId": search_id,
+                "status": "completed",
+                "method": (
+                    {
+                        "createdRequested": "server",
+                        "finalRequested": "server",
+                        "finalResolved": "server",
+                    }
+                    if rust
+                    else {"created": "server", "final": "server"}
+                ),
+                "total": 1,
+                "exactResultCount": 1,
+                "result": driven_result,
+            },
+            "wire": {
+                "ok": True,
+                "request": {
+                    "ok": True,
+                    "endpointRequestCount": 1,
+                    "exactRequestCount": 1,
+                    "sequence": request_sequence,
+                    "traceId": 41 if rust else 42,
+                    "sendAttemptId": 51 if rust else None,
+                    "payloadHex": payload_hex,
+                    "transportMode": "obfuscated",
+                },
+                "reply": {
+                    "ok": True,
+                    "endpointResponseCount": 1,
+                    "traceResponseCount": 1,
+                    "malformedResponseCount": 0,
+                    "decodedRowCount": 1,
+                    "exactRowCount": 1,
+                    "exactRow": dict(wire_result),
+                    "sequence": reply_sequence,
+                    "transportMode": "obfuscated",
+                },
+            },
+            "lifecycle": (
+                {
+                    "ok": True,
+                    "sendOutcomeCount": 1,
+                    "searchActiveCount": 1,
+                    "completedCount": 1,
+                    "schedulerCompletionCount": 1,
+                    "searchActiveSequence": 19,
+                    "sendOutcomeSequence": 21,
+                    "completedSequence": 24,
+                    "schedulerSequence": 25,
+                }
+                if rust
+                else {
+                    "ok": True,
+                    "appliedCount": 1,
+                    "appliedSequence": 32,
+                    "expectedReply": True,
+                    "wireResultCount": 1,
+                    "cumulativeSourceCountBefore": 0,
+                    "cumulativeSourceCountAfter": 1,
+                    "distinctFileCountBefore": 0,
+                    "distinctFileCountAfter": 1,
+                    "moreResultsAvailable": False,
+                    "outcome": "accepted",
+                }
+            ),
+            "wireRestEqual": True,
+        }
+
+    return {
+        "schema": server_search_diagnostic_evidence.SCHEMA,
+        "ok": True,
+        "query": SEARCH_QUERY,
+        "serverEndpoint": "127.0.0.1:4661",
+        "expectedFile": {
+            "hash": SEARCH_FILE_HASH,
+            "name": SEARCH_FILE_NAME,
+            "size": SEARCH_FILE_SIZE,
+        },
+        "failures": [],
+        "clients": {
+            "rust": client_row("rust"),
+            "mfc": client_row("mfc"),
+        },
+        "comparison": {
+            "ok": True,
+            "requestPayloadEqual": True,
+            "replyRowEqual": True,
+            "restResultEqual": True,
+            "transportModeEqual": True,
+            "rustWireRestEqual": True,
+            "mfcWireRestEqual": True,
+        },
+        "observedCoverageIds": list(server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS),
+        "coverageClaims": {
+            "eligibleCoverageIds": list(server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS),
+            "evidenceLayers": list(server_search_diagnostic_evidence.EVIDENCE_LAYERS),
+        },
+        "captures": {
+            "rust": {"processId": 101, "selectedSegments": ["rust.jsonl"]},
+            "mfc": {"processId": 202, "selectedSegments": ["mfc.jsonl"]},
+        },
+    }
+
+
+def attach_server_search(report: dict[str, object]) -> dict[str, object]:
+    driven_searches = {
+        "rust": driven_server_search("rust", "rust-search-1"),
+        "mfc": driven_server_search("mfc", "mfc-search-1"),
+    }
+    evidence = bilateral_search_evidence(driven_searches)
+    report["transfer_scenario"] = "server-keyword-search"
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {"ed2k_tcp": 4661, "search_publisher_tcp": 4664},
+    }
+    report["server_search_fixture"] = {
+        "hash": SEARCH_FILE_HASH,
+        "name": SEARCH_FILE_NAME,
+        "size": SEARCH_FILE_SIZE,
+        "publisher": {
+            "nickname": "search-fixture-publisher",
+            "tcpPort": 4664,
+            "login": {"assigned_id": 1, "id_kind": "low-id"},
+        },
+        "publication": {
+            "hash": SEARCH_FILE_HASH.upper(),
+            "indexed": True,
+            "name": SEARCH_FILE_NAME,
+            "requested_size": SEARCH_FILE_SIZE,
+            "search_result": {
+                "hash": SEARCH_FILE_HASH.upper(),
+                "name": SEARCH_FILE_NAME,
+                "result_source_id": 1,
+                "result_source_port": 4664,
+                "size": SEARCH_FILE_SIZE,
+            },
+            "search_source": {
+                "id": 1,
+                "kind": "low-id-search-reference",
+                "port": 4664,
+            },
+            "size": SEARCH_FILE_SIZE,
+        },
+    }
+    report["checks"]["client_server_searches"] = driven_searches
+    report["checks"]["client_server_search_diagnostics"] = evidence
+    report["diagnostics"]["serverSearch"] = evidence
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
 
 
 def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
@@ -604,64 +822,7 @@ def test_build_transfer_registration_rejects_retired_server_login_mode_field(
 
 def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_path: Path) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
-    report["transfer_scenario"] = "server-keyword-search"
-    report["network"] = {
-        "ed2k_server_address": "127.0.0.1",
-        "ports": {"ed2k_tcp": 4661},
-    }
-    report["checks"]["client2_server_file"] = {
-        "indexed": True,
-        "hash": FILE_HASH.upper(),
-        "name": "fixture.bin",
-        "size": report["fixture"]["size"],
-    }
-    report["checks"]["client1_server_search"] = {
-        "result": {
-            "hash": FILE_HASH.upper(),
-            "displayName": "fixture.bin",
-            "sizeBytes": report["fixture"]["size"],
-        }
-    }
-    report["diagnostics"]["serverSearch"] = {
-        "schema": "emulebb-build-tests.deterministic-server-search-diagnostics.v1",
-        "ok": True,
-        "query": "deterministicparitysearch",
-        "serverEndpoint": "127.0.0.1:4661",
-        "expectedFile": {
-            "hash": FILE_HASH,
-            "name": "fixture.bin",
-            "size": report["fixture"]["size"],
-        },
-        "failures": [],
-        "checks": {
-            "request": {
-                "ok": True,
-                "endpointRequestCount": 1,
-                "exactRequestCount": 1,
-                "sendSucceeded": True,
-                "sequence": 20,
-            },
-            "reply": {
-                "ok": True,
-                "responseCount": 1,
-                "malformedResponseCount": 0,
-                "decodedRowCount": 1,
-                "exactRowCount": 1,
-                "exactRow": {
-                    "hash": FILE_HASH.upper(),
-                    "name": "fixture.bin",
-                    "size": report["fixture"]["size"],
-                },
-                "firstResponseSequence": 22,
-            },
-            "restResult": {"ok": True},
-        },
-        "coverageClaims": {
-            "eligibleCoverageIds": [],
-            "evidenceLayers": list(EVIDENCE_LAYERS),
-        },
-        "observedCoverageIds": ["server.reply.search", "server.search.keyword"],
-    }
+    attach_server_search(report)
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     registration = build_transfer_registration(report_path, output_root=output_root)
@@ -670,8 +831,208 @@ def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_pat
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
         "transfer.block.uncompressed",
     ]
+    search_rows = [
+        row
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] in server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    ]
+    assert [row["coverageId"] for row in search_rows] == [
+        "server.reply.search",
+        "server.search.keyword",
+    ]
+
+
+def test_build_transfer_registration_rejects_legacy_server_search_schema(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["schema"] = "emulebb-build-tests.deterministic-server-search-diagnostics.v1"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_one_client_search_mismatch(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["clients"]["mfc"]["wire"]["reply"]["exactRow"]["hash"] = FILE_HASH
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match server_search_fixture"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_joins_search_result_to_neutral_publisher(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report)
+    report["server_search_fixture"]["publication"]["search_result"]["result_source_id"] = 99
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not joined to the neutral publisher"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_nonisolated_server_search_fixture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report)
+    report["fixture"]["name"] = SEARCH_FILE_NAME
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not isolated from the MFC transfer fixture"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_unjoined_server_search_id(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["clients"]["mfc"]["rest"]["searchId"] = "different-search"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="REST search evidence is not joined"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_out_of_order_server_search_lifecycle(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["clients"]["rust"]["lifecycle"]["sendOutcomeSequence"] = 19
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="lifecycle is not causally ordered"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize("claim_field", ["observedCoverageIds", "eligibleCoverageIds"])
+def test_build_transfer_registration_rejects_inexact_server_search_claims(
+    tmp_path: Path,
+    claim_field: str,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    if claim_field == "observedCoverageIds":
+        evidence[claim_field] = ["server.search.keyword"]
+        error = "observations are not exact"
+    else:
+        evidence["coverageClaims"][claim_field] = ["server.search.keyword"]
+        error = "claims are not exact"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=error):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_false_server_search_comparison(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["comparison"]["requestPayloadEqual"] = False
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_wire_rest_source_mismatch_even_when_bilateral(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report)
+    for driven in report["checks"]["client_server_searches"].values():
+        driven["result"]["sources"] = 0
+        driven["result"]["completeSources"] = 0
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="wire result is not joined to its applied REST result"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_invalid_search_availability_values(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    for client in ("rust", "mfc"):
+        report["checks"]["client_server_searches"][client]["result"]["sources"] = True
+        evidence["clients"][client]["wire"]["reply"]["exactRow"]["sources"] = True
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be a non-negative integer"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize(
+    ("client", "field"),
+    [("rust", "method"), ("mfc", "requestedMethod")],
+)
+def test_build_transfer_registration_rejects_wrong_authority_search_method_schema(
+    tmp_path: Path,
+    client: str,
+    field: str,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report)
+    report["checks"]["client_server_searches"][client]["created"][field] = "server"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=f"{client} driven server search is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_wrong_evidence_search_method_schema(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["clients"]["mfc"]["rest"]["method"] = {
+        "createdRequested": "server",
+        "finalRequested": "server",
+        "finalResolved": "server",
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="REST search evidence is not joined"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_noncanonical_server_search_payload(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report)
+    evidence["clients"]["mfc"]["wire"]["request"]["payloadHex"] = "00"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request is not singular and exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_unindexed_server_search_fixture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report)
+    report["server_search_fixture"]["publication"]["indexed"] = False
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not an exact indexed observation"):
+        build_transfer_registration(report_path, output_root=output_root)
 
 
 def test_build_transfer_registration_rejects_server_search_without_exact_publication(
