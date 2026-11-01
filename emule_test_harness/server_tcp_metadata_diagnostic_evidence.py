@@ -71,7 +71,14 @@ def _payload(record: dict[str, Any] | None) -> bytes | None:
     return payload if body.get("payloadLen") == len(payload) else None
 
 
-def _packet(record: dict[str, Any], *, endpoint: str, direction: str, opcode: int) -> bool:
+def _packet(
+    record: dict[str, Any],
+    *,
+    endpoint: str,
+    direction: str,
+    opcode: int,
+    outcome: str,
+) -> bool:
     body = _body(record)
     keys = _keys(record)
     return bool(
@@ -82,7 +89,7 @@ def _packet(record: dict[str, Any], *, endpoint: str, direction: str, opcode: in
         and keys.get("opcode") == opcode
         and body.get("flow") == "server"
         and body.get("direction") == direction
-        and body.get("outcome") == "accepted"
+        and body.get("outcome") == outcome
         and body.get("protocolMarker") == PROTOCOL_MARKER
         and body.get("opcode") == opcode
     )
@@ -94,39 +101,52 @@ def _one_packet(
     endpoint: str,
     direction: str,
     opcode: int,
+    outcome: str,
 ) -> tuple[dict[str, Any] | None, int]:
     matches = [
         record
         for record in records
-        if _packet(record, endpoint=endpoint, direction=direction, opcode=opcode)
+        if _packet(
+            record,
+            endpoint=endpoint,
+            direction=direction,
+            opcode=opcode,
+            outcome=outcome,
+        )
     ]
     return (matches[0] if len(matches) == 1 else None, len(matches))
 
 
-def _wire_evidence(records: list[dict[str, Any]], *, endpoint: str) -> dict[str, Any]:
+def _wire_evidence(
+    records: list[dict[str, Any]], *, client: str, endpoint: str
+) -> dict[str, Any]:
     id_change, id_change_count = _one_packet(
         records,
         endpoint=endpoint,
         direction="recv",
         opcode=ID_CHANGE_OPCODE,
+        outcome="accepted",
     )
     request, request_count = _one_packet(
         records,
         endpoint=endpoint,
         direction="send",
         opcode=GET_SERVER_LIST_OPCODE,
+        outcome="attempted" if client == "rust" else "send_succeeded",
     )
     status, status_count = _one_packet(
         records,
         endpoint=endpoint,
         direction="recv",
         opcode=STATUS_OPCODE,
+        outcome="accepted",
     )
     ident, ident_count = _one_packet(
         records,
         endpoint=endpoint,
         direction="recv",
         opcode=IDENT_OPCODE,
+        outcome="accepted",
     )
     decode_errors: list[str] = []
     decoded_status = None
@@ -178,6 +198,7 @@ def _wire_evidence(records: list[dict[str, Any]], *, endpoint: str) -> dict[str,
         },
         "sequences": sequences,
         "requestPayloadHex": request_payload.hex() if request_payload is not None else None,
+        "requestOutcome": _body(request).get("outcome") if request is not None else None,
         "transportModes": transports,
         "status": decoded_status,
         "ident": decoded_ident,
@@ -328,7 +349,11 @@ def build_server_tcp_metadata_diagnostic_evidence(
     clients: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
     for client in CLIENTS:
-        wire = _wire_evidence(records_by_client[client], endpoint=server_endpoint)
+        wire = _wire_evidence(
+            records_by_client[client],
+            client=client,
+            endpoint=server_endpoint,
+        )
         applied = _applied_evidence(
             records_by_client[client],
             endpoint=server_endpoint,

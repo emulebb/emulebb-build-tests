@@ -34,7 +34,15 @@ def _ident_payload() -> bytes:
     )
 
 
-def _packet(seq: int, opcode: int, direction: str, payload: bytes, trace_id: int) -> dict[str, object]:
+def _packet(
+    seq: int,
+    opcode: int,
+    direction: str,
+    payload: bytes,
+    trace_id: int,
+    *,
+    outcome: str = "accepted",
+) -> dict[str, object]:
     return {
         "family": "ed2k_tcp",
         "event": "packet",
@@ -48,7 +56,7 @@ def _packet(seq: int, opcode: int, direction: str, payload: bytes, trace_id: int
         "body": {
             "flow": "server",
             "direction": direction,
-            "outcome": "accepted",
+            "outcome": outcome,
             "traceId": trace_id,
             "protocolMarker": ed2k_wire.PROTO_EDONKEY,
             "opcode": opcode,
@@ -90,10 +98,19 @@ def _applied(
     }
 
 
-def _records(*, trace_id: int, users: int, files: int) -> list[dict[str, object]]:
+def _records(
+    *, client: str, trace_id: int, users: int, files: int
+) -> list[dict[str, object]]:
     return [
         _packet(1, ed2k_wire.OP_IDCHANGE, "recv", struct.pack("<I", 7), trace_id),
-        _packet(2, evidence.GET_SERVER_LIST_OPCODE, "send", b"", trace_id),
+        _packet(
+            2,
+            evidence.GET_SERVER_LIST_OPCODE,
+            "send",
+            b"",
+            trace_id,
+            outcome="attempted" if client == "rust" else "send_succeeded",
+        ),
         _packet(3, ed2k_wire.OP_SERVERSTATUS, "recv", struct.pack("<II", users, files), trace_id),
         _packet(4, ed2k_wire.OP_SERVERIDENT, "recv", _ident_payload(), trace_id),
         _applied(
@@ -143,8 +160,8 @@ def _build() -> dict[str, object]:
         seed_name=SEED_NAME,
         expected_name=SERVER_NAME,
         expected_description=SERVER_DESCRIPTION,
-        rust_records=_records(trace_id=11, users=2, files=1),
-        mfc_records=_records(trace_id=22, users=3, files=2),
+        rust_records=_records(client="rust", trace_id=11, users=2, files=1),
+        mfc_records=_records(client="mfc", trace_id=22, users=3, files=2),
         rest_snapshots={"rust": _rest(2, 1), "mfc": _rest(3, 2)},
     )
 
@@ -163,7 +180,7 @@ def test_bilateral_tcp_metadata_proof_accepts_per_client_dynamic_counts() -> Non
 
 
 def test_tcp_metadata_proof_rejects_missing_post_apply_event() -> None:
-    mfc_records = _records(trace_id=22, users=3, files=2)
+    mfc_records = _records(client="mfc", trace_id=22, users=3, files=2)
     mfc_records.pop()
 
     report = evidence.build_server_tcp_metadata_diagnostic_evidence(
@@ -171,7 +188,7 @@ def test_tcp_metadata_proof_rejects_missing_post_apply_event() -> None:
         seed_name=SEED_NAME,
         expected_name=SERVER_NAME,
         expected_description=SERVER_DESCRIPTION,
-        rust_records=_records(trace_id=11, users=2, files=1),
+        rust_records=_records(client="rust", trace_id=11, users=2, files=1),
         mfc_records=mfc_records,
         rest_snapshots={"rust": _rest(2, 1), "mfc": _rest(3, 2)},
     )
@@ -188,8 +205,8 @@ def test_tcp_metadata_proof_rejects_rest_state_not_equal_to_wire() -> None:
         seed_name=SEED_NAME,
         expected_name=SERVER_NAME,
         expected_description=SERVER_DESCRIPTION,
-        rust_records=_records(trace_id=11, users=2, files=1),
-        mfc_records=_records(trace_id=22, users=3, files=2),
+        rust_records=_records(client="rust", trace_id=11, users=2, files=1),
+        mfc_records=_records(client="mfc", trace_id=22, users=3, files=2),
         rest_snapshots={"rust": _rest(999, 1), "mfc": _rest(3, 2)},
     )
 
@@ -199,7 +216,7 @@ def test_tcp_metadata_proof_rejects_rest_state_not_equal_to_wire() -> None:
 
 
 def test_tcp_metadata_proof_rejects_duplicate_or_malformed_wire_reply() -> None:
-    rust_records = _records(trace_id=11, users=2, files=1)
+    rust_records = _records(client="rust", trace_id=11, users=2, files=1)
     duplicate = dict(rust_records[2])
     duplicate["seq"] = 7
     rust_records.append(duplicate)
@@ -210,12 +227,30 @@ def test_tcp_metadata_proof_rejects_duplicate_or_malformed_wire_reply() -> None:
         expected_name=SERVER_NAME,
         expected_description=SERVER_DESCRIPTION,
         rust_records=rust_records,
-        mfc_records=_records(trace_id=22, users=3, files=2),
+        mfc_records=_records(client="mfc", trace_id=22, users=3, files=2),
         rest_snapshots={"rust": _rest(2, 1), "mfc": _rest(3, 2)},
     )
 
     assert report["ok"] is False
     assert report["clients"]["rust"]["wire"]["packetCounts"]["status"] == 2
+
+
+def test_tcp_metadata_proof_requires_client_specific_send_boundary_outcome() -> None:
+    rust_records = _records(client="rust", trace_id=11, users=2, files=1)
+    rust_records[1]["body"]["outcome"] = "send_succeeded"
+
+    report = evidence.build_server_tcp_metadata_diagnostic_evidence(
+        server_endpoint=ENDPOINT,
+        seed_name=SEED_NAME,
+        expected_name=SERVER_NAME,
+        expected_description=SERVER_DESCRIPTION,
+        rust_records=rust_records,
+        mfc_records=_records(client="mfc", trace_id=22, users=3, files=2),
+        rest_snapshots={"rust": _rest(2, 1), "mfc": _rest(3, 2)},
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["wire"]["packetCounts"]["getServerList"] == 0
 
 
 def test_tcp_metadata_proof_requires_one_schema_only() -> None:

@@ -451,6 +451,7 @@ def bilateral_server_tcp_metadata_evidence() -> dict[str, object]:
                     "ident": base + 3,
                 },
                 "requestPayloadHex": "",
+                "requestOutcome": "attempted" if client == "rust" else "send_succeeded",
                 "transportModes": ["obfuscated"] * 4,
                 "status": {"users": users, "files": files},
                 "ident": dict(server_ident),
@@ -1294,6 +1295,18 @@ def test_build_transfer_registration_rejects_plaintext_tcp_metadata_claim(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="transport is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_wrong_tcp_metadata_send_outcome(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["clients"]["rust"]["wire"]["requestOutcome"] = "send_succeeded"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request or decode result is not exact"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

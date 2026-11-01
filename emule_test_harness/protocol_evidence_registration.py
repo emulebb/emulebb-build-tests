@@ -693,6 +693,7 @@ def _derived_server_tcp_metadata_coverage_ids(
             "packetCounts",
             "sequences",
             "requestPayloadHex",
+            "requestOutcome",
             "transportModes",
             "status",
             "ident",
@@ -724,7 +725,12 @@ def _derived_server_tcp_metadata_coverage_ids(
             and id_change_sequence < status_sequence
         ):
             raise ValueError(f"{client} server TCP metadata packets are not causally ordered")
-        if wire.get("requestPayloadHex") != "" or wire.get("decodeErrors") != []:
+        expected_request_outcome = "attempted" if client == "rust" else "send_succeeded"
+        if (
+            wire.get("requestPayloadHex") != ""
+            or wire.get("requestOutcome") != expected_request_outcome
+            or wire.get("decodeErrors") != []
+        ):
             raise ValueError(f"{client} server TCP metadata request or decode result is not exact")
         transport_modes = wire.get("transportModes")
         if transport_modes != ["obfuscated", "obfuscated", "obfuscated", "obfuscated"]:
