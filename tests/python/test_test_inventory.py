@@ -66,5 +66,4 @@ def test_protocol_live_suites_have_explicit_catalog_classification() -> None:
     assert protocol["cleanupCandidates"] == [
         "scripts/local-ed2k-search-soak.py",
         "scripts/native-windows-parity-campaign.py",
-        "scripts/rust-ed2k-total-parity-audit.py",
     ]

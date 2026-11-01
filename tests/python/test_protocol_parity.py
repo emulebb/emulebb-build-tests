@@ -71,7 +71,7 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
         "canonical": 6,
-        "duplicate": 1,
+        "duplicate": 0,
         "historical": 2,
         "product-only": 2,
         "support": 11,
@@ -79,7 +79,6 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
     assert report["assets"]["cleanupCandidates"] == [
         "scripts/local-ed2k-search-soak.py",
         "scripts/native-windows-parity-campaign.py",
-        "scripts/rust-ed2k-total-parity-audit.py",
     ]
 
     assets = {row["path"]: row for row in payload["assetClassifications"]}

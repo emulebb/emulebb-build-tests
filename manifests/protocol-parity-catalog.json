@@ -161,13 +161,6 @@
       "classification": "historical",
       "path": "scripts/native-windows-parity-campaign.py",
       "reason": "Legacy CI-054 all-in-one campaign retained only until catalog campaign migration completes."
-    },
-    {
-      "campaignIds": [],
-      "classification": "duplicate",
-      "path": "scripts/rust-ed2k-total-parity-audit.py",
-      "reason": "Competing aggregate coverage model scheduled for removal after release manifests consume catalog receipts.",
-      "replacementPath": "scripts/validate-protocol-catalog.py"
     }
   ],
   "campaigns": [

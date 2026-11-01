@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust-overnight",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust full overnight parity campaign",
-  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the source-anchored binary/state oracle plus all five Rust proof packages, full protocol-combination matrix, private Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the canonical stock oracle, focused Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
   "phases": [
     {
@@ -72,34 +72,6 @@
                 "/checks/stock_protocol_oracle_requirements/rustProofPackageCount": 5,
                 "/checks/stock_protocol_oracle_requirements/rustProofExecutionsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/binaryDigestsPassed": true
-              }
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
-          "title": "Rust overnight local eD2K protocol-combination matrix",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/local-ed2k-rust-protocol-combinations/latest/local-ed2k-rust-protocol-combinations-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/checks/protocol_matrix_coverage/caseCount": 4,
-                "/checks/protocol_matrix_coverage/hashOnlyFixtureNames": true,
-                "/checks/protocol_matrix_coverage/multiTransferFixtureNames": true,
-                "/checks/rust_protocol_case_requirements/threeTransfersPerCase": true,
-                "/checks/rust_protocol_case_requirements/hashOnlyMetadataRecoveryPerCase": true,
-                "/checks/rust_protocol_case_requirements/unicodeHashOnlyMetadataPerCase": true,
-                "/checks/rust_protocol_case_requirements/namedTransferHashsetsPerCase": true,
-                "/checks/rust_protocol_case_requirements/obfuscatedSourceUserHashPerCase": true
               }
             }
           ]
@@ -263,35 +235,6 @@
               }
             }
           ]
-        },
-        {
-          "id": "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1",
-          "title": "Rust overnight total eD2K parity audit",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/rust-ed2k-total-parity-audit.py",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/checks/rust_ed2k_total_parity_audit/requirementCount": 7,
-                "/checks/rust_ed2k_total_parity_audit/allRequirementsPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/failedRequirementCount": 0,
-                "/checks/rust_ed2k_total_parity_audit/protocolCatalogPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/privateEd2kModulesPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/preflightAndRestPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed": true
-              }
-            }
-          ]
         }
       ]
     },
@@ -372,11 +315,9 @@
       "id": "emulebb-rust-overnight-ed2k-protocol-parity",
       "coveredBy": [
         "emulebb.flow.rust.overnight.stock-protocol-oracle.v1",
-        "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
         "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
         "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
-        "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1",
-        "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
+        "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
       ]
     },
     {

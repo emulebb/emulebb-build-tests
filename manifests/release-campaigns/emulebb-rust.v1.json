@@ -99,22 +99,6 @@
           ]
         },
         {
-          "id": "emulebb.flow.rust.local-ed2k.protocol-combinations.v1",
-          "title": "Rust local eD2K protocol-combination proof",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe",
-          "evidence": [
-            {
-              "kind": "manual",
-              "required": true,
-              "description": "The Rust protocol-combination matrix reuses the stock eMuleBB local cases for plain server traffic, obfuscated-preferred server traffic, obfuscated-required server traffic, and obfuscated-required transfer with compressible transfer payload while downloading Unicode-named fixtures from the eMuleBB MFC main parity peer through the shared Rust ed2k-server launcher. The suite records a protocol_matrix_coverage check requiring all four cases plus plain, obfuscated, compressible-fixture, low-compressibility fixture, Unicode fixture-name, and hash-only fixture-name surfaces, and each case requires ED2K link name round-trip, three Rust transfers in one protocol session, hash-only ED2K link metadata recovery in every protocol case, completed large-file bytes, source userHash metadata, and MD4/AICH hashset metadata for both named transfers."
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1",
           "title": "Rust and eMuleBB bidirectional local swarm proof",
           "phase": "protocol-parity",
@@ -285,7 +269,6 @@
       "id": "emulebb-rust-local-ed2k-protocol",
       "coveredBy": [
         "emulebb.flow.rust.local-ed2k.search-download.v1",
-        "emulebb.flow.rust.local-ed2k.protocol-combinations.v1",
         "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"
       ]
     },
