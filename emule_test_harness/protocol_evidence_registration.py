@@ -11,9 +11,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import diag_event_runs
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
+from emule_test_harness import server_udp_metadata_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -26,6 +28,7 @@ ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_TCP_METADATA_SCENARIO = "server-tcp-metadata"
+SERVER_UDP_METADATA_SCENARIO = "server-udp-metadata"
 SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
 SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
 SERVER_SEARCH_EVIDENCE_LAYERS = (
@@ -34,8 +37,14 @@ SERVER_SEARCH_EVIDENCE_LAYERS = (
     "local-cross-client",
 )
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
+SERVER_UDP_METADATA_SEED_NAME = "seed-before-server-ident"
+SERVER_UDP_METADATA_SEED_DESCRIPTION = "seed metadata before server reply"
 SERVER_IDENT_NAME = "emulebb-local-e2e"
 SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
+SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
+SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
+SERVER_UDP_METADATA_FILE_SIZE = 54_321
+SERVER_UDP_METADATA_PUBLISHER_NICK = "emulebb-harness-udp-metadata-publisher"
 SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
@@ -82,6 +91,20 @@ def _lower_hex(value: Any, pattern: re.Pattern[str], field: str) -> str:
     return value
 
 
+def _canonical_ipv4_endpoint(value: Any, field: str) -> tuple[str, int]:
+    if not isinstance(value, str) or value.count(":") != 1:
+        raise ValueError(f"{field} must be canonical IPv4 host:port")
+    host, port_text = value.rsplit(":", 1)
+    try:
+        canonical_host = str(ipaddress.IPv4Address(host))
+        port = int(port_text)
+    except (ipaddress.AddressValueError, ValueError) as exc:
+        raise ValueError(f"{field} must be canonical IPv4 host:port") from exc
+    if canonical_host != host or not 1 <= port <= 65535 or str(port) != port_text:
+        raise ValueError(f"{field} must be canonical IPv4 host:port")
+    return host, port
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -96,6 +119,15 @@ def _path_within(value: Any, root: Path, field: str) -> Path:
     path = Path(value).resolve()
     if not path.is_relative_to(root) or not path.is_file():
         raise ValueError(f"{field} must resolve to a file under the immutable run directory")
+    return path
+
+
+def _directory_within(value: Any, root: Path, field: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty path")
+    path = Path(value).resolve()
+    if not path.is_relative_to(root) or not path.is_dir():
+        raise ValueError(f"{field} must resolve to a directory under the immutable run directory")
     return path
 
 
@@ -893,6 +925,201 @@ def _derived_server_tcp_metadata_coverage_ids(
     return expected_ids
 
 
+def _load_udp_metadata_capture(
+    capture_value: Any,
+    *,
+    client: str,
+    run_directory: Path,
+) -> list[dict[str, Any]]:
+    capture = _object(
+        capture_value,
+        f"diagnostics.serverUdpMetadata.captures.{client}",
+    )
+    if set(capture) != {"diagnosticsDir", "processId", "selectedSegments"}:
+        raise ValueError(f"server UDP metadata {client} capture has an unexpected shape")
+    process_id = _positive_int(
+        capture.get("processId"),
+        f"server UDP metadata {client} process ID",
+    )
+    diagnostics_dir = _directory_within(
+        capture.get("diagnosticsDir"),
+        run_directory,
+        f"server UDP metadata {client} diagnosticsDir",
+    )
+    segment_values = capture.get("selectedSegments")
+    if not isinstance(segment_values, list) or not segment_values:
+        raise ValueError(f"server UDP metadata {client} capture has no selected segments")
+    segments = [
+        _path_within(
+            value,
+            run_directory,
+            f"server UDP metadata {client} selected segment",
+        )
+        for value in segment_values
+    ]
+    if len(segments) != len(set(segments)) or any(
+        not path.is_relative_to(diagnostics_dir) for path in segments
+    ):
+        raise ValueError(f"server UDP metadata {client} selected segments are not exact")
+    identities = [
+        diag_event_runs.diag_segment_identity(path, client=client) for path in segments
+    ]
+    if any(identity is None for identity in identities):
+        raise ValueError(f"server UDP metadata {client} selected segment is not current-schema")
+    typed_identities = [identity for identity in identities if identity is not None]
+    run_ids = {identity[1] for identity in typed_identities}
+    if len(run_ids) != 1 or any(identity[0] != process_id for identity in typed_identities):
+        raise ValueError(f"server UDP metadata {client} selected segments mix run identity")
+    run_id = next(iter(run_ids))
+    snapshot = diag_event_runs.load_exact_diag_run_snapshot(
+        segments,
+        client=client,
+        process_id=process_id,
+        run_id=run_id,
+    )
+    if not snapshot.records:
+        raise ValueError(f"server UDP metadata {client} capture is empty")
+    return list(snapshot.records)
+
+
+def _derived_server_udp_metadata_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    metadata_value = diagnostics.get("serverUdpMetadata")
+    if metadata_value is None:
+        if report.get("transfer_scenario") == SERVER_UDP_METADATA_SCENARIO:
+            raise ValueError("server UDP metadata scenario has no diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_UDP_METADATA_SCENARIO:
+        raise ValueError("server UDP metadata evidence requires its dedicated scenario")
+
+    metadata = _object(metadata_value, "diagnostics.serverUdpMetadata")
+    if metadata.get("schema") != server_udp_metadata_diagnostic_evidence.SCHEMA:
+        raise ValueError("server UDP metadata diagnostics use an unexpected schema")
+    try:
+        server_udp_metadata_diagnostic_evidence.require_server_udp_metadata_diagnostic_evidence(
+            metadata
+        )
+    except RuntimeError as exc:
+        raise ValueError("server UDP metadata diagnostics are not complete") from exc
+    expected_ids = list(server_udp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
+    if metadata.get("evidenceLayers") != list(
+        server_udp_metadata_diagnostic_evidence.EVIDENCE_LAYERS
+    ):
+        raise ValueError("server UDP metadata evidence layers are not canonical")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_udp_metadata_diagnostics") != metadata:
+        raise ValueError("server UDP metadata diagnostics do not match the retained snapshot")
+    raw_rest = _object(
+        checks.get("client_server_udp_metadata_rest"),
+        "checks.client_server_udp_metadata_rest",
+    )
+    if set(raw_rest) != {"rust", "mfc"}:
+        raise ValueError("server UDP metadata REST snapshots must contain exactly rust and mfc")
+
+    anchor_endpoint = metadata.get("anchorServerEndpoint")
+    target_endpoint = metadata.get("targetServerEndpoint")
+    target_udp_endpoint = metadata.get("targetUdpEndpoint")
+    anchor_host, anchor_port = _canonical_ipv4_endpoint(
+        anchor_endpoint, "server UDP metadata anchor endpoint"
+    )
+    target_host, target_port = _canonical_ipv4_endpoint(
+        target_endpoint, "server UDP metadata target endpoint"
+    )
+    target_udp_host, target_udp_port = _canonical_ipv4_endpoint(
+        target_udp_endpoint, "server UDP metadata target UDP endpoint"
+    )
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    if (
+        anchor_host != target_host
+        or target_host != target_udp_host
+        or anchor_host != network.get("ed2k_server_address")
+        or anchor_port != ports.get("ed2k_tcp")
+        or target_port != ports.get("metadata_ed2k_tcp")
+        or target_udp_port != ports.get("metadata_ed2k_udp")
+        or target_udp_port != target_port + 4
+        or anchor_port == target_port
+    ):
+        raise ValueError("server UDP metadata endpoints do not match the managed topology")
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    if protocol_case.get("name") != "plain-server-plain-clients":
+        raise ValueError("server UDP metadata scenario requires the canonical plaintext case")
+
+    expected = _object(metadata.get("expected"), "diagnostics.serverUdpMetadata.expected")
+    canonical_expected = {
+        "seedName": SERVER_UDP_METADATA_SEED_NAME,
+        "seedDescription": SERVER_UDP_METADATA_SEED_DESCRIPTION,
+        "name": SERVER_IDENT_NAME,
+        "description": SERVER_IDENT_DESCRIPTION,
+        "users": 1,
+        "files": 1,
+    }
+    if expected != canonical_expected:
+        raise ValueError("server UDP metadata expected values are not canonical")
+
+    target = _object(report.get("udp_metadata_target"), "udp_metadata_target")
+    publisher = _object(target.get("publisher"), "udp_metadata_target.publisher")
+    publisher_client = _object(
+        publisher.get("client"), "udp_metadata_target.publisher.client"
+    )
+    target_file = _object(target.get("file"), "udp_metadata_target.file")
+    endpoints = target_file.get("endpoints")
+    if (
+        target.get("address") != target_host
+        or target.get("tcpPort") != target_port
+        or target.get("udpPort") != target_udp_port
+        or publisher.get("nickname") != SERVER_UDP_METADATA_PUBLISHER_NICK
+        or publisher_client.get("nick") != SERVER_UDP_METADATA_PUBLISHER_NICK
+        or publisher_client.get("shared_files") != 1
+        or target_file.get("hash") != SERVER_UDP_METADATA_FILE_HASH
+        or target_file.get("name") != SERVER_UDP_METADATA_FILE_NAME
+        or target_file.get("size") != SERVER_UDP_METADATA_FILE_SIZE
+        or target_file.get("requested_size") != SERVER_UDP_METADATA_FILE_SIZE
+        or target_file.get("indexed") is not True
+        or target_file.get("complete_sources") != 1
+        or not isinstance(endpoints, list)
+        or len(endpoints) != 1
+    ):
+        raise ValueError("server UDP metadata target is not the singular canonical fixture")
+
+    captures = _object(metadata.get("captures"), "diagnostics.serverUdpMetadata.captures")
+    if set(captures) != {"rust", "mfc"}:
+        raise ValueError("server UDP metadata captures must contain exactly rust and mfc")
+    records = {
+        client: _load_udp_metadata_capture(
+            captures.get(client),
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    rebuilt = server_udp_metadata_diagnostic_evidence.build_server_udp_metadata_diagnostic_evidence(
+        anchor_server_endpoint=str(anchor_endpoint),
+        target_server_endpoint=str(target_endpoint),
+        target_udp_endpoint=str(target_udp_endpoint),
+        seed_name=SERVER_UDP_METADATA_SEED_NAME,
+        seed_description=SERVER_UDP_METADATA_SEED_DESCRIPTION,
+        expected_name=SERVER_IDENT_NAME,
+        expected_description=SERVER_IDENT_DESCRIPTION,
+        expected_users=1,
+        expected_files=1,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        rest_snapshots=raw_rest,
+    )
+    retained_without_capture = {
+        key: value for key, value in metadata.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError("server UDP metadata receipt does not match its immutable captures")
+    return expected_ids
+
+
 def _derived_server_login_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
@@ -1329,6 +1556,44 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             "its per-client dynamic counts through REST, at wire sequences "
             f"{rust_sequences['status']}/{mfc_sequences['status']}."
         )
+    if coverage_id in server_udp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS:
+        metadata = _object(
+            diagnostics.get("serverUdpMetadata"),
+            "diagnostics.serverUdpMetadata",
+        )
+        clients = _object(metadata.get("clients"), "diagnostics.serverUdpMetadata.clients")
+        wires = {
+            client: _object(
+                _object(clients.get(client), f"UDP metadata {client}").get("wire"),
+                f"UDP metadata {client} wire",
+            )
+            for client in ("rust", "mfc")
+        }
+        sequences = {
+            client: _object(wire.get("sequences"), f"UDP metadata {client} sequences")
+            for client, wire in wires.items()
+        }
+        if coverage_id == "server.reply.udp-description":
+            transports = {
+                client: _object(
+                    _object(wire.get("transports"), f"UDP metadata {client} transports").get(
+                        "description"
+                    ),
+                    f"UDP metadata {client} description transport",
+                ).get("transportMode")
+                for client, wire in wires.items()
+            }
+            return (
+                "Rust and MFC each causally decoded, applied, and exposed one challenged UDP "
+                f"description reply at sequences {sequences['rust']['descriptionReply']}/"
+                f"{sequences['mfc']['descriptionReply']} over {transports['rust']}/"
+                f"{transports['mfc']} transport."
+            )
+        return (
+            "Rust and MFC each causally decoded, applied, and exposed one challenged UDP "
+            f"status reply at sequences {sequences['rust']['statusReply']}/"
+            f"{sequences['mfc']['statusReply']}."
+        )
     if coverage_id in SERVER_SEARCH_COVERAGE_IDS:
         search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
         clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
@@ -1425,6 +1690,11 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
             *_derived_server_login_coverage_ids(report, diagnostics),
             *_derived_server_search_coverage_ids(report, diagnostics),
             *_derived_server_tcp_metadata_coverage_ids(report, diagnostics),
+            *_derived_server_udp_metadata_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
         ]
     )
     if claim_ids != expected_ids:

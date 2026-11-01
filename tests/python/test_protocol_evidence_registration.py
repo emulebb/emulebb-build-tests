@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import struct
 
 import pytest
 
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
+from emule_test_harness import server_udp_metadata_diagnostic_evidence
+from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
 from emule_test_harness.protocol_evidence_registration import build_transfer_registration
 from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCHEMA
 
@@ -20,6 +23,10 @@ SEARCH_QUERY = "deterministicparitysearch"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_IDENT_NAME = "emulebb-local-e2e"
 SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
+SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
+SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
+SERVER_UDP_METADATA_FILE_SIZE = 54_321
+SERVER_UDP_METADATA_PUBLISHER_NICK = "emulebb-harness-udp-metadata-publisher"
 
 
 def bilateral_login_evidence(
@@ -551,6 +558,345 @@ def attach_server_tcp_metadata(report: dict[str, object]) -> dict[str, object]:
     report["diagnostics"]["serverTcpMetadata"] = evidence
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
         server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
+def _udp_tag(tag_id: int, value: str) -> bytes:
+    encoded = value.encode()
+    return bytes([0x80 | ed2k_wire.TAGTYPE_STRING, tag_id]) + struct.pack(
+        "<H", len(encoded)
+    ) + encoded
+
+
+def _udp_record(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    sequence: int,
+    event: str,
+    keys: dict[str, object],
+    body: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "schema": DIAG_EVENT_SCHEMA,
+        "client": client,
+        "runId": run_id,
+        "processId": process_id,
+        "segmentId": 0,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": "ed2k_server_udp",
+        "event": event,
+        "keys": keys,
+        "body": body,
+    }
+
+
+def _udp_metadata_records(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    obfuscated_description: bool,
+) -> list[dict[str, object]]:
+    target = "127.0.0.1:4761"
+    target_udp = "127.0.0.1:4765"
+    description_peer = "127.0.0.1:4775" if obfuscated_description else target_udp
+    description_mode = "obfuscated" if obfuscated_description else "plaintext"
+    status_challenge = 0x55AA_1234
+    description_challenge = 0x4321_F0FF
+    status_payload = struct.pack(
+        "<IIIIIIIIHHI",
+        status_challenge,
+        1,
+        1,
+        1000,
+        5000,
+        200000,
+        0x123,
+        0,
+        4775,
+        4761,
+        0,
+    )
+    description_payload = (
+        struct.pack("<II", description_challenge, 2)
+        + _udp_tag(ed2k_wire.ST_SERVERNAME, SERVER_IDENT_NAME)
+        + _udp_tag(ed2k_wire.ST_DESCRIPTION, SERVER_IDENT_DESCRIPTION)
+    )
+
+    def packet(
+        sequence: int,
+        *,
+        opcode: int,
+        direction: str,
+        payload: bytes,
+        peer: str,
+        trace_id: int | None,
+        transport_mode: str,
+        obfuscated: bool,
+    ) -> dict[str, object]:
+        keys: dict[str, object] = {
+            "peer": peer,
+            "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+            "opcode": opcode,
+        }
+        body: dict[str, object] = {
+            "flow": "server",
+            "phase": "udp",
+            "direction": direction,
+            "outcome": "attempted" if direction == "send" else "accepted",
+            "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+            "opcode": opcode,
+            "transportMode": transport_mode,
+            "obfuscated": obfuscated,
+            "payloadLen": len(payload),
+            "payloadHex": payload.hex(),
+            "payloadHexTruncated": False,
+        }
+        if trace_id is not None:
+            keys["traceId"] = trace_id
+            body["traceId"] = trace_id
+        return _udp_record(
+            client=client,
+            process_id=process_id,
+            run_id=run_id,
+            sequence=sequence,
+            event="packet",
+            keys=keys,
+            body=body,
+        )
+
+    def applied(
+        sequence: int,
+        *,
+        event: str,
+        opcode: int,
+        challenge: int,
+        trace_id: int,
+        peer: str,
+        transport_mode: str,
+        obfuscated: bool,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        return _udp_record(
+            client=client,
+            process_id=process_id,
+            run_id=run_id,
+            sequence=sequence,
+            event=event,
+            keys={
+                "peer": peer,
+                "traceId": trace_id,
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": opcode,
+                "challenge": challenge,
+            },
+            body={
+                "flow": "server",
+                "phase": "udp",
+                "direction": "meta",
+                "outcome": "applied",
+                "traceId": trace_id,
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": opcode,
+                "challenge": challenge,
+                "serverEndpoint": target,
+                "transportMode": transport_mode,
+                "obfuscated": obfuscated,
+                **fields,
+            },
+        )
+
+    return [
+        packet(
+            1,
+            opcode=ed2k_wire.OP_GLOBSERVSTATREQ,
+            direction="send",
+            payload=struct.pack("<I", status_challenge),
+            peer=target_udp,
+            trace_id=None,
+            transport_mode="plaintext",
+            obfuscated=False,
+        ),
+        packet(
+            2,
+            opcode=ed2k_wire.OP_GLOBSERVSTATRES,
+            direction="recv",
+            payload=status_payload,
+            peer=target_udp,
+            trace_id=20,
+            transport_mode="plaintext",
+            obfuscated=False,
+        ),
+        applied(
+            3,
+            event="server_status_applied",
+            opcode=ed2k_wire.OP_GLOBSERVSTATRES,
+            challenge=status_challenge,
+            trace_id=20,
+            peer=target_udp,
+            transport_mode="plaintext",
+            obfuscated=False,
+            fields={
+                "users": 1,
+                "files": 1,
+                "maxUsers": 1000,
+                "softFiles": 5000,
+                "hardFiles": 200000,
+                "udpFlags": 0x123,
+                "lowIdUsers": 0,
+                "obfuscationPortUdp": 4775,
+                "obfuscationPortTcp": 4761,
+                "udpKey": 0,
+            },
+        ),
+        packet(
+            4,
+            opcode=ed2k_wire.OP_SERVER_DESC_REQ,
+            direction="send",
+            payload=struct.pack("<I", description_challenge),
+            peer=description_peer,
+            trace_id=None,
+            transport_mode=description_mode,
+            obfuscated=obfuscated_description,
+        ),
+        packet(
+            5,
+            opcode=ed2k_wire.OP_SERVER_DESC_RES,
+            direction="recv",
+            payload=description_payload,
+            peer=description_peer,
+            trace_id=40,
+            transport_mode=description_mode,
+            obfuscated=obfuscated_description,
+        ),
+        applied(
+            6,
+            event="server_description_applied",
+            opcode=ed2k_wire.OP_SERVER_DESC_RES,
+            challenge=description_challenge,
+            trace_id=40,
+            peer=description_peer,
+            transport_mode=description_mode,
+            obfuscated=obfuscated_description,
+            fields={
+                "responseFormat": "tagged",
+                "name": SERVER_IDENT_NAME,
+                "description": SERVER_IDENT_DESCRIPTION,
+                "dynamicHost": "",
+                "version": "",
+            },
+        ),
+    ]
+
+
+def attach_server_udp_metadata(
+    report: dict[str, object], *, run_directory: Path
+) -> dict[str, object]:
+    snapshots = {
+        client: {
+            "connectionStatus": {
+                "connected": True,
+                "currentServer": {"address": "127.0.0.1", "port": 4661},
+            },
+            "serverEntity": {
+                "address": "127.0.0.1",
+                "port": 4761,
+                "name": SERVER_IDENT_NAME,
+                "description": SERVER_IDENT_DESCRIPTION,
+                "users": 1,
+                "files": 1,
+                "softFiles": 5000,
+                "hardFiles": 200000,
+            },
+        }
+        for client in ("rust", "mfc")
+    }
+    records = {
+        "rust": _udp_metadata_records(
+            client="rust",
+            process_id=101,
+            run_id="rust-run",
+            obfuscated_description=True,
+        ),
+        "mfc": _udp_metadata_records(
+            client="mfc",
+            process_id=202,
+            run_id="mfc-run",
+            obfuscated_description=False,
+        ),
+    }
+    captures: dict[str, object] = {}
+    for client, process_id in (("rust", 101), ("mfc", 202)):
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{client}-run-000000.jsonl"
+        segment.write_text(
+            "".join(f"{json.dumps(record)}\n" for record in records[client]),
+            encoding="utf-8",
+        )
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+
+    evidence = server_udp_metadata_diagnostic_evidence.build_server_udp_metadata_diagnostic_evidence(
+        anchor_server_endpoint="127.0.0.1:4661",
+        target_server_endpoint="127.0.0.1:4761",
+        target_udp_endpoint="127.0.0.1:4765",
+        seed_name=SERVER_METADATA_SEED_NAME,
+        seed_description="seed metadata before server reply",
+        expected_name=SERVER_IDENT_NAME,
+        expected_description=SERVER_IDENT_DESCRIPTION,
+        expected_users=1,
+        expected_files=1,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        rest_snapshots=snapshots,
+    )
+    evidence["captures"] = captures
+    report["transfer_scenario"] = "server-udp-metadata"
+    report["protocol_case"] = {"name": "plain-server-plain-clients"}
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {
+            "ed2k_tcp": 4661,
+            "metadata_ed2k_tcp": 4761,
+            "metadata_ed2k_udp": 4765,
+        },
+    }
+    report["udp_metadata_target"] = {
+        "address": "127.0.0.1",
+        "tcpPort": 4761,
+        "udpPort": 4765,
+        "publisher": {
+            "nickname": SERVER_UDP_METADATA_PUBLISHER_NICK,
+            "client": {
+                "nick": SERVER_UDP_METADATA_PUBLISHER_NICK,
+                "shared_files": 1,
+            },
+        },
+        "file": {
+            "hash": SERVER_UDP_METADATA_FILE_HASH,
+            "name": SERVER_UDP_METADATA_FILE_NAME,
+            "size": SERVER_UDP_METADATA_FILE_SIZE,
+            "requested_size": SERVER_UDP_METADATA_FILE_SIZE,
+            "indexed": True,
+            "complete_sources": 1,
+            "endpoints": [{"client_id": 1}],
+        },
+    }
+    report["checks"]["client_server_udp_metadata_rest"] = snapshots
+    report["checks"]["client_server_udp_metadata_diagnostics"] = evidence
+    report["diagnostics"]["serverUdpMetadata"] = evidence
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        server_udp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
@@ -1307,6 +1653,94 @@ def test_build_transfer_registration_rejects_wrong_tcp_metadata_send_outcome(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="request or decode result is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_accepts_exact_server_udp_metadata(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_metadata(report, run_directory=report_path.parent)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.udp-description",
+        "server.reply.udp-status",
+        "transfer.block.uncompressed",
+    ]
+    reasons = {
+        row["coverageId"]: row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"]
+        in server_udp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    }
+    assert "obfuscated/plaintext transport" in reasons["server.reply.udp-description"]
+    assert "challenged UDP status reply" in reasons["server.reply.udp-status"]
+
+
+def test_build_transfer_registration_rejects_udp_metadata_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-udp-metadata"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_udp_metadata_schema(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_metadata(report, run_directory=report_path.parent)
+    evidence["schema"] = "emulebb-build-tests.deterministic-server-udp-metadata-diagnostics.v0"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_receipt_not_backed_by_capture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_metadata(report, run_directory=report_path.parent)
+    evidence["clients"]["rust"]["applied"]["status"]["files"] = 2
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_capture_outside_run(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_metadata(report, run_directory=report_path.parent)
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text("{}\n", encoding="utf-8")
+    evidence["captures"]["mfc"]["selectedSegments"] = [str(outside)]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="under the immutable run directory"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_topology_drift(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_metadata(report, run_directory=report_path.parent)
+    report["udp_metadata_target"]["file"]["complete_sources"] = 2
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="singular canonical fixture"):
         build_transfer_registration(report_path, output_root=output_root)
 
 
