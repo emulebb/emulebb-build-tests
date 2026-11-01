@@ -168,7 +168,9 @@
       "campaignId": "server-session-source",
       "coverageGroupIds": [
         "server-session",
-        "server-query-reply"
+        "server-query-reply",
+        "server-tcp-metadata",
+        "server-udp-metadata"
       ]
     },
     {
@@ -364,8 +366,6 @@
         "server.source.udp-v2",
         "server.reply.search",
         "server.reply.sources",
-        "server.reply.status",
-        "server.reply.description",
         "server.reply.callback"
       ],
       "groupId": "server-query-reply",
@@ -376,7 +376,7 @@
       "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "stateModel": {
-        "expected": "causally matched search, source, status, description, or callback reply",
+        "expected": "causally matched search, source, or callback reply",
         "start": "authenticated server session",
         "stimulus": "issue one typed server query"
       },
@@ -411,10 +411,94 @@
             "#define OP_GLOBGETSOURCES",
             "#define OP_GLOBGETSOURCES2",
             "#define OP_SEARCHRESULT",
-            "#define OP_SERVER_DESC_RES",
             "#define OP_CALLBACKREQUESTED"
           ],
           "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-ident",
+        "server.reply.tcp-status"
+      ],
+      "groupId": "server-tcp-metadata",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.tcp.metadata",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "typed TCP metadata frame is decoded and updates the exact server state",
+        "start": "authenticated TCP server session",
+        "stimulus": "receive OP_SERVERSTATUS or OP_SERVERIDENT"
+      },
+      "recordIds": [
+        "stock.server.tcp-ident",
+        "stock.server.tcp-status"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/decoders.rs",
+          "selector": "fn server_ident_parser_extracts_name_and_description"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn malformed_uncorrelated_search_result_is_packet_local"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_SERVERSTATUS:",
+            "case OP_SERVERIDENT:",
+            "uint32 cur_files = PeekUInt32(packet + 4);"
+          ],
+          "path": "srchybrid/ServerSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-description",
+        "server.reply.udp-status"
+      ],
+      "groupId": "server-udp-metadata",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.udp.metadata",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "reply endpoint and challenge match before typed UDP metadata updates server state",
+        "start": "known server with an outstanding typed UDP metadata request",
+        "stimulus": "receive OP_GLOBSERVSTATRES or OP_SERVER_DESC_RES"
+      },
+      "recordIds": [
+        "stock.server.udp-description",
+        "stock.server.udp-status"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/server_description.rs",
+          "selector": "fn decodes_challenge_tag_response_and_rejects_mismatch"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn server_status_matching_challenge_records_users_files_and_udp_flags"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_GLOBSERVSTATRES:",
+            "challenge != pServer->GetChallenge()",
+            "case OP_SERVER_DESC_RES:",
+            "pServer->GetDescReqChallenge()"
+          ],
+          "path": "srchybrid/UDPSocket.cpp"
         }
       ]
     },
@@ -1428,22 +1512,88 @@
       "coverageIds": [
         "server.reply.search",
         "server.reply.sources",
-        "server.reply.status",
-        "server.reply.description",
         "server.reply.callback"
       ],
       "direction": "recv",
-      "fixtureBase64": "4zMBAAAAAAAA40JVVVVVVVVVVVVVVVVVVVVVAONAAQAAAOM1fwAAATYS45YBAgME46ISNFZ446MBAABhAQAAAGI=",
+      "fixtureBase64": "4wUAAAAzAAAAAOMSAAAAQlVVVVVVVVVVVVVVVVVVVVUA4wcAAAA1fwAAATYS",
       "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
-      "fixtureLength": 65,
+      "fixtureLength": 45,
       "opcode": "MULTI",
       "opcodeName": "SERVER_REPLY_CORPUS",
-      "payloadDigest": "sha256:5422881c2f783da840ba1759689750136d66fbdea41dd130e93872a036e9f48a",
+      "payloadDigest": "sha256:a921d37adf552c38f82deebc7137a0681e03fb37755d0475027567c148ffb80f",
       "protocol": "ed2k",
       "recordId": "stock.server.reply-corpus",
       "recordType": "wire-vector",
       "scenarioId": "stock.04.server-reply.v1",
       "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-ident"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4xsAAABBEREREREREREREREREREREX8AAAE2EgAAAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 32,
+      "opcode": "0x41",
+      "opcodeName": "OP_SERVERIDENT",
+      "payloadDigest": "sha256:4e55e5988c52e9c84bc6461753bc80f327daf9afd0f3b25b0a91c1a862e811e2",
+      "protocol": "ed2k",
+      "recordId": "stock.server.tcp-ident",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-status"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4wkAAAA0ewAAAMgBAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 14,
+      "opcode": "0x34",
+      "opcodeName": "OP_SERVERSTATUS",
+      "payloadDigest": "sha256:a94cd1969ebdf0f0c7b2188bf569dcce201ee457d28b2dc9bda5f1734223e0a9",
+      "protocol": "ed2k",
+      "recordId": "stock.server.tcp-status",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-status"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "45d4VjQSewAAAMgBAAA=",
+      "fixtureEncoding": "ed2k-server-udp-datagram",
+      "fixtureLength": 14,
+      "opcode": "0x97",
+      "opcodeName": "OP_GLOBSERVSTATRES",
+      "payloadDigest": "sha256:e90bf8c1b519fdb26555ac6e8aec083248ca5c8b20a9280629de9ab901b28f55",
+      "protocol": "ed2k",
+      "recordId": "stock.server.udp-status",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-description"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "46P/8DQSAAAAAA==",
+      "fixtureEncoding": "ed2k-server-udp-datagram",
+      "fixtureLength": 10,
+      "opcode": "0xA3",
+      "opcodeName": "OP_SERVER_DESC_RES",
+      "payloadDigest": "sha256:9fe5ccc0ad211604e73b2aab986595cba343276455d4455f1376a2205e00ec0f",
+      "protocol": "ed2k",
+      "recordId": "stock.server.udp-description",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "udp"
     },
     {
       "coverageIds": [
@@ -1774,7 +1924,7 @@
       "source": "community-stock-source"
     },
     {
-      "description": "Stock server search/source/status/description/callback reply shapes.",
+      "description": "Stock server search/source/callback replies plus transport-exact TCP and UDP metadata reply shapes.",
       "protocol": "ed2k",
       "scenarioId": "stock.04.server-reply.v1",
       "source": "community-stock-source"
@@ -1861,7 +2011,7 @@
   "schema": "emulebb-build-tests.protocol-parity-catalog",
   "stockAuthority": {
     "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 98,
+    "requiredCoverageCount": 100,
     "sourcePath": "repos/emule-stock",
     "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }

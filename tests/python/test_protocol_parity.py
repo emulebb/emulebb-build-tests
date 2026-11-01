@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from pathlib import Path
 
@@ -34,7 +36,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     coverage_ids = [coverage_id for group in payload["coverageGroups"] for coverage_id in group["coverageIds"]]
 
-    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 98
+    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 100
     assert len(coverage_ids) == len(set(coverage_ids))
     assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
@@ -54,19 +56,19 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
         "groupVerdictCounts": {
             "parity": 0,
             "divergence": 0,
-            "evidence-incomplete": 15,
+            "evidence-incomplete": 17,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
             "parity": 7,
             "divergence": 0,
-            "evidence-incomplete": 91,
+            "evidence-incomplete": 93,
             "not-observed": 0,
             "intentional-difference": 0,
         },
-        "requiredGroupCount": 15,
-        "requiredIdCount": 98,
+        "requiredGroupCount": 17,
+        "requiredIdCount": 100,
     }
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
@@ -125,6 +127,67 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
         "server.login.request",
         "transfer.block.uncompressed",
     ]
+
+
+def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
+    manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records = {
+        row["coverageIds"][0]: row
+        for row in payload["records"]
+        if len(row.get("coverageIds", [])) == 1 and row["coverageIds"][0].startswith("server.reply.")
+    }
+
+    actual = {
+        coverage_id: (
+            row["transport"],
+            row["direction"],
+            row["opcode"],
+            row["opcodeName"],
+            row["fixtureEncoding"],
+        )
+        for coverage_id, row in records.items()
+    }
+    expected = {
+        "server.reply.tcp-ident": ("tcp", "recv", "0x41", "OP_SERVERIDENT", "ed2k-frame"),
+        "server.reply.tcp-status": ("tcp", "recv", "0x34", "OP_SERVERSTATUS", "ed2k-frame"),
+        "server.reply.udp-description": (
+            "udp",
+            "recv",
+            "0xA3",
+            "OP_SERVER_DESC_RES",
+            "ed2k-server-udp-datagram",
+        ),
+        "server.reply.udp-status": (
+            "udp",
+            "recv",
+            "0x97",
+            "OP_GLOBSERVSTATRES",
+            "ed2k-server-udp-datagram",
+        ),
+    }
+    assert expected.items() <= actual.items()
+
+
+def test_stock_server_metadata_vector_rejects_encoded_request_opcode(tmp_path: Path) -> None:
+    source = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    record = next(
+        row for row in payload["records"] if row.get("coverageIds") == ["server.reply.udp-status"]
+    )
+    fixture = bytearray(base64.b64decode(record["fixtureBase64"]))
+    fixture[1] = 0x96
+    record["fixtureBase64"] = base64.b64encode(fixture).decode("ascii")
+    record["payloadDigest"] = "sha256:" + hashlib.sha256(fixture).hexdigest()
+    manifest = tmp_path / "request-opcode.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_protocol_catalog(manifest)
+
+    assert any(
+        "(server.reply.udp-status) encoded opcode is 0x96, expected 0x97" in error
+        for error in validation.errors
+    )
 
 
 def test_catalog_report_keeps_partially_proven_group_incomplete() -> None:

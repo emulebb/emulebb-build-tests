@@ -75,6 +75,44 @@ IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\
 DIGEST_RE = re.compile(r"^(fnv1a64:0x[0-9A-F]{16}|sha256:[0-9a-f]{64})$")
 HEX_RE = re.compile(r"^[0-9A-Fa-f]*$")
 
+STOCK_ED2K_VECTOR_CONTRACTS = {
+    "server.login.request": {
+        "direction": "send",
+        "encoding": "ed2k-frame",
+        "opcode": 0x01,
+        "opcodeName": "OP_LOGINREQUEST",
+        "transport": "tcp",
+    },
+    "server.reply.tcp-ident": {
+        "direction": "recv",
+        "encoding": "ed2k-frame",
+        "opcode": 0x41,
+        "opcodeName": "OP_SERVERIDENT",
+        "transport": "tcp",
+    },
+    "server.reply.tcp-status": {
+        "direction": "recv",
+        "encoding": "ed2k-frame",
+        "opcode": 0x34,
+        "opcodeName": "OP_SERVERSTATUS",
+        "transport": "tcp",
+    },
+    "server.reply.udp-description": {
+        "direction": "recv",
+        "encoding": "ed2k-server-udp-datagram",
+        "opcode": 0xA3,
+        "opcodeName": "OP_SERVER_DESC_RES",
+        "transport": "udp",
+    },
+    "server.reply.udp-status": {
+        "direction": "recv",
+        "encoding": "ed2k-server-udp-datagram",
+        "opcode": 0x97,
+        "opcodeName": "OP_GLOBSERVSTATRES",
+        "transport": "udp",
+    },
+}
+
 # Phase-4 stock oracle coverage is intentionally explicit. A manifest cannot
 # pass merely by accumulating a large number of records: every behavior below
 # must be tied to a canonical binary/state vector, a stock-source anchor, and a
@@ -154,10 +192,12 @@ REQUIRED_STOCK_COVERAGE_IDS = frozenset(
         "server.connect.plaintext",
         "server.login.request",
         "server.reply.callback",
-        "server.reply.description",
         "server.reply.search",
         "server.reply.sources",
-        "server.reply.status",
+        "server.reply.tcp-ident",
+        "server.reply.tcp-status",
+        "server.reply.udp-description",
+        "server.reply.udp-status",
         "server.search.advanced",
         "server.search.keyword",
         "server.source.tcp-obfuscated",
@@ -1420,11 +1460,65 @@ def _validate_stock_record(record: dict[str, Any], index: int, errors: list[str]
         expected = "sha256:" + hashlib.sha256(decoded).hexdigest()
         if record.get("payloadDigest") != expected:
             errors.append(f"records[{index}].payloadDigest does not match fixtureBase64")
+        _validate_stock_ed2k_vector(record, index, decoded, coverage_ids, errors)
     if state is not None:
         canonical = json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")
         expected = "sha256:" + hashlib.sha256(canonical).hexdigest()
         if record.get("stateDigest") != expected:
             errors.append(f"records[{index}].stateDigest does not match oracleState")
+
+
+def _validate_stock_ed2k_vector(
+    record: dict[str, Any],
+    index: int,
+    decoded: bytes,
+    coverage_ids: list[str],
+    errors: list[str],
+) -> None:
+    contract_ids = sorted(set(coverage_ids) & STOCK_ED2K_VECTOR_CONTRACTS.keys())
+    if not contract_ids:
+        return
+    if len(coverage_ids) != 1 or len(contract_ids) != 1:
+        errors.append(f"records[{index}] transport-exact stock vector must own exactly one coverage ID")
+        return
+
+    coverage_id = contract_ids[0]
+    contract = STOCK_ED2K_VECTOR_CONTRACTS[coverage_id]
+    prefix = f"records[{index}] ({coverage_id})"
+    for field in ("direction", "opcodeName", "transport"):
+        if record.get(field) != contract[field]:
+            errors.append(f"{prefix}.{field} must be {contract[field]}")
+    if record.get("fixtureEncoding") != contract["encoding"]:
+        errors.append(f"{prefix}.fixtureEncoding must be {contract['encoding']}")
+
+    expected_opcode = int(contract["opcode"])
+    if record.get("opcode") != f"0x{expected_opcode:02X}":
+        errors.append(f"{prefix}.opcode must be 0x{expected_opcode:02X}")
+
+    if contract["encoding"] == "ed2k-frame":
+        if len(decoded) < 6:
+            errors.append(f"{prefix} ED2K frame is shorter than its header and opcode")
+            return
+        if decoded[0] != 0xE3:
+            errors.append(f"{prefix} ED2K frame must use protocol marker 0xE3")
+        declared_length = int.from_bytes(decoded[1:5], "little")
+        if declared_length != len(decoded) - 5:
+            errors.append(
+                f"{prefix} ED2K frame declares {declared_length} bytes but contains {len(decoded) - 5}"
+            )
+        actual_opcode = decoded[5]
+    else:
+        if len(decoded) < 2:
+            errors.append(f"{prefix} server UDP datagram is shorter than its marker and opcode")
+            return
+        if decoded[0] != 0xE3:
+            errors.append(f"{prefix} server UDP datagram must use protocol marker 0xE3")
+        actual_opcode = decoded[1]
+
+    if actual_opcode != expected_opcode:
+        errors.append(
+            f"{prefix} encoded opcode is 0x{actual_opcode:02X}, expected 0x{expected_opcode:02X}"
+        )
 
 
 def _validate_stock_workspace_anchors(
