@@ -8,6 +8,7 @@ import pytest
 
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_search_diagnostic_evidence
+from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness.protocol_evidence_registration import build_transfer_registration
 from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCHEMA
 
@@ -16,6 +17,9 @@ SEARCH_FILE_HASH = "ffeeddccbbaa99887766554433221100"
 SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
 SEARCH_FILE_SIZE = 12_345
 SEARCH_QUERY = "deterministicparitysearch"
+SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
+SERVER_IDENT_NAME = "emulebb-local-e2e"
+SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
 
 
 def bilateral_login_evidence(
@@ -409,6 +413,133 @@ def attach_server_search(report: dict[str, object]) -> dict[str, object]:
     report["diagnostics"]["serverSearch"] = evidence
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
         server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
+def bilateral_server_tcp_metadata_evidence() -> dict[str, object]:
+    server_ident = {
+        "server_hash": "00112233445566778899AABBCCDDEEFF",
+        "advertised_ip": "192.0.2.10",
+        "advertised_port": 4661,
+        "name": SERVER_IDENT_NAME,
+        "description": SERVER_IDENT_DESCRIPTION,
+        "tags": [
+            {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME},
+            {"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION},
+        ],
+    }
+
+    def client_row(client: str, *, users: int, files: int) -> dict[str, object]:
+        base = 10 if client == "rust" else 20
+        return {
+            "ok": True,
+            "wire": {
+                "ok": True,
+                "traceId": 41 if client == "rust" else 42,
+                "packetCounts": {
+                    "idChange": 1,
+                    "getServerList": 1,
+                    "status": 1,
+                    "ident": 1,
+                },
+                "sequences": {
+                    "idChange": base,
+                    "request": base + 1,
+                    "status": base + 2,
+                    "ident": base + 3,
+                },
+                "requestPayloadHex": "",
+                "transportModes": ["obfuscated"] * 4,
+                "status": {"users": users, "files": files},
+                "ident": dict(server_ident),
+                "decodeErrors": [],
+            },
+            "applied": {
+                "ok": True,
+                "status": {
+                    "ok": True,
+                    "count": 1,
+                    "sequence": base + 4,
+                    "users": users,
+                    "files": files,
+                },
+                "ident": {
+                    "ok": True,
+                    "count": 1,
+                    "sequence": base + 5,
+                    "name": SERVER_IDENT_NAME,
+                    "description": SERVER_IDENT_DESCRIPTION,
+                },
+            },
+            "rest": {
+                "ok": True,
+                "seedNameChanged": True,
+                "currentServer": {
+                    "address": "127.0.0.1",
+                    "port": 4661,
+                    "name": SERVER_IDENT_NAME,
+                    "description": SERVER_IDENT_DESCRIPTION,
+                    "users": users,
+                    "files": files,
+                },
+            },
+        }
+
+    return {
+        "schema": server_tcp_metadata_diagnostic_evidence.SCHEMA,
+        "ok": True,
+        "serverEndpoint": "127.0.0.1:4661",
+        "seedName": SERVER_METADATA_SEED_NAME,
+        "expectedIdent": {
+            "name": SERVER_IDENT_NAME,
+            "description": SERVER_IDENT_DESCRIPTION,
+        },
+        "failures": [],
+        "clients": {
+            "rust": client_row("rust", users=2, files=1),
+            "mfc": client_row("mfc", users=3, files=2),
+        },
+        "comparison": {
+            "ok": True,
+            "identEqual": True,
+            "identMatchesExpected": True,
+            "transportModeEqual": True,
+        },
+        "observedCoverageIds": list(
+            server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        ),
+        "coverageClaims": {
+            "eligibleCoverageIds": list(
+                server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+            ),
+            "evidenceLayers": list(server_tcp_metadata_diagnostic_evidence.EVIDENCE_LAYERS),
+        },
+        "captures": {
+            "rust": {"processId": 101, "selectedSegments": ["rust.jsonl"]},
+            "mfc": {"processId": 202, "selectedSegments": ["mfc.jsonl"]},
+        },
+    }
+
+
+def attach_server_tcp_metadata(report: dict[str, object]) -> dict[str, object]:
+    evidence = bilateral_server_tcp_metadata_evidence()
+    report["transfer_scenario"] = "server-tcp-metadata"
+    report["checks"]["client_server_tcp_metadata_rest"] = {
+        client: {
+            "connected": True,
+            "currentServer": {
+                "current": True,
+                **evidence["clients"][client]["rest"]["currentServer"],
+            },
+        }
+        for client in ("rust", "mfc")
+    }
+    report["checks"]["client_server_tcp_metadata_diagnostics"] = evidence
+    report["diagnostics"]["serverTcpMetadata"] = evidence
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
@@ -1043,6 +1174,118 @@ def test_build_transfer_registration_rejects_server_search_without_exact_publica
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_accepts_exact_server_tcp_metadata(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_tcp_metadata(report)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.tcp-ident",
+        "server.reply.tcp-status",
+        "transfer.block.uncompressed",
+    ]
+    rows = {
+        row["coverageId"]: row
+        for row in registration["coverageEvidence"]
+        if row["coverageId"]
+        in server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    }
+    assert set(rows) == set(server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
+    assert "per-client dynamic counts" in rows["server.reply.tcp-status"]["reason"]
+
+
+def test_build_transfer_registration_rejects_tcp_metadata_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-tcp-metadata"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_tcp_metadata_schema(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["schema"] = "emulebb-build-tests.deterministic-server-tcp-metadata-diagnostics.v0"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_duplicate_tcp_metadata_packet(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["clients"]["mfc"]["wire"]["packetCounts"]["status"] = 2
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="packets are not singular"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_unjoined_tcp_metadata_application(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["clients"]["rust"]["applied"]["status"]["users"] = 999
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not joined to its post-apply event"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_tcp_metadata_raw_rest_drift(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_tcp_metadata(report)
+    report["checks"]["client_server_tcp_metadata_rest"]["mfc"]["currentServer"][
+        "files"
+    ] = 999
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw REST snapshot does not match"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_fabricated_tcp_metadata_comparison(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["clients"]["mfc"]["wire"]["ident"]["server_hash"] = "F" * 32
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not compare exactly"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_plaintext_tcp_metadata_claim(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_tcp_metadata(report)
+    evidence["clients"]["rust"]["wire"]["transportModes"][2] = "plaintext"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="transport is not exact"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

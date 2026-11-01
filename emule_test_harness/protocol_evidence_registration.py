@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from typing import Any
 
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
+from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -23,6 +25,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
+SERVER_TCP_METADATA_SCENARIO = "server-tcp-metadata"
 SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
 SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
 SERVER_SEARCH_EVIDENCE_LAYERS = (
@@ -30,6 +33,9 @@ SERVER_SEARCH_EVIDENCE_LAYERS = (
     "deterministic-state-machine",
     "local-cross-client",
 )
+SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
+SERVER_IDENT_NAME = "emulebb-local-e2e"
+SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
 SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
@@ -607,6 +613,258 @@ def _derived_server_search_coverage_ids(
     return expected_ids
 
 
+def _derived_server_tcp_metadata_coverage_ids(
+    report: dict[str, Any], diagnostics: dict[str, Any]
+) -> list[str]:
+    metadata_value = diagnostics.get("serverTcpMetadata")
+    if metadata_value is None:
+        if report.get("transfer_scenario") == SERVER_TCP_METADATA_SCENARIO:
+            raise ValueError("server TCP metadata scenario has no diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_TCP_METADATA_SCENARIO:
+        raise ValueError("server TCP metadata evidence requires its dedicated scenario")
+
+    metadata = _object(metadata_value, "diagnostics.serverTcpMetadata")
+    if metadata.get("schema") != server_tcp_metadata_diagnostic_evidence.SCHEMA:
+        raise ValueError("server TCP metadata diagnostics use an unexpected schema")
+    if metadata.get("ok") is not True or metadata.get("failures") != []:
+        raise ValueError("server TCP metadata diagnostics are not complete")
+
+    expected_ids = list(server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
+    claims = _object(
+        metadata.get("coverageClaims"),
+        "diagnostics.serverTcpMetadata.coverageClaims",
+    )
+    if metadata.get("observedCoverageIds") != expected_ids:
+        raise ValueError("server TCP metadata observations are not exact")
+    if claims.get("eligibleCoverageIds") != expected_ids:
+        raise ValueError("server TCP metadata claims are not exact")
+    if claims.get("evidenceLayers") != list(
+        server_tcp_metadata_diagnostic_evidence.EVIDENCE_LAYERS
+    ):
+        raise ValueError("server TCP metadata evidence layers are not canonical")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_tcp_metadata_diagnostics") != metadata:
+        raise ValueError("server TCP metadata diagnostics do not match the pre-transfer snapshot")
+
+    endpoint = metadata.get("serverEndpoint")
+    if not isinstance(endpoint, str) or endpoint.count(":") != 1:
+        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port")
+    host, port_text = endpoint.rsplit(":", 1)
+    try:
+        canonical_host = str(ipaddress.IPv4Address(host))
+        endpoint_port = int(port_text)
+    except (ipaddress.AddressValueError, ValueError) as exc:
+        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port") from exc
+    if canonical_host != host or not 1 <= endpoint_port <= 65535 or str(endpoint_port) != port_text:
+        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port")
+    if metadata.get("seedName") != SERVER_METADATA_SEED_NAME:
+        raise ValueError("server TCP metadata seed name is not canonical")
+    expected_ident = {
+        "name": SERVER_IDENT_NAME,
+        "description": SERVER_IDENT_DESCRIPTION,
+    }
+    if metadata.get("expectedIdent") != expected_ident:
+        raise ValueError("server TCP metadata expected ident is not canonical")
+
+    clients = _object(metadata.get("clients"), "diagnostics.serverTcpMetadata.clients")
+    if set(clients) != {"rust", "mfc"}:
+        raise ValueError("server TCP metadata clients must contain exactly rust and mfc")
+    raw_rest = _object(
+        checks.get("client_server_tcp_metadata_rest"),
+        "checks.client_server_tcp_metadata_rest",
+    )
+    if set(raw_rest) != {"rust", "mfc"}:
+        raise ValueError("server TCP metadata REST snapshots must contain exactly rust and mfc")
+
+    ident_rows: dict[str, dict[str, Any]] = {}
+    transport_rows: dict[str, list[str]] = {}
+    for client in ("rust", "mfc"):
+        prefix = f"diagnostics.serverTcpMetadata.clients.{client}"
+        row = _object(clients.get(client), prefix)
+        if set(row) != {"ok", "wire", "applied", "rest"} or row.get("ok") is not True:
+            raise ValueError(f"{client} server TCP metadata row is not exact")
+
+        wire = _object(row.get("wire"), f"{prefix}.wire")
+        wire_fields = {
+            "ok",
+            "traceId",
+            "packetCounts",
+            "sequences",
+            "requestPayloadHex",
+            "transportModes",
+            "status",
+            "ident",
+            "decodeErrors",
+        }
+        if set(wire) != wire_fields or wire.get("ok") is not True:
+            raise ValueError(f"{client} server TCP metadata wire row is not exact")
+        _positive_int(wire.get("traceId"), f"{prefix}.wire.traceId")
+        packet_counts = _object(wire.get("packetCounts"), f"{prefix}.wire.packetCounts")
+        if packet_counts != {"idChange": 1, "getServerList": 1, "status": 1, "ident": 1}:
+            raise ValueError(f"{client} server TCP metadata packets are not singular")
+        sequences = _object(wire.get("sequences"), f"{prefix}.wire.sequences")
+        if set(sequences) != {"idChange", "request", "status", "ident"}:
+            raise ValueError(f"{client} server TCP metadata sequences are malformed")
+        id_change_sequence = _positive_int(
+            sequences.get("idChange"), f"{prefix}.wire.sequences.idChange"
+        )
+        request_sequence = _positive_int(
+            sequences.get("request"), f"{prefix}.wire.sequences.request"
+        )
+        status_sequence = _positive_int(
+            sequences.get("status"), f"{prefix}.wire.sequences.status"
+        )
+        ident_sequence = _positive_int(
+            sequences.get("ident"), f"{prefix}.wire.sequences.ident"
+        )
+        if not (
+            id_change_sequence < request_sequence < ident_sequence
+            and id_change_sequence < status_sequence
+        ):
+            raise ValueError(f"{client} server TCP metadata packets are not causally ordered")
+        if wire.get("requestPayloadHex") != "" or wire.get("decodeErrors") != []:
+            raise ValueError(f"{client} server TCP metadata request or decode result is not exact")
+        transport_modes = wire.get("transportModes")
+        if transport_modes != ["obfuscated", "obfuscated", "obfuscated", "obfuscated"]:
+            raise ValueError(f"{client} server TCP metadata transport is not exact")
+        transport_rows[client] = transport_modes
+
+        status = _object(wire.get("status"), f"{prefix}.wire.status")
+        if set(status) != {"users", "files"}:
+            raise ValueError(f"{client} server status decode is malformed")
+        status_users = _nonnegative_int(status.get("users"), f"{prefix}.wire.status.users")
+        status_files = _nonnegative_int(status.get("files"), f"{prefix}.wire.status.files")
+
+        ident = _object(wire.get("ident"), f"{prefix}.wire.ident")
+        if set(ident) != {
+            "server_hash",
+            "advertised_ip",
+            "advertised_port",
+            "name",
+            "description",
+            "tags",
+        }:
+            raise ValueError(f"{client} server ident decode is malformed")
+        server_hash = ident.get("server_hash")
+        if not isinstance(server_hash, str) or re.fullmatch(r"[0-9A-F]{32}", server_hash) is None:
+            raise ValueError(f"{client} server ident hash is malformed")
+        advertised_ip = ident.get("advertised_ip")
+        try:
+            canonical_advertised_ip = str(ipaddress.IPv4Address(advertised_ip))
+        except ipaddress.AddressValueError as exc:
+            raise ValueError(f"{client} server ident address is malformed") from exc
+        if canonical_advertised_ip != advertised_ip or ident.get("advertised_port") != endpoint_port:
+            raise ValueError(f"{client} server ident endpoint is malformed")
+        if ident.get("name") != SERVER_IDENT_NAME or ident.get("description") != SERVER_IDENT_DESCRIPTION:
+            raise ValueError(f"{client} server ident text does not match the canonical server")
+        tags = ident.get("tags")
+        if not isinstance(tags, list) or not all(
+            isinstance(tag, dict) and set(tag) == {"name", "value"} for tag in tags
+        ):
+            raise ValueError(f"{client} server ident tags are malformed")
+        if [tag for tag in tags if tag == {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}] != [
+            {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}
+        ] or [
+            tag
+            for tag in tags
+            if tag == {"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION}
+        ] != [{"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION}]:
+            raise ValueError(f"{client} server ident tags do not contain the canonical text exactly once")
+        ident_rows[client] = ident
+
+        applied = _object(row.get("applied"), f"{prefix}.applied")
+        if set(applied) != {"ok", "status", "ident"} or applied.get("ok") is not True:
+            raise ValueError(f"{client} server metadata application row is not exact")
+        applied_status = _object(applied.get("status"), f"{prefix}.applied.status")
+        if set(applied_status) != {"ok", "count", "sequence", "users", "files"}:
+            raise ValueError(f"{client} applied server status row is malformed")
+        applied_status_sequence = _positive_int(
+            applied_status.get("sequence"), f"{prefix}.applied.status.sequence"
+        )
+        if (
+            applied_status.get("ok") is not True
+            or applied_status.get("count") != 1
+            or applied_status_sequence <= status_sequence
+            or applied_status.get("users") != status_users
+            or applied_status.get("files") != status_files
+        ):
+            raise ValueError(f"{client} server status is not joined to its post-apply event")
+        applied_ident = _object(applied.get("ident"), f"{prefix}.applied.ident")
+        if set(applied_ident) != {"ok", "count", "sequence", "name", "description"}:
+            raise ValueError(f"{client} applied server ident row is malformed")
+        applied_ident_sequence = _positive_int(
+            applied_ident.get("sequence"), f"{prefix}.applied.ident.sequence"
+        )
+        if (
+            applied_ident.get("ok") is not True
+            or applied_ident.get("count") != 1
+            or applied_ident_sequence <= ident_sequence
+            or applied_ident.get("name") != ident.get("name")
+            or applied_ident.get("description") != ident.get("description")
+        ):
+            raise ValueError(f"{client} server ident is not joined to its post-apply event")
+
+        rest = _object(row.get("rest"), f"{prefix}.rest")
+        if set(rest) != {"ok", "seedNameChanged", "currentServer"}:
+            raise ValueError(f"{client} server metadata REST row is malformed")
+        current = _object(rest.get("currentServer"), f"{prefix}.rest.currentServer")
+        expected_current = {
+            "address": host,
+            "port": endpoint_port,
+            "name": ident["name"],
+            "description": ident["description"],
+            "users": status_users,
+            "files": status_files,
+        }
+        if (
+            rest.get("ok") is not True
+            or rest.get("seedNameChanged") is not True
+            or current != expected_current
+        ):
+            raise ValueError(f"{client} REST state is not joined to its decoded server metadata")
+        raw_snapshot = _object(raw_rest.get(client), f"checks.client_server_tcp_metadata_rest.{client}")
+        raw_current = _object(
+            raw_snapshot.get("currentServer"),
+            f"checks.client_server_tcp_metadata_rest.{client}.currentServer",
+        )
+        if raw_snapshot.get("connected") is not True or raw_current.get("current") is not True:
+            raise ValueError(f"{client} raw REST snapshot is not connected to the current server")
+        if any(raw_current.get(field) != value for field, value in expected_current.items()):
+            raise ValueError(f"{client} raw REST snapshot does not match the diagnostic state")
+
+    comparison = _object(metadata.get("comparison"), "diagnostics.serverTcpMetadata.comparison")
+    comparison_fields = {"ok", "identEqual", "identMatchesExpected", "transportModeEqual"}
+    if set(comparison) != comparison_fields or any(
+        comparison.get(field) is not True for field in comparison_fields
+    ):
+        raise ValueError("bilateral server TCP metadata comparison is not exact")
+    if (
+        ident_rows["rust"] != ident_rows["mfc"]
+        or ident_rows["rust"].get("name") != SERVER_IDENT_NAME
+        or ident_rows["rust"].get("description") != SERVER_IDENT_DESCRIPTION
+        or transport_rows["rust"] != transport_rows["mfc"]
+    ):
+        raise ValueError("bilateral server TCP metadata evidence does not compare exactly")
+
+    captures = _object(metadata.get("captures"), "diagnostics.serverTcpMetadata.captures")
+    if set(captures) != {"rust", "mfc"}:
+        raise ValueError("server TCP metadata captures must contain exactly rust and mfc")
+    for client in ("rust", "mfc"):
+        capture = _object(
+            captures.get(client),
+            f"diagnostics.serverTcpMetadata.captures.{client}",
+        )
+        _positive_int(capture.get("processId"), f"server TCP metadata {client} process ID")
+        segments = capture.get("selectedSegments")
+        if not isinstance(segments, list) or not segments or not all(
+            isinstance(value, str) and value for value in segments
+        ):
+            raise ValueError(f"server TCP metadata {client} capture has no selected segments")
+    return expected_ids
+
+
 def _derived_server_login_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
@@ -1017,6 +1275,32 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             f"ID-change and accepted-session transitions at sequences "
             f"{clients['rust']['loginSequence']}/{clients['mfc']['loginSequence']}."
         )
+    if coverage_id in server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS:
+        metadata = _object(
+            diagnostics.get("serverTcpMetadata"),
+            "diagnostics.serverTcpMetadata",
+        )
+        clients = _object(
+            metadata.get("clients"),
+            "diagnostics.serverTcpMetadata.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.serverTcpMetadata.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.serverTcpMetadata.clients.mfc")
+        rust_wire = _object(rust.get("wire"), "Rust server TCP metadata wire evidence")
+        mfc_wire = _object(mfc.get("wire"), "MFC server TCP metadata wire evidence")
+        rust_sequences = _object(rust_wire.get("sequences"), "Rust server TCP metadata sequences")
+        mfc_sequences = _object(mfc_wire.get("sequences"), "MFC server TCP metadata sequences")
+        if coverage_id == "server.reply.tcp-ident":
+            return (
+                "Rust and MFC each decoded and post-applied the same exact server ident, then "
+                "exposed it through REST, at wire sequences "
+                f"{rust_sequences['ident']}/{mfc_sequences['ident']}."
+            )
+        return (
+            "Rust and MFC each decoded and post-applied one exact server status, then exposed "
+            "its per-client dynamic counts through REST, at wire sequences "
+            f"{rust_sequences['status']}/{mfc_sequences['status']}."
+        )
     if coverage_id in SERVER_SEARCH_COVERAGE_IDS:
         search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
         clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
@@ -1112,6 +1396,7 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
             *_derived_transfer_coverage_ids(diagnostics),
             *_derived_server_login_coverage_ids(report, diagnostics),
             *_derived_server_search_coverage_ids(report, diagnostics),
+            *_derived_server_tcp_metadata_coverage_ids(report, diagnostics),
         ]
     )
     if claim_ids != expected_ids:

@@ -150,6 +150,69 @@ def test_server_login_collection_returns_failed_snapshot_with_capture_provenance
     }
 
 
+def test_server_tcp_metadata_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    built = {
+        "schema": module.server_tcp_metadata_diagnostic_evidence.SCHEMA,
+        "ok": False,
+        "failures": ["client.rust"],
+    }
+    calls: list[dict[str, object]] = []
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
+
+    def build(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return dict(built)
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_tcp_metadata_diagnostic_evidence,
+        "build_server_tcp_metadata_diagnostic_evidence",
+        build,
+    )
+    snapshots = {"rust": {"connected": True}, "mfc": {"connected": True}}
+
+    result = module.collect_server_tcp_metadata_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        rest_snapshots=snapshots,
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert calls == [
+        {
+            "server_endpoint": "127.0.0.1:4661",
+            "seed_name": module.SERVER_METADATA_SEED_NAME,
+            "expected_name": module.SERVER_IDENT_NAME,
+            "expected_description": module.SERVER_IDENT_DESCRIPTION,
+            "rust_records": [{"side": "rust"}],
+            "mfc_records": [{"side": "emule"}],
+            "rest_snapshots": snapshots,
+        }
+    ]
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
 @pytest.mark.parametrize("address", ["0.0.0.0", "ff02::1", "not-an-address"])
 def test_ed2k_server_connect_address_rejects_non_unicast_ipv4(address: str) -> None:
     module = load_suite_module()
@@ -277,6 +340,47 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
             "obfuscated-required",
             "--transfer-scenario",
             module.SERVER_KEYWORD_SEARCH,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
         ]
     )
 
@@ -806,6 +910,27 @@ def test_server_keyword_search_is_bilateral_and_uses_a_neutral_fixture() -> None
     assert script_text.count("except rust_local_ed2k.ServerSearchFailure as exc:") == 2
     assert 'report["checks"]["client_server_search_failures"] = search_failures' in script_text
     assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
+
+
+def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
+    assert script_text.count(
+        "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
+    ) == 2
+    assert script_text.count("rust_local_ed2k.wait_for_current_server_metadata(") == 2
+    assert 'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots' in script_text
+    assert (
+        'report["checks"]["client_server_tcp_metadata_diagnostics"] = ('
+        in script_text
+    )
+    assert "collect_server_tcp_metadata_diagnostics(" in script_text
+    assert (
+        "server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence("
+        in script_text
+    )
 
 
 def test_rust_diagnostics_child_env_does_not_mutate_parent(

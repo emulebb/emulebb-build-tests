@@ -35,6 +35,7 @@ from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
+from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
@@ -70,6 +71,10 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
+SERVER_TCP_METADATA = "server-tcp-metadata"
+SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
+SERVER_IDENT_NAME = "emulebb-local-e2e"
+SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
 SERVER_SEARCH_QUERY = "deterministicparitysearch"
 SERVER_SEARCH_FILE_HASH = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
 SERVER_SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
@@ -81,6 +86,7 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_KEYWORD_SEARCH,
+    SERVER_TCP_METADATA,
 )
 
 SERVER_MET_HEADER = 0xE0
@@ -152,7 +158,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.fixture_size_bytes is None:
         args.fixture_size_bytes = (
             DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
-            if args.transfer_scenario in {SERVER_LOGIN_REQUEST, SERVER_KEYWORD_SEARCH}
+            if args.transfer_scenario
+            in {SERVER_LOGIN_REQUEST, SERVER_KEYWORD_SEARCH, SERVER_TCP_METADATA}
             else DEFAULT_FIXTURE_SIZE_BYTES
         )
     return args
@@ -188,6 +195,13 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.protocol_case != "obfuscated-required":
             raise ValueError(
                 "Server keyword search uses the single canonical obfuscated-required case."
+            )
+    if args.transfer_scenario == SERVER_TCP_METADATA:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("TCP server metadata proof requires the MFC diagnostics oracle.")
+        if args.protocol_case != "obfuscated-required":
+            raise ValueError(
+                "TCP server metadata proof uses the single canonical obfuscated-required case."
             )
     if args.transfer_scenario == SERVER_LOGIN_REQUEST:
         if args.client2_identity != "mfc_oracle":
@@ -225,6 +239,7 @@ def collect_transfer_diagnostics(
     expected_source_user_hash: str,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
+    server_tcp_metadata_evidence: dict[str, object] | None,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -275,6 +290,14 @@ def collect_transfer_diagnostics(
         evidence["serverSearch"] = server_search_evidence
         extra_claims.update(
             server_search_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
+    if server_tcp_metadata_evidence is not None:
+        server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence(
+            server_tcp_metadata_evidence
+        )
+        evidence["serverTcpMetadata"] = server_tcp_metadata_evidence
+        extra_claims.update(
+            server_tcp_metadata_evidence["coverageClaims"]["eligibleCoverageIds"]
         )
     if extra_claims:
         transfer_claims = evidence["coverageClaims"]["eligibleCoverageIds"]
@@ -384,6 +407,53 @@ def collect_server_search_diagnostics(
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
         driven_searches=driven_searches,
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_server_tcp_metadata_diagnostics(
+    *,
+    server_endpoint: str,
+    rest_snapshots: dict[str, dict[str, object]],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots bilateral TCP metadata evidence before transfer traffic rotates it."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = server_tcp_metadata_diagnostic_evidence.build_server_tcp_metadata_diagnostic_evidence(
+        server_endpoint=server_endpoint,
+        seed_name=SERVER_METADATA_SEED_NAME,
+        expected_name=SERVER_IDENT_NAME,
+        expected_description=SERVER_IDENT_DESCRIPTION,
+        rust_records=rust_capture.records,
+        mfc_records=mfc_capture.records,
+        rest_snapshots=rest_snapshots,
     )
     evidence["captures"] = {
         "rust": {
@@ -1132,6 +1202,7 @@ def configure_client_profile(
     crypt_layer_requested: bool | None = None,
     crypt_layer_required: bool | None = None,
     crypt_tcp_padding_length: int | None = None,
+    add_servers_from_server: bool = False,
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
@@ -1148,6 +1219,7 @@ def configure_client_profile(
             ("NetworkED2K", "1" if ed2k_enabled else "0"),
             ("NetworkKademlia", "0"),
             ("AutoConnectStaticOnly", "0"),
+            ("AddServersFromServer", "1" if add_servers_from_server else "0"),
             ("SafeServerConnect", "0"),
             ("FilterBadIPs", "0"),
             ("AllowLocalHostIP", "1"),
@@ -1916,6 +1988,7 @@ def main(argv: list[str] | None = None) -> int:
     server_search_publisher: ed2k_wire.Ed2kWireClient | None = None
     server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
+    server_tcp_metadata_evidence: dict[str, object] | None = None
     current_phase = "initializing"
 
     try:
@@ -2028,6 +2101,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
             else "deterministicserversearch-transfer.bin"
             if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+            else "deterministicservertcpmetadata-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_METADATA
             else "deterministic-two-client-transfer.bin"
         )
         fixture_file = fixture_dir / fixture_name
@@ -2064,6 +2139,12 @@ def main(argv: list[str] | None = None) -> int:
             if protocol_case is not None
             else None
         )
+        if rust_server_entry is not None and args.transfer_scenario == SERVER_TCP_METADATA:
+            rust_server_entry = {
+                **rust_server_entry,
+                "name": SERVER_METADATA_SEED_NAME,
+                "description": "seed metadata before OP_SERVERIDENT",
+            }
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
@@ -2083,6 +2164,7 @@ def main(argv: list[str] | None = None) -> int:
                 else True
             ),
             local_only_discovery=True,
+            add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
         )
         if rust_server_entry is not None:
             report["checks"]["rust_server_entry"] = rust_server_entry
@@ -2160,6 +2242,7 @@ def main(argv: list[str] | None = None) -> int:
                     if protocol_case is not None
                     else None
                 ),
+                add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
             )
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
@@ -2170,7 +2253,11 @@ def main(argv: list[str] | None = None) -> int:
             Path(client2["config_dir"]) / "server.met",
             address=server_address,
             port=ports["ed2k_tcp"],
-            name="emulebb-local-e2e",
+            name=(
+                SERVER_METADATA_SEED_NAME
+                if args.transfer_scenario == SERVER_TCP_METADATA
+                else SERVER_IDENT_NAME
+            ),
         )
 
         report["profiles"] = {
@@ -2410,6 +2497,49 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
+        if args.transfer_scenario == SERVER_TCP_METADATA:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral TCP server metadata diagnostics require the MFC process identity."
+                )
+            current_phase = "wait_for_applied_server_tcp_metadata"
+            rest_snapshots = {
+                "rust": rust_local_ed2k.wait_for_current_server_metadata(
+                    base_url,
+                    args.api_key,
+                    expected_address=server_address,
+                    expected_port=ports["ed2k_tcp"],
+                    expected_name=SERVER_IDENT_NAME,
+                    expected_description=SERVER_IDENT_DESCRIPTION,
+                    timeout_seconds=args.server_connect_timeout_seconds,
+                ),
+                "mfc": rust_local_ed2k.wait_for_current_server_metadata(
+                    client2_base_url,
+                    args.api_key,
+                    expected_address=server_address,
+                    expected_port=ports["ed2k_tcp"],
+                    expected_name=SERVER_IDENT_NAME,
+                    expected_description=SERVER_IDENT_DESCRIPTION,
+                    timeout_seconds=args.server_connect_timeout_seconds,
+                ),
+            }
+            report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots
+            current_phase = "collect_server_tcp_metadata_diagnostics"
+            server_tcp_metadata_evidence = collect_server_tcp_metadata_diagnostics(
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                rest_snapshots=rest_snapshots,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_server_tcp_metadata_diagnostics"] = (
+                server_tcp_metadata_evidence
+            )
+            server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence(
+                server_tcp_metadata_evidence
+            )
+
         if args.transfer_scenario == SERVER_LOGIN_REQUEST:
             if client2_process_id is None:
                 raise RuntimeError(
@@ -2604,6 +2734,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_user_hash=source_user_hash,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
+                server_tcp_metadata_evidence=server_tcp_metadata_evidence,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),
@@ -2641,6 +2772,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_search_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverSearch"] = server_search_evidence
+        if server_tcp_metadata_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverTcpMetadata"] = server_tcp_metadata_evidence
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
         return 1
