@@ -61,6 +61,17 @@ def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() ->
         },
     }
     assert report["unconfiguredAuthorityIds"] == ["amule-stable"]
+    assert report["assets"]["classificationCounts"] == {
+        "canonical": 8,
+        "duplicate": 1,
+        "historical": 1,
+        "product-only": 2,
+        "support": 11,
+    }
+    assert report["assets"]["cleanupCandidates"] == [
+        "scripts/native-windows-parity-campaign.py",
+        "scripts/rust-ed2k-total-parity-audit.py",
+    ]
 
 
 def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixture[str]) -> None:
@@ -100,6 +111,22 @@ def test_catalog_rejects_unproven_green_and_analysis_only_authority(tmp_path: Pa
 
     assert any("cannot use analysis-only amule-head" in error for error in validation.errors)
     assert any("latestEvidence.receipt is required for verdict parity" in error for error in validation.errors)
+
+
+def test_catalog_rejects_unclassified_canonical_runner(tmp_path: Path) -> None:
+    source = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["assetClassifications"] = [
+        row
+        for row in payload["assetClassifications"]
+        if row["path"] != "scripts/deterministic-two-client-transfer.py"
+    ]
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_protocol_catalog(catalog)
+
+    assert any("server-session deterministic runner is not classified" in error for error in validation.errors)
 
 
 def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> None:

@@ -45,6 +45,17 @@ def render_text(inv: dict) -> str:
         f"  ({r['nativeDormantSuiteCount']} dormant suites)",
         f"Python:  {r['pythonModuleCount']} harness modules ({r['pythonSelfTestCount']} self-test a script)",
         f"Live:    {r['liveSuiteCount']} suites ({r['liveDefaultEnabledCount']} default-enabled)",
+        f"Protocol: {r['protocolAssetCount']} classified assets / {r['protocolLiveSuiteCount']} live suites"
+        f"  ({r['protocolUnclassifiedLiveSuiteCount']} unclassified, {r['protocolCleanupCandidateCount']} cleanup candidates)",
+        "",
+        "Protocol live suites (path / classification / campaigns)",
+        "-------------------------------------------------------------",
+    ]
+    for row in inv["layers"]["protocolParity"]["liveProtocolSuites"]:
+        lines.append(
+            f"  {row['path']:46}  {row['classification']:<12}  {','.join(row['campaignIds']) or '-'}"
+        )
+    lines += [
         "",
         "Native suites (suite / files / cases / runBy)",
         "-------------------------------------------------------------",
@@ -76,6 +87,22 @@ def render_markdown(inv: dict) -> str:
         "(reached only via `test native --suite-name`).",
         f"- **Python harness:** {r['pythonModuleCount']} modules, {r['pythonSelfTestCount']} self-test a live script.",
         f"- **Live-e2e:** {r['liveSuiteCount']} suites, {r['liveDefaultEnabledCount']} default-enabled.",
+        f"- **Protocol parity:** {r['protocolAssetCount']} classified assets, "
+        f"{r['protocolLiveSuiteCount']} live protocol suites, "
+        f"{r['protocolUnclassifiedLiveSuiteCount']} unclassified, and "
+        f"{r['protocolCleanupCandidateCount']} cleanup candidates.",
+        "",
+        "## Protocol live-suite ownership",
+        "",
+        "| Path | Classification | Campaigns | Reason |",
+        "| --- | --- | --- | --- |",
+    ]
+    for row in inv["layers"]["protocolParity"]["liveProtocolSuites"]:
+        out.append(
+            f"| `{row['path']}` | {row['classification']} | {', '.join(row['campaignIds']) or '(none)'} | "
+            f"{row['reason']} |"
+        )
+    out += [
         "",
         "## Native doctest suites",
         "",

@@ -3,11 +3,11 @@ from __future__ import annotations
 from emule_test_harness import live_e2e_suite, test_inventory
 
 
-def test_inventory_has_all_three_layers() -> None:
+def test_inventory_has_all_owned_layers() -> None:
     inv = test_inventory.build_test_inventory()
 
     assert inv["schema"] == test_inventory.SCHEMA
-    assert set(inv["layers"]) == {"native", "pythonHarness", "liveE2e"}
+    assert set(inv["layers"]) == {"native", "pythonHarness", "liveE2e", "protocolParity"}
 
 
 def test_native_layer_classifies_tier_and_dormant_suites() -> None:
@@ -51,3 +51,19 @@ def test_python_layer_maps_self_tested_scripts() -> None:
     kad = modules.get("tests/python/test_local_kad_swarm.py")
     assert kad is not None
     assert kad["selfTestsScript"] == "scripts/local-kad-swarm.py"
+
+
+def test_protocol_live_suites_have_explicit_catalog_classification() -> None:
+    inv = test_inventory.build_test_inventory()
+    protocol = inv["layers"]["protocolParity"]
+    by_path = {row["path"]: row for row in protocol["liveProtocolSuites"]}
+
+    assert protocol["unclassifiedLiveProtocolSuites"] == []
+    assert by_path["scripts/deterministic-two-client-transfer.py"]["classification"] == "canonical"
+    assert by_path["scripts/local-kad-mixed-client-swarm.py"]["classification"] == "canonical"
+    assert by_path["scripts/multi-client-p2p-matrix.py"]["classification"] == "support"
+    assert by_path["scripts/godzilla-local-swarm.py"]["classification"] == "product-only"
+    assert protocol["cleanupCandidates"] == [
+        "scripts/native-windows-parity-campaign.py",
+        "scripts/rust-ed2k-total-parity-audit.py",
+    ]

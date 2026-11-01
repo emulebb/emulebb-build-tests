@@ -50,6 +50,15 @@ CATALOG_AUTHORITY_ROLES = frozenset(
         "wire-and-state-intent",
     }
 )
+CATALOG_ASSET_CLASSIFICATIONS = frozenset(
+    {
+        "canonical",
+        "support",
+        "duplicate",
+        "product-only",
+        "historical",
+    }
+)
 SENSITIVE_FIELD_NAMES = {
     "decoded_hex",
     "payload_hex",
@@ -397,6 +406,9 @@ def build_catalog_report(
     authority_rows = [row for row in authorities if isinstance(row, dict)] if isinstance(authorities, list) else []
     campaigns = payload.get("campaigns")
     campaign_rows = [row for row in campaigns if isinstance(row, dict)] if isinstance(campaigns, list) else []
+    assets = payload.get("assetClassifications")
+    asset_rows = [row for row in assets if isinstance(row, dict)] if isinstance(assets, list) else []
+    asset_counts = Counter(str(row.get("classification") or "unclassified") for row in asset_rows)
     return {
         "schema": "emulebb-build-tests.protocol-parity-catalog-report",
         "catalogSchema": payload.get("schema"),
@@ -407,6 +419,18 @@ def build_catalog_report(
             str(row.get("authorityId")) for row in authority_rows if row.get("status") == "not-configured"
         ),
         "campaignCount": len(campaign_rows),
+        "assets": {
+            "classificationCounts": {
+                classification: asset_counts.get(classification, 0)
+                for classification in sorted(CATALOG_ASSET_CLASSIFICATIONS)
+            },
+            "classifiedCount": len(asset_rows),
+            "cleanupCandidates": sorted(
+                str(row.get("path"))
+                for row in asset_rows
+                if row.get("classification") in {"duplicate", "historical"}
+            ),
+        },
         "coverage": {
             "coveredGroupCount": covered,
             "requiredGroupCount": len(group_rows),
@@ -426,6 +450,11 @@ def render_catalog_report_lines(report: dict[str, Any]) -> list[str]:
         f"Protocol groups covered: {coverage['coveredGroupCount']}/{coverage['requiredGroupCount']}",
         f"Protocol coverage IDs cataloged: {coverage['coverageIdCount']}",
         "Protocol verdicts: " + ", ".join(f"{verdict}={counts[verdict]}" for verdict in CATALOG_VERDICTS),
+        "Protocol assets: "
+        + ", ".join(
+            f"{classification}={count}"
+            for classification, count in report["assets"]["classificationCounts"].items()
+        ),
     ]
     unconfigured = report["unconfiguredAuthorityIds"]
     if unconfigured:
@@ -695,6 +724,13 @@ def _validate_catalog_contract(
                     repo_root=repo_root,
                     errors=errors,
                 )
+    _validate_asset_classifications(
+        payload,
+        campaign_ids=campaign_ids,
+        groups=groups if isinstance(groups, list) else [],
+        repo_root=repo_root,
+        errors=errors,
+    )
 
 
 def _validate_catalog_group(
@@ -809,6 +845,88 @@ def _validate_catalog_group(
                         errors.append(
                             f"{prefix}.latestEvidence.receipt.subjects must include Rust and one selected executable oracle"
                         )
+
+
+def _validate_asset_classifications(
+    payload: dict[str, Any],
+    *,
+    campaign_ids: set[str],
+    groups: list[Any],
+    repo_root: Path,
+    errors: list[str],
+) -> None:
+    """Validates the catalog's explicit active-test ownership decisions."""
+
+    assets = payload.get("assetClassifications")
+    if not isinstance(assets, list) or not assets:
+        errors.append("assetClassifications must be a non-empty list")
+        return
+    assets_by_path: dict[str, dict[str, Any]] = {}
+    for index, asset in enumerate(assets):
+        prefix = f"assetClassifications[{index}]"
+        if not isinstance(asset, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        relative_path = asset.get("path")
+        classification = asset.get("classification")
+        selected_campaigns = _string_list(asset.get("campaignIds"))
+        reason = asset.get("reason")
+        if not isinstance(relative_path, str) or not relative_path:
+            errors.append(f"{prefix}.path must be a non-empty string")
+            continue
+        if relative_path in assets_by_path:
+            errors.append(f"duplicate asset classification: {relative_path}")
+        assets_by_path[relative_path] = asset
+        _validate_repo_runner(relative_path, f"{prefix}.path", repo_root, errors, required=True)
+        if classification not in CATALOG_ASSET_CLASSIFICATIONS:
+            errors.append(f"{prefix}.classification is unsupported")
+        if not isinstance(reason, str) or not reason:
+            errors.append(f"{prefix}.reason must be a non-empty string")
+        unknown_campaigns = set(selected_campaigns) - campaign_ids
+        if unknown_campaigns:
+            errors.append(f"{prefix}.campaignIds contains unknown campaigns: {sorted(unknown_campaigns)}")
+        if classification == "canonical" and not selected_campaigns:
+            errors.append(f"{prefix}.campaignIds must not be empty for a canonical asset")
+        if classification in {"duplicate", "product-only", "historical"} and selected_campaigns:
+            errors.append(f"{prefix}.campaignIds must be empty for classification {classification}")
+        replacement = asset.get("replacementPath")
+        if classification == "duplicate":
+            if not isinstance(replacement, str) or not replacement or replacement == relative_path:
+                errors.append(f"{prefix}.replacementPath must identify a different asset")
+        elif replacement is not None:
+            errors.append(f"{prefix}.replacementPath is valid only for duplicate assets")
+
+    for relative_path, asset in assets_by_path.items():
+        replacement = asset.get("replacementPath")
+        if isinstance(replacement, str) and replacement not in assets_by_path:
+            errors.append(f"duplicate asset {relative_path} references unclassified replacement {replacement}")
+
+    canonical_campaigns = {
+        campaign_id
+        for asset in assets_by_path.values()
+        if asset.get("classification") == "canonical"
+        for campaign_id in _string_list(asset.get("campaignIds"))
+    }
+    for campaign_id in sorted(campaign_ids - canonical_campaigns):
+        errors.append(f"campaign {campaign_id} has no canonical test asset")
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_id = str(group.get("groupId") or "")
+        deterministic_runner = group.get("deterministicRunner")
+        deterministic_asset = assets_by_path.get(deterministic_runner) if isinstance(deterministic_runner, str) else None
+        if deterministic_asset is None:
+            errors.append(f"coverage group {group_id} deterministic runner is not classified")
+        elif deterministic_asset.get("classification") != "canonical":
+            errors.append(f"coverage group {group_id} deterministic runner must be canonical")
+        discovery_runner = group.get("publicDiscoveryRunner")
+        if isinstance(discovery_runner, str):
+            discovery_asset = assets_by_path.get(discovery_runner)
+            if discovery_asset is None:
+                errors.append(f"coverage group {group_id} public discovery runner is not classified")
+            elif discovery_asset.get("classification") != "support":
+                errors.append(f"coverage group {group_id} public discovery runner must be support")
 
 
 def _validate_repo_runner(

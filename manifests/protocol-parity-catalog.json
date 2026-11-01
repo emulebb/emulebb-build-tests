@@ -34,6 +34,147 @@
       "role": "analysis-only"
     }
   ],
+  "assetClassifications": [
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/deterministic-two-client-transfer.py",
+      "reason": "Primary deterministic local two-client state-machine runner."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/emulebb-rust-emulebb-cross-client.py",
+      "reason": "Primary Rust-versus-MFC local cross-client transfer runner."
+    },
+    {
+      "campaignIds": ["client-udp-reask", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/emulebb-rust-reask-cross-client.py",
+      "reason": "Primary local cross-client UDP reask and queue-state runner."
+    },
+    {
+      "campaignIds": ["server-session-source"],
+      "classification": "canonical",
+      "path": "scripts/local-ed2k-search-soak.py",
+      "reason": "Deterministic local server search and source-discovery runner."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/local-ed2k-rust-protocol-combinations.py",
+      "reason": "Rust protocol-variant transfer matrix."
+    },
+    {
+      "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "canonical",
+      "path": "scripts/local-kad-mixed-client-swarm.py",
+      "reason": "Primary local mixed-client Kad state-machine runner."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback", "client-udp-reask", "kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "canonical",
+      "path": "scripts/stock-protocol-oracle-proof.py",
+      "reason": "Source-anchored stock fixture and Rust proof execution."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback", "client-udp-reask"],
+      "classification": "canonical",
+      "path": "src/protocol_parity.tests.cpp",
+      "reason": "Native stock-compatible wire and state fixture suite."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/compare-protocol-oracle.py",
+      "reason": "Compares normalized evidence records without owning coverage."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/local-ed2k-chaos-mode.py",
+      "reason": "Local fault discovery feeds deterministic regressions but is not standalone parity proof."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/local-ed2k-protocol-combinations.py",
+      "reason": "MFC oracle-only protocol matrix supporting the Rust-owned matrix."
+    },
+    {
+      "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "support",
+      "path": "scripts/local-kad-swarm.py",
+      "reason": "MFC oracle-only Kad control lane supporting mixed-client campaigns."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/local-parity-swarm-matrix.py",
+      "reason": "Multi-client topology support; individual catalog campaigns own verdicts."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/multi-client-p2p-matrix.py",
+      "reason": "Cross-client scenario orchestration; selected scenarios own evidence."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/normalize-protocol-oracle.py",
+      "reason": "Normalizes diagnostic captures without owning coverage."
+    },
+    {
+      "campaignIds": ["server-session-source", "client-udp-reask", "kad-search-publish-firewall"],
+      "classification": "support",
+      "path": "scripts/persisted-soak-control.py",
+      "reason": "Public-network discovery only; never a parity authority."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/protocol-pcap-capture.py",
+      "reason": "Optional passive evidence capture without verdict ownership."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/rust-ed2k-private-parity-modules.py",
+      "reason": "Executes Rust-private proof selectors until catalog-native execution replaces it."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/validate-protocol-catalog.py",
+      "reason": "Validates and reports the catalog without owning protocol evidence."
+    },
+    {
+      "campaignIds": [],
+      "classification": "product-only",
+      "path": "scripts/godzilla-local-swarm.py",
+      "reason": "Scale and stress coverage, not protocol-state parity."
+    },
+    {
+      "campaignIds": [],
+      "classification": "product-only",
+      "path": "scripts/shared-directory-browse-stress.py",
+      "reason": "Shared-directory browsing stress, not protocol-state parity."
+    },
+    {
+      "campaignIds": [],
+      "classification": "historical",
+      "path": "scripts/native-windows-parity-campaign.py",
+      "reason": "Legacy CI-054 all-in-one campaign retained only until catalog campaign migration completes."
+    },
+    {
+      "campaignIds": [],
+      "classification": "duplicate",
+      "path": "scripts/rust-ed2k-total-parity-audit.py",
+      "reason": "Competing aggregate coverage model scheduled for removal after release manifests consume catalog receipts.",
+      "replacementPath": "scripts/validate-protocol-catalog.py"
+    }
+  ],
   "campaigns": [
     {
       "campaignId": "server-session-source",
@@ -618,7 +759,7 @@
       "groupId": "lowid-callbacks",
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["source-queue-callback"],
-      "deterministicRunner": "scripts/local-ed2k-protocol-combinations.py",
+      "deterministicRunner": "scripts/local-ed2k-rust-protocol-combinations.py",
       "latestEvidence": {
         "reason": "No current-head execution receipt is registered in the catalog.",
         "verdict": "evidence-incomplete"
