@@ -209,7 +209,7 @@ def build_server_search_diagnostic_evidence(
         },
     }
     failures = [name for name, check in checks.items() if check["ok"] is not True]
-    coverage_ids = (
+    observed_ids = (
         ["server.reply.search", "server.search.keyword"] if not failures else []
     )
     return {
@@ -224,8 +224,9 @@ def build_server_search_diagnostic_evidence(
         },
         "failures": failures,
         "checks": checks,
+        "observedCoverageIds": observed_ids,
         "coverageClaims": {
-            "eligibleCoverageIds": coverage_ids,
+            "eligibleCoverageIds": [],
             "evidenceLayers": list(EVIDENCE_LAYERS),
         },
     }

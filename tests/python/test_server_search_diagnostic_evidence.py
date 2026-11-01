@@ -123,8 +123,12 @@ def test_exact_keyword_request_and_reply_are_claimable() -> None:
     assert report["checks"]["request"]["sequence"] == 10
     assert report["checks"]["reply"]["firstResponseSequence"] == 12
     assert report["checks"]["reply"]["exactRow"]["hash"] == FILE_HASH.upper()
+    assert report["observedCoverageIds"] == [
+        "server.reply.search",
+        "server.search.keyword",
+    ]
     assert report["coverageClaims"] == {
-        "eligibleCoverageIds": ["server.reply.search", "server.search.keyword"],
+        "eligibleCoverageIds": [],
         "evidenceLayers": list(evidence.EVIDENCE_LAYERS),
     }
     evidence.require_server_search_diagnostic_evidence(report)
@@ -139,6 +143,7 @@ def test_duplicate_request_is_not_causally_attributable() -> None:
 
     assert report["ok"] is False
     assert report["checks"]["request"]["endpointRequestCount"] == 2
+    assert report["observedCoverageIds"] == []
     assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 

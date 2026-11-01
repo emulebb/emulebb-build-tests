@@ -272,14 +272,11 @@ def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_pat
             "restResult": {"ok": True},
         },
         "coverageClaims": {
-            "eligibleCoverageIds": ["server.reply.search", "server.search.keyword"],
+            "eligibleCoverageIds": [],
             "evidenceLayers": list(EVIDENCE_LAYERS),
         },
+        "observedCoverageIds": ["server.reply.search", "server.search.keyword"],
     }
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        ["server.reply.search", "server.search.keyword"]
-    )
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     registration = build_transfer_registration(report_path, output_root=output_root)
@@ -288,8 +285,6 @@ def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_pat
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.reply.search",
-        "server.search.keyword",
         "transfer.block.uncompressed",
     ]
 

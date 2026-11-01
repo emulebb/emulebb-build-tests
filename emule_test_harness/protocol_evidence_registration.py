@@ -158,9 +158,11 @@ def _derived_server_search_coverage_ids(
     search = _object(search_value, "diagnostics.serverSearch")
     server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(search)
     claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
-    expected_ids = ["server.reply.search", "server.search.keyword"]
-    if claims.get("eligibleCoverageIds") != expected_ids:
-        raise ValueError("server search diagnostic claims are not exact")
+    observed_ids = ["server.reply.search", "server.search.keyword"]
+    if search.get("observedCoverageIds") != observed_ids:
+        raise ValueError("server search diagnostic observations are not exact")
+    if claims.get("eligibleCoverageIds") != []:
+        raise ValueError("unilateral server search diagnostics cannot claim parity coverage")
     if claims.get("evidenceLayers") != list(server_search_diagnostic_evidence.EVIDENCE_LAYERS):
         raise ValueError("server search diagnostic evidence layers are not canonical")
 
@@ -241,24 +243,10 @@ def _derived_server_search_coverage_ids(
     )
     if search.get("serverEndpoint") != expected_endpoint:
         raise ValueError("server search diagnostics use an unexpected server endpoint")
-    return expected_ids
+    return []
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
-    if coverage_id in {"server.search.keyword", "server.reply.search"}:
-        search = _object(diagnostics.get("serverSearch"), "diagnostics.serverSearch")
-        checks = _object(search.get("checks"), "diagnostics.serverSearch.checks")
-        if coverage_id == "server.search.keyword":
-            request = _object(checks.get("request"), "server search request")
-            return (
-                f"Rust sent one exact keyword request at sequence {request['sequence']} "
-                "to the deterministic server after MFC publication."
-            )
-        reply = _object(checks.get("reply"), "server search reply")
-        return (
-            f"Rust decoded the one exact hash/name/size result from "
-            f"{reply['responseCount']} causally ordered server reply frame(s)."
-        )
     if coverage_id == "peer.startup.multipacket-ext2":
         request = _exact_startup_check(diagnostics, "multipacketRequestFrames")
         answer = _exact_startup_check(diagnostics, "multipacketAnswerFrames")
