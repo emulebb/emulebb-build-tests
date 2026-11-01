@@ -186,9 +186,13 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.transfer_scenario == SERVER_LOGIN_REQUEST:
         if args.client2_identity != "mfc_oracle":
             raise ValueError("Server login proof requires the MFC diagnostics oracle.")
-        if args.protocol_case not in {"plain-server-plain-clients", "obfuscated-required"}:
+        if args.protocol_case not in {
+            "plain-server-plain-clients",
+            "obfuscated-preferred-fallback",
+            "obfuscated-required",
+        }:
             raise ValueError(
-                "Server login proof requires plain-server-plain-clients or obfuscated-required."
+                "Server login proof requires a canonical plaintext, obfuscated, or fallback case."
             )
 
 
@@ -293,7 +297,7 @@ def collect_server_login_diagnostics(
     rust_tcp_port: int,
     mfc_nickname: str,
     mfc_tcp_port: int,
-    expected_transport_mode: str,
+    expected_transport_plan: tuple[str, ...],
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -319,7 +323,7 @@ def collect_server_login_diagnostics(
         rust_tcp_port=rust_tcp_port,
         mfc_nickname=mfc_nickname,
         mfc_tcp_port=mfc_tcp_port,
-        expected_transport_mode=expected_transport_mode,
+        expected_transport_plan=expected_transport_plan,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
     )
@@ -2338,7 +2342,7 @@ def main(argv: list[str] | None = None) -> int:
                 rust_tcp_port=ports["client1_tcp"],
                 mfc_nickname=client2_identity.nick,
                 mfc_tcp_port=ports["client2_tcp"],
-                expected_transport_mode=ed2k_protocol_cases.required_server_transport_mode(
+                expected_transport_plan=ed2k_protocol_cases.required_server_transport_plan(
                     protocol_case
                 ),
                 rust_diagnostics_dir=rust_diagnostics_dir,

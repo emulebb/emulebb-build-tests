@@ -12,50 +12,61 @@ from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCH
 FILE_HASH = "00112233445566778899aabbccddeeff"
 
 
-def bilateral_login_evidence(transport_mode: str = "plaintext") -> dict[str, object]:
+def bilateral_login_evidence(
+    transport_plan: tuple[str, ...] = ("plaintext",),
+) -> dict[str, object]:
+    fallback = len(transport_plan) == 2
+    final_transport_mode = transport_plan[-1]
+
+    def client_row(client: str) -> dict[str, object]:
+        login_sequence = 4 if fallback else (2 if client == "rust" else 3)
+        return {
+            "ok": True,
+            "packetCount": 1,
+            "sendSucceeded": True,
+            "loginSequence": login_sequence,
+            "idChangeSequence": 7 if fallback else (7 if client == "rust" else 4),
+            "loginAcceptedSequence": 8 if fallback else (8 if client == "rust" else 5),
+            "connectionFailureSequence": 1 if fallback else None,
+            "transportFallbackSequence": 2 if fallback else None,
+            "connectionFailureCount": 1 if fallback else 0,
+            "transportFallbackCount": 1 if fallback else 0,
+            "failedTraceId": 1 if fallback else None,
+            "fallbackTraceId": 1 if fallback else None,
+            "finalTraceId": 2,
+            "loginTraceId": 2,
+            "idChangeTraceId": 2,
+            "loginAcceptedTraceId": 2,
+            "fallbackError": "crypt negotiation rejected" if fallback else None,
+            "decodedLogin": {"client_id": 0},
+            "decodedIdChange": {"id_kind": "low-id"},
+            "extensionTags": {"offerfiles_v": 1} if client == "rust" else {},
+            "semanticShape": True,
+            "transportPlanExact": True,
+            "traceCorrelation": True,
+            "fallbackCausal": True,
+            "transportObservation": {
+                "attempts": list(transport_plan),
+                "login": final_transport_mode,
+                "idChange": final_transport_mode,
+                "accepted": final_transport_mode,
+            },
+        }
+
     clients = {
-        "rust": {
-            "ok": True,
-            "packetCount": 1,
-            "sendSucceeded": True,
-            "loginSequence": 2,
-            "idChangeSequence": 7,
-            "loginAcceptedSequence": 8,
-            "decodedLogin": {"client_id": 0},
-            "decodedIdChange": {"id_kind": "low-id"},
-            "extensionTags": {"offerfiles_v": 1},
-            "semanticShape": True,
-            "transportExact": True,
-            "transportObservation": {
-                "login": transport_mode,
-                "idChange": transport_mode,
-                "accepted": transport_mode,
-            },
-        },
-        "mfc": {
-            "ok": True,
-            "packetCount": 1,
-            "sendSucceeded": True,
-            "loginSequence": 3,
-            "idChangeSequence": 4,
-            "loginAcceptedSequence": 5,
-            "decodedLogin": {"client_id": 0},
-            "decodedIdChange": {"id_kind": "low-id"},
-            "extensionTags": {},
-            "semanticShape": True,
-            "transportExact": True,
-            "transportObservation": {
-                "login": transport_mode,
-                "idChange": transport_mode,
-                "accepted": transport_mode,
-            },
-        },
+        "rust": client_row("rust"),
+        "mfc": client_row("mfc"),
     }
+    connection_id = (
+        "server.connect.fallback"
+        if fallback
+        else f"server.connect.{final_transport_mode}"
+    )
     return {
         "schema": "emulebb-build-tests.deterministic-server-login-diagnostics",
         "ok": True,
         "serverEndpoint": "127.0.0.1:4661",
-        "expectedTransportMode": transport_mode,
+        "expectedTransportPlan": list(transport_plan),
         "expectedClients": {
             "rust": {"nickname": "rust-test", "tcpPort": 4662},
             "mfc": {"nickname": "mfc-test", "tcpPort": 4663},
@@ -68,7 +79,9 @@ def bilateral_login_evidence(transport_mode: str = "plaintext") -> dict[str, obj
             "serverFlagsEqual": True,
             "udpPortsTagEqual": True,
             "idKindEqual": True,
-            "transportModeExact": True,
+            "transportPlanExact": True,
+            "traceCorrelationExact": True,
+            "fallbackSequenceExact": True,
             "ok": True,
         },
         "captures": {
@@ -77,7 +90,7 @@ def bilateral_login_evidence(transport_mode: str = "plaintext") -> dict[str, obj
         },
         "coverageClaims": {
             "eligibleCoverageIds": [
-                f"server.connect.{transport_mode}",
+                connection_id,
                 "server.login.request",
             ],
             "evidenceLayers": list(EVIDENCE_LAYERS),
@@ -85,15 +98,43 @@ def bilateral_login_evidence(transport_mode: str = "plaintext") -> dict[str, obj
     }
 
 
-def forced_server_protocol_case(transport_mode: str) -> dict[str, object]:
-    obfuscated = transport_mode == "obfuscated"
+def server_protocol_case(transport_plan: tuple[str, ...]) -> dict[str, object]:
+    fallback = len(transport_plan) == 2
+    obfuscated = transport_plan == ("obfuscated",)
     return {
-        "name": "obfuscated-required" if obfuscated else "plain-server-plain-clients",
+        "name": (
+            "obfuscated-preferred-fallback"
+            if fallback
+            else "obfuscated-required"
+            if obfuscated
+            else "plain-server-plain-clients"
+        ),
         "server_protocol_obfuscation": obfuscated,
-        "client_crypt_supported": obfuscated,
-        "client_crypt_requested": obfuscated,
+        "client_crypt_supported": obfuscated or fallback,
+        "client_crypt_requested": obfuscated or fallback,
         "client_crypt_required": obfuscated,
     }
+
+
+def attach_server_login(
+    report: dict[str, object],
+    login: dict[str, object],
+    transport_plan: tuple[str, ...],
+) -> None:
+    report["transfer_scenario"] = "server-login-request"
+    report["protocol_case"] = server_protocol_case(transport_plan)
+    report["network"] = {
+        "ed2k_server_address": "127.0.0.1",
+        "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
+    }
+    report["profiles"]["rust"]["nick"] = "rust-test"
+    report["profiles"]["mfc"]["nick"] = "mfc-test"
+    report["checks"]["client_server_login_diagnostics"] = login
+    report["diagnostics"]["serverLogin"] = login
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        login["coverageClaims"]["eligibleCoverageIds"]
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
 
 
 def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
@@ -301,26 +342,20 @@ def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_pat
     assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
 
 
-@pytest.mark.parametrize("transport_mode", ["plaintext", "obfuscated"])
+@pytest.mark.parametrize(
+    ("transport_plan", "connection_id"),
+    [
+        (("plaintext",), "server.connect.plaintext"),
+        (("obfuscated",), "server.connect.obfuscated"),
+        (("obfuscated", "plaintext"), "server.connect.fallback"),
+    ],
+)
 def test_build_transfer_registration_accepts_bilateral_server_login(
-    tmp_path: Path, transport_mode: str
+    tmp_path: Path, transport_plan: tuple[str, ...], connection_id: str
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
-    login = bilateral_login_evidence(transport_mode)
-    report["transfer_scenario"] = "server-login-request"
-    report["protocol_case"] = forced_server_protocol_case(transport_mode)
-    report["network"] = {
-        "ed2k_server_address": "127.0.0.1",
-        "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
-    }
-    report["profiles"]["rust"]["nick"] = "rust-test"
-    report["profiles"]["mfc"]["nick"] = "mfc-test"
-    report["checks"]["client_server_login_diagnostics"] = login
-    report["diagnostics"]["serverLogin"] = login
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        login["coverageClaims"]["eligibleCoverageIds"]
-    )
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    login = bilateral_login_evidence(transport_plan)
+    attach_server_login(report, login, transport_plan)
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     registration = build_transfer_registration(report_path, output_root=output_root)
@@ -329,7 +364,7 @@ def test_build_transfer_registration_accepts_bilateral_server_login(
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        f"server.connect.{transport_mode}",
+        connection_id,
         "server.login.request",
         "transfer.block.uncompressed",
     ]
@@ -339,23 +374,49 @@ def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Pa
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence()
     login["clients"]["mfc"]["ok"] = False
-    report["transfer_scenario"] = "server-login-request"
-    report["protocol_case"] = forced_server_protocol_case("plaintext")
-    report["network"] = {
-        "ed2k_server_address": "127.0.0.1",
-        "ports": {"ed2k_tcp": 4661, "client1_tcp": 4662, "client2_tcp": 4663},
-    }
-    report["profiles"]["rust"]["nick"] = "rust-test"
-    report["profiles"]["mfc"]["nick"] = "mfc-test"
-    report["checks"]["client_server_login_diagnostics"] = login
-    report["diagnostics"]["serverLogin"] = login
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        login["coverageClaims"]["eligibleCoverageIds"]
-    )
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    attach_server_login(report, login, ("plaintext",))
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="mfc server login evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_revalidates_final_trace_components(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    login["clients"]["mfc"]["idChangeTraceId"] = 99
+    attach_server_login(report, login, plan)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="final server-login trace IDs"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_case_flags_that_only_match_report_claims(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    attach_server_login(report, login, plan)
+    report["protocol_case"]["server_protocol_obfuscation"] = True
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="flags do not match"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_retired_server_login_mode_field(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence()
+    login["expectedTransportMode"] = "plaintext"
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="invalid transport plan"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

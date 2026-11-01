@@ -52,6 +52,15 @@ PROTOCOL_CASES = (
         client_crypt_required=False,
     ),
     ProtocolCase(
+        name="obfuscated-preferred-fallback",
+        artifact_id="obf-fallback",
+        server_protocol_obfuscation=False,
+        server_udp=True,
+        client_crypt_supported=True,
+        client_crypt_requested=True,
+        client_crypt_required=False,
+    ),
+    ProtocolCase(
         name="obfuscated-required",
         artifact_id="obf-req",
         server_protocol_obfuscation=True,
@@ -110,14 +119,16 @@ def expected_peer_transport_mode(case: ProtocolCase) -> str:
     return "obfuscated" if case.client_crypt_supported else "plaintext"
 
 
-def required_server_transport_mode(case: ProtocolCase) -> str:
-    """Returns the server transport forced by a non-fallback protocol case."""
+def required_server_transport_plan(case: ProtocolCase) -> tuple[str, ...]:
+    """Returns the exact ordered server transports required by one case."""
 
-    if not case.server_protocol_obfuscation and not case.client_crypt_supported:
-        return "plaintext"
-    if case.server_protocol_obfuscation and case.client_crypt_required:
-        return "obfuscated"
-    raise ValueError(f"Protocol case {case.name!r} does not force one server transport mode.")
+    if not case.client_crypt_supported:
+        return ("plaintext",)
+    if case.server_protocol_obfuscation:
+        return ("obfuscated",)
+    if case.client_crypt_requested and not case.client_crypt_required:
+        return ("obfuscated", "plaintext")
+    raise ValueError(f"Protocol case {case.name!r} has no successful server transport plan.")
 
 
 def expected_payload_encoding(case: ProtocolCase) -> str:

@@ -22,6 +22,23 @@ GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
+SERVER_LOGIN_CASE_AUTHORITY = {
+    "plain-server-plain-clients": {
+        "transportPlan": ("plaintext",),
+        "flags": (False, False, False, False),
+        "coverageId": "server.connect.plaintext",
+    },
+    "obfuscated-preferred-fallback": {
+        "transportPlan": ("obfuscated", "plaintext"),
+        "flags": (False, True, True, False),
+        "coverageId": "server.connect.fallback",
+    },
+    "obfuscated-required": {
+        "transportPlan": ("obfuscated",),
+        "flags": (True, True, True, True),
+        "coverageId": "server.connect.obfuscated",
+    },
+}
 
 
 def _object(value: Any, field: str) -> dict[str, Any]:
@@ -262,36 +279,34 @@ def _derived_server_login_coverage_ids(
     server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(login)
     protocol_case = _object(report.get("protocol_case"), "protocol_case")
     case_name = protocol_case.get("name")
-    if case_name == "plain-server-plain-clients":
-        expected_transport_mode = "plaintext"
-        expected_case_flags = {
-            "server_protocol_obfuscation": False,
-            "client_crypt_supported": False,
-            "client_crypt_requested": False,
-            "client_crypt_required": False,
-        }
-    elif case_name == "obfuscated-required":
-        expected_transport_mode = "obfuscated"
-        expected_case_flags = {
-            "server_protocol_obfuscation": True,
-            "client_crypt_supported": True,
-            "client_crypt_requested": True,
-            "client_crypt_required": True,
-        }
-    else:
-        raise ValueError("server login evidence requires one forced transport protocol case")
+    case_authority = (
+        SERVER_LOGIN_CASE_AUTHORITY.get(case_name) if isinstance(case_name, str) else None
+    )
+    if case_authority is None:
+        raise ValueError("server login evidence requires one canonical transport protocol case")
+    expected_transport_plan = list(case_authority["transportPlan"])
+    expected_case_flags = dict(
+        zip(
+            (
+                "server_protocol_obfuscation",
+                "client_crypt_supported",
+                "client_crypt_requested",
+                "client_crypt_required",
+            ),
+            case_authority["flags"],
+            strict=True,
+        )
+    )
     if any(protocol_case.get(name) is not value for name, value in expected_case_flags.items()):
         raise ValueError("server login protocol case flags do not match its named transport case")
-    if login.get("expectedTransportMode") != expected_transport_mode:
-        raise ValueError("server login expected transport does not match the protocol case")
+    if login.get("expectedTransportPlan") != expected_transport_plan:
+        raise ValueError("server login expected transport plan does not match the protocol case")
 
     claims = _object(login.get("coverageClaims"), "diagnostics.serverLogin.coverageClaims")
     expected_ids = sorted(
         [
             "server.login.request",
-            server_login_diagnostic_evidence.CONNECTION_COVERAGE_ID_BY_TRANSPORT[
-                expected_transport_mode
-            ],
+            case_authority["coverageId"],
         ]
     )
     if claims.get("eligibleCoverageIds") != expected_ids:
@@ -317,6 +332,19 @@ def _derived_server_login_coverage_ids(
             row.get("loginAcceptedSequence"),
             f"diagnostics.serverLogin.clients.{client}.loginAcceptedSequence",
         )
+        final_trace_id = _positive_int(
+            row.get("finalTraceId"),
+            f"diagnostics.serverLogin.clients.{client}.finalTraceId",
+        )
+        final_trace_components = {
+            _positive_int(
+                row.get(field),
+                f"diagnostics.serverLogin.clients.{client}.{field}",
+            )
+            for field in ("loginTraceId", "idChangeTraceId", "loginAcceptedTraceId")
+        }
+        if final_trace_components != {final_trace_id}:
+            raise ValueError(f"{client} final server-login trace IDs are not exact")
         decoded_login = _object(
             row.get("decodedLogin"),
             f"diagnostics.serverLogin.clients.{client}.decodedLogin",
@@ -330,18 +358,62 @@ def _derived_server_login_coverage_ids(
             or row.get("packetCount") != 1
             or row.get("sendSucceeded") is not True
             or row.get("semanticShape") is not True
-            or row.get("transportExact") is not True
+            or row.get("transportPlanExact") is not True
+            or row.get("traceCorrelation") is not True
+            or row.get("fallbackCausal") is not True
             or decoded_login.get("client_id") != 0
             or decoded_id.get("id_kind") != "low-id"
             or not login_sequence < id_change_sequence < accepted_sequence
         ):
             raise ValueError(f"{client} server login evidence is not singular and causal")
+        final_transport_mode = expected_transport_plan[-1]
         if row.get("transportObservation") != {
-            "login": expected_transport_mode,
-            "idChange": expected_transport_mode,
-            "accepted": expected_transport_mode,
+            "attempts": expected_transport_plan,
+            "login": final_transport_mode,
+            "idChange": final_transport_mode,
+            "accepted": final_transport_mode,
         }:
             raise ValueError(f"{client} server login transport observations are not exact")
+        if len(expected_transport_plan) == 2:
+            failure_sequence = _positive_int(
+                row.get("connectionFailureSequence"),
+                f"diagnostics.serverLogin.clients.{client}.connectionFailureSequence",
+            )
+            fallback_sequence = _positive_int(
+                row.get("transportFallbackSequence"),
+                f"diagnostics.serverLogin.clients.{client}.transportFallbackSequence",
+            )
+            failed_trace_id = _positive_int(
+                row.get("failedTraceId"),
+                f"diagnostics.serverLogin.clients.{client}.failedTraceId",
+            )
+            fallback_trace_id = _positive_int(
+                row.get("fallbackTraceId"),
+                f"diagnostics.serverLogin.clients.{client}.fallbackTraceId",
+            )
+            if (
+                row.get("connectionFailureCount") != 1
+                or row.get("transportFallbackCount") != 1
+                or not failure_sequence < fallback_sequence < login_sequence
+                or failed_trace_id != fallback_trace_id
+                or failed_trace_id == final_trace_id
+                or not isinstance(row.get("fallbackError"), str)
+                or not row["fallbackError"]
+            ):
+                raise ValueError(f"{client} server fallback evidence is not exact and causal")
+        elif any(
+            row.get(name) is not expected
+            for name, expected in {
+                "connectionFailureCount": 0,
+                "transportFallbackCount": 0,
+                "connectionFailureSequence": None,
+                "transportFallbackSequence": None,
+                "failedTraceId": None,
+                "fallbackTraceId": None,
+                "fallbackError": None,
+            }.items()
+        ):
+            raise ValueError(f"{client} singular server transport contains fallback evidence")
     if clients["rust"].get("extensionTags") != {"offerfiles_v": 1}:
         raise ValueError("Rust server login has unexpected extension tags")
     if clients["mfc"].get("extensionTags") != {}:
@@ -354,7 +426,9 @@ def _derived_server_login_coverage_ids(
         "serverFlagsEqual",
         "udpPortsTagEqual",
         "idKindEqual",
-        "transportModeExact",
+        "transportPlanExact",
+        "traceCorrelationExact",
+        "fallbackSequenceExact",
         "ok",
     }
     if set(comparison) != required_comparisons or any(
@@ -398,12 +472,23 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
-    if coverage_id in {"server.connect.plaintext", "server.connect.obfuscated"}:
+    if coverage_id in {
+        "server.connect.plaintext",
+        "server.connect.obfuscated",
+        "server.connect.fallback",
+    }:
         login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
         clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
-        mode = login.get("expectedTransportMode")
+        plan = login.get("expectedTransportPlan")
+        if coverage_id == "server.connect.fallback":
+            return (
+                "Rust and MFC each recorded an obfuscated connection failure, a causally "
+                "joined plaintext fallback, and an accepted plaintext session at fallback "
+                f"sequences {clients['rust']['transportFallbackSequence']}/"
+                f"{clients['mfc']['transportFallbackSequence']}."
+            )
         return (
-            f"Rust and MFC each recorded {mode} transport on login, ID-change, and "
+            f"Rust and MFC each recorded {plan[0]} transport on login, ID-change, and "
             f"accepted-session transitions at sequences "
             f"{clients['rust']['loginSequence']}/{clients['mfc']['loginSequence']}."
         )

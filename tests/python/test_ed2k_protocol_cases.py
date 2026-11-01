@@ -12,12 +12,15 @@ def test_default_matrix_covers_plain_obfuscated_udp_and_compression_surfaces() -
     assert tuple(cases) == (
         "plain-server-plain-clients",
         "obfuscated-preferred",
+        "obfuscated-preferred-fallback",
         "obfuscated-required",
         "obfuscated-required-compressible",
     )
     assert cases["plain-server-plain-clients"].server_protocol_obfuscation is False
     assert cases["plain-server-plain-clients"].client_crypt_supported is False
     assert cases["obfuscated-preferred"].client_crypt_requested is True
+    assert cases["obfuscated-preferred-fallback"].server_protocol_obfuscation is False
+    assert cases["obfuscated-preferred-fallback"].client_crypt_requested is True
     assert cases["obfuscated-required"].client_crypt_required is True
     assert cases["obfuscated-required-compressible"].artifact_id == "obf-req-z"
     assert all(case.server_udp for case in cases.values())
@@ -108,16 +111,16 @@ def test_expected_peer_transport_mode_is_derived_from_case() -> None:
     assert ed2k_protocol_cases.client_connect_options(required) == 0x07
 
 
-def test_required_server_transport_mode_rejects_fallback_case() -> None:
+def test_required_server_transport_plan_is_exact_for_singular_and_fallback_cases() -> None:
     plain = ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
     required = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
     preferred = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred"]
+    fallback = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred-fallback"]
 
-    assert ed2k_protocol_cases.required_server_transport_mode(plain) == "plaintext"
-    assert ed2k_protocol_cases.required_server_transport_mode(required) == "obfuscated"
-    try:
-        ed2k_protocol_cases.required_server_transport_mode(preferred)
-    except ValueError as exc:
-        assert "does not force one server transport mode" in str(exc)
-    else:
-        raise AssertionError("preferred transport must not be treated as deterministic")
+    assert ed2k_protocol_cases.required_server_transport_plan(plain) == ("plaintext",)
+    assert ed2k_protocol_cases.required_server_transport_plan(preferred) == ("obfuscated",)
+    assert ed2k_protocol_cases.required_server_transport_plan(required) == ("obfuscated",)
+    assert ed2k_protocol_cases.required_server_transport_plan(fallback) == (
+        "obfuscated",
+        "plaintext",
+    )
