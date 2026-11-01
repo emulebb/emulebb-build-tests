@@ -146,6 +146,14 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     assert report["ok"] is True
     assert report["fileHash"] == FILE_HASH
     assert report["failures"] == []
+    assert report["coverageClaims"] == {
+        "eligibleCoverageIds": ["queue.admission", "transfer.block.uncompressed"],
+        "evidenceLayers": [
+            "codec-transcript",
+            "deterministic-state-machine",
+            "local-cross-client",
+        ],
+    }
     assert report["clients"]["mfc"]["checks"]["uploadPayloadSent"]["sentFileBytes"] == 4096
     evidence.require_transfer_diagnostic_evidence(report)
 
@@ -161,6 +169,7 @@ def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> Non
     )
 
     assert report["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
     assert "Rust settled the exact download task as completed" in report["failures"]
     with pytest.raises(RuntimeError, match="diagnostics are incomplete"):
         evidence.require_transfer_diagnostic_evidence(report)
@@ -178,6 +187,29 @@ def test_build_transfer_diagnostic_evidence_rejects_zero_payload() -> None:
 
     assert report["ok"] is False
     assert "MFC sent payload for the exact file" in report["failures"]
+
+
+def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_variant() -> None:
+    rust, mfc = complete_records()
+    for packet in (rust[2], mfc[2]):
+        packet["keys"]["opcode"] = 64
+        packet["body"]["opcode"] = 64
+        packet["body"]["opcodeName"] = "OP_COMPRESSEDPART"
+        packet["body"]["clearFrameHex"] = "e31100000040ccdd"
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is True
+    assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "queue.admission",
+        "transfer.block.compressed",
+    ]
+    assert "transfer.block.invalid-zlib" not in report["coverageClaims"]["eligibleCoverageIds"]
+    assert "queue.rank-transition" not in report["coverageClaims"]["eligibleCoverageIds"]
 
 
 def test_build_transfer_diagnostic_evidence_rejects_unmatched_wire_frame() -> None:

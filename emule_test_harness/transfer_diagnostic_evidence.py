@@ -9,6 +9,13 @@ from typing import Any
 
 SCHEMA = "emulebb-build-tests.deterministic-transfer-diagnostics.v1"
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+EVIDENCE_LAYERS = (
+    "codec-transcript",
+    "deterministic-state-machine",
+    "local-cross-client",
+)
+UNCOMPRESSED_PAYLOAD_OPCODES = frozenset({"OP_SENDINGPART", "OP_SENDINGPART_I64"})
+COMPRESSED_PAYLOAD_OPCODES = frozenset({"OP_COMPRESSEDPART", "OP_COMPRESSEDPART_I64"})
 
 
 def normalize_ed2k_hash(value: str) -> str:
@@ -358,11 +365,23 @@ def build_transfer_diagnostic_evidence(
         *ordering.values(),
     ]
     failures = [str(check["name"]) for check in required_checks if not check["ok"]]
+    eligible_coverage_ids: list[str] = []
+    if not failures:
+        eligible_coverage_ids.append("queue.admission")
+        observed_payload_opcodes = set(wire_checks["payloadFrames"]["opcodes"])
+        if observed_payload_opcodes.intersection(UNCOMPRESSED_PAYLOAD_OPCODES):
+            eligible_coverage_ids.append("transfer.block.uncompressed")
+        if observed_payload_opcodes.intersection(COMPRESSED_PAYLOAD_OPCODES):
+            eligible_coverage_ids.append("transfer.block.compressed")
     return {
         "schema": SCHEMA,
         "ok": not failures,
         "fileHash": normalized_hash,
         "failures": failures,
+        "coverageClaims": {
+            "eligibleCoverageIds": sorted(eligible_coverage_ids),
+            "evidenceLayers": list(EVIDENCE_LAYERS),
+        },
         "wireChecks": wire_checks,
         "clients": {
             "rust": {
