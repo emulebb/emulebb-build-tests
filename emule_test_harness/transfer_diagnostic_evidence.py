@@ -182,6 +182,8 @@ def _decode_file_identifier(
     *,
     expected_file_hash: str,
     expected_file_size: int,
+    require_size: bool = True,
+    require_aich: bool = True,
 ) -> tuple[dict[str, Any], bytes]:
     if not payload:
         raise ValueError("short FileIdentifier descriptor")
@@ -204,7 +206,9 @@ def _decode_file_identifier(
             raise ValueError("short FileIdentifier size")
         file_size = int.from_bytes(payload[cursor : cursor + 8], "little")
         cursor += 8
-    if file_size != expected_file_size:
+    if require_size and file_size != expected_file_size:
+        raise ValueError(f"FileIdentifier size {file_size} does not match {expected_file_size}")
+    if file_size is not None and file_size != expected_file_size:
         raise ValueError(f"FileIdentifier size {file_size} does not match {expected_file_size}")
 
     aich_root: str | None = None
@@ -213,7 +217,7 @@ def _decode_file_identifier(
             raise ValueError("short FileIdentifier AICH root")
         aich_root = payload[cursor : cursor + 20].hex()
         cursor += 20
-    if aich_root is None:
+    if require_aich and aich_root is None:
         raise ValueError("FileIdentifier does not contain an AICH root")
     return {
         "descriptor": descriptor,
@@ -228,11 +232,14 @@ def _decode_multipacket_request(
     *,
     expected_file_hash: str,
     expected_file_size: int,
+    metadata_recovery_required: bool,
 ) -> dict[str, Any]:
     identifier, remaining = _decode_file_identifier(
         _packet_payload(record),
         expected_file_hash=expected_file_hash,
         expected_file_size=expected_file_size,
+        require_size=not metadata_recovery_required,
+        require_aich=not metadata_recovery_required,
     )
     if not remaining or remaining[0] != OP_REQUESTFILENAME:
         raise ValueError("OP_MULTIPACKET_EXT2 does not start with OP_REQUESTFILENAME")
@@ -295,11 +302,14 @@ def _decode_hashset_request(
     *,
     expected_file_hash: str,
     expected_file_size: int,
+    metadata_recovery_required: bool,
 ) -> dict[str, Any]:
     identifier, remaining = _decode_file_identifier(
         _packet_payload(record),
         expected_file_hash=expected_file_hash,
         expected_file_size=expected_file_size,
+        require_size=not metadata_recovery_required,
+        require_aich=not metadata_recovery_required,
     )
     if remaining != b"\x03":
         raise ValueError("OP_HASHSETREQUEST2 does not request exactly MD4 plus AICH")
@@ -733,6 +743,7 @@ def build_transfer_diagnostic_evidence(
             record,
             expected_file_hash=normalized_hash,
             expected_file_size=expected_file_size,
+            metadata_recovery_required=metadata_recovery_required,
         ),
     )
     multipacket_answer_semantics = _semantic_check(
@@ -752,6 +763,7 @@ def build_transfer_diagnostic_evidence(
             record,
             expected_file_hash=normalized_hash,
             expected_file_size=expected_file_size,
+            metadata_recovery_required=metadata_recovery_required,
         ),
     )
     hashset_answer_semantics = _semantic_check(

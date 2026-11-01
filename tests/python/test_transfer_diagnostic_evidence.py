@@ -156,6 +156,31 @@ def packet_named(records: list[dict[str, object]], opcode_name: str) -> dict[str
     return next(record for record in records if record["body"].get("opcodeName") == opcode_name)
 
 
+def replace_packet_payload(record: dict[str, object], payload: bytes) -> None:
+    body = record["body"]
+    opcode = int(body["opcode"])
+    frame = bytes([0xC5]) + (len(payload) + 1).to_bytes(4, "little") + bytes([opcode]) + payload
+    body["payloadHex"] = payload.hex()
+    body["payloadLen"] = len(payload)
+    body["clearFrameHex"] = frame.hex()
+    if body["direction"] == "send":
+        body["attemptedLen"] = len(frame)
+        body["writtenLen"] = len(frame)
+
+
+def use_hash_only_request_identifiers(
+    rust: list[dict[str, object]],
+    mfc: list[dict[str, object]],
+) -> None:
+    full_identifier_len = 1 + 16 + 8 + 20
+    hash_only_identifier = b"\x01" + bytes.fromhex(FILE_HASH)
+    for opcode_name in ("OP_MULTIPACKET_EXT2", "OP_HASHSETREQUEST2"):
+        for records in (rust, mfc):
+            record = packet_named(records, opcode_name)
+            payload = bytes.fromhex(str(record["body"]["payloadHex"]))
+            replace_packet_payload(record, hash_only_identifier + payload[full_identifier_len:])
+
+
 def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     request_frame = {
         "direction": "send",
@@ -309,6 +334,7 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
 
 def test_build_transfer_diagnostic_evidence_claims_hash_only_metadata_recovery() -> None:
     rust, mfc = complete_records()
+    use_hash_only_request_identifiers(rust, mfc)
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
@@ -338,6 +364,7 @@ def test_build_transfer_diagnostic_evidence_claims_hash_only_metadata_recovery()
 
 def test_build_transfer_diagnostic_evidence_rejects_metadata_recovery_source_drift() -> None:
     rust, mfc = complete_records()
+    use_hash_only_request_identifiers(rust, mfc)
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
