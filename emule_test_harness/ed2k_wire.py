@@ -26,6 +26,10 @@ OP_IDCHANGE = 0x40
 OP_SERVERIDENT = 0x41
 OP_FOUNDSOURCES = 0x42
 OP_FOUNDSOURCES_OBFU = 0x44
+OP_GLOBSERVSTATREQ = 0x96
+OP_GLOBSERVSTATRES = 0x97
+OP_SERVER_DESC_REQ = 0xA2
+OP_SERVER_DESC_RES = 0xA3
 
 CT_NAME = 0x01
 CT_SERVER_FLAGS = 0x20
@@ -36,6 +40,9 @@ FT_COMPLETE_SOURCES = 0x30
 FT_FILESIZE_HI = 0x3A
 ST_SERVERNAME = 0x01
 ST_DESCRIPTION = 0x0B
+ST_DYNIP = 0x85
+ST_VERSION = 0x91
+ST_AUXPORTSLIST = 0x93
 
 TAGTYPE_HASH = 0x01
 TAGTYPE_STRING = 0x02
@@ -57,6 +64,10 @@ SRVCAP_UNICODE = 0x0010
 SRVCAP_LARGEFILES = 0x0100
 SRVCAP_SUPPORTCRYPT = 0x0200
 SRVCAP_LUGDUNUM_NAT_CALLBACK = 0x1000
+SERVER_UDP_FLAG_UDPOBFUSCATION = 0x0000_0200
+SERVER_UDP_FLAG_TCPOBFUSCATION = 0x0000_0400
+SERVER_STATUS_CHALLENGE_PREFIX = 0x55AA_0000
+SERVER_DESCRIPTION_CHALLENGE_SUFFIX = 0xF0FF
 DEFAULT_SERVER_FLAGS = (
     SRVCAP_ZLIB
     | SRVCAP_NEWTAGS
@@ -257,6 +268,151 @@ def decode_server_status(payload: bytes) -> dict[str, int]:
     if reader.remaining:
         raise Ed2kWireError(f"SERVERSTATUS has {reader.remaining} trailing bytes.")
     return {"users": users, "files": files}
+
+
+def decode_server_udp_status_request(payload: bytes) -> dict[str, int]:
+    """Decodes one exact challenged ``OP_GLOBSERVSTATREQ`` payload."""
+
+    if len(payload) != 4:
+        raise Ed2kWireError(
+            f"GLOBSERVSTATREQ must contain one four-byte challenge, got {len(payload)} bytes."
+        )
+    challenge = int.from_bytes(payload, "little")
+    if challenge & 0xFFFF_0000 != SERVER_STATUS_CHALLENGE_PREFIX:
+        raise Ed2kWireError(
+            f"GLOBSERVSTATREQ challenge 0x{challenge:08X} lacks the 0x55AA prefix."
+        )
+    return {"challenge": challenge}
+
+
+def decode_server_udp_status_response(
+    payload: bytes,
+    *,
+    expected_challenge: int | None = None,
+    server_port: int | None = None,
+) -> dict[str, int | str]:
+    """Decodes the complete stock ``OP_GLOBSERVSTATRES`` optional-field layout."""
+
+    if len(payload) < 12:
+        raise Ed2kWireError(
+            f"GLOBSERVSTATRES requires challenge/users/files, got {len(payload)} bytes."
+        )
+    reader = _Reader(payload)
+    challenge = reader.u32()
+    if expected_challenge is not None and challenge != expected_challenge:
+        raise Ed2kWireError(
+            f"GLOBSERVSTATRES challenge 0x{challenge:08X} does not match 0x{expected_challenge:08X}."
+        )
+    users = reader.u32()
+    files = reader.u32()
+    max_users = reader.u32() if len(payload) >= 16 else 0
+    soft_files = reader.u32() if len(payload) >= 24 else 0
+    hard_files = reader.u32() if len(payload) >= 24 else 0
+    udp_flags = reader.u32() if len(payload) >= 28 else 0
+    low_id_users = reader.u32() if len(payload) >= 32 else 0
+    wire_obfuscation_port_udp = reader.u16() if len(payload) >= 40 else 0
+    wire_obfuscation_port_tcp = reader.u16() if len(payload) >= 40 else 0
+    udp_key = reader.u32() if len(payload) >= 40 else 0
+    trailing = reader.take(reader.remaining)
+    obfuscation_port_udp = wire_obfuscation_port_udp
+    obfuscation_port_tcp = wire_obfuscation_port_tcp
+    if server_port is not None:
+        if not obfuscation_port_tcp and udp_flags & SERVER_UDP_FLAG_TCPOBFUSCATION:
+            obfuscation_port_tcp = server_port
+        if not obfuscation_port_udp and udp_flags & SERVER_UDP_FLAG_UDPOBFUSCATION:
+            obfuscation_port_udp = server_port + 12 if server_port <= 0xFFFF - 12 else 0
+    return {
+        "challenge": challenge,
+        "users": users,
+        "files": files,
+        "max_users": max_users,
+        "soft_files": soft_files,
+        "hard_files": hard_files,
+        "udp_flags": udp_flags,
+        "low_id_users": low_id_users,
+        "wire_obfuscation_port_udp": wire_obfuscation_port_udp,
+        "wire_obfuscation_port_tcp": wire_obfuscation_port_tcp,
+        "obfuscation_port_udp": obfuscation_port_udp,
+        "obfuscation_port_tcp": obfuscation_port_tcp,
+        "udp_key": udp_key,
+        "trailing_hex": trailing.hex().upper(),
+    }
+
+
+def decode_server_udp_description_request(payload: bytes) -> dict[str, int]:
+    """Decodes one exact modern ``OP_SERVER_DESC_REQ`` challenge."""
+
+    if len(payload) != 4:
+        raise Ed2kWireError(
+            f"SERVER_DESC_REQ must contain one four-byte challenge, got {len(payload)} bytes."
+        )
+    challenge = int.from_bytes(payload, "little")
+    if challenge & 0xFFFF != SERVER_DESCRIPTION_CHALLENGE_SUFFIX:
+        raise Ed2kWireError(
+            f"SERVER_DESC_REQ challenge 0x{challenge:08X} lacks the 0xF0FF suffix."
+        )
+    return {"challenge": challenge}
+
+
+def decode_server_udp_description_response(
+    payload: bytes,
+    *,
+    expected_challenge: int | None = None,
+) -> dict[str, object]:
+    """Decodes one complete modern challenged ``OP_SERVER_DESC_RES`` payload."""
+
+    if len(payload) < 8:
+        raise Ed2kWireError(
+            f"SERVER_DESC_RES modern payload requires challenge and tag count, got {len(payload)} bytes."
+        )
+    reader = _Reader(payload)
+    challenge = reader.u32()
+    if challenge & 0xFFFF != SERVER_DESCRIPTION_CHALLENGE_SUFFIX:
+        raise Ed2kWireError(
+            f"SERVER_DESC_RES is not the modern challenged format: 0x{challenge:08X}."
+        )
+    if expected_challenge is not None and challenge != expected_challenge:
+        raise Ed2kWireError(
+            f"SERVER_DESC_RES challenge 0x{challenge:08X} does not match 0x{expected_challenge:08X}."
+        )
+    tags: list[dict[str, object]] = []
+    for _ in range(reader.u32()):
+        name, value = _decode_tag(reader)
+        tags.append(
+            {
+                "name": name,
+                "value": value.hex().upper() if isinstance(value, bytes) else value,
+            }
+        )
+    if reader.remaining:
+        raise Ed2kWireError(f"SERVER_DESC_RES has {reader.remaining} trailing bytes.")
+    by_name = {row["name"]: row["value"] for row in tags}
+    raw_version = by_name.get(ST_VERSION)
+    version = (
+        f"{raw_version >> 16}.{raw_version & 0xFFFF:02}"
+        if isinstance(raw_version, int)
+        else raw_version
+    )
+    raw_auxiliary_ports = by_name.get(ST_AUXPORTSLIST)
+    auxiliary_ports = []
+    if isinstance(raw_auxiliary_ports, str):
+        for value in raw_auxiliary_ports.split(","):
+            try:
+                port = int(value.strip())
+            except ValueError:
+                continue
+            if 0 < port <= 0xFFFF and port not in auxiliary_ports:
+                auxiliary_ports.append(port)
+    return {
+        "challenge": challenge,
+        "response_format": "tagged",
+        "name": by_name.get(ST_SERVERNAME),
+        "description": by_name.get(ST_DESCRIPTION),
+        "dynamic_host": by_name.get(ST_DYNIP),
+        "version": version,
+        "auxiliary_ports": auxiliary_ports,
+        "tags": tags,
+    }
 
 
 def decode_server_ident(payload: bytes) -> dict[str, object]:

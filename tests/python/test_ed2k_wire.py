@@ -82,6 +82,94 @@ def test_server_session_reply_decoders_are_exact() -> None:
 
 
 @pytest.mark.unit
+def test_server_udp_status_transaction_decoder_preserves_extended_fields() -> None:
+    challenge = 0x55AA_1234
+    request = struct.pack("<I", challenge)
+    response = struct.pack(
+        "<IIIIIIIIHHI",
+        challenge,
+        1,
+        1,
+        1000,
+        5000,
+        200000,
+        ed2k_wire.SERVER_UDP_FLAG_UDPOBFUSCATION
+        | ed2k_wire.SERVER_UDP_FLAG_TCPOBFUSCATION,
+        0,
+        0,
+        0,
+        0x11223344,
+    )
+
+    assert ed2k_wire.decode_server_udp_status_request(request) == {
+        "challenge": challenge
+    }
+    assert ed2k_wire.decode_server_udp_status_response(
+        response,
+        expected_challenge=challenge,
+        server_port=4661,
+    ) == {
+        "challenge": challenge,
+        "users": 1,
+        "files": 1,
+        "max_users": 1000,
+        "soft_files": 5000,
+        "hard_files": 200000,
+        "udp_flags": 0x600,
+        "low_id_users": 0,
+        "wire_obfuscation_port_udp": 0,
+        "wire_obfuscation_port_tcp": 0,
+        "obfuscation_port_udp": 4673,
+        "obfuscation_port_tcp": 4661,
+        "udp_key": 0x11223344,
+        "trailing_hex": "",
+    }
+
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="does not match"):
+        ed2k_wire.decode_server_udp_status_response(
+            response,
+            expected_challenge=challenge + 1,
+        )
+
+
+@pytest.mark.unit
+def test_server_udp_description_decoder_requires_modern_challenge_and_exact_tags() -> None:
+    challenge = 0x1234_F0FF
+    tags = b"".join(
+        [
+            bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_STRING, ed2k_wire.ST_SERVERNAME])
+            + struct.pack("<H", 12)
+            + b"local-server",
+            bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_STRING, ed2k_wire.ST_DESCRIPTION])
+            + struct.pack("<H", 13)
+            + b"deterministic",
+            bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_UINT32, ed2k_wire.ST_VERSION])
+            + struct.pack("<I", (17 << 16) | 6),
+            bytes([ed2k_wire.TAG_SHORT_NAME | ed2k_wire.TAGTYPE_STRING, ed2k_wire.ST_AUXPORTSLIST])
+            + struct.pack("<H", 13)
+            + b"4661, 4662, 0",
+        ]
+    )
+    response = struct.pack("<II", challenge, 4) + tags
+
+    assert ed2k_wire.decode_server_udp_description_request(
+        struct.pack("<I", challenge)
+    ) == {"challenge": challenge}
+    decoded = ed2k_wire.decode_server_udp_description_response(
+        response,
+        expected_challenge=challenge,
+    )
+    assert decoded["name"] == "local-server"
+    assert decoded["description"] == "deterministic"
+    assert decoded["version"] == "17.06"
+    assert decoded["auxiliary_ports"] == [4661, 4662]
+    assert decoded["response_format"] == "tagged"
+
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="modern challenged format"):
+        ed2k_wire.decode_server_udp_description_response(b"\x06\x00Server\x00\x00")
+
+
+@pytest.mark.unit
 def test_server_ident_decoder_preserves_identity_and_tags() -> None:
     payload = (
         bytes.fromhex("00112233445566778899AABBCCDDEEFF")
