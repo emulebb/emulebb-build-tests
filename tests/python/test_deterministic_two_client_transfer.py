@@ -234,7 +234,48 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_login_uses_one_canonical_bilateral_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plain-server-plain-clients"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
 def test_non_search_scenarios_keep_the_multi_part_fixture_default() -> None:

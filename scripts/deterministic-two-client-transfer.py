@@ -32,6 +32,7 @@ from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
@@ -55,7 +56,7 @@ rest_smoke = load_script_module("rest_api_smoke", "rest-api-smoke.py")
 SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
 DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
-DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
+DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
@@ -66,11 +67,13 @@ SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb_rust"]
 FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
+SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_SEARCH_QUERY = "deterministicparitysearch"
 TRANSFER_SCENARIOS = (
     FULL_METADATA_LINK,
     HASH_ONLY_METADATA_RECOVERY,
+    SERVER_LOGIN_REQUEST,
     SERVER_KEYWORD_SEARCH,
 )
 
@@ -142,8 +145,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.fixture_size_bytes is None:
         args.fixture_size_bytes = (
-            DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES
-            if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+            DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+            if args.transfer_scenario in {SERVER_LOGIN_REQUEST, SERVER_KEYWORD_SEARCH}
             else DEFAULT_FIXTURE_SIZE_BYTES
         )
     return args
@@ -180,6 +183,13 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Server keyword search uses the single canonical obfuscated-required case."
             )
+    if args.transfer_scenario == SERVER_LOGIN_REQUEST:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("Server login proof requires the MFC diagnostics oracle.")
+        if args.protocol_case != "plain-server-plain-clients":
+            raise ValueError(
+                "Server login proof uses the single canonical plain-server-plain-clients case."
+            )
 
 
 def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
@@ -203,6 +213,7 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
+    server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
@@ -238,16 +249,79 @@ def collect_transfer_diagnostics(
         expected_source_port=expected_source_port,
         expected_source_user_hash=expected_source_user_hash,
     )
+    extra_claims: set[str] = set()
+    if server_login_evidence is not None:
+        server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
+            server_login_evidence
+        )
+        evidence["serverLogin"] = server_login_evidence
+        extra_claims.update(
+            server_login_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
     if server_search_evidence is not None:
         server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(
             server_search_evidence
         )
         evidence["serverSearch"] = server_search_evidence
-        transfer_claims = evidence["coverageClaims"]["eligibleCoverageIds"]
-        search_claims = server_search_evidence["coverageClaims"]["eligibleCoverageIds"]
-        evidence["coverageClaims"]["eligibleCoverageIds"] = sorted(
-            {*transfer_claims, *search_claims}
+        extra_claims.update(
+            server_search_evidence["coverageClaims"]["eligibleCoverageIds"]
         )
+    if extra_claims:
+        transfer_claims = evidence["coverageClaims"]["eligibleCoverageIds"]
+        evidence["coverageClaims"]["eligibleCoverageIds"] = sorted(
+            {*transfer_claims, *extra_claims}
+        )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_server_login_diagnostics(
+    *,
+    server_endpoint: str,
+    rust_nickname: str,
+    rust_tcp_port: int,
+    mfc_nickname: str,
+    mfc_tcp_port: int,
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots bilateral login evidence before transfer traffic can rotate it."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = server_login_diagnostic_evidence.build_server_login_diagnostic_evidence(
+        server_endpoint=server_endpoint,
+        rust_nickname=rust_nickname,
+        rust_tcp_port=rust_tcp_port,
+        mfc_nickname=mfc_nickname,
+        mfc_tcp_port=mfc_tcp_port,
+        rust_records=rust_capture.records,
+        mfc_records=mfc_capture.records,
+    )
+    server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(evidence)
     evidence["captures"] = {
         "rust": {
             "processId": rust_process_id,
@@ -1808,6 +1882,7 @@ def main(argv: list[str] | None = None) -> int:
     client2_app = None
     client2_control_exe: Path | None = None
     client2_process_id: int | None = None
+    server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     current_phase = "initializing"
 
@@ -1863,6 +1938,8 @@ def main(argv: list[str] | None = None) -> int:
         fixture_name = (
             "deterministic-transfer-Unicode-é-漢.bin"
             if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+            else "deterministicserverlogin-fixture.bin"
+            if args.transfer_scenario == SERVER_LOGIN_REQUEST
             else "deterministicparitysearch-fixture.bin"
             if args.transfer_scenario == SERVER_KEYWORD_SEARCH
             else "deterministic-two-client-transfer.bin"
@@ -2247,6 +2324,27 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
+        if args.transfer_scenario == SERVER_LOGIN_REQUEST:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral server-login diagnostics require the MFC process identity."
+                )
+            current_phase = "collect_server_login_diagnostics"
+            server_login_evidence = collect_server_login_diagnostics(
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                rust_nickname=CLIENT01.nick,
+                rust_tcp_port=ports["client1_tcp"],
+                mfc_nickname=client2_identity.nick,
+                mfc_tcp_port=ports["client2_tcp"],
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_server_login_diagnostics"] = (
+                server_login_evidence
+            )
+
         if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
             current_phase = "client1_server_keyword_search"
             report["checks"]["client1_server_search"] = (
@@ -2375,6 +2473,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
+                server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
