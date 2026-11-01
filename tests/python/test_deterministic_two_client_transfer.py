@@ -213,6 +213,76 @@ def test_server_tcp_metadata_collection_preserves_capture_provenance(
     }
 
 
+def test_server_udp_metadata_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    built = {
+        "schema": module.server_udp_metadata_diagnostic_evidence.SCHEMA,
+        "passed": False,
+        "failures": ["client.rust"],
+    }
+    calls: list[dict[str, object]] = []
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
+
+    def build(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return dict(built)
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_udp_metadata_diagnostic_evidence,
+        "build_server_udp_metadata_diagnostic_evidence",
+        build,
+    )
+    snapshots = {"rust": {"connected": True}, "mfc": {"connected": True}}
+
+    result = module.collect_server_udp_metadata_diagnostics(
+        anchor_server_endpoint="127.0.0.1:4661",
+        target_server_endpoint="127.0.0.1:4761",
+        target_udp_endpoint="127.0.0.1:4765",
+        rest_snapshots=snapshots,
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert calls == [
+        {
+            "anchor_server_endpoint": "127.0.0.1:4661",
+            "target_server_endpoint": "127.0.0.1:4761",
+            "target_udp_endpoint": "127.0.0.1:4765",
+            "seed_name": module.SERVER_METADATA_SEED_NAME,
+            "seed_description": module.SERVER_METADATA_SEED_DESCRIPTION,
+            "expected_name": module.SERVER_IDENT_NAME,
+            "expected_description": module.SERVER_IDENT_DESCRIPTION,
+            "expected_users": 1,
+            "expected_files": 1,
+            "rust_records": [{"side": "rust"}],
+            "mfc_records": [{"side": "emule"}],
+            "rest_snapshots": snapshots,
+        }
+    ]
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
 @pytest.mark.parametrize("address", ["0.0.0.0", "ff02::1", "not-an-address"])
 def test_ed2k_server_connect_address_rejects_non_unicast_ipv4(address: str) -> None:
     module = load_suite_module()
@@ -387,6 +457,47 @@ def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
     with pytest.raises(ValueError, match="MFC diagnostics oracle"):
         module.validate_args(wrong_client)
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
@@ -773,6 +884,7 @@ def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch
     target = ports["metadata_ed2k_tcp"]
     assert target not in {6200, 6204, 6208, 6212, 6214}
     assert ports["metadata_ed2k_udp"] == target + 4
+    assert "metadata_publisher_tcp" in ports
     assert all((target + offset, True) in checks for offset in (4, 8, 12, 14))
     assert len(ports) == len(set(ports.values()))
 
@@ -977,7 +1089,7 @@ def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> N
     assert script_text.count(
         "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
     ) == 2
-    assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 2
+    assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 4
     assert 'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots' in script_text
     assert (
         'report["checks"]["client_server_tcp_metadata_diagnostics"] = ('
@@ -988,6 +1100,28 @@ def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> N
         "server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence("
         in script_text
     )
+
+
+def test_server_udp_metadata_uses_two_servers_and_causal_bilateral_gate() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
+    assert module.SERVER_METADATA_SEED_DESCRIPTION != module.SERVER_IDENT_DESCRIPTION
+    assert "include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA" in script_text
+    assert script_text.count("ed2k_server.launch_ed2k_server(") == 2
+    assert "metadata_server_publisher.offer_file(" in script_text
+    assert '"serverPriority": "high"' in script_text
+    assert '"serverPriority": "low"' in script_text
+    assert '"priority": SERVER_PRIORITY_HIGH' in script_text
+    assert '"priority": SERVER_PRIORITY_LOW' in script_text
+    assert 'report["checks"]["client_server_udp_metadata_rest"]' in script_text
+    assert "collect_server_udp_metadata_diagnostics(" in script_text
+    assert (
+        "server_udp_metadata_diagnostic_evidence.require_server_udp_metadata_diagnostic_evidence("
+        in script_text
+    )
+    assert "ed2k_server.stop_process(metadata_server_process)" in script_text
 
 
 def test_rust_diagnostics_child_env_does_not_mutate_parent(
