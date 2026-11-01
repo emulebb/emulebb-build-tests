@@ -86,20 +86,22 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
 
 def test_resolve_mfc_oracle_client_uses_canonical_external_build(tmp_path: Path) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
+    source_repo = workspace / "app" / "emulebb-main"
+    source_repo.mkdir(parents=True)
     output_root = tmp_path / "output"
     oracle_dir = output_root / "builds" / "app" / "main" / "x64" / "Release" / "standard" / "bin"
     oracle_dir.mkdir(parents=True)
     oracle_exe = oracle_dir / "emulebb.exe"
 
     oracle_exe.write_bytes(b"")
-    assert (
-        multi_client.resolve_mfc_oracle_client(
-            workspace,
-            "Release",
-            output_root=output_root,
-        ).executable
-        == oracle_exe.resolve()
+    availability = multi_client.resolve_mfc_oracle_client(
+        workspace,
+        "Release",
+        output_root=output_root,
     )
+
+    assert availability.executable == oracle_exe.resolve()
+    assert availability.source_repo == source_repo.resolve()
 
 
 def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, monkeypatch) -> None:

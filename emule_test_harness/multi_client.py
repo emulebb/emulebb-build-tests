@@ -256,6 +256,7 @@ def resolve_mfc_oracle_client(
     """Resolves the maintained MFC diagnostics-oracle executable."""
 
     identity = CLIENT_IDENTITIES["mfc_oracle"]
+    source_repo = (workspace_root / "app" / "emulebb-main").resolve()
     base_dir = (
         output_root.resolve() if output_root is not None else get_workspace_output_root()
     ) / "builds" / "app" / "main" / "x64" / configuration / "standard" / "bin"
@@ -273,6 +274,8 @@ def resolve_mfc_oracle_client(
         reason=reason if executable is not None else f"{reason} under {expected_location}",
         launch_adapter="emulebb-main-rest-profile",
         deterministic_transfer_adapter=True,
+        source_repo=source_repo,
+        source_revision=git_head_revision(source_repo),
     )
 
 
