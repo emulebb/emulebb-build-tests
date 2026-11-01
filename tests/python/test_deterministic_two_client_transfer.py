@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import struct
 import sys
@@ -512,7 +513,24 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert script_text.count("p2p_bind_addr=p2p_address") == 1
     assert "p2p_bind_ip=p2p_address" in script_text
     assert "rust_client.start_rust_client_executable(" in script_text
+    assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text
+    assert "converged_live_wire.resolve_rust_regular_exe(" not in script_text
+    assert "transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(" in script_text
     assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
+
+
+def test_rust_diagnostics_child_env_does_not_mutate_parent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = load_suite_module()
+    parent_value = "operator-owned"
+    monkeypatch.setenv("EMULEBB_RUST_LOG_DIR", parent_value)
+
+    child_env = module.rust_diagnostics_child_env(tmp_path / "diagnostics")
+
+    assert os.environ["EMULEBB_RUST_LOG_DIR"] == parent_value
+    assert child_env["EMULEBB_RUST_LOG_DIR"] == str((tmp_path / "diagnostics").resolve())
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:

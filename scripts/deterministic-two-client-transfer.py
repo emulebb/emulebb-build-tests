@@ -29,6 +29,7 @@ from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
+from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -125,6 +126,57 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("OFFERFILES v1 fallback proof requires stock_emule or amule client2.")
     if not args.verify_source_lifecycle:
         raise ValueError("OFFERFILES v1 fallback proof requires --verify-source-lifecycle.")
+
+
+def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
+    """Builds a child-only Rust diagnostics environment without mutating operator state."""
+
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    child_env = os.environ.copy()
+    child_env["EMULEBB_RUST_LOG_DIR"] = str(diagnostics_dir.resolve())
+    return child_env
+
+
+def collect_transfer_diagnostics(
+    *,
+    file_hash: str,
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Loads the two current runs and builds the exact-hash transfer gate."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = transfer_diagnostic_evidence.build_transfer_diagnostic_evidence(
+        file_hash=file_hash,
+        rust_records=rust_capture.records,
+        mfc_records=mfc_capture.records,
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
 
 
 def require_offerfiles_v1_stock_fallback(
@@ -1623,6 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
     client1_process = None
     client2_app = None
     client2_control_exe: Path | None = None
+    client2_process_id: int | None = None
     current_phase = "initializing"
 
     try:
@@ -1681,6 +1734,8 @@ def main(argv: list[str] | None = None) -> int:
         rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(get_workspace_output_root())
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
         rust_output = paths.source_artifacts_dir / "rust-client.out"
+        rust_diagnostics_dir = paths.source_artifacts_dir / "diagnostics" / "rust"
+        rust_diagnostics_env = rust_diagnostics_child_env(rust_diagnostics_dir)
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
@@ -1773,6 +1828,7 @@ def main(argv: list[str] | None = None) -> int:
                 "source_revision": git_head_revision(rust_repo),
                 "settings": str(rust_profile / rust_client.RUST_PROFILE_SETTINGS_FILE),
                 "metadata": str(rust_profile / rust_client.RUST_PROFILE_METADATA_FILE),
+                "diagnostics_dir": str(rust_diagnostics_dir),
             },
             client2_identity.profile_id: {
                 "client_key": client2_identity.key,
@@ -1802,6 +1858,9 @@ def main(argv: list[str] | None = None) -> int:
                 Path(client2["profile_base"]),
                 minimized_to_tray=True,
             )
+            client2_process_id = live_common.resolve_app_process_id(client2_app)
+            if client2_process_id is None:
+                raise RuntimeError("Could not resolve the launched client2 process identity.")
         if args.client2_identity == "stock_emule":
             current_phase = "client2_stock_source_lifecycle"
             client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
@@ -1956,6 +2015,7 @@ def main(argv: list[str] | None = None) -> int:
             rust_exe,
             rust_profile,
             rust_output,
+            env=rust_diagnostics_env,
         )
         base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["client1_rest_ready"] = rust_local_ed2k.wait_for_rest_ready(
@@ -2028,6 +2088,29 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
         server_stats = server_control.stats()
         report["checks"]["ed2k_server_stats_final"] = server_stats
+        if args.client2_identity == "mfc_oracle":
+            if client2_process_id is None:
+                raise RuntimeError("MFC diagnostics require the launched process identity.")
+            current_phase = "collect_transfer_diagnostics"
+            diagnostics = collect_transfer_diagnostics(
+                file_hash=transfer_hash,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            diagnostics["externalAuthorities"] = {
+                "wirePublication": report["checks"]["client2_server_file"],
+                "directSource": report["checks"]["client1_direct_source_link"],
+                "completedFile": report["checks"]["client1_transfer_completed_file"],
+            }
+            report["diagnostics"] = diagnostics
+            transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(diagnostics)
+        else:
+            report["diagnostics"] = {
+                "required": False,
+                "reason": f"{args.client2_identity} does not emit the MFC oracle diagnostic contract",
+            }
         if args.verify_offerfiles_v1_stock_fallback:
             report["offerfiles_v1_stock_fallback"] = {
                 "enabled": True,
