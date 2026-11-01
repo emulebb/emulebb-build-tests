@@ -126,7 +126,6 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
     "godzilla-local-swarm",
     "local-ed2k-search-soak",
     "local-ed2k-chaos-mode",
-    "local-ed2k-rust-protocol-combinations",
     "radarr-emulebb-local",
     "sonarr-emulebb-local",
 }
@@ -136,7 +135,6 @@ CLIENT2_APP_EXE_SUITE_NAMES = {
     "godzilla-local-swarm",
     "local-ed2k-search-soak",
     "local-ed2k-chaos-mode",
-    "local-ed2k-rust-protocol-combinations",
     "radarr-emulebb-local",
     "sonarr-emulebb-local",
 }
@@ -209,7 +207,6 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "godzilla-local-swarm",
         "local-dumps-crash-smoke",
         "local-ed2k-chaos-mode",
-        "local-ed2k-rust-protocol-combinations",
         "local-ed2k-search-soak",
         "shared-directory-browse-stress",
         "local-kad-mixed-client-swarm",
@@ -350,13 +347,6 @@ SUITE_SPECS = (
         category="protocol",
         network_scope="lan",
         accepts_admin_volume_fixtures=True,
-        default_enabled=False,
-    ),
-    SuiteSpec(
-        name="local-ed2k-rust-protocol-combinations",
-        script_name="local-ed2k-rust-protocol-combinations.py",
-        category="protocol",
-        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
@@ -580,7 +570,6 @@ PROFILE_SUITE_NAMES = {
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
-        "local-ed2k-rust-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
     ),
@@ -588,7 +577,6 @@ PROFILE_SUITE_NAMES = {
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
-        "local-ed2k-rust-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
     ),
@@ -1293,7 +1281,6 @@ def build_suite_command(
             "godzilla-local-swarm",
             "local-ed2k-search-soak",
             "local-ed2k-chaos-mode",
-            "local-ed2k-rust-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
         }
@@ -1309,7 +1296,6 @@ def build_suite_command(
             "godzilla-local-swarm",
             "local-ed2k-search-soak",
             "local-ed2k-chaos-mode",
-            "local-ed2k-rust-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
         }

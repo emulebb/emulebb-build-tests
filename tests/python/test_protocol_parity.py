@@ -72,13 +72,11 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
     assert report["assets"]["classificationCounts"] == {
         "canonical": 6,
         "duplicate": 1,
-        "historical": 4,
+        "historical": 2,
         "product-only": 2,
         "support": 11,
     }
     assert report["assets"]["cleanupCandidates"] == [
-        "scripts/local-ed2k-protocol-combinations.py",
-        "scripts/local-ed2k-rust-protocol-combinations.py",
         "scripts/local-ed2k-search-soak.py",
         "scripts/native-windows-parity-campaign.py",
         "scripts/rust-ed2k-total-parity-audit.py",
@@ -86,8 +84,6 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
 
     assets = {row["path"]: row for row in payload["assetClassifications"]}
     assert assets["scripts/local-ed2k-server-state-campaign.py"]["classification"] == "support"
-    assert assets["scripts/local-ed2k-protocol-combinations.py"]["classification"] == "historical"
-    assert assets["scripts/local-ed2k-rust-protocol-combinations.py"]["classification"] == "historical"
     assert assets["scripts/local-ed2k-search-soak.py"]["classification"] == "historical"
     server_queries = next(
         group for group in payload["coverageGroups"] if group["groupId"] == "server-query-reply"

@@ -993,7 +993,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-rust-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]
@@ -1001,7 +1000,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
-        "local-ed2k-rust-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
     ]
@@ -1009,9 +1007,8 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[1], "--p2p-bind-interface-name") == []
     assert option_values(commands[2], "--p2p-bind-interface-name") == []
     assert option_values(commands[3], "--p2p-bind-interface-name") == []
+    assert option_values(commands[3], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[4], "--p2p-bind-interface-name") == []
-    assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
-    assert option_values(commands[5], "--p2p-bind-interface-name") == []
 
 
 def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp_path: Path, monkeypatch) -> None:
@@ -1060,7 +1057,6 @@ def test_multi_client_required_profile_enables_required_optional_clients(tmp_pat
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-rust-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]

@@ -67,12 +67,6 @@
       "reason": "Upstream-clean server dependency gate with causal wire transcripts; proves harness infrastructure only, never Rust product parity."
     },
     {
-      "campaignIds": [],
-      "classification": "historical",
-      "path": "scripts/local-ed2k-rust-protocol-combinations.py",
-      "reason": "Legacy aggregate Rust matrix retained only for server-search extraction; its transport and metadata-recovery states now belong to diagnostics-gated canonical scenarios."
-    },
-    {
       "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
       "classification": "canonical",
       "path": "scripts/local-kad-mixed-client-swarm.py",
@@ -101,12 +95,6 @@
       "classification": "support",
       "path": "scripts/local-ed2k-chaos-mode.py",
       "reason": "Local fault discovery feeds deterministic regressions but is not standalone parity proof."
-    },
-    {
-      "campaignIds": [],
-      "classification": "historical",
-      "path": "scripts/local-ed2k-protocol-combinations.py",
-      "reason": "Retired MFC-versus-MFC matrix retained only until historical aggregate callers are removed; it cannot own parity evidence."
     },
     {
       "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
