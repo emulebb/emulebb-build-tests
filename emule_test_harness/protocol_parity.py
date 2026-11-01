@@ -915,6 +915,7 @@ def _validate_catalog_evidence(
         evidence = []
     observed_coverage_ids: set[str] = set()
     referenced_receipt_ids: set[str] = set()
+    registered_receipt_claims: dict[str, set[str]] = defaultdict(set)
     previous_coverage_id: str | None = None
     for index, row in enumerate(evidence):
         prefix = f"coverageEvidence[{index}]"
@@ -963,6 +964,12 @@ def _validate_catalog_evidence(
                 continue
             if receipt.get("runnerPath") != expected_runner:
                 errors.append(f"{prefix} receipt {receipt_id} was produced by a different runner")
+            if coverage_id not in _string_list(receipt.get("coverageIds")):
+                errors.append(f"{prefix} receipt {receipt_id} does not claim {coverage_id}")
+            else:
+                registered_receipt_claims[receipt_id].add(coverage_id)
+            if row.get("evidenceLayers") != receipt.get("evidenceLayers"):
+                errors.append(f"{prefix} evidence layers differ from receipt {receipt_id}")
             subject_ids = receipt_subject_ids.get(receipt_id, set())
             if "rust-product" not in subject_ids:
                 errors.append(f"{prefix} receipt {receipt_id} must include rust-product")
@@ -976,6 +983,12 @@ def _validate_catalog_evidence(
     unused_receipts = set(receipt_by_id) - referenced_receipt_ids
     if unused_receipts:
         errors.append(f"evidenceReceipts contains unreferenced receipts: {sorted(unused_receipts)}")
+    for receipt_id, receipt in receipt_by_id.items():
+        unregistered_claims = set(_string_list(receipt.get("coverageIds"))) - registered_receipt_claims[receipt_id]
+        if unregistered_claims:
+            errors.append(
+                f"evidence receipt {receipt_id} has unregistered coverage claims: {sorted(unregistered_claims)}"
+            )
 
 
 def _validate_evidence_receipt(
@@ -1007,6 +1020,23 @@ def _validate_evidence_receipt(
         errors.append(f"{prefix}.runnerRevision must be a lowercase git revision")
     if not isinstance(receipt.get("profileAuthority"), str) or not receipt["profileAuthority"]:
         errors.append(f"{prefix}.profileAuthority must be a non-empty string")
+
+    coverage_ids = _string_list(receipt.get("coverageIds"))
+    if not coverage_ids:
+        errors.append(f"{prefix}.coverageIds must be a non-empty string list")
+    elif coverage_ids != sorted(set(coverage_ids)):
+        errors.append(f"{prefix}.coverageIds must be sorted and unique")
+    unknown_coverage_ids = set(coverage_ids) - REQUIRED_STOCK_COVERAGE_IDS
+    if unknown_coverage_ids:
+        errors.append(f"{prefix}.coverageIds contains unknown IDs: {sorted(unknown_coverage_ids)}")
+    evidence_layers = _string_list(receipt.get("evidenceLayers"))
+    if not evidence_layers:
+        errors.append(f"{prefix}.evidenceLayers must be a non-empty string list")
+    unknown_layers = set(evidence_layers) - set(CATALOG_EVIDENCE_LAYERS)
+    if unknown_layers:
+        errors.append(f"{prefix}.evidenceLayers contains unknown layers: {sorted(unknown_layers)}")
+    elif evidence_layers != sorted(set(evidence_layers), key=CATALOG_EVIDENCE_LAYERS.index):
+        errors.append(f"{prefix}.evidenceLayers must be unique and use canonical order")
 
     subjects = receipt.get("subjects")
     subject_ids: set[str] = set()
