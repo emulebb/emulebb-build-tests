@@ -21,6 +21,19 @@ def test_build_ed2k_link_roundtrip() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "encoded_name"),
+    [
+        ("fixture with spaces (2026).rar", "fixture%20with%20spaces%20%282026%29.rar"),
+        ("Café fixture.rar", "Caf%C3%A9%20fixture.rar"),
+    ],
+)
+def test_build_ed2k_link_percent_encodes_file_name(name: str, encoded_name: str) -> None:
+    link = sa.build_ed2k_link({"hash": "A" * 32, "name": name, "size": 1234})
+
+    assert link == f"ed2k://|file|{encoded_name}|1234|{'a' * 32}|/"
+
+
+@pytest.mark.parametrize(
     "fixture",
     [
         {"hash": "A" * 31, "name": "x", "size": 1},  # short hash

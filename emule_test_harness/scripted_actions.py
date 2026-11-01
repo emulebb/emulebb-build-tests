@@ -29,6 +29,7 @@ import re
 import struct
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -150,7 +151,8 @@ def build_ed2k_link(fixture: dict[str, Any]) -> str:
         raise ValueError("direct-transfer fixture needs a non-empty name")
     if not isinstance(size, int) or size <= 0:
         raise ValueError("direct-transfer fixture needs a positive integer size")
-    return f"ed2k://|file|{name}|{size}|{file_hash}|/"
+    encoded_name = urllib.parse.quote(name, safe="")
+    return f"ed2k://|file|{encoded_name}|{size}|{file_hash}|/"
 
 
 def default_action_set(
