@@ -14,6 +14,7 @@ from emule_test_harness.diag_event_diff import (
     full_run_conformance,
     load_trace,
     load_traces,
+    schema_audit,
 )
 from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
@@ -714,6 +715,24 @@ def test_family_conformance_fails_on_missing_oracle_body_key() -> None:
     assert gate["ok"] is False
     fam = next(f for f in gate["families"] if f["family"] == "kad_event")
     assert fam["bodyKeyViolations"][0]["missingOracleKeys"] == ["resultCount"]
+
+
+def test_client_udp_routed_reply_note_is_conditional_across_captures() -> None:
+    rust = [_client_udp_packet("send", "c590", outcome="attempted", attempt_id=1)]
+    mfc_packet = _client_udp_packet("recv", "c591")
+    mfc_packet["body"]["note"] = "routed_reply"
+
+    audit = schema_audit(rust, [mfc_packet])
+    assert audit["conformance"]["conformant"] is True
+    assert audit["conformance"]["bodyKeyViolations"] == []
+
+    gate = family_conformance(
+        rust,
+        [mfc_packet],
+        required_families={"ed2k_client_udp"},
+    )
+    assert gate["ok"] is True
+    assert gate["requiredFamiliesOk"] is True
 
 
 def test_family_conformance_ignores_packet_meta_body_key_gap() -> None:

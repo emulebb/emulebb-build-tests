@@ -122,6 +122,10 @@ _COMPARABLE_KEYS: dict[str, tuple[str, ...]] = {
 # artifact, not a rust ⊇ oracle gap — never a conformance violation. Keyed by family.
 _CONDITIONAL_ORACLE_BODY_KEYS: dict[str, frozenset[str]] = {
     "sched": frozenset({"firstSkipReason"}),
+    # Client-UDP packet notes describe an inbound routing/drop decision. Normal
+    # send attempts omit the field on both clients, so independent captures may
+    # legitimately expose it on only one side.
+    ED2K_CLIENT_UDP_FAMILY: frozenset({"note"}),
     # MFC overloads the kad_event "lookup" event across milestones (search lookups,
     # kad_request_flood anti-flood drops, ...) with different bodies; `reason` appears
     # only on the flood/error milestones, which rust emits under a DISTINCT event name
