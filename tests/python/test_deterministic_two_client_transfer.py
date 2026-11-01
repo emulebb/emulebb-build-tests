@@ -76,6 +76,7 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     assert defaults.verify_offerfiles_v1_stock_fallback is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
     assert defaults.protocol_case is None
+    assert defaults.transfer_scenario == module.FULL_METADATA_LINK
     assert enabled.verify_source_lifecycle is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
@@ -165,6 +166,34 @@ def test_mfc_oracle_requires_fixture_large_enough_for_startup_hashsets() -> None
 
     with pytest.raises(ValueError, match="larger than one eD2K part"):
         module.validate_args(args)
+
+
+def test_hash_only_metadata_recovery_uses_one_canonical_transport_case() -> None:
+    module = load_suite_module()
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.HASH_ONLY_METADATA_RECOVERY,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.HASH_ONLY_METADATA_RECOVERY,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
 
 
 def test_reference_clients_reject_mfc_protocol_case() -> None:

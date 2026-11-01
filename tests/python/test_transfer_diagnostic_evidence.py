@@ -8,6 +8,7 @@ FILE_HASH = "00112233445566778899aabbccddeeff"
 FILE_NAME = "fixture.bin"
 FILE_SIZE = 9_728_001
 AICH_ROOT = bytes.fromhex("44" * 20)
+SOURCE_USER_HASH = "77" * 16
 
 
 def record(
@@ -141,6 +142,13 @@ def complete_manifest() -> dict[str, object]:
         "aich_hashset_acquired": True,
         "aich_root": AICH_ROOT.hex(),
         "aich_hashset": ["55" * 20, "66" * 20],
+        "sources": [
+            {
+                "ip": "127.0.0.1",
+                "tcp_port": 4662,
+                "user_hash": SOURCE_USER_HASH,
+            }
+        ],
     }
 
 
@@ -174,7 +182,7 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
     startup_rust, startup_mfc = modern_startup_records()
     rust = [
         *startup_rust,
-        record("rust", 10, "sched", "source_engaged", keys={"fileHash": FILE_HASH}, body={"outcome": "engaged"}),
+        record("rust", 1, "sched", "source_engaged", keys={"fileHash": FILE_HASH}, body={"outcome": "engaged"}),
         record(
             "rust",
             11,
@@ -297,6 +305,58 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     }
     assert report["clients"]["mfc"]["checks"]["uploadPayloadSent"]["sentFileBytes"] == 4096
     evidence.require_transfer_diagnostic_evidence(report)
+
+
+def test_build_transfer_diagnostic_evidence_claims_hash_only_metadata_recovery() -> None:
+    rust, mfc = complete_records()
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
+        rust_records=rust,
+        mfc_records=mfc,
+        metadata_recovery_required=True,
+        expected_source_host="127.0.0.1",
+        expected_source_port=4662,
+        expected_source_user_hash=SOURCE_USER_HASH,
+    )
+
+    assert report["ok"] is True
+    assert report["metadataRecovery"]["sourceMatch"] is True
+    assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.metadata-recovery",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed",
+    ]
+
+
+def test_build_transfer_diagnostic_evidence_rejects_metadata_recovery_source_drift() -> None:
+    rust, mfc = complete_records()
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
+        rust_records=rust,
+        mfc_records=mfc,
+        metadata_recovery_required=True,
+        expected_source_host="127.0.0.1",
+        expected_source_port=4662,
+        expected_source_user_hash="88" * 16,
+    )
+
+    assert report["ok"] is False
+    assert report["metadataRecovery"]["sourceMatch"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
 def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> None:

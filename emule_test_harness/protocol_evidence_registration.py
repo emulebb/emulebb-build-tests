@@ -128,6 +128,14 @@ def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
         "peer.startup.multipacket-ext2",
         "queue.admission",
     ]
+    if diagnostics.get("metadataRecoveryRequired") is True:
+        metadata_recovery = _object(
+            diagnostics.get("metadataRecovery"),
+            "diagnostics.metadataRecovery",
+        )
+        if metadata_recovery.get("ok") is not True or metadata_recovery.get("sourceMatch") is not True:
+            raise ValueError("diagnostics metadata recovery is not green")
+        coverage_ids.append("peer.startup.metadata-recovery")
     if observed.intersection(transfer_diagnostic_evidence.UNCOMPRESSED_PAYLOAD_OPCODES):
         coverage_ids.append("transfer.block.uncompressed")
     if observed.intersection(transfer_diagnostic_evidence.COMPRESSED_PAYLOAD_OPCODES):
@@ -149,6 +157,11 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
         return (
             f"Matched {answer['matchedFrameCount']} exact MD4+AICH hashset answer and persisted "
             f"{manifest['aichHashsetCount']} exact AICH part hashes in Rust."
+        )
+    if coverage_id == "peer.startup.metadata-recovery":
+        return (
+            "Rust recovered the exact Unicode name, size, MD4/AICH metadata, and source identity "
+            "from a causally ordered hash-only startup."
         )
     if coverage_id == "queue.admission":
         mfc = _object(_object(diagnostics.get("clients"), "diagnostics.clients").get("mfc"), "diagnostics.clients.mfc")
@@ -201,6 +214,30 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
     fixture_path = _path_within(fixture.get("path"), run_directory, "fixture.path")
     if fixture_path.stat().st_size != fixture_size or _file_sha256(fixture_path) != fixture_sha256:
         raise ValueError("fixture bytes do not match the receipt")
+
+    if "peer.startup.metadata-recovery" in expected_ids:
+        if report.get("transfer_scenario") != "hash-only-metadata-recovery":
+            raise ValueError("metadata recovery evidence requires the hash-only transfer scenario")
+        stimulus = _object(
+            _object(report.get("checks"), "checks").get("client1_transfer_stimulus"),
+            "checks.client1_transfer_stimulus",
+        )
+        if stimulus.get("mode") != "hash-only-direct-source-link-with-profile-identity":
+            raise ValueError("metadata recovery evidence requires an identity-bearing hash-only stimulus")
+        input_metadata = _object(stimulus.get("inputMetadata"), "stimulus.inputMetadata")
+        authority_metadata = _object(stimulus.get("authorityMetadata"), "stimulus.authorityMetadata")
+        if (
+            input_metadata.get("name") != diagnostics.get("fileHash")
+            or input_metadata.get("size") != 0
+            or str(input_metadata.get("hash") or "").lower() != diagnostics.get("fileHash")
+        ):
+            raise ValueError("metadata recovery stimulus contains source filename or size metadata")
+        if (
+            authority_metadata.get("name") != fixture.get("name")
+            or authority_metadata.get("size") != fixture_size
+            or str(authority_metadata.get("hash") or "").lower() != diagnostics.get("fileHash")
+        ):
+            raise ValueError("metadata recovery authority metadata does not match the fixture")
 
     checks = _object(report.get("checks"), "checks")
     completed = _object(checks.get("client1_transfer_completed_file"), "checks.client1_transfer_completed_file")

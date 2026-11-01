@@ -412,6 +412,52 @@ def _manifest_check(
     }
 
 
+def _metadata_recovery_check(
+    manifest: dict[str, Any] | None,
+    *,
+    required: bool,
+    expected_source_host: str | None,
+    expected_source_port: int | None,
+    expected_source_user_hash: str | None,
+    rust_checks: dict[str, dict[str, Any]],
+    rust_multipacket_answers: list[dict[str, Any]],
+    rust_hashset_answers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not required:
+        return {
+            "name": "Hash-only metadata recovery was either proven or not requested",
+            "ok": True,
+            "required": False,
+        }
+    manifest = manifest if isinstance(manifest, dict) else {}
+    sources = manifest.get("sources")
+    expected_source = {
+        "ip": expected_source_host,
+        "tcp_port": expected_source_port,
+        "user_hash": expected_source_user_hash,
+    }
+    source_match = isinstance(sources, list) and expected_source in sources
+    positions = {
+        "sourceEngaged": rust_checks["sourceEngaged"]["firstStreamSeq"],
+        "multipacketAnswer": _sequence(rust_multipacket_answers[0]) if rust_multipacket_answers else None,
+        "hashsetAnswer": _sequence(rust_hashset_answers[0]) if rust_hashset_answers else None,
+        "payloadAccepted": rust_checks["payloadAccepted"]["firstStreamSeq"],
+        "taskSettled": rust_checks["taskSettled"]["firstStreamSeq"],
+    }
+    ordered_positions = list(positions.values())
+    ordered = all(isinstance(value, int) and value >= 0 for value in ordered_positions) and (
+        ordered_positions == sorted(ordered_positions)
+    )
+    return {
+        "name": "Rust recovered exact metadata from startup before payload and completion",
+        "ok": source_match and ordered,
+        "required": True,
+        "sourceMatch": source_match,
+        "expectedSource": expected_source,
+        "positions": positions,
+    }
+
+
 def _packet_records(
     records: Iterable[dict[str, Any]],
     *,
@@ -548,6 +594,10 @@ def build_transfer_diagnostic_evidence(
     rust_manifest: dict[str, Any] | None,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
+    metadata_recovery_required: bool = False,
+    expected_source_host: str | None = None,
+    expected_source_port: int | None = None,
+    expected_source_user_hash: str | None = None,
 ) -> dict[str, Any]:
     """Builds the mandatory hash-correlated diagnostics gate for Rust <- MFC."""
 
@@ -562,6 +612,11 @@ def build_transfer_diagnostic_evidence(
         raise ValueError(
             f"Canonical startup evidence requires a fixture larger than {ED2K_PART_SIZE} bytes."
         )
+    if metadata_recovery_required:
+        if not expected_source_host or not expected_source_user_hash:
+            raise ValueError("Hash-only metadata recovery requires exact source identity.")
+        if not isinstance(expected_source_port, int) or expected_source_port <= 0:
+            raise ValueError("Hash-only metadata recovery requires an exact source port.")
     rust = list(rust_records)
     mfc = list(mfc_records)
 
@@ -805,6 +860,16 @@ def build_transfer_diagnostic_evidence(
             ),
         ),
     }
+    metadata_recovery = _metadata_recovery_check(
+        rust_manifest,
+        required=metadata_recovery_required,
+        expected_source_host=expected_source_host,
+        expected_source_port=expected_source_port,
+        expected_source_user_hash=expected_source_user_hash,
+        rust_checks=rust_checks,
+        rust_multipacket_answers=rust_multipacket_answers,
+        rust_hashset_answers=rust_hashset_answers,
+    )
     mfc_checks = {
         "published": _check("MFC published the exact file hash", publication),
         "uploadSlotOpened": _check(
@@ -863,6 +928,7 @@ def build_transfer_diagnostic_evidence(
         *startup_checks.values(),
         *wire_checks.values(),
         *rust_checks.values(),
+        metadata_recovery,
         *mfc_checks.values(),
         *ordering.values(),
     ]
@@ -872,6 +938,8 @@ def build_transfer_diagnostic_evidence(
         eligible_coverage_ids.extend(
             ["peer.startup.multipacket-ext2", "peer.startup.aich"]
         )
+        if metadata_recovery_required:
+            eligible_coverage_ids.append("peer.startup.metadata-recovery")
         eligible_coverage_ids.append("queue.admission")
         if observed_payload_opcodes.intersection(UNCOMPRESSED_PAYLOAD_OPCODES):
             eligible_coverage_ids.append("transfer.block.uncompressed")
@@ -885,6 +953,7 @@ def build_transfer_diagnostic_evidence(
         "expectedPayloadEncoding": expected_payload_encoding,
         "expectedFileName": expected_file_name,
         "expectedFileSize": expected_file_size,
+        "metadataRecoveryRequired": metadata_recovery_required,
         "failures": failures,
         "coverageClaims": {
             "eligibleCoverageIds": sorted(eligible_coverage_ids),
@@ -892,6 +961,7 @@ def build_transfer_diagnostic_evidence(
         },
         "wireChecks": wire_checks,
         "startupChecks": startup_checks,
+        "metadataRecovery": metadata_recovery,
         "clients": {
             "rust": {
                 "recordCount": len(rust),

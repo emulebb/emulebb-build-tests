@@ -28,6 +28,7 @@ def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]
         "status": "passed",
         "runner_revision": "1" * 40,
         "fixture": {
+            "name": "fixture.bin",
             "path": str(fixture_path),
             "size": len(content),
             "sha256": digest,
@@ -45,6 +46,7 @@ def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]
             "ok": True,
             "failures": [],
             "fileHash": FILE_HASH,
+            "metadataRecoveryRequired": False,
             "coverageClaims": {
                 "eligibleCoverageIds": [
                     "peer.startup.aich",
@@ -188,6 +190,31 @@ def test_build_transfer_registration_rejects_coverage_overclaim(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="claims do not match"):
         build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "hash-only-metadata-recovery"
+    report["diagnostics"]["metadataRecoveryRequired"] = True
+    report["diagnostics"]["metadataRecovery"] = {"ok": True, "sourceMatch": True}
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].insert(
+        1,
+        "peer.startup.metadata-recovery",
+    )
+    report["checks"]["client1_transfer_stimulus"] = {
+        "mode": "hash-only-direct-source-link-with-profile-identity",
+        "inputMetadata": {"name": FILE_HASH, "size": 0, "hash": FILE_HASH},
+        "authorityMetadata": {
+            "name": "fixture.bin",
+            "size": report["fixture"]["size"],
+            "hash": FILE_HASH,
+        },
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
 
 
 def test_build_transfer_registration_rejects_mutated_delivered_file(tmp_path: Path) -> None:

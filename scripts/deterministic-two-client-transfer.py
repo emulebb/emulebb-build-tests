@@ -62,6 +62,9 @@ ED2K_LOCAL_PORT_MAX = 49151
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb_rust"]
+FULL_METADATA_LINK = "full-metadata-link"
+HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
+TRANSFER_SCENARIOS = (FULL_METADATA_LINK, HASH_ONLY_METADATA_RECOVERY)
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
@@ -90,6 +93,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--protocol-case",
         choices=tuple(ed2k_protocol_cases.PROTOCOL_CASE_MAP),
         help="Required authoritative transport case for the MFC diagnostics oracle.",
+    )
+    parser.add_argument(
+        "--transfer-scenario",
+        choices=TRANSFER_SCENARIOS,
+        default=FULL_METADATA_LINK,
+        help="Deterministic transfer-input state to prove.",
     )
     parser.add_argument("--client2-control-exe")
     parser.add_argument("--profile-seed-dir")
@@ -142,6 +151,13 @@ def validate_args(args: argparse.Namespace) -> None:
         )
     if args.client2_identity != "mfc_oracle" and args.protocol_case is not None:
         raise ValueError("--protocol-case is valid only with --client2-identity mfc_oracle.")
+    if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("Hash-only metadata recovery requires the MFC diagnostics oracle.")
+        if args.protocol_case != "obfuscated-required":
+            raise ValueError(
+                "Hash-only metadata recovery uses the single canonical obfuscated-required case."
+            )
 
 
 def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
@@ -161,6 +177,10 @@ def collect_transfer_diagnostics(
     expected_transport_mode: str,
     expected_payload_encoding: str,
     rust_metadata_path: Path,
+    metadata_recovery_required: bool,
+    expected_source_host: str,
+    expected_source_port: int,
+    expected_source_user_hash: str,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -190,6 +210,10 @@ def collect_transfer_diagnostics(
         rust_manifest=manifest,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
+        metadata_recovery_required=metadata_recovery_required,
+        expected_source_host=expected_source_host,
+        expected_source_port=expected_source_port,
+        expected_source_user_hash=expected_source_user_hash,
     )
     evidence["captures"] = {
         "rust": {
@@ -1701,6 +1725,7 @@ def main(argv: list[str] | None = None) -> int:
             if protocol_case is not None
             else None
         ),
+        "transfer_scenario": args.transfer_scenario,
         "source_lifecycle": {"enabled": bool(args.verify_source_lifecycle)},
         "offerfiles_v1_stock_fallback": {
             "enabled": bool(args.verify_offerfiles_v1_stock_fallback),
@@ -1764,7 +1789,12 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["ed2k_server_address"] = server_address
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
-        fixture_file = fixture_dir / "deterministic-two-client-transfer.bin"
+        fixture_name = (
+            "deterministic-transfer-Unicode-é-漢.bin"
+            if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+            else "deterministic-two-client-transfer.bin"
+        )
+        fixture_file = fixture_dir / fixture_name
         fixture_pattern = (
             protocol_case.fixture_pattern
             if protocol_case is not None
@@ -2155,8 +2185,14 @@ def main(argv: list[str] | None = None) -> int:
                 protocol_case
             )
             stimulus_mode = "direct-source-link-with-profile-identity"
+        transfer_base_link = exported_link
+        input_link_info = link_info
+        if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY:
+            transfer_base_link = f"ed2k://|file|{transfer_hash}|0|{transfer_hash}|/"
+            input_link_info = parse_ed2k_file_link(transfer_base_link)
+            stimulus_mode = "hash-only-direct-source-link-with-profile-identity"
         direct_source_link = rust_local_ed2k.ed2k_link_with_source(
-            exported_link,
+            transfer_base_link,
             p2p_address,
             ports["client2_tcp"],
             source_user_hash,
@@ -2164,8 +2200,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["client1_transfer_stimulus"] = {
             "mode": stimulus_mode,
-            "baseLink": exported_link,
+            "baseLink": transfer_base_link,
             "transferLink": direct_source_link,
+            "inputMetadata": {
+                "name": input_link_info["name"],
+                "size": input_link_info["size"],
+                "hash": input_link_info["hash"],
+            },
+            "authorityMetadata": {
+                "name": fixture_file.name,
+                "size": link_info["size"],
+                "hash": link_info["hash"],
+            },
             "source": {
                 "host": p2p_address,
                 "port": ports["client2_tcp"],
@@ -2222,6 +2268,12 @@ def main(argv: list[str] | None = None) -> int:
                     protocol_case
                 ),
                 rust_metadata_path=rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
+                metadata_recovery_required=(
+                    args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+                ),
+                expected_source_host=p2p_address,
+                expected_source_port=ports["client2_tcp"],
+                expected_source_user_hash=source_user_hash,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),
