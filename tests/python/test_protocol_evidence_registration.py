@@ -113,6 +113,7 @@ def server_protocol_case(transport_plan: tuple[str, ...]) -> dict[str, object]:
         "client_crypt_supported": obfuscated or fallback,
         "client_crypt_requested": obfuscated or fallback,
         "client_crypt_required": obfuscated,
+        "rust_server_metadata_mode": "endpoint-only" if fallback else "known",
     }
 
 
@@ -130,6 +131,26 @@ def attach_server_login(
     report["profiles"]["rust"]["nick"] = "rust-test"
     report["profiles"]["mfc"]["nick"] = "mfc-test"
     report["checks"]["client_server_login_diagnostics"] = login
+    report["checks"]["rust_server_entry"] = (
+        {
+            "host": "127.0.0.1",
+            "port": 4661,
+            "name": "emulebb-local-e2e",
+            "description": "test",
+        }
+        if len(transport_plan) == 2
+        else {
+            "host": "127.0.0.1",
+            "port": 4661,
+            "name": "emulebb-local-e2e",
+            "description": "test",
+            "udpFlags": 0,
+            "udpKey": 0,
+            "udpKeyIp": 0,
+            "obfuscationPortTcp": 0,
+            "obfuscationPortUdp": 0,
+        }
+    )
     report["diagnostics"]["serverLogin"] = login
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
         login["coverageClaims"]["eligibleCoverageIds"]
@@ -404,6 +425,20 @@ def test_build_transfer_registration_rejects_case_flags_that_only_match_report_c
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="flags do not match"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_fallback_with_known_rust_metadata(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    attach_server_login(report, login, plan)
+    report["checks"]["rust_server_entry"]["udpFlags"] = 0x123
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not endpoint-only"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

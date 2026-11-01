@@ -16,6 +16,8 @@ SERVER_UDP_FLAG_EXT_GETSOURCES2 = 0x0000_0020
 SERVER_UDP_FLAG_LARGEFILES = 0x0000_0100
 SERVER_UDP_FLAG_UDPOBFUSCATION = 0x0000_0200
 SERVER_UDP_FLAG_TCPOBFUSCATION = 0x0000_0400
+SERVER_METADATA_KNOWN = "known"
+SERVER_METADATA_ENDPOINT_ONLY = "endpoint-only"
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class ProtocolCase:
     client_crypt_supported: bool
     client_crypt_requested: bool
     client_crypt_required: bool
+    rust_server_metadata_mode: str = SERVER_METADATA_KNOWN
     fixture_pattern: str = LOW_COMPRESSIBILITY
 
 
@@ -59,6 +62,7 @@ PROTOCOL_CASES = (
         client_crypt_supported=True,
         client_crypt_requested=True,
         client_crypt_required=False,
+        rust_server_metadata_mode=SERVER_METADATA_ENDPOINT_ONLY,
     ),
     ProtocolCase(
         name="obfuscated-required",
@@ -166,18 +170,31 @@ def server_udp_flags(case: ProtocolCase) -> int:
 def rust_server_entry(case: ProtocolCase, host: str, tcp_port: int) -> dict[str, object]:
     """Builds the deterministic server metadata Rust needs for one case."""
 
-    udp_key = 0x11223344 if case.server_protocol_obfuscation and case.server_udp else 0
-    return {
+    entry: dict[str, object] = {
         "host": host,
         "port": tcp_port,
         "name": "emulebb-local-e2e",
         "description": "Workspace deterministic eMuleBB Rust protocol campaign server",
-        "udpFlags": server_udp_flags(case),
-        "udpKey": udp_key,
-        "udpKeyIp": 0,
-        "obfuscationPortTcp": tcp_port if case.server_protocol_obfuscation else 0,
-        "obfuscationPortUdp": tcp_port + 4 if case.server_protocol_obfuscation and case.server_udp else 0,
     }
+    if case.rust_server_metadata_mode == SERVER_METADATA_ENDPOINT_ONLY:
+        return entry
+    if case.rust_server_metadata_mode != SERVER_METADATA_KNOWN:
+        raise ValueError(
+            f"Unsupported Rust server metadata mode: {case.rust_server_metadata_mode!r}"
+        )
+    udp_key = 0x11223344 if case.server_protocol_obfuscation and case.server_udp else 0
+    entry.update(
+        {
+            "udpFlags": server_udp_flags(case),
+            "udpKey": udp_key,
+            "udpKeyIp": 0,
+            "obfuscationPortTcp": tcp_port if case.server_protocol_obfuscation else 0,
+            "obfuscationPortUdp": (
+                tcp_port + 4 if case.server_protocol_obfuscation and case.server_udp else 0
+            ),
+        }
+    )
+    return entry
 
 
 def write_fixture(path: Path, size_bytes: int, pattern: str) -> str:

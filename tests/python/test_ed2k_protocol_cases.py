@@ -21,6 +21,10 @@ def test_default_matrix_covers_plain_obfuscated_udp_and_compression_surfaces() -
     assert cases["obfuscated-preferred"].client_crypt_requested is True
     assert cases["obfuscated-preferred-fallback"].server_protocol_obfuscation is False
     assert cases["obfuscated-preferred-fallback"].client_crypt_requested is True
+    assert (
+        cases["obfuscated-preferred-fallback"].rust_server_metadata_mode
+        == ed2k_protocol_cases.SERVER_METADATA_ENDPOINT_ONLY
+    )
     assert cases["obfuscated-required"].client_crypt_required is True
     assert cases["obfuscated-required-compressible"].artifact_id == "obf-req-z"
     assert all(case.server_udp for case in cases.values())
@@ -71,6 +75,19 @@ def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
     assert entry["udpKey"] == 0
     assert not entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_TCPOBFUSCATION
     assert not entry["udpFlags"] & ed2k_protocol_cases.SERVER_UDP_FLAG_UDPOBFUSCATION
+
+
+def test_rust_server_entry_is_endpoint_only_for_fallback_probe() -> None:
+    case = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred-fallback"]
+
+    entry = ed2k_protocol_cases.rust_server_entry(case, "192.0.2.10", 4661)
+
+    assert entry == {
+        "host": "192.0.2.10",
+        "port": 4661,
+        "name": "emulebb-local-e2e",
+        "description": "Workspace deterministic eMuleBB Rust protocol campaign server",
+    }
 
 
 def test_fixture_writer_is_deterministic_for_both_patterns(tmp_path: Path) -> None:

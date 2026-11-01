@@ -26,16 +26,19 @@ SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
         "flags": (False, False, False, False),
+        "rustServerMetadataMode": "known",
         "coverageId": "server.connect.plaintext",
     },
     "obfuscated-preferred-fallback": {
         "transportPlan": ("obfuscated", "plaintext"),
         "flags": (False, True, True, False),
+        "rustServerMetadataMode": "endpoint-only",
         "coverageId": "server.connect.fallback",
     },
     "obfuscated-required": {
         "transportPlan": ("obfuscated",),
         "flags": (True, True, True, True),
+        "rustServerMetadataMode": "known",
         "coverageId": "server.connect.obfuscated",
     },
 }
@@ -299,6 +302,9 @@ def _derived_server_login_coverage_ids(
     )
     if any(protocol_case.get(name) is not value for name, value in expected_case_flags.items()):
         raise ValueError("server login protocol case flags do not match its named transport case")
+    metadata_mode = case_authority["rustServerMetadataMode"]
+    if protocol_case.get("rust_server_metadata_mode") != metadata_mode:
+        raise ValueError("server login Rust metadata mode does not match its named transport case")
     if login.get("expectedTransportPlan") != expected_transport_plan:
         raise ValueError("server login expected transport plan does not match the protocol case")
 
@@ -315,6 +321,18 @@ def _derived_server_login_coverage_ids(
         raise ValueError("server login diagnostic evidence layers are not canonical")
 
     checks = _object(report.get("checks"), "checks")
+    rust_server_entry = _object(checks.get("rust_server_entry"), "checks.rust_server_entry")
+    capability_fields = {
+        "udpFlags",
+        "udpKey",
+        "udpKeyIp",
+        "obfuscationPortTcp",
+        "obfuscationPortUdp",
+    }
+    if metadata_mode == "endpoint-only" and capability_fields.intersection(rust_server_entry):
+        raise ValueError("server fallback Rust entry is not endpoint-only")
+    if metadata_mode == "known" and not capability_fields.issubset(rust_server_entry):
+        raise ValueError("server login Rust entry lacks required capability metadata")
     if checks.get("client_server_login_diagnostics") != login:
         raise ValueError("server login diagnostics do not match the pre-transfer snapshot")
     clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
