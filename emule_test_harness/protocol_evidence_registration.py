@@ -807,10 +807,15 @@ def _derived_server_tcp_metadata_coverage_ids(
             raise ValueError(f"{client} server ident is not joined to its post-apply event")
 
         rest = _object(row.get("rest"), f"{prefix}.rest")
-        if set(rest) != {"ok", "seedNameChanged", "currentServer"}:
+        if set(rest) != {"ok", "seedNameChanged", "connection", "server"}:
             raise ValueError(f"{client} server metadata REST row is malformed")
-        current = _object(rest.get("currentServer"), f"{prefix}.rest.currentServer")
-        expected_current = {
+        connection = _object(rest.get("connection"), f"{prefix}.rest.connection")
+        expected_connection = {
+            "connected": True,
+            "address": host,
+            "port": endpoint_port,
+        }
+        expected_server = {
             "address": host,
             "port": endpoint_port,
             "name": ident["name"],
@@ -821,18 +826,35 @@ def _derived_server_tcp_metadata_coverage_ids(
         if (
             rest.get("ok") is not True
             or rest.get("seedNameChanged") is not True
-            or current != expected_current
+            or connection != expected_connection
+            or rest.get("server") != expected_server
         ):
             raise ValueError(f"{client} REST state is not joined to its decoded server metadata")
         raw_snapshot = _object(raw_rest.get(client), f"checks.client_server_tcp_metadata_rest.{client}")
-        raw_current = _object(
-            raw_snapshot.get("currentServer"),
-            f"checks.client_server_tcp_metadata_rest.{client}.currentServer",
+        if set(raw_snapshot) != {"connectionStatus", "serverEntity"}:
+            raise ValueError(f"{client} raw REST snapshot has an unexpected shape")
+        raw_status = _object(
+            raw_snapshot.get("connectionStatus"),
+            f"checks.client_server_tcp_metadata_rest.{client}.connectionStatus",
         )
-        if raw_snapshot.get("connected") is not True or raw_current.get("current") is not True:
+        raw_current = _object(
+            raw_status.get("currentServer"),
+            f"checks.client_server_tcp_metadata_rest.{client}.connectionStatus.currentServer",
+        )
+        if raw_status.get("connected") is not True or raw_current.get("current") is not True:
             raise ValueError(f"{client} raw REST snapshot is not connected to the current server")
-        if any(raw_current.get(field) != value for field, value in expected_current.items()):
-            raise ValueError(f"{client} raw REST snapshot does not match the diagnostic state")
+        if any(
+            raw_current.get(field) != value
+            for field, value in expected_connection.items()
+            if field != "connected"
+        ):
+            raise ValueError(f"{client} raw REST connection does not match the diagnostic endpoint")
+        raw_entity = _object(
+            raw_snapshot.get("serverEntity"),
+            f"checks.client_server_tcp_metadata_rest.{client}.serverEntity",
+        )
+        if any(raw_entity.get(field) != value for field, value in expected_server.items()):
+            raise ValueError(f"{client} raw REST server entity does not match the diagnostic state")
 
     comparison = _object(metadata.get("comparison"), "diagnostics.serverTcpMetadata.comparison")
     comparison_fields = {"ok", "identEqual", "identMatchesExpected", "transportModeEqual"}

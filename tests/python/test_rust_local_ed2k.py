@@ -46,8 +46,8 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
-def test_wait_for_current_server_metadata_requires_applied_identity_and_counters(monkeypatch) -> None:
-    responses = iter(
+def test_wait_for_applied_server_metadata_joins_active_endpoint_to_server_entity(monkeypatch) -> None:
+    status_responses = iter(
         [
             {
                 "servers": {
@@ -56,10 +56,6 @@ def test_wait_for_current_server_metadata_requires_applied_identity_and_counters
                         "current": True,
                         "address": "127.0.0.1",
                         "port": 4661,
-                        "name": "seed-before-server-ident",
-                        "description": "seed",
-                        "users": 2,
-                        "files": 1,
                     },
                 }
             },
@@ -70,12 +66,28 @@ def test_wait_for_current_server_metadata_requires_applied_identity_and_counters
                         "current": True,
                         "address": "127.0.0.1",
                         "port": 4661,
-                        "name": "emulebb-local-e2e",
-                        "description": "deterministic server",
-                        "users": 2,
-                        "files": 1,
                     },
                 }
+            },
+        ]
+    )
+    entity_responses = iter(
+        [
+            {
+                "address": "127.0.0.1",
+                "port": 4661,
+                "name": "seed-before-server-ident",
+                "description": "seed",
+                "users": 2,
+                "files": 1,
+            },
+            {
+                "address": "127.0.0.1",
+                "port": 4661,
+                "name": "emulebb-local-e2e",
+                "description": "deterministic server",
+                "users": 2,
+                "files": 1,
             },
         ]
     )
@@ -83,12 +95,12 @@ def test_wait_for_current_server_metadata_requires_applied_identity_and_counters
 
     def request(_base_url, method, path, _api_key, _body=None):
         calls.append((method, path))
-        return next(responses)
+        return next(status_responses) if path == "/api/v1/status" else next(entity_responses)
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
     monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
 
-    result = rust_local_ed2k.wait_for_current_server_metadata(
+    result = rust_local_ed2k.wait_for_applied_server_metadata(
         "http://127.0.0.1:4711",
         "key",
         expected_address="127.0.0.1",
@@ -98,10 +110,12 @@ def test_wait_for_current_server_metadata_requires_applied_identity_and_counters
         timeout_seconds=1.0,
     )
 
-    assert result["currentServer"]["name"] == "emulebb-local-e2e"
+    assert result["serverEntity"]["name"] == "emulebb-local-e2e"
     assert calls == [
         ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/servers/127.0.0.1:4661"),
         ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/servers/127.0.0.1:4661"),
     ]
 
 

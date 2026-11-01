@@ -264,30 +264,43 @@ def _rest_evidence(
     wire: dict[str, Any],
 ) -> dict[str, Any]:
     value = snapshot if isinstance(snapshot, dict) else {}
-    current = value.get("currentServer") if isinstance(value.get("currentServer"), dict) else {}
+    status = value.get("connectionStatus") if isinstance(value.get("connectionStatus"), dict) else {}
+    current = status.get("currentServer") if isinstance(status.get("currentServer"), dict) else {}
+    server = value.get("serverEntity") if isinstance(value.get("serverEntity"), dict) else {}
     host, port_text = endpoint.rsplit(":", 1)
     decoded_status = wire.get("status") if isinstance(wire.get("status"), dict) else {}
     decoded_ident = wire.get("ident") if isinstance(wire.get("ident"), dict) else {}
     comparable = {
-        "address": current.get("address"),
-        "port": current.get("port"),
-        "name": current.get("name"),
-        "description": current.get("description"),
-        "users": current.get("users"),
-        "files": current.get("files"),
+        "address": server.get("address"),
+        "port": server.get("port"),
+        "name": server.get("name"),
+        "description": server.get("description"),
+        "users": server.get("users"),
+        "files": server.get("files"),
     }
     ok = bool(
-        value.get("connected") is True
+        status.get("connected") is True
         and current.get("current") is True
         and str(current.get("address") or "").casefold() == host.casefold()
         and current.get("port") == int(port_text)
-        and current.get("name") == decoded_ident.get("name")
-        and current.get("description") == decoded_ident.get("description")
-        and current.get("name") != seed_name
-        and _nonnegative_int(current.get("users")) == decoded_status.get("users")
-        and _nonnegative_int(current.get("files")) == decoded_status.get("files")
+        and str(server.get("address") or "").casefold() == host.casefold()
+        and server.get("port") == int(port_text)
+        and server.get("name") == decoded_ident.get("name")
+        and server.get("description") == decoded_ident.get("description")
+        and server.get("name") != seed_name
+        and _nonnegative_int(server.get("users")) == decoded_status.get("users")
+        and _nonnegative_int(server.get("files")) == decoded_status.get("files")
     )
-    return {"ok": ok, "seedNameChanged": current.get("name") != seed_name, "currentServer": comparable}
+    return {
+        "ok": ok,
+        "seedNameChanged": server.get("name") != seed_name,
+        "connection": {
+            "connected": status.get("connected"),
+            "address": current.get("address"),
+            "port": current.get("port"),
+        },
+        "server": comparable,
+    }
 
 
 def build_server_tcp_metadata_diagnostic_evidence(

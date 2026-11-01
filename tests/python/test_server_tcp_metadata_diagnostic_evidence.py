@@ -117,9 +117,16 @@ def _records(*, trace_id: int, users: int, files: int) -> list[dict[str, object]
 
 def _rest(users: int, files: int) -> dict[str, object]:
     return {
-        "connected": True,
-        "currentServer": {
-            "current": True,
+        "connectionStatus": {
+            "connected": True,
+            "currentServer": {
+                "current": True,
+                "address": "127.0.0.1",
+                "port": 4661,
+                "name": SEED_NAME,
+            },
+        },
+        "serverEntity": {
             "address": "127.0.0.1",
             "port": 4661,
             "name": SERVER_NAME,

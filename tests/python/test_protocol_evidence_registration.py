@@ -476,7 +476,12 @@ def bilateral_server_tcp_metadata_evidence() -> dict[str, object]:
             "rest": {
                 "ok": True,
                 "seedNameChanged": True,
-                "currentServer": {
+                "connection": {
+                    "connected": True,
+                    "address": "127.0.0.1",
+                    "port": 4661,
+                },
+                "server": {
                     "address": "127.0.0.1",
                     "port": 4661,
                     "name": SERVER_IDENT_NAME,
@@ -528,11 +533,16 @@ def attach_server_tcp_metadata(report: dict[str, object]) -> dict[str, object]:
     report["transfer_scenario"] = "server-tcp-metadata"
     report["checks"]["client_server_tcp_metadata_rest"] = {
         client: {
-            "connected": True,
-            "currentServer": {
-                "current": True,
-                **evidence["clients"][client]["rest"]["currentServer"],
+            "connectionStatus": {
+                "connected": True,
+                "currentServer": {
+                    "current": True,
+                    "address": "127.0.0.1",
+                    "port": 4661,
+                    "name": SERVER_METADATA_SEED_NAME,
+                },
             },
+            "serverEntity": dict(evidence["clients"][client]["rest"]["server"]),
         }
         for client in ("rust", "mfc")
     }
@@ -1256,12 +1266,10 @@ def test_build_transfer_registration_rejects_tcp_metadata_raw_rest_drift(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     attach_server_tcp_metadata(report)
-    report["checks"]["client_server_tcp_metadata_rest"]["mfc"]["currentServer"][
-        "files"
-    ] = 999
+    report["checks"]["client_server_tcp_metadata_rest"]["mfc"]["serverEntity"]["files"] = 999
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="raw REST snapshot does not match"):
+    with pytest.raises(ValueError, match="raw REST server entity does not match"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

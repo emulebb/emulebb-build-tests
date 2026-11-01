@@ -123,7 +123,7 @@ def wait_for_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float)
     )
 
 
-def wait_for_current_server_metadata(
+def wait_for_applied_server_metadata(
     base_url: str,
     api_key: str,
     *,
@@ -133,33 +133,54 @@ def wait_for_current_server_metadata(
     expected_description: str,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits until one client exposes the exact applied current-server metadata."""
+    """Waits for the active endpoint and its exact applied server-list metadata."""
 
     last_status: dict[str, object] = {}
 
     def probe() -> dict[str, object] | None:
         status = request_json(base_url, "GET", "/api/v1/status", api_key)
         nested = status.get("servers")
-        data = nested if isinstance(nested, dict) else status
+        connection_status = nested if isinstance(nested, dict) else status
+        server_entity = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/servers/{expected_address}:{expected_port}",
+            api_key,
+        )
         last_status.clear()
-        last_status.update(data)
-        current = data.get("currentServer") if isinstance(data.get("currentServer"), dict) else {}
-        users = current.get("users")
-        files = current.get("files")
+        last_status.update(
+            {
+                "connectionStatus": connection_status,
+                "serverEntity": server_entity,
+            }
+        )
+        current = (
+            connection_status.get("currentServer")
+            if isinstance(connection_status.get("currentServer"), dict)
+            else {}
+        )
+        users = server_entity.get("users")
+        files = server_entity.get("files")
         counters_valid = all(
             isinstance(value, int) and not isinstance(value, bool) and value >= 0
             for value in (users, files)
         )
         if (
-            data.get("connected") is True
+            connection_status.get("connected") is True
             and current.get("current") is True
             and str(current.get("address") or "").casefold() == expected_address.casefold()
             and current.get("port") == expected_port
-            and current.get("name") == expected_name
-            and current.get("description") == expected_description
+            and str(server_entity.get("address") or "").casefold()
+            == expected_address.casefold()
+            and server_entity.get("port") == expected_port
+            and server_entity.get("name") == expected_name
+            and server_entity.get("description") == expected_description
             and counters_valid
         ):
-            return data
+            return {
+                "connectionStatus": connection_status,
+                "serverEntity": server_entity,
+            }
         return None
 
     try:
@@ -171,7 +192,7 @@ def wait_for_current_server_metadata(
         )
     except RuntimeError as exc:
         detail = json.dumps(last_status, sort_keys=True, separators=(",", ":"))
-        raise RuntimeError(f"{exc} Last normalized server status: {detail}") from exc
+        raise RuntimeError(f"{exc} Last normalized server state: {detail}") from exc
 
 
 def wait_for_server_search_result(
