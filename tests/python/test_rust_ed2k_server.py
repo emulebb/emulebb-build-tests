@@ -87,8 +87,8 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
     assert config["limits"]["hard_limit_files"] == 200_001
     assert "soft_limit_files = 100000" in text
     assert "hard_limit_files = 200001" in text
-    assert config["network"]["private_highid_probe"] is True
-    assert "private_highid_probe = true" in text
+    assert "private_highid_probe" not in config["network"]
+    assert "private_highid_probe" not in text
     assert "password" not in text
     assert text.endswith("\n")
 
