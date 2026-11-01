@@ -1024,12 +1024,12 @@ def require_high_id_clients(
         data = stats.get("data") if isinstance(stats, dict) else None
         if isinstance(data, dict):
             for key in (
-                "highid_verify_verified",
-                "highid_verify_verified_marker",
-                "highid_verify_mismatch",
-                "highid_verify_no_answer",
-                "highid_verify_skipped",
-                "highid_verify_reasons",
+                "highid_observe_verified",
+                "highid_observe_verified_marker",
+                "highid_observe_mismatch",
+                "highid_observe_no_answer",
+                "highid_observe_skipped",
+                "highid_observe_reasons",
             ):
                 if key in data:
                     verification[key] = data[key]

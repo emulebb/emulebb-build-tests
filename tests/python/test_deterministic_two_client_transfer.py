@@ -1617,12 +1617,12 @@ def test_require_high_id_clients_fails_with_compact_server_verification_evidence
                 "ok": True,
                 "data": {
                     "bytes_in": 999,
-                    "highid_verify_verified": 1,
-                    "highid_verify_verified_marker": 0,
-                    "highid_verify_mismatch": 2,
-                    "highid_verify_no_answer": 3,
-                    "highid_verify_skipped": 4,
-                    "highid_verify_reasons": "connect failed: 3",
+                    "highid_observe_verified": 1,
+                    "highid_observe_verified_marker": 0,
+                    "highid_observe_mismatch": 2,
+                    "highid_observe_no_answer": 3,
+                    "highid_observe_skipped": 4,
+                    "highid_observe_reasons": "connect failed: 3",
                 },
             }
 
@@ -1644,12 +1644,12 @@ def test_require_high_id_clients_fails_with_compact_server_verification_evidence
         },
         "server_highid_verification": {
             "available": True,
-            "highid_verify_verified": 1,
-            "highid_verify_verified_marker": 0,
-            "highid_verify_mismatch": 2,
-            "highid_verify_no_answer": 3,
-            "highid_verify_skipped": 4,
-            "highid_verify_reasons": "connect failed: 3",
+            "highid_observe_verified": 1,
+            "highid_observe_verified_marker": 0,
+            "highid_observe_mismatch": 2,
+            "highid_observe_no_answer": 3,
+            "highid_observe_skipped": 4,
+            "highid_observe_reasons": "connect failed: 3",
         },
     }
 
