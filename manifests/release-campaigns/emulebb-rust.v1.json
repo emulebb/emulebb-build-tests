@@ -165,20 +165,20 @@
           "flowCategory": "live-wire",
           "required": true,
           "blocking": true,
-          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
+          "command": "python scripts/persisted-soak-control.py run-to-gate --inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 --rest-timeout-seconds 1800 --connect-timeout-seconds 600 --observer-action-success-target-per-method 4 --gate-timeout-seconds 18000",
           "localInputs": [
             "CARGO_TARGET_DIR, EMULEBB_WORKSPACE_OUTPUT_ROOT, and EMULEBB_WORKSPACE_ROOT are pre-set environment variables and point to valid paths",
             "operator-owned live-wire inputs stay in ignored local files (live-wire-inputs.local.json) and define mfc_profile.profile_dir plus rust_profile.profile_dir",
-            "X_LOCAL_IP is the REST/control bind address and must match --lan-bind-addr",
-            "public live Rust and MFC P2P bind through the hide.me split tunnel; REST binds stay on X_LOCAL_IP",
+            "REST/control binds to localhost while the hide.me full tunnel carries both clients' public P2P traffic",
+            "hide.me split tunneling is disabled",
             "vpn-guard-live.local.json uses p2pBindInterfaceName hide.me and the approved public CIDRs",
-            "live eD2K connects to 45.82.80.155:5687"
+            "the controller selects the same configured public eD2K server for Rust and MFC"
           ],
           "evidence": [
             {
               "kind": "manual",
               "required": true,
-              "description": "Host-level converged live-wire run binds REST/control to X_LOCAL_IP, binds P2P through hide.me, uses the persisted MFC and Rust profiles from live-wire inputs, connects both clients to 45.82.80.155:5687, bootstraps Kad from the selected nodes.dat source, and records synchronized REST, server, Kad, upload, transfer, and diagnostic parity checkpoints under EMULEBB_WORKSPACE_OUTPUT_ROOT."
+              "description": "The maintained persisted-profile controller binds REST/control to localhost, routes both clients through hide.me with VPN Guard enabled, reuses the MFC and Rust profiles from live-wire inputs, and blocks until four completed server-search and four completed Kad-search diagnostic parity actions pass. It always stops and finalizes the bounded diagnostic evidence under EMULEBB_WORKSPACE_OUTPUT_ROOT."
             }
           ]
         },

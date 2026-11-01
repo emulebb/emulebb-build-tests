@@ -1541,6 +1541,23 @@ def test_start_parser_accepts_observer_action_schedule() -> None:
     )
 
 
+def test_run_to_gate_parser_uses_bounded_canonical_defaults() -> None:
+    args = controller.build_parser().parse_args(
+        [
+            "run-to-gate",
+            "--gate-timeout-seconds",
+            "14400",
+            "--observer-action-success-target-per-method",
+            "4",
+        ]
+    )
+
+    assert args.gate_timeout_seconds == 14400
+    assert args.gate_poll_interval_seconds == 30
+    assert args.observer_action_success_target_per_method == 4
+    assert args.lan_bind_addr == "127.0.0.1"
+
+
 def test_preflight_parser_uses_shared_session_selection() -> None:
     args = controller.build_parser().parse_args(
         [
@@ -1884,6 +1901,182 @@ def test_gate_status_command_exit_code(
 
     assert controller.main(["gate-status"]) == expected_exit
     assert json.loads(capsys.readouterr().out) == result
+
+
+def test_wait_for_parity_gate_reaches_green_while_owned_processes_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    gates = iter(
+        [
+            {"status": "pending", "ok": False},
+            {"status": "green", "ok": True},
+        ]
+    )
+    monkeypatch.setattr(controller, "parity_gate_status", lambda _paths: next(gates))
+    monkeypatch.setattr(
+        controller,
+        "load_json",
+        lambda _path: {
+            "state": "running",
+            "launcher": {"pid": 1},
+            "observer": {"pid": 2},
+            "watcher": {"pid": 3},
+        },
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+    monkeypatch.setattr(controller, "exact_process_row", lambda _identity, _rows: object())
+    monkeypatch.setattr(controller.time, "sleep", lambda _seconds: None)
+
+    result = controller.wait_for_parity_gate(
+        paths,
+        timeout_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    assert result["status"] == "green"
+    assert result["samples"] == 2
+    assert result["gate"] == {"status": "green", "ok": True}
+
+
+def test_wait_for_parity_gate_fails_when_owned_runtime_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    monkeypatch.setattr(
+        controller,
+        "parity_gate_status",
+        lambda _paths: {"status": "pending", "ok": False},
+    )
+    monkeypatch.setattr(
+        controller,
+        "load_json",
+        lambda _path: {
+            "state": "running",
+            "launcher": {"pid": 1},
+            "observer": {"pid": 2},
+            "watcher": {"pid": 3},
+        },
+    )
+    monkeypatch.setattr(controller.windows_processes, "collect_processes", lambda: [])
+    monkeypatch.setattr(controller, "exact_process_row", lambda _identity, _rows: None)
+
+    result = controller.wait_for_parity_gate(paths)
+
+    assert result["status"] == "runtime-failed"
+    assert result["reason"] == "launcher-not-running"
+    assert result["findings"] == [
+        "launcher-not-running",
+        "observer-not-running",
+        "watcher-not-running",
+    ]
+
+
+def test_run_session_to_gate_stops_after_wait_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    stop_calls = []
+    monkeypatch.setattr(
+        controller,
+        "start_session",
+        lambda *_args, **_kwargs: {
+            "campaignId": "20261101T120000Z",
+            "campaignDir": str(tmp_path / "campaign"),
+            "startedUtc": "2026-11-01T12:00:00+00:00",
+        },
+    )
+
+    def fail_wait(*_args, **_kwargs):
+        raise RuntimeError("synthetic gate read failure")
+
+    def stop(*_args, **_kwargs):
+        stop_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(controller, "wait_for_parity_gate", fail_wait)
+    monkeypatch.setattr(controller, "stop_session", stop)
+
+    result = controller.run_session_to_gate(config, paths)
+
+    assert stop_calls == [True]
+    assert result["ok"] is False
+    assert result["wait"]["status"] == "wait-failed"
+    assert result["stop"] == {"ok": True}
+
+
+def test_run_session_to_gate_requires_green_gate_and_clean_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    monkeypatch.setattr(
+        controller,
+        "start_session",
+        lambda *_args, **_kwargs: {
+            "campaignId": "20261101T120000Z",
+            "campaignDir": str(tmp_path / "campaign"),
+            "startedUtc": "2026-11-01T12:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr(
+        controller,
+        "wait_for_parity_gate",
+        lambda *_args, **_kwargs: {"status": "green"},
+    )
+    monkeypatch.setattr(
+        controller,
+        "stop_session",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+
+    result = controller.run_session_to_gate(config, paths)
+
+    assert result["ok"] is True
+    assert result["campaignId"] == "20261101T120000Z"
+
+
+def test_run_session_to_gate_stops_when_operator_interrupts_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = make_paths(tmp_path)
+    config = controller.SessionConfig(
+        inputs=tmp_path / "inputs.json",
+        vpn_guard_config=tmp_path / "vpn.json",
+    )
+    stop_calls = []
+    monkeypatch.setattr(
+        controller,
+        "start_session",
+        lambda *_args, **_kwargs: {"campaignId": "20261101T120000Z"},
+    )
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    def stop(*_args, **_kwargs):
+        stop_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(controller, "wait_for_parity_gate", interrupt)
+    monkeypatch.setattr(controller, "stop_session", stop)
+
+    with pytest.raises(KeyboardInterrupt):
+        controller.run_session_to_gate(config, paths)
+
+    assert stop_calls == [True]
 
 
 def test_current_observer_report_loads_exact_current_campaign(

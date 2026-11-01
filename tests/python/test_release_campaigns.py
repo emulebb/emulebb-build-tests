@@ -208,8 +208,11 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe"
     )
     rust_live_wire_command = (
-        "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json "
-        "--lan-bind-addr ${X_LOCAL_IP} --duration 4h"
+        "python scripts/persisted-soak-control.py run-to-gate "
+        "--inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 "
+        "--rest-timeout-seconds 1800 --connect-timeout-seconds 600 "
+        "--observer-action-success-target-per-method 4 "
+        "--gate-timeout-seconds 18000"
     )
 
     assert covered_ids <= scenario_ids
@@ -251,7 +254,7 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         and scenario["required"] is True
         and scenario["blocking"] is True
         and any("mfc_profile.profile_dir plus rust_profile.profile_dir" in item for item in scenario["localInputs"])
-        and any("45.82.80.155:5687" in item for item in scenario["localInputs"])
+        and any("split tunneling is disabled" in item for item in scenario["localInputs"])
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
     )

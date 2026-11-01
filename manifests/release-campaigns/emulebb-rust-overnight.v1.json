@@ -333,12 +333,12 @@
           "flowCategory": "live-wire",
           "required": false,
           "blocking": false,
-          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
+          "command": "python scripts/persisted-soak-control.py run-to-gate --inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 --rest-timeout-seconds 1800 --connect-timeout-seconds 600 --observer-action-success-target-per-method 4 --gate-timeout-seconds 18000",
           "evidence": [
             {
               "kind": "manual",
               "required": false,
-              "description": "Public live-wire proof is owned by the 0.1.0-beta.1 release gate: persisted MFC and Rust profiles from live-wire inputs, REST/control bound to X_LOCAL_IP, P2P bound through hide.me, VPN Guard CIDR validation, and fixed eD2K server 45.82.80.155:5687. The overnight campaign remains the long local protocol matrix."
+              "description": "Public live-wire proof is owned by the 0.1.0-beta.1 release gate: the maintained controller reuses persisted MFC and Rust profiles, binds REST/control to localhost, routes both clients through the hide.me full tunnel with VPN Guard enabled, and requires four completed server-search plus four completed Kad-search diagnostic parity actions. The overnight campaign remains the long local protocol matrix."
             }
           ]
         }

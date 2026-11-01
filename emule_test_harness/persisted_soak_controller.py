@@ -45,11 +45,14 @@ OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
 MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v5"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v4"
 GATE_STATUS_SCHEMA = "emulebb.persisted-soak-gate-status.v1"
+RUN_TO_GATE_SCHEMA = "emulebb.persisted-soak-run-to-gate.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
 DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
+DEFAULT_GATE_TIMEOUT_SECONDS = 5 * 60 * 60
+DEFAULT_GATE_POLL_INTERVAL_SECONDS = 30.0
 WATCH_FAILURE_GRACE_SECONDS = 15.0
 OBSERVER_REPORT_READ_ATTEMPTS = 8
 OBSERVER_REPORT_READ_RETRY_SECONDS = 0.25
@@ -2353,6 +2356,150 @@ def parity_gate_status(paths: ControlPaths) -> dict[str, Any]:
     }
 
 
+def wait_for_parity_gate(
+    paths: ControlPaths,
+    *,
+    timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+) -> dict[str, Any]:
+    """Blocks until the current campaign gate is green, failed, or unhealthy."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("Gate timeout must be greater than zero.")
+    if poll_interval_seconds <= 0:
+        raise ValueError("Gate poll interval must be greater than zero.")
+    started = time.monotonic()
+    samples = 0
+    while True:
+        samples += 1
+        gate = parity_gate_status(paths)
+        status = gate.get("status")
+        if status == "failed":
+            return {
+                "status": status,
+                "reason": None,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+        if status == "unavailable":
+            return {
+                "status": "gate-unavailable",
+                "reason": gate.get("reason") or "gate-unavailable",
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+
+        manifest = load_json(paths.manifest)
+        processes = windows_processes.collect_processes()
+        runtime_findings = []
+        for role in ("launcher", "observer", "watcher"):
+            identity = manifest.get(role)
+            if not isinstance(identity, dict) or exact_process_row(identity, processes) is None:
+                runtime_findings.append(f"{role}-not-running")
+        if manifest.get("state") != "running":
+            runtime_findings.append("session-not-running")
+        if runtime_findings:
+            return {
+                "status": "runtime-failed",
+                "reason": runtime_findings[0],
+                "findings": runtime_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+        if status == "green":
+            return {
+                "status": status,
+                "reason": None,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+
+        elapsed = time.monotonic() - started
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            return {
+                "status": "timeout",
+                "reason": "gate-timeout",
+                "samples": samples,
+                "elapsedSeconds": elapsed,
+                "gate": gate,
+            }
+        time.sleep(min(poll_interval_seconds, remaining))
+
+
+def run_session_to_gate(
+    config: SessionConfig,
+    paths: ControlPaths,
+    *,
+    gate_timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
+    gate_poll_interval_seconds: float = DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    success_target_per_method: int = converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
+    action_start_delay_seconds: float = converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    action_search_interval_seconds: float = converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    action_search_timeout_seconds: float = converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    graceful_stop_timeout_seconds: float = 90.0,
+) -> dict[str, Any]:
+    """Runs one maintained campaign to its gate and always stops it cleanly."""
+
+    started = start_session(
+        config,
+        paths,
+        observer_drive_actions=True,
+        observer_action_success_target_per_method=success_target_per_method,
+        observer_action_start_delay_seconds=action_start_delay_seconds,
+        observer_action_search_interval_seconds=action_search_interval_seconds,
+        observer_action_search_timeout_seconds=action_search_timeout_seconds,
+    )
+    wait_result: dict[str, Any]
+    stopped: dict[str, Any]
+    try:
+        try:
+            wait_result = wait_for_parity_gate(
+                paths,
+                timeout_seconds=gate_timeout_seconds,
+                poll_interval_seconds=gate_poll_interval_seconds,
+            )
+        except Exception as error:  # noqa: BLE001 - report wait failure after stop
+            wait_result = {
+                "status": "wait-failed",
+                "reason": "gate-wait-error",
+                "error": bounded_error(
+                    {"type": type(error).__name__, "message": str(error)}
+                ),
+            }
+    finally:
+        try:
+            stopped = stop_session(
+                paths,
+                graceful_timeout_seconds=graceful_stop_timeout_seconds,
+            )
+        except Exception as error:  # noqa: BLE001 - preserve the gate evidence
+            stopped = {
+                "ok": False,
+                "error": bounded_error(
+                    {"type": type(error).__name__, "message": str(error)}
+                ),
+            }
+    return {
+        "schema": RUN_TO_GATE_SCHEMA,
+        "campaignId": started.get("campaignId"),
+        "ok": bool(
+            wait_result.get("status") == "green" and stopped.get("ok") is True
+        ),
+        "start": {
+            "campaignId": started.get("campaignId"),
+            "campaignDir": started.get("campaignDir"),
+            "startedUtc": started.get("startedUtc"),
+        },
+        "wait": wait_result,
+        "stop": stopped,
+    }
+
+
 def session_status(
     paths: ControlPaths,
     *,
@@ -3431,6 +3578,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the machine-readable observer parity gate and fail unless green.",
     )
 
+    run_to_gate = subparsers.add_parser(
+        "run-to-gate",
+        help="Start the maintained persisted soak, wait for its parity gate, and stop it.",
+    )
+    add_session_config_arguments(run_to_gate)
+    run_to_gate.add_argument(
+        "--gate-timeout-seconds",
+        type=float,
+        default=DEFAULT_GATE_TIMEOUT_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--gate-poll-interval-seconds",
+        type=float,
+        default=DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-success-target-per-method",
+        type=int,
+        default=converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-start-delay-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-search-interval-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-search-timeout-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--graceful-stop-timeout-seconds",
+        type=float,
+        default=90.0,
+    )
+
     status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
     status.add_argument("--no-rest", action="store_true")
     status.add_argument("--no-vpn", action="store_true")
@@ -3536,6 +3724,24 @@ def main(argv: list[str] | None = None) -> int:
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
     elif args.command == "gate-status":
         result = parity_gate_status(paths)
+    elif args.command == "run-to-gate":
+        result = run_session_to_gate(
+            session_config_from_args(args),
+            paths,
+            gate_timeout_seconds=args.gate_timeout_seconds,
+            gate_poll_interval_seconds=args.gate_poll_interval_seconds,
+            success_target_per_method=(
+                args.observer_action_success_target_per_method
+            ),
+            action_start_delay_seconds=args.observer_action_start_delay_seconds,
+            action_search_interval_seconds=(
+                args.observer_action_search_interval_seconds
+            ),
+            action_search_timeout_seconds=(
+                args.observer_action_search_timeout_seconds
+            ),
+            graceful_stop_timeout_seconds=args.graceful_stop_timeout_seconds,
+        )
     elif args.command == "watch":
         launcher_fallback = None
         if args.launcher_pid is not None or args.launcher_creation_date is not None:
