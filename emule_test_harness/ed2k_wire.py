@@ -1,0 +1,536 @@
+"""Minimal provider-neutral eD2K server wire client for deterministic campaigns."""
+
+from __future__ import annotations
+
+import hashlib
+import ipaddress
+import socket
+import struct
+import time
+import zlib
+from dataclasses import dataclass, field
+from typing import Any
+
+
+PROTO_EDONKEY = 0xE3
+PROTO_PACKED = 0xD4
+
+OP_LOGINREQUEST = 0x01
+OP_OFFERFILES = 0x15
+OP_SEARCHREQUEST = 0x16
+OP_GETSOURCES = 0x19
+OP_GETSOURCES_OBFU = 0x23
+OP_SEARCHRESULT = 0x33
+OP_SERVERSTATUS = 0x34
+OP_IDCHANGE = 0x40
+OP_FOUNDSOURCES = 0x42
+OP_FOUNDSOURCES_OBFU = 0x44
+
+CT_NAME = 0x01
+CT_SERVER_FLAGS = 0x20
+FT_FILENAME = 0x01
+FT_FILESIZE = 0x02
+FT_SOURCES = 0x15
+FT_COMPLETE_SOURCES = 0x30
+FT_FILESIZE_HI = 0x3A
+
+TAGTYPE_HASH = 0x01
+TAGTYPE_STRING = 0x02
+TAGTYPE_UINT32 = 0x03
+TAGTYPE_FLOAT32 = 0x04
+TAGTYPE_BOOL = 0x05
+TAGTYPE_BOOLARRAY = 0x06
+TAGTYPE_BLOB = 0x07
+TAGTYPE_UINT16 = 0x08
+TAGTYPE_UINT8 = 0x09
+TAGTYPE_BSOB = 0x0A
+TAGTYPE_UINT64 = 0x0B
+TAGTYPE_STR1_BASE = 0x10
+TAG_SHORT_NAME = 0x80
+
+SRVCAP_ZLIB = 0x0001
+SRVCAP_NEWTAGS = 0x0008
+SRVCAP_UNICODE = 0x0010
+SRVCAP_LARGEFILES = 0x0100
+SRVCAP_SUPPORTCRYPT = 0x0200
+SRVCAP_LUGDUNUM_NAT_CALLBACK = 0x1000
+DEFAULT_SERVER_FLAGS = (
+    SRVCAP_ZLIB
+    | SRVCAP_NEWTAGS
+    | SRVCAP_UNICODE
+    | SRVCAP_LARGEFILES
+    | SRVCAP_SUPPORTCRYPT
+    | SRVCAP_LUGDUNUM_NAT_CALLBACK
+)
+
+LOW_ID_CEILING = 0x0100_0000
+IPV6_SOURCE_SENTINEL = 0xFFFF_FFFF
+COMPLETE_FILE_ID = 0xFBFB_FBFB
+COMPLETE_FILE_PORT = 0xFBFB
+MAX_FRAME_BYTES = 8_000_000
+
+
+class Ed2kWireError(RuntimeError):
+    """Raised for malformed, truncated, or unexpected eD2K traffic."""
+
+
+@dataclass(frozen=True)
+class Ed2kFrame:
+    """One decoded eD2K TCP frame."""
+
+    marker: int
+    opcode: int
+    payload: bytes
+
+    def evidence(self, direction: str) -> dict[str, object]:
+        """Returns the complete local-test frame evidence record."""
+
+        return {
+            "direction": direction,
+            "protocolMarker": self.marker,
+            "opcode": self.opcode,
+            "payloadLength": len(self.payload),
+            "payloadSha256": hashlib.sha256(self.payload).hexdigest(),
+            "payloadHex": self.payload.hex(),
+        }
+
+
+class _Reader:
+    """Bounded little-endian reader used by protocol decoders."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.offset = 0
+
+    @property
+    def remaining(self) -> int:
+        return len(self.data) - self.offset
+
+    def take(self, size: int) -> bytes:
+        if size < 0 or self.remaining < size:
+            raise Ed2kWireError(
+                f"eD2K payload underrun at {self.offset}: need {size}, have {self.remaining}."
+            )
+        value = self.data[self.offset : self.offset + size]
+        self.offset += size
+        return value
+
+    def u8(self) -> int:
+        return self.take(1)[0]
+
+    def u16(self) -> int:
+        return int.from_bytes(self.take(2), "little")
+
+    def u32(self) -> int:
+        return int.from_bytes(self.take(4), "little")
+
+    def u64(self) -> int:
+        return int.from_bytes(self.take(8), "little")
+
+
+def encode_frame(opcode: int, payload: bytes = b"") -> bytes:
+    """Encodes one clear eD2K TCP frame."""
+
+    if not 0 <= opcode <= 0xFF:
+        raise ValueError("opcode must fit in one byte")
+    return (
+        bytes([PROTO_EDONKEY])
+        + struct.pack("<I", len(payload) + 1)
+        + bytes([opcode])
+        + payload
+    )
+
+
+def decode_frame_bytes(data: bytes) -> Ed2kFrame:
+    """Decodes exactly one complete clear or packed eD2K TCP frame."""
+
+    if len(data) < 6:
+        raise Ed2kWireError("eD2K frame is shorter than its six-byte header.")
+    marker = data[0]
+    if marker not in {PROTO_EDONKEY, PROTO_PACKED}:
+        raise Ed2kWireError(f"Unsupported eD2K protocol marker 0x{marker:02X}.")
+    declared = int.from_bytes(data[1:5], "little")
+    if declared < 1 or declared > MAX_FRAME_BYTES:
+        raise Ed2kWireError(f"Invalid eD2K frame length {declared}.")
+    if len(data) != declared + 5:
+        raise Ed2kWireError(
+            f"eD2K frame length mismatch: declared {declared + 5}, received {len(data)}."
+        )
+    opcode = data[5]
+    payload = data[6:]
+    if marker == PROTO_PACKED:
+        try:
+            payload = zlib.decompress(payload)
+        except zlib.error as exc:
+            raise Ed2kWireError(
+                f"Packed eD2K frame decompression failed: {exc}"
+            ) from exc
+        if len(payload) > MAX_FRAME_BYTES:
+            raise Ed2kWireError("Packed eD2K frame expands beyond the harness limit.")
+    return Ed2kFrame(marker=marker, opcode=opcode, payload=payload)
+
+
+def _short_string_tag(tag_id: int, value: str) -> bytes:
+    encoded = value.encode("utf-8")
+    return (
+        bytes([TAG_SHORT_NAME | TAGTYPE_STRING, tag_id])
+        + struct.pack("<H", len(encoded))
+        + encoded
+    )
+
+
+def _u32_tag(tag_id: int, value: int) -> bytes:
+    return bytes([TAG_SHORT_NAME | TAGTYPE_UINT32, tag_id]) + struct.pack("<I", value)
+
+
+def encode_login_request(
+    *,
+    user_hash: bytes,
+    tcp_port: int,
+    nickname: str,
+    server_flags: int = DEFAULT_SERVER_FLAGS,
+) -> bytes:
+    """Builds a stock-shaped server LOGINREQUEST payload."""
+
+    if len(user_hash) != 16:
+        raise ValueError("user_hash must be 16 bytes")
+    tags = [
+        _short_string_tag(CT_NAME, nickname),
+        _u32_tag(CT_SERVER_FLAGS, server_flags),
+    ]
+    return (
+        user_hash
+        + struct.pack("<IH", 0, tcp_port)
+        + struct.pack("<I", len(tags))
+        + b"".join(tags)
+    )
+
+
+def encode_offer_file(*, file_hash: bytes, name: str, size: int) -> bytes:
+    """Builds one complete-file OFFERFILES payload."""
+
+    if len(file_hash) != 16:
+        raise ValueError("file_hash must be 16 bytes")
+    if size < 0 or size > 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("size must fit in u64")
+    tags = [
+        _short_string_tag(FT_FILENAME, name),
+        _u32_tag(FT_FILESIZE, size & 0xFFFF_FFFF),
+    ]
+    size_hi = size >> 32
+    if size_hi:
+        tags.append(_u32_tag(FT_FILESIZE_HI, size_hi))
+    return (
+        struct.pack("<I", 1)
+        + file_hash
+        + struct.pack("<IH", COMPLETE_FILE_ID, COMPLETE_FILE_PORT)
+        + struct.pack("<I", len(tags))
+        + b"".join(tags)
+    )
+
+
+def encode_hash_search(file_hash: bytes) -> bytes:
+    """Builds a hash-exact SEARCHREQUEST expression."""
+
+    if len(file_hash) != 16:
+        raise ValueError("file_hash must be 16 bytes")
+    term = f"ed2k::{file_hash.hex().upper()}".encode("ascii")
+    return b"\x01" + struct.pack("<H", len(term)) + term
+
+
+def encode_source_request(file_hash: bytes, size: int) -> bytes:
+    """Builds a small- or large-file GETSOURCES payload."""
+
+    if len(file_hash) != 16:
+        raise ValueError("file_hash must be 16 bytes")
+    if size < 0 or size > 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("size must fit in u64")
+    if size <= 0xFFFF_FFFF:
+        return file_hash + struct.pack("<I", size)
+    return file_hash + struct.pack("<I", 0) + struct.pack("<Q", size)
+
+
+def _decode_tag(reader: _Reader) -> tuple[int | str, Any]:
+    raw_type = reader.u8()
+    if raw_type & TAG_SHORT_NAME:
+        tag_type = raw_type & ~TAG_SHORT_NAME
+        name: int | str = reader.u8()
+    else:
+        tag_type = raw_type
+        name_bytes = reader.take(reader.u16())
+        name = (
+            name_bytes[0]
+            if len(name_bytes) == 1
+            else name_bytes.decode("utf-8", errors="replace")
+        )
+
+    if tag_type == TAGTYPE_HASH:
+        value: Any = reader.take(16)
+    elif tag_type == TAGTYPE_STRING:
+        value = reader.take(reader.u16()).decode("utf-8", errors="replace")
+    elif tag_type == TAGTYPE_UINT32:
+        value = reader.u32()
+    elif tag_type == TAGTYPE_FLOAT32:
+        value = struct.unpack("<f", reader.take(4))[0]
+    elif tag_type == TAGTYPE_BOOL:
+        value = bool(reader.u8())
+    elif tag_type == TAGTYPE_BOOLARRAY:
+        bit_count = reader.u16()
+        value = reader.take((bit_count + 7) // 8)
+    elif tag_type == TAGTYPE_BLOB:
+        value = reader.take(reader.u32())
+    elif tag_type == TAGTYPE_UINT16:
+        value = reader.u16()
+    elif tag_type == TAGTYPE_UINT8:
+        value = reader.u8()
+    elif tag_type == TAGTYPE_BSOB:
+        value = reader.take(reader.u8())
+    elif tag_type == TAGTYPE_UINT64:
+        value = reader.u64()
+    elif TAGTYPE_STR1_BASE + 1 <= tag_type <= TAGTYPE_STR1_BASE + 22:
+        value = reader.take(tag_type - TAGTYPE_STR1_BASE).decode(
+            "utf-8", errors="replace"
+        )
+    else:
+        raise Ed2kWireError(f"Unsupported eD2K tag type 0x{tag_type:02X}.")
+    return name, value
+
+
+def decode_search_results(payload: bytes) -> list[dict[str, object]]:
+    """Decodes one SEARCHRESULT page into normalized file rows."""
+
+    reader = _Reader(payload)
+    count = reader.u32()
+    rows: list[dict[str, object]] = []
+    for _ in range(count):
+        file_hash = reader.take(16)
+        source_id = reader.u32()
+        source_port = reader.u16()
+        tags = dict(_decode_tag(reader) for _ in range(reader.u32()))
+        size = int(tags.get(FT_FILESIZE, 0)) | (int(tags.get(FT_FILESIZE_HI, 0)) << 32)
+        rows.append(
+            {
+                "hash": file_hash.hex().upper(),
+                "name": str(tags.get(FT_FILENAME, "")),
+                "size": size,
+                "sources": int(tags.get(FT_SOURCES, 0)),
+                "complete_sources": int(tags.get(FT_COMPLETE_SOURCES, 0)),
+                "result_source_id": source_id,
+                "result_source_port": source_port,
+            }
+        )
+    if reader.remaining == 1:
+        reader.u8()
+    if reader.remaining:
+        raise Ed2kWireError(f"SEARCHRESULT has {reader.remaining} trailing bytes.")
+    return rows
+
+
+def decode_found_sources(payload: bytes, *, obfuscated: bool) -> dict[str, object]:
+    """Decodes one FOUNDSOURCES or FOUNDSOURCES_OBFU payload."""
+
+    reader = _Reader(payload)
+    file_hash = reader.take(16)
+    source_count = reader.u8()
+    sources: list[dict[str, object]] = []
+    for _ in range(source_count):
+        source_id = reader.u32()
+        port = reader.u16()
+        crypt_options = reader.u8() if obfuscated else 0
+        user_hash = reader.take(16).hex().upper() if crypt_options & 0x80 else None
+        if source_id == IPV6_SOURCE_SENTINEL:
+            host = str(ipaddress.IPv6Address(reader.take(16)))
+            kind = "ipv6"
+        elif source_id < LOW_ID_CEILING:
+            host = None
+            kind = "low-id"
+        else:
+            host = str(ipaddress.IPv4Address(struct.pack("<I", source_id)))
+            kind = "high-id"
+        sources.append(
+            {
+                "kind": kind,
+                "client_id": source_id,
+                "host": host,
+                "port": port,
+                "crypt_options": crypt_options,
+                "user_hash": user_hash,
+            }
+        )
+    if reader.remaining:
+        raise Ed2kWireError(f"FOUNDSOURCES has {reader.remaining} trailing bytes.")
+    return {
+        "hash": file_hash.hex().upper(),
+        "source_count": source_count,
+        "sources": sources,
+    }
+
+
+@dataclass
+class Ed2kWireClient:
+    """Blocking deterministic eD2K server client with a complete transcript."""
+
+    host: str
+    port: int
+    timeout_seconds: float = 5.0
+    transcript: list[dict[str, object]] = field(default_factory=list)
+    _socket: socket.socket | None = field(default=None, init=False, repr=False)
+
+    def __enter__(self) -> "Ed2kWireClient":
+        self.connect()
+        return self
+
+    def __exit__(self, _kind, _value, _traceback) -> None:
+        self.close()
+
+    def connect(self) -> None:
+        """Opens the server TCP connection."""
+
+        if self._socket is not None:
+            raise Ed2kWireError("eD2K wire client is already connected.")
+        self._socket = socket.create_connection(
+            (self.host, self.port), timeout=self.timeout_seconds
+        )
+        self._socket.settimeout(self.timeout_seconds)
+
+    def close(self) -> None:
+        """Closes the server TCP connection."""
+
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+    def _require_socket(self) -> socket.socket:
+        if self._socket is None:
+            raise Ed2kWireError("eD2K wire client is not connected.")
+        return self._socket
+
+    def send(self, opcode: int, payload: bytes = b"") -> None:
+        """Sends and records one clear frame."""
+
+        frame = Ed2kFrame(PROTO_EDONKEY, opcode, payload)
+        self._require_socket().sendall(encode_frame(opcode, payload))
+        self.transcript.append(frame.evidence("send"))
+
+    def receive(self, *, timeout_seconds: float | None = None) -> Ed2kFrame:
+        """Receives and records one complete frame."""
+
+        stream = self._require_socket()
+        previous_timeout = stream.gettimeout()
+        if timeout_seconds is not None:
+            stream.settimeout(timeout_seconds)
+        try:
+            header = _recv_exact(stream, 6)
+            declared = int.from_bytes(header[1:5], "little")
+            if declared < 1 or declared > MAX_FRAME_BYTES:
+                raise Ed2kWireError(f"Invalid eD2K frame length {declared}.")
+            frame = decode_frame_bytes(header + _recv_exact(stream, declared - 1))
+        finally:
+            if timeout_seconds is not None:
+                stream.settimeout(previous_timeout)
+        self.transcript.append(frame.evidence("recv"))
+        return frame
+
+    def receive_until(
+        self, opcodes: set[int], *, timeout_seconds: float | None = None
+    ) -> Ed2kFrame:
+        """Receives until one requested opcode arrives or the deadline expires."""
+
+        timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Timed out waiting for eD2K opcodes {sorted(opcodes)}."
+                )
+            frame = self.receive(timeout_seconds=remaining)
+            if frame.opcode in opcodes:
+                return frame
+
+    def login(
+        self,
+        *,
+        user_hash: bytes,
+        tcp_port: int,
+        nickname: str,
+        server_flags: int = DEFAULT_SERVER_FLAGS,
+    ) -> dict[str, object]:
+        """Logs in and returns the assigned ID plus observed welcome opcodes."""
+
+        self.send(
+            OP_LOGINREQUEST,
+            encode_login_request(
+                user_hash=user_hash,
+                tcp_port=tcp_port,
+                nickname=nickname,
+                server_flags=server_flags,
+            ),
+        )
+        welcome: list[int] = []
+        assigned_id: int | None = None
+        got_status = False
+        deadline = time.monotonic() + self.timeout_seconds
+        while assigned_id is None or not got_status:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Timed out waiting for ED2K login welcome frames.")
+            frame = self.receive(timeout_seconds=remaining)
+            welcome.append(frame.opcode)
+            if frame.opcode == OP_IDCHANGE:
+                if len(frame.payload) < 4:
+                    raise Ed2kWireError("OP_IDCHANGE is shorter than its assigned ID.")
+                assigned_id = int.from_bytes(frame.payload[:4], "little")
+            elif frame.opcode == OP_SERVERSTATUS:
+                got_status = True
+        return {
+            "assigned_id": assigned_id,
+            "id_kind": "low-id" if assigned_id < LOW_ID_CEILING else "high-id",
+            "welcome_opcodes": welcome,
+        }
+
+    def offer_file(self, *, file_hash: bytes, name: str, size: int) -> None:
+        """Publishes one complete file on the current session."""
+
+        self.send(
+            OP_OFFERFILES, encode_offer_file(file_hash=file_hash, name=name, size=size)
+        )
+
+    def search_hash(self, file_hash: bytes) -> list[dict[str, object]]:
+        """Runs one exact hash search and returns its decoded result page."""
+
+        self.send(OP_SEARCHREQUEST, encode_hash_search(file_hash))
+        frame = self.receive_until({OP_SEARCHRESULT})
+        return decode_search_results(frame.payload)
+
+    def get_sources(
+        self,
+        *,
+        file_hash: bytes,
+        size: int,
+        obfuscated: bool = True,
+    ) -> dict[str, object]:
+        """Runs one TCP source lookup and returns decoded source records."""
+
+        request_opcode = OP_GETSOURCES_OBFU if obfuscated else OP_GETSOURCES
+        response_opcode = OP_FOUNDSOURCES_OBFU if obfuscated else OP_FOUNDSOURCES
+        self.send(request_opcode, encode_source_request(file_hash, size))
+        frame = self.receive_until({response_opcode})
+        result = decode_found_sources(frame.payload, obfuscated=obfuscated)
+        if result["hash"] != file_hash.hex().upper():
+            raise Ed2kWireError(
+                f"FOUNDSOURCES hash mismatch: expected {file_hash.hex().upper()}, got {result['hash']}."
+            )
+        return result
+
+
+def _recv_exact(stream: socket.socket, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        chunk = stream.recv(size - len(data))
+        if not chunk:
+            raise Ed2kWireError(
+                f"eD2K connection closed with {size - len(data)} frame bytes outstanding."
+            )
+        data.extend(chunk)
+    return bytes(data)
