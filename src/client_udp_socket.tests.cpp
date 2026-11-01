@@ -49,6 +49,13 @@ TEST_CASE("Client UDP seam only reads diagnostic opcode when packet contains it"
 	CHECK(opcode == 0x91);
 }
 
+TEST_CASE("Client UDP diagnostics classify the wire protocol independently of routing")
+{
+	CHECK(ClientUDPSocketSeams::IsOutgoingEd2kClientUdpDiagnosticPacket(true, 0xC5u));
+	CHECK_FALSE(ClientUDPSocketSeams::IsOutgoingEd2kClientUdpDiagnosticPacket(true, 0xE4u));
+	CHECK_FALSE(ClientUDPSocketSeams::IsOutgoingEd2kClientUdpDiagnosticPacket(false, 0xC5u));
+}
+
 TEST_CASE("Client UDP seam gates outgoing encryption on the global crypt preference")
 {
 	CHECK(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, true, false, 0u));
