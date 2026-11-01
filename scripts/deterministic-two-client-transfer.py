@@ -55,6 +55,7 @@ rest_smoke = load_script_module("rest_api_smoke", "rest-api-smoke.py")
 SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
 DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
+DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
@@ -133,12 +134,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--source-withdraw-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
-    parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.fixture_size_bytes is None:
+        args.fixture_size_bytes = (
+            DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES
+            if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+            else DEFAULT_FIXTURE_SIZE_BYTES
+        )
+    return args
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -195,9 +203,7 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
-    server_search_query: str | None,
-    server_search_rest_result: dict[str, object] | None,
-    server_endpoint: str,
+    server_search_evidence: dict[str, object] | None,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -232,24 +238,13 @@ def collect_transfer_diagnostics(
         expected_source_port=expected_source_port,
         expected_source_user_hash=expected_source_user_hash,
     )
-    if server_search_query is not None:
-        search_evidence = (
-            server_search_diagnostic_evidence.build_server_search_diagnostic_evidence(
-                query=server_search_query,
-                expected_file_hash=file_hash,
-                expected_file_name=expected_file_name,
-                expected_file_size=expected_file_size,
-                server_endpoint=server_endpoint,
-                rust_records=rust_capture.records,
-                rest_result=server_search_rest_result,
-            )
-        )
+    if server_search_evidence is not None:
         server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(
-            search_evidence
+            server_search_evidence
         )
-        evidence["serverSearch"] = search_evidence
+        evidence["serverSearch"] = server_search_evidence
         transfer_claims = evidence["coverageClaims"]["eligibleCoverageIds"]
-        search_claims = search_evidence["coverageClaims"]["eligibleCoverageIds"]
+        search_claims = server_search_evidence["coverageClaims"]["eligibleCoverageIds"]
         evidence["coverageClaims"]["eligibleCoverageIds"] = sorted(
             {*transfer_claims, *search_claims}
         )
@@ -264,6 +259,43 @@ def collect_transfer_diagnostics(
             "diagnosticsDir": str(mfc_diagnostics_dir),
             "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
         },
+    }
+    return evidence
+
+
+def collect_server_search_diagnostics(
+    *,
+    query: str,
+    expected_file_hash: str,
+    expected_file_name: str,
+    expected_file_size: int,
+    server_endpoint: str,
+    rest_result: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+) -> dict[str, object]:
+    """Snapshots search evidence before a later transfer can rotate its segment."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = server_search_diagnostic_evidence.build_server_search_diagnostic_evidence(
+        query=query,
+        expected_file_hash=expected_file_hash,
+        expected_file_name=expected_file_name,
+        expected_file_size=expected_file_size,
+        server_endpoint=server_endpoint,
+        rust_records=rust_capture.records,
+        rest_result=rest_result,
+    )
+    server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(evidence)
+    evidence["capture"] = {
+        "processId": rust_process_id,
+        "diagnosticsDir": str(rust_diagnostics_dir),
+        "selectedSegments": [str(path) for path in rust_capture.selected_segments],
     }
     return evidence
 
@@ -1776,6 +1808,7 @@ def main(argv: list[str] | None = None) -> int:
     client2_app = None
     client2_control_exe: Path | None = None
     client2_process_id: int | None = None
+    server_search_evidence: dict[str, object] | None = None
     current_phase = "initializing"
 
     try:
@@ -2227,6 +2260,20 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.server_publish_timeout_seconds,
                 )
             )
+            current_phase = "collect_server_search_diagnostics"
+            server_search_evidence = collect_server_search_diagnostics(
+                query=SERVER_SEARCH_QUERY,
+                expected_file_hash=transfer_hash,
+                expected_file_name=fixture_file.name,
+                expected_file_size=int(link_info["size"]),
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                rest_result=report["checks"]["client1_server_search"]["result"],
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+            )
+            report["checks"]["client1_server_search_diagnostics"] = (
+                server_search_evidence
+            )
 
         source_user_hash = None
         source_connect_options = None
@@ -2328,17 +2375,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
-                server_search_query=(
-                    SERVER_SEARCH_QUERY
-                    if args.transfer_scenario == SERVER_KEYWORD_SEARCH
-                    else None
-                ),
-                server_search_rest_result=(
-                    report["checks"]["client1_server_search"]["result"]
-                    if args.transfer_scenario == SERVER_KEYWORD_SEARCH
-                    else None
-                ),
-                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                server_search_evidence=server_search_evidence,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),

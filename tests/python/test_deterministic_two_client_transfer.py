@@ -234,6 +234,21 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_SEARCH_FIXTURE_SIZE_BYTES
+
+
+def test_non_search_scenarios_keep_the_multi_part_fixture_default() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+        ]
+    )
+
+    assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
 
 
 def test_reference_clients_reject_mfc_protocol_case() -> None:
