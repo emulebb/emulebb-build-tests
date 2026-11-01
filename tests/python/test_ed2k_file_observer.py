@@ -35,6 +35,8 @@ def test_observe_uses_exact_search_and_obfuscated_source_reply(monkeypatch) -> N
                     "size": 123,
                     "sources": 1,
                     "complete_sources": 1,
+                    "result_source_id": 0xC000020A,
+                    "result_source_port": 4662,
                 }
             ]
 
@@ -71,6 +73,11 @@ def test_observe_uses_exact_search_and_obfuscated_source_reply(monkeypatch) -> N
             "user_hash": "AA" * 16,
         }
     ]
+    assert result["search_source"] == {
+        "kind": "high-id-search-reference",
+        "id": 0xC000020A,
+        "port": 4662,
+    }
     assert result["transcript"] == [{"direction": "send", "opcode": "fixture"}]
 
 
@@ -101,7 +108,7 @@ def test_observe_rejects_exact_hash_size_mismatch(monkeypatch) -> None:
 
 
 @pytest.mark.unit
-def test_withdrawal_waits_for_source_cache_after_search_disappears(monkeypatch) -> None:
+def test_withdrawal_waits_for_direct_source_cache_after_search_disappears(monkeypatch) -> None:
     observations = [
         {
             "indexed": False,
@@ -121,7 +128,7 @@ def test_withdrawal_waits_for_source_cache_after_search_disappears(monkeypatch) 
         lambda _description, _timeout, resolve: resolve() or resolve(),
     )
 
-    result = file_observer.wait_for_endpoint_absent(
+    result = file_observer.wait_for_source_absent(
         FILE_HASH,
         123,
         "192.0.2.10",
@@ -134,6 +141,42 @@ def test_withdrawal_waits_for_source_cache_after_search_disappears(monkeypatch) 
     assert result["observations"][0]["indexed"] is False
     assert result["observations"][0]["endpoints"] != []
     assert result["observation"]["endpoints"] == []
+
+
+@pytest.mark.unit
+def test_low_id_search_reference_is_authoritative_source_evidence(monkeypatch) -> None:
+    observations = [
+        {
+            "indexed": True,
+            "endpoints": [],
+            "search_source": {
+                "kind": "low-id-search-reference",
+                "id": 2,
+                "port": 4662,
+            },
+        }
+    ]
+    file_observer = observer.Ed2kFileObserver("127.0.0.1", 4661)
+    monkeypatch.setattr(
+        observer.Ed2kFileObserver,
+        "observe",
+        lambda *_args: observations.pop(0),
+    )
+    monkeypatch.setattr(observer, "wait_for", lambda _description, _timeout, resolve: resolve())
+
+    result = file_observer.wait_for_source(
+        FILE_HASH,
+        123,
+        "127.0.0.1",
+        4662,
+        1.0,
+    )
+
+    assert result["matched_source"] == {
+        "kind": "low-id-search-reference",
+        "id": 2,
+        "port": 4662,
+    }
 
 
 @pytest.mark.unit

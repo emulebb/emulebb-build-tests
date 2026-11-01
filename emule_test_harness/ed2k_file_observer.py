@@ -54,17 +54,28 @@ def exact_search_row(
     return next((row for row in rows if row.get("hash") == expected), None)
 
 
-def endpoint_present(observation: dict[str, object], *, host: str, port: int) -> bool:
-    """Reports whether one exact directly-addressable source is present."""
+def find_source_reference(
+    observation: dict[str, object],
+    *,
+    host: str,
+    port: int,
+) -> dict[str, object] | None:
+    """Finds one direct endpoint or server-assigned LowID search reference."""
 
     endpoints = observation.get("endpoints")
     rows = endpoints if isinstance(endpoints, list) else []
-    return any(
-        isinstance(endpoint, dict)
-        and endpoint.get("host") == host
-        and int(endpoint.get("port") or 0) == port
-        for endpoint in rows
-    )
+    for endpoint in rows:
+        if (
+            isinstance(endpoint, dict)
+            and endpoint.get("host") == host
+            and int(endpoint.get("port") or 0) == port
+        ):
+            return {"kind": "direct-endpoint", **endpoint}
+
+    search_source = observation.get("search_source")
+    if isinstance(search_source, dict) and int(search_source.get("port") or 0) == port:
+        return dict(search_source)
+    return None
 
 
 @dataclass(frozen=True)
@@ -112,6 +123,20 @@ class Ed2kFileObserver:
         source_rows = raw_sources if isinstance(raw_sources, list) else []
         endpoints = [dict(row) for row in source_rows if isinstance(row, dict)]
         indexed = search_row is not None
+        search_source = None
+        if indexed:
+            source_id = int(search_row.get("result_source_id") or 0)
+            source_port = int(search_row.get("result_source_port") or 0)
+            if source_id > 0 and source_port > 0:
+                search_source = {
+                    "kind": (
+                        "low-id-search-reference"
+                        if source_id < 0x0100_0000
+                        else "high-id-search-reference"
+                    ),
+                    "id": source_id,
+                    "port": source_port,
+                }
         return {
             "hash": hash_bytes.hex().upper(),
             "requested_size": file_size,
@@ -124,6 +149,7 @@ class Ed2kFileObserver:
                 int(search_row.get("complete_sources") or 0) if indexed else 0
             ),
             "endpoints": endpoints,
+            "search_source": search_source,
             "search_result": search_row,
             "source_reply": source_reply,
             "observer_login": login,
@@ -153,7 +179,7 @@ class Ed2kFileObserver:
             resolve,
         )
 
-    def wait_for_endpoint(
+    def wait_for_source(
         self,
         file_hash: str,
         file_size: int,
@@ -162,16 +188,17 @@ class Ed2kFileObserver:
         timeout_seconds: float,
         description: str = "ED2K wire source publication",
     ) -> dict[str, Any]:
-        """Waits until one exact directly-addressable source is returned."""
+        """Waits for one direct endpoint or server-assigned search reference."""
 
         observations: list[dict[str, object]] = []
 
         def resolve() -> dict[str, object] | None:
             observation = self.observe(file_hash, file_size)
             observations.append(observation)
-            if not endpoint_present(observation, host=host, port=port):
+            source = find_source_reference(observation, host=host, port=port)
+            if source is None:
                 return None
-            return {**observation, "observations": observations}
+            return {**observation, "matched_source": source, "observations": observations}
 
         return wait_for(
             description,
@@ -179,7 +206,7 @@ class Ed2kFileObserver:
             resolve,
         )
 
-    def wait_for_endpoint_absent(
+    def wait_for_source_absent(
         self,
         file_hash: str,
         file_size: int,
@@ -188,14 +215,14 @@ class Ed2kFileObserver:
         timeout_seconds: float,
         description: str = "ED2K wire source withdrawal",
     ) -> dict[str, Any]:
-        """Waits until the source reply, not only search, drops one endpoint."""
+        """Waits until wire search and source replies both drop one source."""
 
         observations: list[dict[str, object]] = []
 
         def resolve() -> dict[str, object] | None:
             observation = self.observe(file_hash, file_size)
             observations.append(observation)
-            if endpoint_present(observation, host=host, port=port):
+            if find_source_reference(observation, host=host, port=port) is not None:
                 return None
             return {
                 "absent": True,
