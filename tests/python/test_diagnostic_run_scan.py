@@ -96,6 +96,10 @@ def test_scan_indexes_only_closed_segments_and_reports_pin_reasons(
     assert advanced.checkpoint["source"]["closedSegmentCount"] == 2
     assert advanced.checkpoint["index"]["recordCount"] == 2
     assert [item["segmentId"] for item in advanced.processed_segments] == [0, 1]
+    assert [snapshot.path.name for snapshot in advanced.processed_snapshots] == [
+        _segment_name("rust", 0),
+        _segment_name("rust", 1),
+    ]
     assert advanced.processed_segments[1]["source"] == str(second.resolve())
     assert advanced.processed_segments[1]["interestingReasons"] == [
         "event:request_timeout",

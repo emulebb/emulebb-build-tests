@@ -18,10 +18,11 @@ class DiagnosticRunScanError(ValueError):
 
 @dataclass(frozen=True)
 class ClosedSegmentAdvance:
-    """One immutable checkpoint update and its newly indexed segment metadata."""
+    """One checkpoint update plus immutable snapshots consumed before retention."""
 
     checkpoint: dict[str, Any]
     processed_segments: tuple[dict[str, Any], ...]
+    processed_snapshots: tuple[diag_event_runs.DiagnosticSegmentSnapshot, ...]
 
 
 def scan_closed_segments(
@@ -100,7 +101,7 @@ def scan_closed_segments(
         last_closed_segment_id=last_closed_segment_id,
     )
 
-    index, processed = _advance_segments(
+    index, processed, snapshots = _advance_segments(
         index,
         source,
         new_segments,
@@ -127,6 +128,7 @@ def scan_closed_segments(
     return ClosedSegmentAdvance(
         checkpoint=updated,
         processed_segments=tuple(processed),
+        processed_snapshots=tuple(snapshots),
     )
 
 
@@ -170,6 +172,7 @@ def finalize_stopped_run(
         return ClosedSegmentAdvance(
             checkpoint=copy.deepcopy(checkpoint),
             processed_segments=(),
+            processed_snapshots=(),
         )
     if source["activeSegmentId"] is not None:
         last_observed_active_segment_id = source["activeSegmentId"]
@@ -198,7 +201,7 @@ def finalize_stopped_run(
         last_closed_segment_id=last_closed_segment_id,
         last_observed_active_segment_id=last_observed_active_segment_id,
     )
-    processed = _advance_segments(
+    index, processed, snapshots = _advance_segments(
         index,
         source,
         new_segments,
@@ -206,7 +209,6 @@ def finalize_stopped_run(
         process_id=process_id,
         run_id=run_id,
     )
-    index = processed[0]
     source["activeSegmentId"] = None
     source["finalized"] = True
     source["finalizedUtc"] = observed_utc
@@ -224,7 +226,8 @@ def finalize_stopped_run(
     }
     return ClosedSegmentAdvance(
         checkpoint=updated,
-        processed_segments=tuple(processed[1]),
+        processed_segments=tuple(processed),
+        processed_snapshots=tuple(snapshots),
     )
 
 
@@ -404,8 +407,13 @@ def _advance_segments(
     client: str,
     process_id: int,
     run_id: str,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[diag_event_runs.DiagnosticSegmentSnapshot],
+]:
     processed: list[dict[str, Any]] = []
+    snapshots: list[diag_event_runs.DiagnosticSegmentSnapshot] = []
     for segment_id, path in segments.items():
         snapshot = diag_event_runs.load_diag_event_segment_snapshot(path)
         _require_segment_envelopes(
@@ -430,13 +438,14 @@ def _advance_segments(
             "interestingReasons": reasons,
         }
         processed.append(metadata)
+        snapshots.append(snapshot)
         if source["firstClosedSegmentId"] is None:
             source["firstClosedSegmentId"] = segment_id
             source["omittedSegmentPrefix"] = segment_id
         source["lastClosedSegmentId"] = segment_id
         source["closedSegmentCount"] += 1
         source["lastClosedSegment"] = copy.deepcopy(metadata)
-    return index, processed
+    return index, processed, snapshots
 
 
 def _require_closed_suffix(

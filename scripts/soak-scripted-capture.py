@@ -550,6 +550,7 @@ def observe_transfer_coverage(
                 evidence,
                 advanced.processed_segments,
                 observed_utc=observed_utc,
+                segment_snapshots=advanced.processed_snapshots,
             )
             transfer_coverage_evidence.write_evidence(
                 evidence_path,
@@ -605,6 +606,7 @@ def finalize_transfer_coverage(
         evidence,
         advanced.processed_segments,
         observed_utc=observed_utc,
+        segment_snapshots=advanced.processed_snapshots,
     )
     transfer_coverage_evidence.write_evidence(
         evidence_path,

@@ -423,6 +423,22 @@ def test_changed_segment_is_rejected_after_scanner_snapshot(tmp_path: Path) -> N
         )
 
 
+def test_scanner_snapshot_survives_source_retention(tmp_path: Path) -> None:
+    segment = _segment(tmp_path, 0, [_record(1, segment_id=0, family="noise", event="ignored")])
+    source = Path(segment["source"])
+    snapshot = diag_event_runs.load_diag_event_segment_snapshot(source)
+    source.unlink()
+
+    evidence = transfer_coverage_evidence.advance_evidence(
+        _empty(),
+        (segment,),
+        observed_utc="2026-10-31T00:01:00Z",
+        segment_snapshots=(snapshot,),
+    )
+
+    assert evidence["source"]["closedSegmentsScanned"] == 1
+
+
 def test_write_and_load_enforce_exact_current_contract(tmp_path: Path) -> None:
     path = tmp_path / "transfer-coverage-evidence.json"
 

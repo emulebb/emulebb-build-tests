@@ -125,12 +125,17 @@ def advance_evidence(
     processed_segments: Iterable[dict[str, Any]],
     *,
     observed_utc: str,
+    segment_snapshots: Iterable[diag_event_runs.DiagnosticSegmentSnapshot] | None = None,
 ) -> dict[str, Any]:
     """Consumes newly closed scanner segments before the source ring can evict them."""
 
     updated = _validated_copy(evidence)
-    for metadata in processed_segments:
-        segment = _segment_snapshot(metadata)
+    metadata_items = tuple(processed_segments)
+    snapshot_items = tuple(segment_snapshots) if segment_snapshots is not None else None
+    if snapshot_items is not None and len(snapshot_items) != len(metadata_items):
+        raise TransferCoverageEvidenceError("processed segment snapshots do not match metadata")
+    for index, metadata in enumerate(metadata_items):
+        segment = snapshot_items[index] if snapshot_items is not None else _segment_snapshot(metadata)
         _require_snapshot_metadata(segment, metadata)
         segment_provenance = _segment_provenance(metadata)
         for record in segment.records:
