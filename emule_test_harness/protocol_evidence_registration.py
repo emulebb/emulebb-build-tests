@@ -56,6 +56,12 @@ def _positive_int(value: Any, field: str) -> int:
     return value
 
 
+def _nonnegative_int(value: Any, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
+
+
 def _lower_hex(value: Any, pattern: re.Pattern[str], field: str) -> str:
     if not isinstance(value, str) or pattern.fullmatch(value) is None:
         raise ValueError(f"{field} is malformed")
@@ -338,6 +344,62 @@ def _derived_server_login_coverage_ids(
     clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
     for client in ("rust", "mfc"):
         row = _object(clients.get(client), f"diagnostics.serverLogin.clients.{client}")
+        attempt_start_sequences = row.get("attemptStartSequences")
+        attempt_trace_ids = row.get("attemptTraceIds")
+        attempt_phases = row.get("attemptPhases")
+        attempt_states = row.get("attemptStates")
+        attempt_start_count = _positive_int(
+            row.get("attemptStartCount"),
+            f"diagnostics.serverLogin.clients.{client}.attemptStartCount",
+        )
+        login_packet_count = _positive_int(
+            row.get("loginPacketCount"),
+            f"diagnostics.serverLogin.clients.{client}.loginPacketCount",
+        )
+        final_login_packet_count = _positive_int(
+            row.get("finalLoginPacketCount"),
+            f"diagnostics.serverLogin.clients.{client}.finalLoginPacketCount",
+        )
+        failed_attempt_login_count = _nonnegative_int(
+            row.get("failedAttemptLoginPacketCount"),
+            f"diagnostics.serverLogin.clients.{client}.failedAttemptLoginPacketCount",
+        )
+        connection_failure_count = _nonnegative_int(
+            row.get("connectionFailureCount"),
+            f"diagnostics.serverLogin.clients.{client}.connectionFailureCount",
+        )
+        fallback_count = _nonnegative_int(
+            row.get("transportFallbackCount"),
+            f"diagnostics.serverLogin.clients.{client}.transportFallbackCount",
+        )
+        accepted_count = _positive_int(
+            row.get("loginAcceptedCount"),
+            f"diagnostics.serverLogin.clients.{client}.loginAcceptedCount",
+        )
+        if (
+            attempt_start_count != len(expected_transport_plan)
+            or attempt_phases != ["connection"] * len(expected_transport_plan)
+            or attempt_states != ["connecting"] * len(expected_transport_plan)
+            or not isinstance(attempt_start_sequences, list)
+            or len(attempt_start_sequences) != len(expected_transport_plan)
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in attempt_start_sequences
+            )
+            or attempt_start_sequences != sorted(set(attempt_start_sequences))
+            or not isinstance(attempt_trace_ids, list)
+            or len(attempt_trace_ids) != len(expected_transport_plan)
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in attempt_trace_ids
+            )
+            or len(set(attempt_trace_ids)) != len(attempt_trace_ids)
+            or row.get("attemptPlanExact") is not True
+        ):
+            raise ValueError(f"{client} server transport attempts are not exact")
+        final_attempt_sequence = _positive_int(
+            row.get("finalAttemptStartSequence"),
+            f"diagnostics.serverLogin.clients.{client}.finalAttemptStartSequence",
+        )
         login_sequence = _positive_int(
             row.get("loginSequence"),
             f"diagnostics.serverLogin.clients.{client}.loginSequence",
@@ -359,10 +421,20 @@ def _derived_server_login_coverage_ids(
                 row.get(field),
                 f"diagnostics.serverLogin.clients.{client}.{field}",
             )
-            for field in ("loginTraceId", "idChangeTraceId", "loginAcceptedTraceId")
+            for field in (
+                "finalAttemptTraceId",
+                "loginTraceId",
+                "idChangeTraceId",
+                "loginAcceptedTraceId",
+            )
         }
         if final_trace_components != {final_trace_id}:
             raise ValueError(f"{client} final server-login trace IDs are not exact")
+        if len(expected_transport_plan) == 1 and (
+            attempt_start_sequences != [final_attempt_sequence]
+            or attempt_trace_ids != [final_trace_id]
+        ):
+            raise ValueError(f"{client} singular server attempt is not joined to the final trace")
         decoded_login = _object(
             row.get("decodedLogin"),
             f"diagnostics.serverLogin.clients.{client}.decodedLogin",
@@ -373,7 +445,11 @@ def _derived_server_login_coverage_ids(
         )
         if (
             row.get("ok") is not True
-            or row.get("packetCount") != 1
+            or accepted_count != 1
+            or row.get("loginAcceptedPhase") != "connection"
+            or row.get("loginAcceptedState") != "connected"
+            or final_login_packet_count != 1
+            or login_packet_count != 1 + failed_attempt_login_count
             or row.get("sendSucceeded") is not True
             or row.get("semanticShape") is not True
             or row.get("transportPlanExact") is not True
@@ -381,10 +457,34 @@ def _derived_server_login_coverage_ids(
             or row.get("fallbackCausal") is not True
             or decoded_login.get("client_id") != 0
             or decoded_id.get("id_kind") != "low-id"
-            or not login_sequence < id_change_sequence < accepted_sequence
+            or not final_attempt_sequence < login_sequence < id_change_sequence < accepted_sequence
         ):
             raise ValueError(f"{client} server login evidence is not singular and causal")
         final_transport_mode = expected_transport_plan[-1]
+        if client == "rust":
+            send_outcome_sequence = _positive_int(
+                row.get("sendOutcomeSequence"),
+                "diagnostics.serverLogin.clients.rust.sendOutcomeSequence",
+            )
+            send_outcome_trace_id = _positive_int(
+                row.get("sendOutcomeTraceId"),
+                "diagnostics.serverLogin.clients.rust.sendOutcomeTraceId",
+            )
+            if (
+                not login_sequence < send_outcome_sequence < id_change_sequence
+                or send_outcome_trace_id != final_trace_id
+                or row.get("sendOutcomeTransportMode") != final_transport_mode
+            ):
+                raise ValueError("Rust server-login send outcome is not joined to the final attempt")
+        elif any(
+            row.get(field) is not None
+            for field in (
+                "sendOutcomeSequence",
+                "sendOutcomeTraceId",
+                "sendOutcomeTransportMode",
+            )
+        ):
+            raise ValueError("MFC server login contains an unexpected separate send outcome")
         if row.get("transportObservation") != {
             "attempts": expected_transport_plan,
             "login": final_transport_mode,
@@ -393,6 +493,10 @@ def _derived_server_login_coverage_ids(
         }:
             raise ValueError(f"{client} server login transport observations are not exact")
         if len(expected_transport_plan) == 2:
+            failed_attempt_sequence = _positive_int(
+                row.get("failedAttemptStartSequence"),
+                f"diagnostics.serverLogin.clients.{client}.failedAttemptStartSequence",
+            )
             failure_sequence = _positive_int(
                 row.get("connectionFailureSequence"),
                 f"diagnostics.serverLogin.clients.{client}.connectionFailureSequence",
@@ -409,27 +513,89 @@ def _derived_server_login_coverage_ids(
                 row.get("fallbackTraceId"),
                 f"diagnostics.serverLogin.clients.{client}.fallbackTraceId",
             )
+            failed_attempt_trace_id = _positive_int(
+                row.get("failedAttemptTraceId"),
+                f"diagnostics.serverLogin.clients.{client}.failedAttemptTraceId",
+            )
+            expected_failed_login_count = 0 if client == "rust" else 1
+            failed_login_fields = {
+                "failedAttemptLoginSequence": None,
+                "failedAttemptLoginTraceId": None,
+                "failedAttemptLoginTransportMode": None,
+                "failedAttemptLoginOutcome": None,
+            }
+            if client == "mfc":
+                failed_login_sequence = _positive_int(
+                    row.get("failedAttemptLoginSequence"),
+                    "diagnostics.serverLogin.clients.mfc.failedAttemptLoginSequence",
+                )
+                failed_login_trace_id = _positive_int(
+                    row.get("failedAttemptLoginTraceId"),
+                    "diagnostics.serverLogin.clients.mfc.failedAttemptLoginTraceId",
+                )
+                failed_login_exact = bool(
+                    failed_attempt_sequence < failed_login_sequence < failure_sequence
+                    and failed_login_trace_id == failed_attempt_trace_id
+                    and row.get("failedAttemptLoginTransportMode") == "obfuscated"
+                    and row.get("failedAttemptLoginOutcome") == "send_succeeded"
+                )
+            else:
+                failed_login_exact = all(
+                    row.get(field) is expected for field, expected in failed_login_fields.items()
+                )
             if (
-                row.get("connectionFailureCount") != 1
-                or row.get("transportFallbackCount") != 1
-                or not failure_sequence < fallback_sequence < login_sequence
+                connection_failure_count != 1
+                or fallback_count != 1
+                or failed_attempt_login_count != expected_failed_login_count
+                or not failed_login_exact
+                or attempt_start_sequences != [failed_attempt_sequence, final_attempt_sequence]
+                or attempt_trace_ids != [failed_attempt_trace_id, final_trace_id]
+                or not failed_attempt_sequence
+                < failure_sequence
+                < fallback_sequence
+                < final_attempt_sequence
+                < login_sequence
+                or failed_attempt_trace_id != failed_trace_id
                 or failed_trace_id != fallback_trace_id
                 or failed_trace_id == final_trace_id
+                or row.get("connectionFailurePhase") != "connection"
+                or row.get("connectionFailureOutcome") != "connection_failed"
+                or row.get("connectionFailureTransportMode") != "obfuscated"
+                or row.get("transportFallbackPhase") != "connection"
+                or row.get("transportFallbackOutcome") != "retrying"
+                or row.get("transportFallbackFromMode") != "obfuscated"
+                or row.get("transportFallbackToMode") != "plaintext"
                 or not isinstance(row.get("fallbackError"), str)
                 or not row["fallbackError"]
             ):
                 raise ValueError(f"{client} server fallback evidence is not exact and causal")
-        elif any(
-            row.get(name) is not expected
-            for name, expected in {
-                "connectionFailureCount": 0,
-                "transportFallbackCount": 0,
-                "connectionFailureSequence": None,
-                "transportFallbackSequence": None,
-                "failedTraceId": None,
-                "fallbackTraceId": None,
-                "fallbackError": None,
-            }.items()
+        elif (
+            connection_failure_count != 0
+            or fallback_count != 0
+            or failed_attempt_login_count != 0
+            or any(
+                row.get(name) is not expected
+                for name, expected in {
+                    "failedAttemptStartSequence": None,
+                    "connectionFailureSequence": None,
+                    "transportFallbackSequence": None,
+                    "failedAttemptTraceId": None,
+                    "failedTraceId": None,
+                    "fallbackTraceId": None,
+                    "fallbackError": None,
+                    "connectionFailurePhase": None,
+                    "connectionFailureOutcome": None,
+                    "connectionFailureTransportMode": None,
+                    "failedAttemptLoginSequence": None,
+                    "failedAttemptLoginTraceId": None,
+                    "failedAttemptLoginTransportMode": None,
+                    "failedAttemptLoginOutcome": None,
+                    "transportFallbackPhase": None,
+                    "transportFallbackOutcome": None,
+                    "transportFallbackFromMode": None,
+                    "transportFallbackToMode": None,
+                }.items()
+            )
         ):
             raise ValueError(f"{client} singular server transport contains fallback evidence")
     if clients["rust"].get("extensionTags") != {"offerfiles_v": 1}:

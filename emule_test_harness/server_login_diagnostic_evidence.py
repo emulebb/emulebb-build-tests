@@ -127,31 +127,41 @@ def _user_hash_has_stock_markers(value: object) -> bool:
     return user_hash[5] == 0x0E and user_hash[14] == 0x6F
 
 
-def _send_succeeded(
+def _linked_send_outcome(
     *,
     client: str,
     records: list[dict[str, Any]],
     login: dict[str, Any] | None,
     endpoint: str,
-) -> bool:
+) -> dict[str, Any] | None:
     if login is None:
-        return False
-    if _body(login).get("outcome") == "send_succeeded":
-        return True
+        return None
     if client != "rust" or _body(login).get("outcome") != "attempted":
-        return False
+        return None
     attempt_id = _keys(login).get("sendAttemptId")
     if not isinstance(attempt_id, int) or isinstance(attempt_id, bool):
-        return False
-    return any(
-        _is_server_record(record, endpoint)
-        and record.get("event") == "send_outcome"
-        and _keys(record).get("sendAttemptId") == attempt_id
-        and _body(record).get("opcode") == LOGIN_OPCODE
-        and _body(record).get("outcome") == "send_succeeded"
-        and _body(record).get("deliveryKnown") is True
-        and _sequence(record) >= _sequence(login)
+        return None
+    outcomes = [
+        record
         for record in records
+        if (
+            _is_server_record(record, endpoint)
+            and record.get("event") == "send_outcome"
+            and _keys(record).get("sendAttemptId") == attempt_id
+            and _body(record).get("opcode") == LOGIN_OPCODE
+        )
+    ]
+    if len(outcomes) != 1:
+        return None
+    outcome = outcomes[0]
+    return (
+        outcome
+        if _body(outcome).get("outcome") == "send_succeeded"
+        and _body(outcome).get("deliveryKnown") is True
+        and _trace_id(outcome) == _trace_id(login)
+        and _body(outcome).get("transportMode") == _body(login).get("transportMode")
+        and _sequence(outcome) > _sequence(login)
+        else None
     )
 
 
@@ -165,12 +175,45 @@ def _client_evidence(
     expected_transport_plan: tuple[str, ...],
 ) -> dict[str, Any]:
     final_transport_mode = expected_transport_plan[-1]
+    attempt_starts = [
+        record
+        for record in records
+        if _is_server_record(record, endpoint)
+        and record.get("event") == "connection_state"
+        and _body(record).get("outcome") == "attempt_started"
+    ]
+    attempt_modes = tuple(_body(record).get("transportMode") for record in attempt_starts)
+    attempt_phases = tuple(_body(record).get("phase") for record in attempt_starts)
+    attempt_states = tuple(_body(record).get("state") for record in attempt_starts)
+    attempt_sequences = tuple(_sequence(record) for record in attempt_starts)
+    attempt_trace_ids = tuple(_trace_id(record) for record in attempt_starts)
+    attempt_plan_exact = bool(
+        attempt_modes == expected_transport_plan
+        and attempt_phases == ("connection",) * len(expected_transport_plan)
+        and attempt_states == ("connecting",) * len(expected_transport_plan)
+        and len(attempt_sequences) == len(expected_transport_plan)
+        and all(sequence > 0 for sequence in attempt_sequences)
+        and list(attempt_sequences) == sorted(set(attempt_sequences))
+        and all(trace_id is not None for trace_id in attempt_trace_ids)
+        and len(set(attempt_trace_ids)) == len(attempt_trace_ids)
+    )
+    final_attempt = attempt_starts[-1] if attempt_starts else None
+    final_attempt_sequence = _sequence(final_attempt)
+    final_attempt_trace_id = _trace_id(final_attempt)
     login_packets = [
         record
         for record in records
         if _packet(record, endpoint=endpoint, direction="send", opcode=LOGIN_OPCODE)
     ]
-    login = login_packets[0] if len(login_packets) == 1 else None
+    final_login_packets = [
+        record
+        for record in login_packets
+        if final_attempt_trace_id is not None
+        and _trace_id(record) == final_attempt_trace_id
+        and _body(record).get("transportMode") == final_transport_mode
+    ]
+    login = final_login_packets[0] if len(final_login_packets) == 1 else None
+    failed_attempt_login_packets = [record for record in login_packets if record is not login]
     decoded_login: dict[str, object] | None = None
     login_decode_error: str | None = None
     if login is not None:
@@ -203,13 +246,12 @@ def _client_evidence(
         and extension_tags == EXPECTED_EXTENSION_TAGS[client]
         and _user_hash_has_stock_markers(decoded_login.get("user_hash"))
     )
-    send_succeeded = _send_succeeded(
+    send_outcome = _linked_send_outcome(
         client=client,
         records=records,
         login=login,
         endpoint=endpoint,
     )
-
     id_change_packets = [
         record
         for record in records
@@ -232,23 +274,38 @@ def _client_evidence(
         if _is_server_record(record, endpoint)
         and record.get("event") == "connection_state"
         and _body(record).get("outcome") == "login_accepted"
-        and _body(record).get("state") == "connected"
     ]
     accepted = accepted_records[0] if len(accepted_records) == 1 else None
+    accepted_shape = bool(
+        accepted is not None
+        and _body(accepted).get("phase") == "connection"
+        and _body(accepted).get("state") == "connected"
+    )
     login_sequence = _sequence(login)
     id_change_sequence = _sequence(id_change)
     accepted_sequence = _sequence(accepted)
-    lifecycle_ok = bool(
+    send_succeeded = bool(
         login is not None
+        and (
+            _body(login).get("outcome") == "send_succeeded"
+            or client == "rust"
+            and send_outcome is not None
+            and _sequence(send_outcome) < id_change_sequence
+        )
+    )
+    lifecycle_ok = bool(
+        final_attempt is not None
+        and login is not None
         and id_change is not None
         and decoded_id_change is not None
         and accepted is not None
+        and final_attempt_sequence > 0
         and login_sequence > 0
         and id_change_sequence > 0
         and accepted_sequence > 0
-        and login_sequence < id_change_sequence < accepted_sequence
+        and final_attempt_sequence < login_sequence < id_change_sequence < accepted_sequence
     )
-    final_trace_ids = tuple(_trace_id(record) for record in (login, id_change, accepted))
+    final_trace_ids = tuple(_trace_id(record) for record in (final_attempt, login, id_change, accepted))
     final_trace_id = (
         final_trace_ids[0]
         if all(value is not None for value in final_trace_ids)
@@ -286,40 +343,68 @@ def _client_evidence(
         and isinstance(fallback_error, str)
         and fallback_error
     )
-    observed_transport_plan = tuple(
-        [
-            _body(record).get("transportMode")
-            for record in connection_failures
-            if isinstance(_body(record).get("transportMode"), str)
-        ]
-        + (
-            [_body(login).get("transportMode")]
-            if login is not None and isinstance(_body(login).get("transportMode"), str)
-            else []
+    observed_transport_plan = attempt_modes
+    fallback_required = len(expected_transport_plan) == 2
+    failed_attempt = attempt_starts[0] if fallback_required and attempt_starts else None
+    failed_attempt_sequence = _sequence(failed_attempt)
+    failed_attempt_trace_id = _trace_id(failed_attempt)
+    failed_attempt_login = (
+        failed_attempt_login_packets[0] if len(failed_attempt_login_packets) == 1 else None
+    )
+    failed_attempt_login_sequence = _sequence(failed_attempt_login)
+    failed_attempt_login_trace_id = _trace_id(failed_attempt_login)
+    failed_attempt_login_body = _body(failed_attempt_login) if failed_attempt_login is not None else {}
+    expected_failed_attempt_login_count = 1 if fallback_required and client == "mfc" else 0
+    failed_attempt_logins_exact = bool(
+        len(failed_attempt_login_packets) == expected_failed_attempt_login_count
+        and (
+            failed_attempt_login is None
+            or failed_attempt_login_trace_id == failed_attempt_trace_id
+            and failed_attempt_login_body.get("transportMode") == "obfuscated"
+            and failed_attempt_login_body.get("outcome") == "send_succeeded"
+            and failed_attempt_sequence
+            < failed_attempt_login_sequence
+            < connection_failure_sequence
         )
     )
-    fallback_required = len(expected_transport_plan) == 2
     if fallback_required:
         fallback_causal = bool(
-            len(connection_failures) == 1
+            attempt_plan_exact
+            and len(connection_failures) == 1
             and len(fallback_records) == 1
+            and failed_attempt is not None
             and connection_failure is not None
             and fallback is not None
+            and _body(connection_failure).get("phase") == "connection"
             and _body(connection_failure).get("transportMode") == "obfuscated"
             and fallback_shape
             and login is not None
+            and failed_attempt_sequence > 0
             and connection_failure_sequence > 0
             and fallback_sequence > 0
+            and final_attempt_sequence > 0
             and login_sequence > 0
-            and connection_failure_sequence < fallback_sequence < login_sequence
+            and failed_attempt_sequence
+            < connection_failure_sequence
+            < fallback_sequence
+            < final_attempt_sequence
+            < login_sequence
+            and failed_attempt_logins_exact
+            and failed_attempt_trace_id is not None
             and failure_trace_id is not None
             and final_trace_id is not None
+            and failure_trace_id == failed_attempt_trace_id
             and failure_trace_id != final_trace_id
             and fallback_trace_id == failure_trace_id
         )
         trace_correlation = trace_correlation and fallback_causal
     else:
-        fallback_causal = not connection_failures and not fallback_records
+        fallback_causal = bool(
+            attempt_plan_exact
+            and not connection_failures
+            and not fallback_records
+            and not failed_attempt_login_packets
+        )
 
     transport_observation = {
         "attempts": list(observed_transport_plan),
@@ -328,40 +413,81 @@ def _client_evidence(
         "accepted": _body(accepted).get("transportMode") if accepted is not None else None,
     }
     transport_plan_exact = bool(
-        observed_transport_plan == expected_transport_plan
+        attempt_plan_exact
         and transport_observation["login"] == final_transport_mode
         and transport_observation["idChange"] == final_transport_mode
         and transport_observation["accepted"] == final_transport_mode
         and fallback_causal
     )
     ok = bool(
-        len(login_packets) == 1
+        len(final_login_packets) == 1
+        and failed_attempt_logins_exact
         and semantic_shape
         and send_succeeded
         and len(id_change_packets) == 1
         and len(accepted_records) == 1
+        and accepted_shape
         and lifecycle_ok
         and trace_correlation
         and transport_plan_exact
     )
     return {
         "ok": ok,
-        "packetCount": len(login_packets),
+        "attemptStartCount": len(attempt_starts),
+        "attemptPhases": list(attempt_phases),
+        "attemptStates": list(attempt_states),
+        "attemptStartSequences": list(attempt_sequences),
+        "attemptTraceIds": list(attempt_trace_ids),
+        "attemptPlanExact": attempt_plan_exact,
+        "loginPacketCount": len(login_packets),
+        "finalLoginPacketCount": len(final_login_packets),
+        "failedAttemptLoginPacketCount": len(failed_attempt_login_packets),
         "sendSucceeded": send_succeeded,
+        "sendOutcomeSequence": _sequence(send_outcome) or None,
+        "sendOutcomeTraceId": _trace_id(send_outcome),
+        "sendOutcomeTransportMode": (
+            _body(send_outcome).get("transportMode") if send_outcome is not None else None
+        ),
+        "failedAttemptStartSequence": failed_attempt_sequence or None,
+        "failedAttemptLoginSequence": failed_attempt_login_sequence or None,
+        "finalAttemptStartSequence": final_attempt_sequence or None,
         "loginSequence": login_sequence or None,
         "idChangeSequence": id_change_sequence or None,
         "loginAcceptedSequence": accepted_sequence or None,
+        "loginAcceptedCount": len(accepted_records),
         "connectionFailureSequence": connection_failure_sequence or None,
         "transportFallbackSequence": fallback_sequence or None,
         "connectionFailureCount": len(connection_failures),
         "transportFallbackCount": len(fallback_records),
         "failedTraceId": failure_trace_id,
         "fallbackTraceId": fallback_trace_id,
+        "failedAttemptTraceId": failed_attempt_trace_id,
+        "failedAttemptLoginTraceId": failed_attempt_login_trace_id,
         "finalTraceId": final_trace_id,
-        "loginTraceId": final_trace_ids[0],
-        "idChangeTraceId": final_trace_ids[1],
-        "loginAcceptedTraceId": final_trace_ids[2],
+        "finalAttemptTraceId": final_trace_ids[0],
+        "loginTraceId": final_trace_ids[1],
+        "idChangeTraceId": final_trace_ids[2],
+        "loginAcceptedTraceId": final_trace_ids[3],
+        "loginAcceptedPhase": _body(accepted).get("phase") if accepted is not None else None,
+        "loginAcceptedState": _body(accepted).get("state") if accepted is not None else None,
         "fallbackError": fallback_error if isinstance(fallback_error, str) else None,
+        "connectionFailureTransportMode": (
+            _body(connection_failure).get("transportMode")
+            if connection_failure is not None
+            else None
+        ),
+        "connectionFailurePhase": (
+            _body(connection_failure).get("phase") if connection_failure is not None else None
+        ),
+        "connectionFailureOutcome": (
+            _body(connection_failure).get("outcome") if connection_failure is not None else None
+        ),
+        "failedAttemptLoginTransportMode": failed_attempt_login_body.get("transportMode"),
+        "failedAttemptLoginOutcome": failed_attempt_login_body.get("outcome"),
+        "transportFallbackPhase": fallback_body.get("phase"),
+        "transportFallbackOutcome": fallback_body.get("outcome"),
+        "transportFallbackFromMode": fallback_body.get("fromTransportMode"),
+        "transportFallbackToMode": fallback_body.get("toTransportMode"),
         "loginDecodeError": login_decode_error,
         "decodedLogin": decoded_login,
         "decodedIdChange": decoded_id_change,

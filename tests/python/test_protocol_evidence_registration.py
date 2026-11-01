@@ -19,25 +19,63 @@ def bilateral_login_evidence(
     final_transport_mode = transport_plan[-1]
 
     def client_row(client: str) -> dict[str, object]:
-        login_sequence = 4 if fallback else (2 if client == "rust" else 3)
+        failed_attempt_login_count = 1 if fallback and client == "mfc" else 0
+        failed_attempt_sequence = 1 if fallback else None
+        final_attempt_sequence = 5 if fallback else 1
+        login_sequence = 6 if fallback else 2
         return {
             "ok": True,
-            "packetCount": 1,
+            "attemptStartCount": len(transport_plan),
+            "attemptPhases": ["connection"] * len(transport_plan),
+            "attemptStates": ["connecting"] * len(transport_plan),
+            "attemptStartSequences": (
+                [failed_attempt_sequence, final_attempt_sequence] if fallback else [final_attempt_sequence]
+            ),
+            "attemptTraceIds": [1, 2] if fallback else [2],
+            "attemptPlanExact": True,
+            "loginPacketCount": 1 + failed_attempt_login_count,
+            "finalLoginPacketCount": 1,
+            "failedAttemptLoginPacketCount": failed_attempt_login_count,
             "sendSucceeded": True,
+            "sendOutcomeSequence": (7 if fallback else 3) if client == "rust" else None,
+            "sendOutcomeTraceId": 2 if client == "rust" else None,
+            "sendOutcomeTransportMode": final_transport_mode if client == "rust" else None,
+            "failedAttemptStartSequence": failed_attempt_sequence,
+            "failedAttemptLoginSequence": 2 if fallback and client == "mfc" else None,
+            "finalAttemptStartSequence": final_attempt_sequence,
             "loginSequence": login_sequence,
-            "idChangeSequence": 7 if fallback else (7 if client == "rust" else 4),
-            "loginAcceptedSequence": 8 if fallback else (8 if client == "rust" else 5),
-            "connectionFailureSequence": 1 if fallback else None,
-            "transportFallbackSequence": 2 if fallback else None,
+            "idChangeSequence": (8 if client == "rust" else 7) if fallback else (4 if client == "rust" else 3),
+            "loginAcceptedSequence": (9 if client == "rust" else 8) if fallback else (5 if client == "rust" else 4),
+            "loginAcceptedCount": 1,
+            "connectionFailureSequence": 3 if fallback else None,
+            "transportFallbackSequence": 4 if fallback else None,
             "connectionFailureCount": 1 if fallback else 0,
             "transportFallbackCount": 1 if fallback else 0,
+            "failedAttemptTraceId": 1 if fallback else None,
+            "failedAttemptLoginTraceId": 1 if fallback and client == "mfc" else None,
             "failedTraceId": 1 if fallback else None,
             "fallbackTraceId": 1 if fallback else None,
             "finalTraceId": 2,
+            "finalAttemptTraceId": 2,
             "loginTraceId": 2,
             "idChangeTraceId": 2,
             "loginAcceptedTraceId": 2,
+            "loginAcceptedPhase": "connection",
+            "loginAcceptedState": "connected",
             "fallbackError": "crypt negotiation rejected" if fallback else None,
+            "connectionFailurePhase": "connection" if fallback else None,
+            "connectionFailureOutcome": "connection_failed" if fallback else None,
+            "connectionFailureTransportMode": "obfuscated" if fallback else None,
+            "failedAttemptLoginTransportMode": (
+                "obfuscated" if fallback and client == "mfc" else None
+            ),
+            "failedAttemptLoginOutcome": (
+                "send_succeeded" if fallback and client == "mfc" else None
+            ),
+            "transportFallbackPhase": "connection" if fallback else None,
+            "transportFallbackOutcome": "retrying" if fallback else None,
+            "transportFallbackFromMode": "obfuscated" if fallback else None,
+            "transportFallbackToMode": "plaintext" if fallback else None,
             "decodedLogin": {"client_id": 0},
             "decodedIdChange": {"id_kind": "low-id"},
             "extensionTags": {"offerfiles_v": 1} if client == "rust" else {},
@@ -411,6 +449,115 @@ def test_build_transfer_registration_revalidates_final_trace_components(tmp_path
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="final server-login trace IDs"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_revalidates_attempt_sequence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    login["clients"]["rust"]["attemptStartSequences"] = [5, 1]
+    attach_server_login(report, login, plan)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="transport attempts are not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_joins_singular_attempt_to_final_trace(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["attemptTraceIds"] = [77]
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="singular server attempt"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_boolean_login_count(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["finalLoginPacketCount"] = True
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="positive integer"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_duplicate_acceptance_count(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["loginAcceptedCount"] = 2
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not singular and causal"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_wrong_failed_attempt_login_count(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    login["clients"]["mfc"]["failedAttemptLoginPacketCount"] = 0
+    login["clients"]["mfc"]["loginPacketCount"] = 1
+    attach_server_login(report, login, plan)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fallback evidence is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_revalidates_failed_login_trace(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    plan = ("obfuscated", "plaintext")
+    login = bilateral_login_evidence(plan)
+    login["clients"]["mfc"]["failedAttemptLoginTraceId"] = 99
+    attach_server_login(report, login, plan)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fallback evidence is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_revalidates_rust_send_outcome(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["sendOutcomeTraceId"] = 99
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="send outcome is not joined"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_late_rust_send_outcome(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["sendOutcomeSequence"] = 6
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="send outcome is not joined"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_malformed_attempt_shape(tmp_path: Path) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    login = bilateral_login_evidence(("plaintext",))
+    login["clients"]["rust"]["attemptPhases"] = ["malformed"]
+    attach_server_login(report, login, ("plaintext",))
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="transport attempts are not exact"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

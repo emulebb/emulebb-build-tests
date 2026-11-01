@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import struct
 
 from emule_test_harness import ed2k_wire
@@ -124,31 +125,61 @@ def canonical_records(
     fallback = len(transport_plan) == 2
     failed_trace_id = 1
     final_trace_id = 2
-    login_sequence = 4 if fallback else 2
-    login = packet(
-        client,
-        login_sequence,
-        "send",
-        ed2k_wire.OP_LOGINREQUEST,
-        login_payload(client=client, nickname=nickname, tcp_port=tcp_port),
-        outcome="attempted" if client == "rust" else "send_succeeded",
-        transport_mode=transport_plan[-1],
-        trace_id=final_trace_id,
-        send_attempt_id=11 if client == "rust" else None,
-    )
+    sequence = 0
     records: list[dict[str, object]] = []
+
+    def next_sequence() -> int:
+        nonlocal sequence
+        sequence += 1
+        return sequence
+
+    def attempt_start(transport_mode: str, trace_id: int) -> dict[str, object]:
+        return record(
+            client,
+            next_sequence(),
+            "connection_state",
+            keys={"flow": "server", "peer": ENDPOINT, "traceId": trace_id},
+            body={
+                "flow": "server",
+                "outcome": "attempt_started",
+                "phase": "connection",
+                "state": "connecting",
+                "traceId": trace_id,
+                "transportMode": transport_mode,
+            },
+        )
+
     if fallback:
+        records.append(attempt_start("obfuscated", failed_trace_id))
+        if client == "mfc":
+            records.append(
+                packet(
+                    client,
+                    next_sequence(),
+                    "send",
+                    ed2k_wire.OP_LOGINREQUEST,
+                    login_payload(client=client, nickname=nickname, tcp_port=tcp_port),
+                    outcome="send_succeeded",
+                    transport_mode="obfuscated",
+                    trace_id=failed_trace_id,
+                )
+            )
         records.extend(
             [
                 record(
                     client,
-                    1,
+                    next_sequence(),
                     "connection_state",
-                    keys={"flow": "server", "peer": ENDPOINT, "traceId": failed_trace_id},
+                    keys={
+                        "flow": "server",
+                        "peer": ENDPOINT,
+                        "traceId": failed_trace_id,
+                    },
                     body={
                         "error": "crypt negotiation rejected",
                         "flow": "server",
                         "outcome": "connection_failed",
+                        "phase": "connection",
                         "state": "server_dead",
                         "traceId": failed_trace_id,
                         "transportMode": "obfuscated",
@@ -156,7 +187,7 @@ def canonical_records(
                 ),
                 record(
                     client,
-                    2,
+                    next_sequence(),
                     "transport_fallback",
                     keys={
                         "flow": "server",
@@ -175,12 +206,25 @@ def canonical_records(
                 ),
             ]
         )
-    records.append(login)
+    records.append(attempt_start(transport_plan[-1], final_trace_id))
+    records.append(
+        packet(
+            client,
+            next_sequence(),
+            "send",
+            ed2k_wire.OP_LOGINREQUEST,
+            login_payload(client=client, nickname=nickname, tcp_port=tcp_port),
+            outcome="attempted" if client == "rust" else "send_succeeded",
+            transport_mode=transport_plan[-1],
+            trace_id=final_trace_id,
+            send_attempt_id=11 if client == "rust" else None,
+        )
+    )
     if client == "rust":
         records.append(
             record(
                 client,
-                login_sequence + 1,
+                next_sequence(),
                 "send_outcome",
                 keys={
                     "opcode": ed2k_wire.OP_LOGINREQUEST,
@@ -197,6 +241,7 @@ def canonical_records(
                     "outcome": "send_succeeded",
                     "protocolMarker": ed2k_wire.PROTO_EDONKEY,
                     "traceId": final_trace_id,
+                    "transportMode": transport_plan[-1],
                 },
             )
         )
@@ -204,7 +249,7 @@ def canonical_records(
         [
             packet(
                 client,
-                7 if fallback else 5,
+                next_sequence(),
                 "recv",
                 ed2k_wire.OP_IDCHANGE,
                 struct.pack("<I", 7 if client == "rust" else 8),
@@ -214,12 +259,13 @@ def canonical_records(
             ),
             record(
                 client,
-                8 if fallback else 6,
+                next_sequence(),
                 "connection_state",
                 keys={"flow": "server", "peer": ENDPOINT, "traceId": final_trace_id},
                 body={
                     "flow": "server",
                     "outcome": "login_accepted",
+                    "phase": "connection",
                     "state": "connected",
                     "traceId": final_trace_id,
                     "transportMode": transport_plan[-1],
@@ -324,6 +370,10 @@ def test_bilateral_preferred_fallback_sequence_is_claimable() -> None:
         assert row["traceCorrelation"] is True
     assert report["clients"]["rust"]["fallbackTraceId"] == 1
     assert report["clients"]["mfc"]["fallbackTraceId"] == 1
+    assert report["clients"]["rust"]["loginPacketCount"] == 1
+    assert report["clients"]["rust"]["failedAttemptLoginPacketCount"] == 0
+    assert report["clients"]["mfc"]["loginPacketCount"] == 2
+    assert report["clients"]["mfc"]["failedAttemptLoginPacketCount"] == 1
     assert report["coverageClaims"]["eligibleCoverageIds"] == [
         "server.connect.fallback",
         "server.login.request",
@@ -352,7 +402,7 @@ def test_missing_mfc_login_is_evidence_incomplete() -> None:
 
 def test_shared_server_flags_must_match() -> None:
     mfc_records = canonical_records("mfc")
-    mfc_records[0] = packet(
+    mfc_records[1] = packet(
         "mfc",
         2,
         "send",
@@ -377,7 +427,7 @@ def test_shared_server_flags_must_match() -> None:
 def test_unregistered_extension_tag_is_rejected() -> None:
     extra = bytes([0x80 | ed2k_wire.TAGTYPE_UINT32, 0xEE]) + struct.pack("<I", 1)
     rust_records = canonical_records("rust")
-    rust_records[0] = packet(
+    rust_records[1] = packet(
         "rust",
         2,
         "send",
@@ -402,17 +452,65 @@ def test_unregistered_extension_tag_is_rejected() -> None:
 
 def test_duplicate_login_is_not_causally_attributable() -> None:
     rust_records = canonical_records("rust")
-    rust_records.insert(0, {**rust_records[0], "seq": 1, "streamSeq": 1})
+    rust_records.insert(1, {**rust_records[1]})
 
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["packetCount"] == 2
+    assert report["clients"]["rust"]["loginPacketCount"] == 2
+    assert report["clients"]["rust"]["finalLoginPacketCount"] == 2
 
 
 def test_rust_login_requires_linked_send_success() -> None:
     rust_records = canonical_records("rust")
-    rust_records.pop(1)
+    rust_records.pop(2)
+
+    report = build(rust_records=rust_records)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["sendSucceeded"] is False
+
+
+def test_rust_send_outcome_must_join_final_trace() -> None:
+    rust_records = canonical_records("rust")
+    rust_records[2]["keys"]["traceId"] = 99
+    rust_records[2]["body"]["traceId"] = 99
+
+    report = build(rust_records=rust_records)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["sendSucceeded"] is False
+
+
+def test_rust_send_outcome_must_follow_login() -> None:
+    rust_records = canonical_records("rust")
+    rust_records[2]["seq"] = rust_records[1]["seq"]
+    rust_records[2]["streamSeq"] = rust_records[1]["streamSeq"]
+
+    report = build(rust_records=rust_records)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["sendSucceeded"] is False
+
+
+def test_rust_send_outcome_must_precede_id_change() -> None:
+    rust_records = canonical_records("rust")
+    rust_records[2]["seq"] = 6
+    rust_records[2]["streamSeq"] = 6
+
+    report = build(rust_records=rust_records)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["sendSucceeded"] is False
+
+
+def test_rust_login_requires_exactly_one_send_outcome() -> None:
+    rust_records = canonical_records("rust")
+    failed_outcome = copy.deepcopy(rust_records[2])
+    failed_outcome["seq"] = 4
+    failed_outcome["streamSeq"] = 4
+    failed_outcome["body"]["outcome"] = "send_failed"
+    rust_records.insert(3, failed_outcome)
 
     report = build(rust_records=rust_records)
 
@@ -422,8 +520,8 @@ def test_rust_login_requires_linked_send_success() -> None:
 
 def test_login_acceptance_must_follow_id_change() -> None:
     mfc_records = canonical_records("mfc")
-    mfc_records[-1]["seq"] = 4
-    mfc_records[-1]["streamSeq"] = 4
+    mfc_records[-1]["seq"] = 2
+    mfc_records[-1]["streamSeq"] = 2
 
     report = build(mfc_records=mfc_records)
 
@@ -433,7 +531,7 @@ def test_login_acceptance_must_follow_id_change() -> None:
 
 def test_fallback_requires_one_structured_decision_between_attempts() -> None:
     mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
-    mfc_records.pop(1)
+    mfc_records.pop(3)
 
     report = build(
         expected_transport_plan=("obfuscated", "plaintext"),
@@ -445,9 +543,146 @@ def test_fallback_requires_one_structured_decision_between_attempts() -> None:
     assert report["clients"]["mfc"]["fallbackCausal"] is False
 
 
+def test_fallback_requires_both_attempt_start_records() -> None:
+    rust_records = canonical_records("rust", ("obfuscated", "plaintext"))
+    rust_records.pop(3)
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        rust_records=rust_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["attemptStartCount"] == 1
+    assert report["clients"]["rust"]["attemptPlanExact"] is False
+
+
+def test_extra_malformed_attempt_start_is_not_ignored() -> None:
+    rust_records = canonical_records("rust", ("obfuscated", "plaintext"))
+    rust_records.append(
+        record(
+            "rust",
+            99,
+            "connection_state",
+            keys={"flow": "server", "peer": ENDPOINT, "traceId": 99},
+            body={
+                "flow": "server",
+                "outcome": "attempt_started",
+                "phase": "malformed",
+                "state": "connecting",
+                "traceId": 99,
+                "transportMode": "plaintext",
+            },
+        )
+    )
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        rust_records=rust_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["attemptStartCount"] == 3
+    assert report["clients"]["rust"]["attemptPlanExact"] is False
+
+
+def test_extra_malformed_connection_failure_is_not_ignored() -> None:
+    rust_records = canonical_records("rust", ("obfuscated", "plaintext"))
+    rust_records.append(
+        record(
+            "rust",
+            99,
+            "connection_state",
+            keys={"flow": "server", "peer": ENDPOINT, "traceId": 99},
+            body={
+                "flow": "server",
+                "outcome": "connection_failed",
+                "phase": "malformed",
+                "state": "server_dead",
+                "traceId": 99,
+                "transportMode": "obfuscated",
+            },
+        )
+    )
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        rust_records=rust_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["connectionFailureCount"] == 2
+
+
+def test_extra_malformed_login_acceptance_is_not_ignored() -> None:
+    rust_records = canonical_records("rust")
+    rust_records.append(
+        record(
+            "rust",
+            99,
+            "connection_state",
+            keys={"flow": "server", "peer": ENDPOINT, "traceId": 99},
+            body={
+                "flow": "server",
+                "outcome": "login_accepted",
+                "phase": "malformed",
+                "state": "connected",
+                "traceId": 99,
+                "transportMode": "plaintext",
+            },
+        )
+    )
+
+    report = build(rust_records=rust_records)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["loginAcceptedCount"] == 2
+
+
+def test_failed_attempt_login_must_join_failed_trace() -> None:
+    mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
+    mfc_records[1]["keys"]["traceId"] = 99
+    mfc_records[1]["body"]["traceId"] = 99
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        mfc_records=mfc_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["mfc"]["failedAttemptLoginPacketCount"] == 1
+    assert report["clients"]["mfc"]["fallbackCausal"] is False
+
+
+def test_mfc_fallback_requires_failed_attempt_login() -> None:
+    mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
+    mfc_records.pop(1)
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        mfc_records=mfc_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["mfc"]["failedAttemptLoginPacketCount"] == 0
+
+
+def test_mfc_failed_attempt_login_must_succeed_on_socket() -> None:
+    mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
+    mfc_records[1]["body"]["outcome"] = "send_failed"
+
+    report = build(
+        expected_transport_plan=("obfuscated", "plaintext"),
+        mfc_records=mfc_records,
+    )
+
+    assert report["ok"] is False
+    assert report["clients"]["mfc"]["failedAttemptLoginOutcome"] == "send_failed"
+
+
 def test_fallback_requires_distinct_failed_and_final_attempts() -> None:
     mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
-    for record_value in mfc_records[2:]:
+    for record_value in mfc_records[4:]:
         record_value["keys"]["traceId"] = 1
         record_value["body"]["traceId"] = 1
 
@@ -464,8 +699,8 @@ def test_fallback_requires_distinct_failed_and_final_attempts() -> None:
 
 def test_fallback_decision_must_join_the_failed_attempt_trace() -> None:
     rust_records = canonical_records("rust", ("obfuscated", "plaintext"))
-    rust_records[1]["keys"]["traceId"] = 99
-    rust_records[1]["body"]["traceId"] = 99
+    rust_records[2]["keys"]["traceId"] = 99
+    rust_records[2]["body"]["traceId"] = 99
 
     report = build(
         expected_transport_plan=("obfuscated", "plaintext"),
@@ -479,8 +714,8 @@ def test_fallback_decision_must_join_the_failed_attempt_trace() -> None:
 
 def test_fallback_decision_must_precede_plaintext_login() -> None:
     mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
-    mfc_records[1]["seq"] = 5
-    mfc_records[1]["streamSeq"] = 5
+    mfc_records[3]["seq"] = 7
+    mfc_records[3]["streamSeq"] = 7
 
     report = build(
         expected_transport_plan=("obfuscated", "plaintext"),
@@ -502,7 +737,8 @@ def test_zero_sequence_cannot_satisfy_login_or_fallback_ordering() -> None:
     )
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["connectionFailureSequence"] is None
+    assert report["clients"]["rust"]["failedAttemptStartSequence"] is None
+    assert report["clients"]["rust"]["attemptPlanExact"] is False
     assert report["clients"]["rust"]["fallbackCausal"] is False
 
 
