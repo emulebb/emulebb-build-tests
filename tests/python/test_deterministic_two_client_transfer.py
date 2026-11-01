@@ -196,6 +196,46 @@ def test_hash_only_metadata_recovery_uses_one_canonical_transport_case() -> None
     module.validate_args(canonical)
 
 
+def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_KEYWORD_SEARCH,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.SERVER_KEYWORD_SEARCH,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_KEYWORD_SEARCH,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle publisher"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+
+
 def test_reference_clients_reject_mfc_protocol_case() -> None:
     module = load_suite_module()
     args = module.parse_args(

@@ -32,6 +32,7 @@ from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
@@ -64,7 +65,13 @@ SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb_rust"]
 FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
-TRANSFER_SCENARIOS = (FULL_METADATA_LINK, HASH_ONLY_METADATA_RECOVERY)
+SERVER_KEYWORD_SEARCH = "server-keyword-search"
+SERVER_SEARCH_QUERY = "deterministicparitysearch"
+TRANSFER_SCENARIOS = (
+    FULL_METADATA_LINK,
+    HASH_ONLY_METADATA_RECOVERY,
+    SERVER_KEYWORD_SEARCH,
+)
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
@@ -158,6 +165,13 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Hash-only metadata recovery uses the single canonical obfuscated-required case."
             )
+    if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("Server keyword search requires the MFC diagnostics oracle publisher.")
+        if args.protocol_case != "obfuscated-required":
+            raise ValueError(
+                "Server keyword search uses the single canonical obfuscated-required case."
+            )
 
 
 def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
@@ -181,6 +195,9 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
+    server_search_query: str | None,
+    server_search_rest_result: dict[str, object] | None,
+    server_endpoint: str,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -215,6 +232,27 @@ def collect_transfer_diagnostics(
         expected_source_port=expected_source_port,
         expected_source_user_hash=expected_source_user_hash,
     )
+    if server_search_query is not None:
+        search_evidence = (
+            server_search_diagnostic_evidence.build_server_search_diagnostic_evidence(
+                query=server_search_query,
+                expected_file_hash=file_hash,
+                expected_file_name=expected_file_name,
+                expected_file_size=expected_file_size,
+                server_endpoint=server_endpoint,
+                rust_records=rust_capture.records,
+                rest_result=server_search_rest_result,
+            )
+        )
+        server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(
+            search_evidence
+        )
+        evidence["serverSearch"] = search_evidence
+        transfer_claims = evidence["coverageClaims"]["eligibleCoverageIds"]
+        search_claims = search_evidence["coverageClaims"]["eligibleCoverageIds"]
+        evidence["coverageClaims"]["eligibleCoverageIds"] = sorted(
+            {*transfer_claims, *search_claims}
+        )
     evidence["captures"] = {
         "rust": {
             "processId": rust_process_id,
@@ -1792,6 +1830,8 @@ def main(argv: list[str] | None = None) -> int:
         fixture_name = (
             "deterministic-transfer-Unicode-é-漢.bin"
             if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+            else "deterministicparitysearch-fixture.bin"
+            if args.transfer_scenario == SERVER_KEYWORD_SEARCH
             else "deterministic-two-client-transfer.bin"
         )
         fixture_file = fixture_dir / fixture_name
@@ -2174,6 +2214,20 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
+        if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+            current_phase = "client1_server_keyword_search"
+            report["checks"]["client1_server_search"] = (
+                rust_local_ed2k.run_single_server_search(
+                    base_url,
+                    args.api_key,
+                    query=SERVER_SEARCH_QUERY,
+                    expected_hash=transfer_hash,
+                    expected_name=fixture_file.name,
+                    expected_size=int(link_info["size"]),
+                    timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            )
+
         source_user_hash = None
         source_connect_options = None
         stimulus_mode = "direct-source-link"
@@ -2274,6 +2328,17 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
+                server_search_query=(
+                    SERVER_SEARCH_QUERY
+                    if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+                    else None
+                ),
+                server_search_rest_result=(
+                    report["checks"]["client1_server_search"]["result"]
+                    if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+                    else None
+                ),
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),
