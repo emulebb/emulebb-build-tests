@@ -1609,6 +1609,7 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_log_dir,
         artifact_store=artifact_store,
+        preserve_mfc_profile_outputs=mfc_profile_dir is not None,
     )
     mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
     mfc_preferences_path = (

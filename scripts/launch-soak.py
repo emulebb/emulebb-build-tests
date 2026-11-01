@@ -923,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
         artifact_store=artifact_store,
+        preserve_mfc_profile_outputs=direct_mfc_profile is not None,
     )
     preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
     diagnostic_bundle_policy = storage_policy.stream("diagnostic_bundles")
