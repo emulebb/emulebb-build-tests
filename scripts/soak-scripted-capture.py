@@ -508,23 +508,28 @@ def observe_transfer_coverage(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     now_utc: Callable[[], str] = _utc_now,
+    checkpoint: dict[str, object] | None = None,
+    evidence: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     """Scan closed segments until exact client-UDP proof, timeout, or operator stop."""
 
     started = monotonic()
     deadline = None if timeout_seconds == 0 else started + timeout_seconds
-    checkpoint = None
     diagnostic_base_url = f"{base_url.rstrip('/')}/api/v1"
-    health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
-    if health.get("processId") != process_id:
-        raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
-    evidence = transfer_coverage_evidence.new_evidence(
-        client=client,
-        process_id=process_id,
-        run_id=str(health["runId"]),
-        fixture_hashes=fixture_hashes,
-        observed_utc=now_utc(),
-    )
+    if (checkpoint is None) != (evidence is None):
+        raise RuntimeError("Transfer coverage checkpoint and evidence must be supplied together.")
+    if checkpoint is None:
+        health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
+        if health.get("processId") != process_id:
+            raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
+        evidence = transfer_coverage_evidence.new_evidence(
+            client=client,
+            process_id=process_id,
+            run_id=str(health["runId"]),
+            fixture_hashes=fixture_hashes,
+            observed_utc=now_utc(),
+        )
+    assert evidence is not None
     timed_out = False
     stopped_by_operator = False
     route_lost = False
@@ -581,6 +586,40 @@ def observe_transfer_coverage(
         elapsed_seconds=elapsed,
     )
     return summary, checkpoint, evidence
+
+
+def initialize_transfer_coverage(
+    *,
+    base_url: str,
+    api_key: str,
+    client: str,
+    process_id: int,
+    diagnostics_dir: Path,
+    fixture_hashes: tuple[str, ...],
+    observed_utc: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Start a contiguous evidence tail immediately before scripted actions."""
+
+    health = converged_observer.diagnostic_writer_health(
+        f"{base_url.rstrip('/')}/api/v1", api_key
+    )
+    if health.get("processId") != process_id:
+        raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
+    advanced = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=diagnostics_dir,
+        client=client,
+        writer_health=health,
+        observed_utc=observed_utc,
+        tail_from_active=True,
+    )
+    evidence = transfer_coverage_evidence.new_evidence(
+        client=client,
+        process_id=process_id,
+        run_id=str(health["runId"]),
+        fixture_hashes=fixture_hashes,
+        observed_utc=observed_utc,
+    )
+    return advanced.checkpoint, evidence
 
 
 def finalize_transfer_coverage(
@@ -1992,6 +2031,20 @@ def main(argv: list[str] | None = None) -> int:
                         {"type": "doc", "extension": "pdf", "minAvailability": 1} if native_config is not None else None
                     ),
                 )
+                if args.transfer_coverage_timeout_seconds is not None:
+                    fixture_hashes = tuple(str(fixture["hash"]) for fixture in download_fixtures)
+                    (
+                        transfer_coverage_checkpoint,
+                        transfer_coverage_evidence_payload,
+                    ) = initialize_transfer_coverage(
+                        base_url=base_url,
+                        api_key=api_key,
+                        client=client,
+                        process_id=client_process_ids[0],
+                        diagnostics_dir=dump_dir,
+                        fixture_hashes=fixture_hashes,
+                        observed_utc=_utc_now(),
+                    )
                 log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
                 results = scripted_actions.execute_action_set(
                     actions,
@@ -2012,7 +2065,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.transfer_coverage_timeout_seconds is not None:
             assert handles is not None
             assert inputs.soak_storage is not None
-            fixture_hashes = tuple(str(fixture["hash"]) for fixture in download_fixtures)
+            assert transfer_coverage_checkpoint is not None
+            assert transfer_coverage_evidence_payload is not None
             log("actions done; scanning closed diagnostic segments for exact transfer coverage...")
             (
                 transfer_coverage_summary,
@@ -2030,6 +2084,8 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.transfer_coverage_timeout_seconds,
                 poll_seconds=args.transfer_coverage_poll_seconds,
                 route_guard=(hideme_vpn.require_full_tunnel_ready if native_config is None else None),
+                checkpoint=transfer_coverage_checkpoint,
+                evidence=transfer_coverage_evidence_payload,
             )
             log(
                 "transfer coverage wait done: "

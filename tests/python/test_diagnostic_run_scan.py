@@ -135,6 +135,33 @@ def test_scan_resumes_after_retention_deleted_previously_indexed_segments(
     assert resumed.checkpoint["index"]["writerHealth"]["samples"] == 2
 
 
+def test_tail_checkpoint_starts_with_current_active_segment(tmp_path: Path) -> None:
+    old = _write_segment(tmp_path, 7, [_record(8, segment_id=7)])
+    initial = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(8, records_written=8),
+        observed_utc="2026-10-25T12:00:00+00:00",
+        tail_from_active=True,
+    )
+
+    assert initial.processed_segments == ()
+    assert initial.checkpoint["source"]["startAfterSegmentId"] == 7
+    old.unlink()
+    _write_segment(tmp_path, 8, [_record(9, segment_id=8)])
+
+    resumed = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=tmp_path,
+        client="rust",
+        writer_health=_health(9, records_written=9),
+        observed_utc="2026-10-25T12:00:01+00:00",
+        checkpoint=initial.checkpoint,
+    )
+
+    assert [item["segmentId"] for item in resumed.processed_segments] == [8]
+    assert resumed.checkpoint["source"]["closedSegmentCount"] == 1
+
+
 def test_scan_preserves_bounded_evidence_pin_metadata(tmp_path: Path) -> None:
     initial = diagnostic_run_scan.scan_closed_segments(
         profile_dir=tmp_path,

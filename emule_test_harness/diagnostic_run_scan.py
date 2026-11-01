@@ -9,7 +9,7 @@ from typing import Any
 
 from . import diag_event_runs, diagnostic_run_index
 
-CHECKPOINT_SCHEMA = "emulebb-build-tests.diagnostic-run-checkpoint.v2"
+CHECKPOINT_SCHEMA = "emulebb-build-tests.diagnostic-run-checkpoint.v3"
 
 
 class DiagnosticRunScanError(ValueError):
@@ -32,6 +32,7 @@ def scan_closed_segments(
     writer_health: dict[str, Any],
     observed_utc: str,
     checkpoint: dict[str, Any] | None = None,
+    tail_from_active: bool = False,
 ) -> ClosedSegmentAdvance:
     """Indexes every newly closed segment while leaving the active file untouched."""
 
@@ -73,6 +74,8 @@ def scan_closed_segments(
         observed_utc=observed_utc,
     )
     previous_active_segment_id = source["activeSegmentId"]
+    if tail_from_active and checkpoint is not None:
+        raise DiagnosticRunScanError("tail_from_active requires a new checkpoint")
     if (
         previous_active_segment_id is not None
         and active_segment_id < previous_active_segment_id
@@ -80,6 +83,28 @@ def scan_closed_segments(
         raise DiagnosticRunScanError(
             "writer active segment regressed: "
             f"{previous_active_segment_id} -> {active_segment_id}"
+        )
+    if tail_from_active:
+        source["startAfterSegmentId"] = active_segment_id - 1 if active_segment_id > 0 else None
+        source["activeSegmentId"] = active_segment_id
+        source["finalized"] = False
+        source["finalizedUtc"] = None
+        source["coverage"] = _coverage(source)
+        updated = {
+            "schema": CHECKPOINT_SCHEMA,
+            "profileDir": str(resolved_profile),
+            "client": client,
+            "processId": process_id,
+            "runId": run_id,
+            "updatedUtc": observed_utc,
+            "source": source,
+            "index": index,
+            "evidencePins": [],
+        }
+        return ClosedSegmentAdvance(
+            checkpoint=updated,
+            processed_segments=(),
+            processed_snapshots=(),
         )
 
     closed_segments = _closed_run_segments(
@@ -90,15 +115,21 @@ def scan_closed_segments(
         active_segment_id=active_segment_id,
     )
     last_closed_segment_id = source["lastClosedSegmentId"]
+    scan_after_segment_id = (
+        last_closed_segment_id
+        if last_closed_segment_id is not None
+        else source["startAfterSegmentId"]
+    )
     new_segments = {
         segment_id: path
         for segment_id, path in closed_segments.items()
-        if last_closed_segment_id is None or segment_id > last_closed_segment_id
+        if scan_after_segment_id is None or segment_id > scan_after_segment_id
     }
     _require_closed_suffix(
         tuple(new_segments),
         active_segment_id=active_segment_id,
         last_closed_segment_id=last_closed_segment_id,
+        start_after_segment_id=source["startAfterSegmentId"],
     )
 
     index, processed, snapshots = _advance_segments(
@@ -191,15 +222,21 @@ def finalize_stopped_run(
         run_id=run_id,
     )
     last_closed_segment_id = source["lastClosedSegmentId"]
+    scan_after_segment_id = (
+        last_closed_segment_id
+        if last_closed_segment_id is not None
+        else source["startAfterSegmentId"]
+    )
     new_segments = {
         segment_id: path
         for segment_id, path in run_segments.items()
-        if last_closed_segment_id is None or segment_id > last_closed_segment_id
+        if scan_after_segment_id is None or segment_id > scan_after_segment_id
     }
     _require_final_suffix(
         tuple(new_segments),
         last_closed_segment_id=last_closed_segment_id,
         last_observed_active_segment_id=last_observed_active_segment_id,
+        start_after_segment_id=source["startAfterSegmentId"],
     )
     index, processed, snapshots = _advance_segments(
         index,
@@ -256,6 +293,7 @@ def _load_checkpoint(
                 "omittedSegmentPrefix": None,
                 "closedSegmentCount": 0,
                 "lastClosedSegment": None,
+                "startAfterSegmentId": None,
             },
         )
     if (
@@ -305,6 +343,7 @@ def _load_checkpoint(
         "omittedSegmentPrefix",
         "closedSegmentCount",
         "lastClosedSegment",
+        "startAfterSegmentId",
     }
     if set(source) != expected_source_fields:
         raise DiagnosticRunScanError(
@@ -315,6 +354,7 @@ def _load_checkpoint(
         "firstClosedSegmentId",
         "lastClosedSegmentId",
         "omittedSegmentPrefix",
+        "startAfterSegmentId",
     ):
         value = source[name]
         if value is not None:
@@ -453,9 +493,12 @@ def _require_closed_suffix(
     *,
     active_segment_id: int,
     last_closed_segment_id: int | None,
+    start_after_segment_id: int | None,
 ) -> None:
     if last_closed_segment_id is None:
-        if active_segment_id == 0:
+        if start_after_segment_id is not None:
+            expected = tuple(range(start_after_segment_id + 1, active_segment_id))
+        elif active_segment_id == 0:
             expected: tuple[int, ...] = ()
         elif segment_ids:
             expected = tuple(range(segment_ids[0], active_segment_id))
@@ -483,6 +526,7 @@ def _require_final_suffix(
     *,
     last_closed_segment_id: int | None,
     last_observed_active_segment_id: int | None,
+    start_after_segment_id: int | None,
 ) -> None:
     if not segment_ids:
         raise DiagnosticRunScanError(
@@ -498,9 +542,11 @@ def _require_final_suffix(
             f"segment: {final_segment_id} < {last_observed_active_segment_id}"
         )
     first_expected = (
-        segment_ids[0]
-        if last_closed_segment_id is None
-        else last_closed_segment_id + 1
+        last_closed_segment_id + 1
+        if last_closed_segment_id is not None
+        else start_after_segment_id + 1
+        if start_after_segment_id is not None
+        else segment_ids[0]
     )
     expected = tuple(range(first_expected, final_segment_id + 1))
     if segment_ids != expected:
@@ -557,6 +603,7 @@ def _require_source_consistency(source: dict[str, Any]) -> None:
     first_segment_id = source["firstClosedSegmentId"]
     last_segment_id = source["lastClosedSegmentId"]
     omitted_prefix = source["omittedSegmentPrefix"]
+    start_after_segment_id = source["startAfterSegmentId"]
     segment_count = source["closedSegmentCount"]
     last_segment = source["lastClosedSegment"]
     if segment_count == 0:
@@ -571,6 +618,11 @@ def _require_source_consistency(source: dict[str, Any]) -> None:
                 )
             )
             or source["coverage"] != "awaiting-first-closed-segment"
+            or (
+                start_after_segment_id is not None
+                and active_segment_id is not None
+                and start_after_segment_id >= active_segment_id
+            )
         ):
             raise DiagnosticRunScanError(
                 "empty diagnostic run checkpoint source state is inconsistent"
@@ -581,6 +633,10 @@ def _require_source_consistency(source: dict[str, Any]) -> None:
         or last_segment_id is None
         or omitted_prefix != first_segment_id
         or first_segment_id > last_segment_id
+        or (
+            start_after_segment_id is not None
+            and first_segment_id != start_after_segment_id + 1
+        )
         or segment_count != last_segment_id - first_segment_id + 1
         or (
             not finalized
