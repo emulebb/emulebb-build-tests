@@ -421,6 +421,47 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
+def test_server_tcp_source_uses_one_canonical_plaintext_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
 def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
     module = load_suite_module()
     wrong_client = module.parse_args(
@@ -904,6 +945,23 @@ def test_choose_distinct_ports_adds_dedicated_search_publisher(monkeypatch) -> N
     assert len(ports) == len(set(ports.values()))
 
 
+def test_choose_distinct_ports_adds_dedicated_source_publisher(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_source_publisher=True,
+    )
+
+    assert ports["source_publisher_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
 def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch) -> None:
     module = load_suite_module()
     checks: list[tuple[int, bool]] = []
@@ -1175,6 +1233,23 @@ def test_server_keyword_search_is_bilateral_and_uses_a_neutral_fixture() -> None
     assert script_text.count("except rust_local_ed2k.ServerSearchFailure as exc:") == 2
     assert 'report["checks"]["client_server_search_failures"] = search_failures' in script_text
     assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
+
+
+def test_server_tcp_source_uses_neutral_low_id_fixture_and_causal_bilateral_gate() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_SOURCE_FILE_NAME != "deterministicserversource-transfer.bin"
+    assert "include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE" in script_text
+    assert "server_source_publisher.offer_file(" in script_text
+    assert 'source_publisher_login.get("id_kind") != "low-id"' in script_text
+    assert '"mode": "plain-ed2k-link-without-source-hints"' in script_text
+    assert script_text.count("wait_for_transfer_sources(") == 3
+    assert "collect_server_source_diagnostics(" in script_text
+    assert (
+        "server_source_diagnostic_evidence.require_server_source_diagnostic_evidence("
+        in script_text
+    )
 
 
 def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:
@@ -2377,6 +2452,52 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
             {"link": "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/", "paused": False, "categoryId": 0},
         )
     ]
+
+
+def test_wait_for_transfer_sources_requires_exact_metadata_and_positive_count(monkeypatch) -> None:
+    module = load_suite_module()
+    transfer_hash = module.SERVER_SOURCE_FILE_HASH.hex()
+    payloads = [
+        {
+            "hash": transfer_hash,
+            "displayName": module.SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": module.SERVER_SOURCE_FILE_SIZE,
+            "sources": 0,
+        },
+        {
+            "hash": transfer_hash.upper(),
+            "displayName": module.SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": module.SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+    ]
+
+    def fake_http_request(*_args, **_kwargs):
+        payload = payloads.pop(0)
+        return {
+            "status": 200,
+            "json": payload,
+            "raw_json": {"data": payload, "meta": {"apiVersion": "v1"}},
+        }
+
+    def fake_wait_for(resolve, *_args):
+        assert resolve() is None
+        return resolve()
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
+
+    result = module.wait_for_transfer_sources(
+        "http://127.0.0.1:4711",
+        "key",
+        transfer_hash=transfer_hash,
+        expected_name=module.SERVER_SOURCE_FILE_NAME,
+        expected_size=module.SERVER_SOURCE_FILE_SIZE,
+        timeout_seconds=2.0,
+    )
+
+    assert result["sources"] == 1
+    assert len(result["observations"]) == 2
 
 
 def test_observe_client_id_classes_records_high_id_clients() -> None:

@@ -35,6 +35,7 @@ from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
+from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_udp_metadata_diagnostic_evidence  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
@@ -72,6 +73,7 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
+SERVER_TCP_SOURCE = "server-tcp-source"
 SERVER_TCP_METADATA = "server-tcp-metadata"
 SERVER_UDP_METADATA = "server-udp-metadata"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
@@ -84,6 +86,11 @@ SERVER_SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
 SERVER_SEARCH_FILE_SIZE = 12_345
 SERVER_SEARCH_PUBLISHER_HASH = bytes.fromhex("102132435465768798A9BACBDCEDFE0F")
 SERVER_SEARCH_PUBLISHER_NICK = "emulebb-harness-search-publisher"
+SERVER_SOURCE_FILE_HASH = bytes.fromhex("22334455667788990011AABBCCDDEEFF")
+SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
+SERVER_SOURCE_FILE_SIZE = 67_890
+SERVER_SOURCE_PUBLISHER_HASH = bytes.fromhex("32547698BADCFE1021436587A9CBED0F")
+SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
 SERVER_UDP_METADATA_FILE_HASH = bytes.fromhex("11223344556677889900AABBCCDDEEFF")
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
@@ -94,6 +101,7 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_KEYWORD_SEARCH,
+    SERVER_TCP_SOURCE,
     SERVER_TCP_METADATA,
     SERVER_UDP_METADATA,
 )
@@ -175,6 +183,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             in {
                 SERVER_LOGIN_REQUEST,
                 SERVER_KEYWORD_SEARCH,
+                SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
                 SERVER_UDP_METADATA,
             }
@@ -213,6 +222,13 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.protocol_case != "obfuscated-required":
             raise ValueError(
                 "Server keyword search uses the single canonical obfuscated-required case."
+            )
+    if args.transfer_scenario == SERVER_TCP_SOURCE:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("TCP server-source proof requires the MFC diagnostics oracle.")
+        if args.protocol_case != "plain-server-plain-clients":
+            raise ValueError(
+                "TCP server-source proof uses the single canonical plaintext case."
             )
     if args.transfer_scenario == SERVER_TCP_METADATA:
         if args.client2_identity != "mfc_oracle":
@@ -264,6 +280,7 @@ def collect_transfer_diagnostics(
     expected_source_user_hash: str,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
+    server_source_evidence: dict[str, object] | None,
     server_tcp_metadata_evidence: dict[str, object] | None,
     server_udp_metadata_evidence: dict[str, object] | None,
     rust_diagnostics_dir: Path,
@@ -316,6 +333,14 @@ def collect_transfer_diagnostics(
         evidence["serverSearch"] = server_search_evidence
         extra_claims.update(
             server_search_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
+    if server_source_evidence is not None:
+        server_source_diagnostic_evidence.require_server_source_diagnostic_evidence(
+            server_source_evidence
+        )
+        evidence["serverSource"] = server_source_evidence
+        extra_claims.update(
+            server_source_evidence["coverageClaims"]["eligibleCoverageIds"]
         )
     if server_tcp_metadata_evidence is not None:
         server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence(
@@ -439,6 +464,60 @@ def collect_server_search_diagnostics(
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
         driven_searches=driven_searches,
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_server_source_diagnostics(
+    *,
+    expected_file_hash: str,
+    expected_file_name: str,
+    expected_file_size: int,
+    server_endpoint: str,
+    publisher_client_id: int,
+    publisher_tcp_port: int,
+    transfer_rows: dict[str, dict[str, object]],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots bilateral TCP source-discovery evidence before later traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
+        expected_file_hash=expected_file_hash,
+        expected_file_name=expected_file_name,
+        expected_file_size=expected_file_size,
+        server_endpoint=server_endpoint,
+        publisher_client_id=publisher_client_id,
+        publisher_tcp_port=publisher_tcp_port,
+        rust_records=rust_capture.records,
+        mfc_records=mfc_capture.records,
+        transfer_rows=transfer_rows,
     )
     evidence["captures"] = {
         "rust": {
@@ -777,6 +856,7 @@ def choose_distinct_ports(
     lan_bind_addr: str | None = None,
     *,
     include_search_publisher: bool = False,
+    include_source_publisher: bool = False,
     include_metadata_target: bool = False,
 ) -> dict[str, int]:
     """Allocates the suite's local ports without intentional reuse."""
@@ -813,6 +893,7 @@ def choose_distinct_ports(
         "client2_udp",
         "client2_ec",
         *(("search_publisher_tcp",) if include_search_publisher else ()),
+        *(("source_publisher_tcp",) if include_source_publisher else ()),
         *(("metadata_publisher_tcp",) if include_metadata_target else ()),
     ):
         try:
@@ -1713,6 +1794,55 @@ def add_transfer(base_url: str, api_key: str, link: str, transfer_hash: str) -> 
     return {"response": summary, "item": item}
 
 
+def wait_for_transfer_sources(
+    base_url: str,
+    api_key: str,
+    *,
+    transfer_hash: str,
+    expected_name: str,
+    expected_size: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for one exact transfer to expose at least one applied source."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve() -> dict[str, object] | None:
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        payload = response_payload(result, 200)
+        if not isinstance(payload, dict):
+            raise AssertionError(rest_smoke.compact_http_result(result))
+        row = dict(payload)
+        observations.append({**row, "observed_at": round(time.time(), 3)})
+        row_hash = str(row.get("hash") or "").casefold()
+        row_name = row.get("displayName", row.get("name"))
+        row_size = row.get("sizeBytes", row.get("size"))
+        source_count = row.get("sources")
+        exact = bool(
+            row_hash == transfer_hash.casefold()
+            and row_name == expected_name
+            and row_size == expected_size
+            and isinstance(source_count, int)
+            and not isinstance(source_count, bool)
+            and source_count >= 1
+        )
+        if exact:
+            return {**row, "observations": observations[-20:]}
+        return None
+
+    return live_common.wait_for(
+        resolve,
+        timeout_seconds,
+        0.25,
+        f"applied server source for transfer {transfer_hash}",
+    )
+
+
 def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     """Returns the bind and port preferences that matter for this suite."""
 
@@ -2177,9 +2307,12 @@ def main(argv: list[str] | None = None) -> int:
     client2_control_exe: Path | None = None
     client2_process_id: int | None = None
     server_search_publisher: ed2k_wire.Ed2kWireClient | None = None
+    server_source_publisher: ed2k_wire.Ed2kWireClient | None = None
+    source_publisher_login: dict[str, object] | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
+    server_source_evidence: dict[str, object] | None = None
     server_tcp_metadata_evidence: dict[str, object] | None = None
     server_udp_metadata_evidence: dict[str, object] | None = None
     current_phase = "initializing"
@@ -2193,6 +2326,7 @@ def main(argv: list[str] | None = None) -> int:
         ports = choose_distinct_ports(
             args.lan_bind_addr,
             include_search_publisher=args.transfer_scenario == SERVER_KEYWORD_SEARCH,
+            include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
         )
         report["network"] = {
@@ -2365,6 +2499,66 @@ def main(argv: list[str] | None = None) -> int:
                     f"Deterministic server search fixture differs after publication: {search_publication!r}"
                 )
 
+        if args.transfer_scenario == SERVER_TCP_SOURCE:
+            current_phase = "publish_server_source_fixture"
+            server_source_publisher = ed2k_wire.Ed2kWireClient(
+                server_address,
+                ports["ed2k_tcp"],
+                args.server_publish_timeout_seconds,
+            )
+            server_source_publisher.connect()
+            source_publisher_login = server_source_publisher.login(
+                user_hash=SERVER_SOURCE_PUBLISHER_HASH,
+                tcp_port=ports["source_publisher_tcp"],
+                nickname=SERVER_SOURCE_PUBLISHER_NICK,
+            )
+            if source_publisher_login.get("id_kind") != "low-id":
+                raise RuntimeError(
+                    "Deterministic server-source publisher must receive a server-assigned LowID: "
+                    f"{source_publisher_login!r}"
+                )
+            server_source_publisher.offer_file(
+                file_hash=SERVER_SOURCE_FILE_HASH,
+                name=SERVER_SOURCE_FILE_NAME,
+                size=SERVER_SOURCE_FILE_SIZE,
+            )
+            source_publisher_client = server_control.wait_for_client(
+                SERVER_SOURCE_PUBLISHER_NICK,
+                args.server_publish_timeout_seconds,
+            )
+            source_publication = file_observer.wait_for_file(
+                SERVER_SOURCE_FILE_HASH.hex(),
+                SERVER_SOURCE_FILE_SIZE,
+                args.server_publish_timeout_seconds,
+            )
+            source_publication_row = source_publication.get("search_result")
+            if (
+                source_publication.get("indexed") is not True
+                or source_publication.get("name") != SERVER_SOURCE_FILE_NAME
+                or source_publication.get("size") != SERVER_SOURCE_FILE_SIZE
+                or not isinstance(source_publication_row, dict)
+                or source_publication_row.get("result_source_id")
+                != source_publisher_login.get("assigned_id")
+                or source_publication_row.get("result_source_port")
+                != ports["source_publisher_tcp"]
+            ):
+                raise RuntimeError(
+                    "Deterministic server-source fixture differs after publication: "
+                    f"{source_publication!r}"
+                )
+            report["server_source_fixture"] = {
+                "hash": SERVER_SOURCE_FILE_HASH.hex(),
+                "name": SERVER_SOURCE_FILE_NAME,
+                "size": SERVER_SOURCE_FILE_SIZE,
+                "publisher": {
+                    "nickname": SERVER_SOURCE_PUBLISHER_NICK,
+                    "tcpPort": ports["source_publisher_tcp"],
+                    "login": source_publisher_login,
+                    "client": source_publisher_client,
+                },
+                "publication": source_publication,
+            }
+
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_name = (
             "deterministic-transfer-Unicode-é-漢.bin"
@@ -2373,6 +2567,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
             else "deterministicserversearch-transfer.bin"
             if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+            else "deterministicserversource-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_SOURCE
             else "deterministicservertcpmetadata-transfer.bin"
             if args.transfer_scenario == SERVER_TCP_METADATA
             else "deterministicserverudpmetadata-transfer.bin"
@@ -3013,6 +3209,85 @@ def main(argv: list[str] | None = None) -> int:
                 server_search_evidence
             )
 
+        if args.transfer_scenario == SERVER_TCP_SOURCE:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral server-source diagnostics require the MFC process identity."
+                )
+            if source_publisher_login is None:
+                raise RuntimeError("Server-source publisher login was not initialized.")
+            publisher_client_id = source_publisher_login.get("assigned_id")
+            if not isinstance(publisher_client_id, int) or isinstance(
+                publisher_client_id, bool
+            ):
+                raise RuntimeError(
+                    f"Server-source publisher login has no assigned client ID: {source_publisher_login!r}"
+                )
+            source_link = (
+                "ed2k://|file|"
+                f"{urllib.parse.quote(SERVER_SOURCE_FILE_NAME, safe='')}|"
+                f"{SERVER_SOURCE_FILE_SIZE}|{SERVER_SOURCE_FILE_HASH.hex()}|/"
+            )
+            report["checks"]["client_server_source_stimulus"] = {
+                "mode": "plain-ed2k-link-without-source-hints",
+                "link": source_link,
+                "hash": SERVER_SOURCE_FILE_HASH.hex(),
+                "name": SERVER_SOURCE_FILE_NAME,
+                "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            }
+            source_transfer_rows: dict[str, dict[str, object]] = {}
+            current_phase = "mfc_server_source_transfer"
+            report["checks"]["mfc_server_source_transfer_add"] = add_transfer(
+                client2_base_url,
+                args.api_key,
+                source_link,
+                SERVER_SOURCE_FILE_HASH.hex(),
+            )
+            source_transfer_rows["mfc"] = wait_for_transfer_sources(
+                client2_base_url,
+                args.api_key,
+                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_name=SERVER_SOURCE_FILE_NAME,
+                expected_size=SERVER_SOURCE_FILE_SIZE,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            current_phase = "rust_server_source_transfer"
+            report["checks"]["rust_server_source_transfer_add"] = add_transfer(
+                base_url,
+                args.api_key,
+                source_link,
+                SERVER_SOURCE_FILE_HASH.hex(),
+            )
+            source_transfer_rows["rust"] = wait_for_transfer_sources(
+                base_url,
+                args.api_key,
+                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_name=SERVER_SOURCE_FILE_NAME,
+                expected_size=SERVER_SOURCE_FILE_SIZE,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            report["checks"]["client_server_source_transfers"] = source_transfer_rows
+            current_phase = "collect_server_source_diagnostics"
+            server_source_evidence = collect_server_source_diagnostics(
+                expected_file_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_file_name=SERVER_SOURCE_FILE_NAME,
+                expected_file_size=SERVER_SOURCE_FILE_SIZE,
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                publisher_client_id=publisher_client_id,
+                publisher_tcp_port=ports["source_publisher_tcp"],
+                transfer_rows=source_transfer_rows,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_server_source_diagnostics"] = (
+                server_source_evidence
+            )
+            server_source_diagnostic_evidence.require_server_source_diagnostic_evidence(
+                server_source_evidence
+            )
+
         source_user_hash = None
         source_connect_options = None
         stimulus_mode = "direct-source-link"
@@ -3115,6 +3390,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_user_hash=source_user_hash,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
+                server_source_evidence=server_source_evidence,
                 server_tcp_metadata_evidence=server_tcp_metadata_evidence,
                 server_udp_metadata_evidence=server_udp_metadata_evidence,
                 rust_diagnostics_dir=rust_diagnostics_dir,
@@ -3154,6 +3430,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_search_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverSearch"] = server_search_evidence
+        if server_source_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverSource"] = server_source_evidence
         if server_tcp_metadata_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverTcpMetadata"] = server_tcp_metadata_evidence
@@ -3176,6 +3455,16 @@ def main(argv: list[str] | None = None) -> int:
                 close_results["server_search_publisher"] = {"ok": True}
             except Exception as exc:
                 close_results["server_search_publisher"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if server_source_publisher is not None:
+            try:
+                server_source_publisher.close()
+                close_results["server_source_publisher"] = {"ok": True}
+            except Exception as exc:
+                close_results["server_source_publisher"] = {
                     "ok": False,
                     "type": type(exc).__name__,
                     "message": str(exc),
