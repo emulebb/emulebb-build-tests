@@ -75,14 +75,59 @@ def _exact_wire_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
     return check
 
 
+def _exact_startup_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
+    startup_checks = _object(diagnostics.get("startupChecks"), "diagnostics.startupChecks")
+    check = _object(startup_checks.get(name), f"diagnostics.startupChecks.{name}")
+    matched = _positive_int(
+        check.get("matchedFrameCount"),
+        f"diagnostics.startupChecks.{name}.matchedFrameCount",
+    )
+    if check.get("ok") is not True:
+        raise ValueError(f"diagnostics.startupChecks.{name} is not green")
+    if check.get("leftFrameCount") != matched or check.get("rightFrameCount") != matched:
+        raise ValueError(f"diagnostics.startupChecks.{name} is not an exact frame match")
+    if check.get("unmatchedLeftFrameCount") != 0 or check.get("unmatchedRightFrameCount") != 0:
+        raise ValueError(f"diagnostics.startupChecks.{name} contains unmatched frames")
+    return check
+
+
+def _green_startup_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
+    startup_checks = _object(diagnostics.get("startupChecks"), "diagnostics.startupChecks")
+    check = _object(startup_checks.get(name), f"diagnostics.startupChecks.{name}")
+    if check.get("ok") is not True:
+        raise ValueError(f"diagnostics.startupChecks.{name} is not green")
+    return check
+
+
 def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
+    _exact_startup_check(diagnostics, "multipacketRequestFrames")
+    _exact_startup_check(diagnostics, "multipacketAnswerFrames")
+    _green_startup_check(diagnostics, "multipacketRequestSemantics")
+    _green_startup_check(diagnostics, "multipacketAnswerSemantics")
+    _exact_startup_check(diagnostics, "hashsetRequestFrames")
+    _exact_startup_check(diagnostics, "hashsetAnswerFrames")
+    _green_startup_check(diagnostics, "hashsetRequestSemantics")
+    _green_startup_check(diagnostics, "hashsetAnswerSemantics")
+    manifest = _green_startup_check(diagnostics, "persistedManifest")
+    manifest_checks = _object(
+        manifest.get("checks"),
+        "diagnostics.startupChecks.persistedManifest.checks",
+    )
+    if not manifest_checks or any(value is not True for value in manifest_checks.values()):
+        raise ValueError("diagnostics startup manifest checks are not all green")
+    _positive_int(manifest.get("md4HashsetCount"), "persisted MD4 hashset count")
+    _positive_int(manifest.get("aichHashsetCount"), "persisted AICH hashset count")
     _exact_wire_check(diagnostics, "requestFrames")
     payload = _exact_wire_check(diagnostics, "payloadFrames")
     opcodes = payload.get("opcodes")
     if not isinstance(opcodes, list) or not opcodes or not all(isinstance(value, str) for value in opcodes):
         raise ValueError("diagnostics.wireChecks.payloadFrames.opcodes must be a non-empty string list")
     observed = set(opcodes)
-    coverage_ids = ["queue.admission"]
+    coverage_ids = [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+    ]
     if observed.intersection(transfer_diagnostic_evidence.UNCOMPRESSED_PAYLOAD_OPCODES):
         coverage_ids.append("transfer.block.uncompressed")
     if observed.intersection(transfer_diagnostic_evidence.COMPRESSED_PAYLOAD_OPCODES):
@@ -91,6 +136,20 @@ def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == "peer.startup.multipacket-ext2":
+        request = _exact_startup_check(diagnostics, "multipacketRequestFrames")
+        answer = _exact_startup_check(diagnostics, "multipacketAnswerFrames")
+        return (
+            f"Matched {request['matchedFrameCount']} exact EXT2 startup request and "
+            f"{answer['matchedFrameCount']} exact EXT2 answer with decoded filename and status."
+        )
+    if coverage_id == "peer.startup.aich":
+        answer = _exact_startup_check(diagnostics, "hashsetAnswerFrames")
+        manifest = _green_startup_check(diagnostics, "persistedManifest")
+        return (
+            f"Matched {answer['matchedFrameCount']} exact MD4+AICH hashset answer and persisted "
+            f"{manifest['aichHashsetCount']} exact AICH part hashes in Rust."
+        )
     if coverage_id == "queue.admission":
         mfc = _object(_object(diagnostics.get("clients"), "diagnostics.clients").get("mfc"), "diagnostics.clients.mfc")
         checks = _object(mfc.get("checks"), "diagnostics.clients.mfc.checks")

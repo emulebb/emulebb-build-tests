@@ -46,8 +46,67 @@ def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]
             "failures": [],
             "fileHash": FILE_HASH,
             "coverageClaims": {
-                "eligibleCoverageIds": ["queue.admission", "transfer.block.uncompressed"],
+                "eligibleCoverageIds": [
+                    "peer.startup.aich",
+                    "peer.startup.multipacket-ext2",
+                    "queue.admission",
+                    "transfer.block.uncompressed",
+                ],
                 "evidenceLayers": list(EVIDENCE_LAYERS),
+            },
+            "startupChecks": {
+                "multipacketRequestFrames": {
+                    "ok": True,
+                    "matchedFrameCount": 1,
+                    "leftFrameCount": 1,
+                    "rightFrameCount": 1,
+                    "unmatchedLeftFrameCount": 0,
+                    "unmatchedRightFrameCount": 0,
+                },
+                "multipacketAnswerFrames": {
+                    "ok": True,
+                    "matchedFrameCount": 1,
+                    "leftFrameCount": 1,
+                    "rightFrameCount": 1,
+                    "unmatchedLeftFrameCount": 0,
+                    "unmatchedRightFrameCount": 0,
+                },
+                "multipacketRequestSemantics": {"ok": True},
+                "multipacketAnswerSemantics": {"ok": True},
+                "hashsetRequestFrames": {
+                    "ok": True,
+                    "matchedFrameCount": 1,
+                    "leftFrameCount": 1,
+                    "rightFrameCount": 1,
+                    "unmatchedLeftFrameCount": 0,
+                    "unmatchedRightFrameCount": 0,
+                },
+                "hashsetAnswerFrames": {
+                    "ok": True,
+                    "matchedFrameCount": 1,
+                    "leftFrameCount": 1,
+                    "rightFrameCount": 1,
+                    "unmatchedLeftFrameCount": 0,
+                    "unmatchedRightFrameCount": 0,
+                },
+                "hashsetRequestSemantics": {"ok": True},
+                "hashsetAnswerSemantics": {"ok": True},
+                "persistedManifest": {
+                    "ok": True,
+                    "checks": {
+                        "fileHash": True,
+                        "fileName": True,
+                        "fileSize": True,
+                        "completed": True,
+                        "md4Acquired": True,
+                        "md4Hashset": True,
+                        "aichAcquired": True,
+                        "aichRoot": True,
+                        "aichHashset": True,
+                    },
+                    "md4HashsetCount": 2,
+                    "aichHashsetCount": 2,
+                },
             },
             "wireChecks": {
                 "requestFrames": {
@@ -107,9 +166,16 @@ def test_build_transfer_registration_accepts_only_causally_claimed_ids(tmp_path:
         "output-root:reports/deterministic-two-client-transfer/"
         "20261101T183823Z-test/deterministic-two-client-transfer-result.json"
     )
-    assert receipt["coverageIds"] == ["queue.admission", "transfer.block.uncompressed"]
+    assert receipt["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed",
+    ]
     assert receipt["receiptId"] == "rust-mfc-transfer-20261101t183823z"
     assert [row["coverageId"] for row in registration["coverageEvidence"]] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
         "queue.admission",
         "transfer.block.uncompressed",
     ]
