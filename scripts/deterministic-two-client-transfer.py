@@ -102,7 +102,6 @@ SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
 TAGTYPE_UINT32 = 0x03
 ST_SERVERNAME = 0x01
-ST_DYNIP = 0x85
 ST_DESCRIPTION = 0x0B
 ST_PREFERENCE = 0x0E
 SERVER_PRIORITY_NORMAL = 0
@@ -870,7 +869,6 @@ def write_server_met_entries(path: Path, entries: list[dict[str, object]]) -> No
             raise ValueError("Server priority must be normal (0), high (1), or low (2).")
         tags = [
             build_old_ed2k_string_tag(ST_SERVERNAME, name),
-            build_old_ed2k_string_tag(ST_DYNIP, address),
             build_old_ed2k_string_tag(
                 ST_DESCRIPTION,
                 str(entry.get("description") or "workspace deterministic ED2K server"),

@@ -1030,7 +1030,7 @@ def test_resolve_local_p2p_bind_address_accepts_explicit_loopback() -> None:
     assert module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1") == "127.0.0.1"
 
 
-def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_path: Path) -> None:
+def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
 
@@ -1041,9 +1041,9 @@ def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_
     assert data[5:9] == bytes([10, 44, 55, 66])
     port, tag_count = struct.unpack("<HI", data[9:15])
     assert port == 4711
-    assert tag_count == 4
+    assert tag_count == 3
     assert b"local-ed2k" in data
-    assert b"10.44.55.66" in data
+    assert b"10.44.55.66" not in data
 
 
 def test_write_server_met_entries_preserves_anchor_then_low_priority_target(tmp_path: Path) -> None:
