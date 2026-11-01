@@ -169,12 +169,16 @@ def application_record(client: str, seq: int, trace_id: int) -> dict[str, object
 
 
 def client_records(client: str, trace_id: int) -> list[dict[str, object]]:
-    return [
-        request_record(client, 10, trace_id),
-        send_outcome_record(client, 11, trace_id),
-        reply_record(client, 12, trace_id),
-        application_record(client, 13, trace_id),
-    ]
+    records = [request_record(client, 10, trace_id)]
+    if client == "rust":
+        records.append(send_outcome_record(client, 11, trace_id))
+    records.extend(
+        [
+            reply_record(client, 12, trace_id),
+            application_record(client, 13, trace_id),
+        ]
+    )
+    return records
 
 
 def transfer_row(client: str) -> dict[str, object]:
@@ -219,6 +223,21 @@ def test_exact_bilateral_plaintext_source_lookup_is_claimable() -> None:
     assert report["failures"] == []
     assert report["clients"]["rust"]["wire"]["request"]["sequence"] == 10
     assert report["clients"]["rust"]["wire"]["sendOutcome"]["sequence"] == 11
+    assert report["clients"]["rust"]["wire"]["reply"]["causalPredecessor"] == "send_outcome"
+    assert report["clients"]["mfc"]["wire"]["sendOutcome"] == {
+        "deliveryKnown": None,
+        "evidenceModel": "correlated-reply-after-attempt",
+        "obfuscated": None,
+        "ok": True,
+        "outcome": None,
+        "outcomeCount": 0,
+        "required": False,
+        "sequence": None,
+        "successfulOutcomeCount": 0,
+        "traceId": None,
+        "transportMode": None,
+    }
+    assert report["clients"]["mfc"]["wire"]["reply"]["causalPredecessor"] == "request"
     assert report["clients"]["rust"]["wire"]["reply"]["decoded"] == {
         "hash": FILE_HASH.upper(),
         "source_count": 1,
@@ -284,6 +303,16 @@ def test_wrong_request_payload_fails_closed() -> None:
     assert report["ok"] is False
 
 
+def test_outbound_request_is_an_attempt_not_a_fabricated_success() -> None:
+    records = client_records("mfc", 202)
+    records[0]["body"]["outcome"] = "send_succeeded"
+
+    report = build(mfc=records)
+
+    assert report["clients"]["mfc"]["wire"]["request"]["exactPacketCount"] == 0
+    assert "mfc.request" in report["failures"]
+
+
 def test_wrong_request_size_encoding_fails_closed() -> None:
     records = client_records("mfc", 202)
     wrong = bytes.fromhex(FILE_HASH) + (FILE_SIZE + 1).to_bytes(4, "little")
@@ -320,19 +349,37 @@ def test_send_outcome_must_follow_request() -> None:
     [("outcome", "send_failed"), ("deliveryKnown", False), ("transportMode", "obfuscated"), ("obfuscated", True)],
 )
 def test_send_outcome_must_be_delivered_plaintext(field: str, value: object) -> None:
-    records = client_records("mfc", 202)
+    records = client_records("rust", 101)
     records[1]["body"][field] = value
+
+    report = build(rust=records)
+
+    assert report["clients"]["rust"]["wire"]["sendOutcome"]["successfulOutcomeCount"] == 0
+    assert report["ok"] is False
+
+
+def test_mfc_causal_reply_does_not_require_a_fabricated_send_outcome() -> None:
+    report = build()
+
+    assert report["clients"]["mfc"]["wire"]["sendOutcome"]["required"] is False
+    assert report["clients"]["mfc"]["wire"]["sendOutcome"]["ok"] is True
+    assert report["clients"]["mfc"]["wire"]["reply"]["ok"] is True
+
+
+def test_mfc_unexpected_terminal_send_outcome_fails_closed() -> None:
+    records = client_records("mfc", 202)
+    records.insert(1, send_outcome_record("mfc", 11, 202))
 
     report = build(mfc=records)
 
-    assert report["clients"]["mfc"]["wire"]["sendOutcome"]["successfulOutcomeCount"] == 0
-    assert report["ok"] is False
+    assert report["clients"]["mfc"]["wire"]["sendOutcome"]["outcomeCount"] == 1
+    assert "mfc.sendOutcome" in report["failures"]
 
 
 def test_wrong_reply_trace_fails_closed() -> None:
     records = client_records("mfc", 202)
-    records[2]["keys"]["traceId"] = 303
-    records[2]["body"]["traceId"] = 303
+    records[1]["keys"]["traceId"] = 303
+    records[1]["body"]["traceId"] = 303
 
     report = build(mfc=records)
 
@@ -374,7 +421,7 @@ def test_wrong_reply_hash_or_source_fails_closed(payload: bytes) -> None:
 
 def test_duplicate_reply_fails_closed() -> None:
     records = client_records("mfc", 202)
-    duplicate = copy.deepcopy(records[2])
+    duplicate = copy.deepcopy(records[1])
     duplicate["seq"] = 14
     records.append(duplicate)
 
@@ -395,8 +442,8 @@ def test_missing_application_event_fails_closed() -> None:
 
 def test_wrong_application_trace_fails_closed() -> None:
     records = client_records("mfc", 202)
-    records[3]["keys"]["traceId"] = 999
-    records[3]["body"]["traceId"] = 999
+    records[2]["keys"]["traceId"] = 999
+    records[2]["body"]["traceId"] = 999
 
     report = build(mfc=records)
 
@@ -431,7 +478,7 @@ def test_application_must_follow_reply() -> None:
 )
 def test_application_contract_is_exact(field: str, value: object) -> None:
     records = client_records("mfc", 202)
-    records[3]["body"][field] = value
+    records[2]["body"][field] = value
 
     report = build(mfc=records)
 

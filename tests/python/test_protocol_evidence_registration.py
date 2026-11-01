@@ -705,7 +705,11 @@ def _server_source_records(
             "sourceCountAfter": 1,
         },
     )
-    return [request, send_outcome, reply, applied]
+    if client == "rust":
+        return [request, send_outcome, reply, applied]
+    reply["seq"] = reply["streamSeq"] = 2
+    applied["seq"] = applied["streamSeq"] = 3
+    return [request, reply, applied]
 
 
 def _write_server_source_segment(

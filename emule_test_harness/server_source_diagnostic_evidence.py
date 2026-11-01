@@ -119,7 +119,13 @@ def _request_evidence(
             opcode=SOURCE_REQUEST_OPCODE,
         )
     ]
-    exact = [record for record in candidates if _payload(record) == expected_payload and _is_plaintext(record)]
+    exact = [
+        record
+        for record in candidates
+        if _payload(record) == expected_payload
+        and _is_plaintext(record)
+        and _body(record).get("outcome") == "attempted"
+    ]
     request = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
     observed_payload = _payload(candidates[0]) if len(candidates) == 1 else None
     sequence = _sequence(request)
@@ -147,6 +153,7 @@ def _send_outcome_evidence(
     endpoint: str,
     trace_id: int | None,
     request_sequence: int | None,
+    required: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
         record
@@ -172,14 +179,20 @@ def _send_outcome_evidence(
     ]
     outcome = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
     sequence = _sequence(outcome)
-    ok = bool(
-        outcome is not None
-        and isinstance(request_sequence, int)
-        and sequence > request_sequence
+    ok = (
+        bool(
+            outcome is not None
+            and isinstance(request_sequence, int)
+            and sequence > request_sequence
+        )
+        if required
+        else not candidates
     )
     return (
         {
             "ok": ok,
+            "required": required,
+            "evidenceModel": "terminal-socket-outcome" if required else "correlated-reply-after-attempt",
             "outcomeCount": len(candidates),
             "successfulOutcomeCount": len(exact),
             "sequence": sequence or None,
@@ -198,7 +211,8 @@ def _reply_evidence(
     *,
     endpoint: str,
     trace_id: int | None,
-    send_sequence: int | None,
+    predecessor_sequence: int | None,
+    predecessor_kind: str,
     expected_hash: str,
     expected_client_id: int,
     expected_host: str,
@@ -252,8 +266,8 @@ def _reply_evidence(
     ok = bool(
         reply is not None
         and malformed_count == 0
-        and isinstance(send_sequence, int)
-        and sequence > send_sequence
+        and isinstance(predecessor_sequence, int)
+        and sequence > predecessor_sequence
     )
     return (
         {
@@ -264,6 +278,7 @@ def _reply_evidence(
             "exactPacketCount": len(exact),
             "sequence": sequence or None,
             "traceId": _trace_id(reply),
+            "causalPredecessor": predecessor_kind,
             "payloadHex": _payload(reply).hex() if _payload(reply) is not None else None,
             "transportMode": _body(reply).get("transportMode") if reply is not None else None,
             "obfuscated": _body(reply).get("obfuscated") if reply is not None else None,
@@ -435,12 +450,15 @@ def build_server_source_diagnostic_evidence(
             endpoint=server_endpoint,
             trace_id=request.get("traceId"),
             request_sequence=request.get("sequence"),
+            required=client == "rust",
         )
+        reply_predecessor = send_outcome if client == "rust" else request
         reply, _ = _reply_evidence(
             records_by_client[client],
             endpoint=server_endpoint,
             trace_id=request.get("traceId"),
-            send_sequence=send_outcome.get("sequence"),
+            predecessor_sequence=reply_predecessor.get("sequence"),
+            predecessor_kind="send_outcome" if client == "rust" else "request",
             expected_hash=normalized_hash,
             expected_client_id=publisher_client_id,
             expected_host=str(publisher_address),
@@ -516,8 +534,15 @@ def build_server_source_diagnostic_evidence(
         ),
         "transportModeEqual": all(
             part.get("transportMode") == "plaintext" and part.get("obfuscated") is False
-            for wire in (rust_wire, mfc_wire)
-            for part in (wire["request"], wire["sendOutcome"], wire["reply"], wire["application"])
+            for part in (
+                rust_wire["request"],
+                rust_wire["sendOutcome"],
+                rust_wire["reply"],
+                rust_wire["application"],
+                mfc_wire["request"],
+                mfc_wire["reply"],
+                mfc_wire["application"],
+            )
         ),
         "applicationCountsEqual": (
             rust_application.get("wireSourceCount")

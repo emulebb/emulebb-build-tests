@@ -2643,7 +2643,7 @@ def _check_server_socket_source__diagnostics_use_attempt_transport_before_handsh
         'IsServerCryptEnabledConnection() ? _T("obfuscated") : _T("plaintext")'
     )
 
-    assert source.count(attempt_transport) == 5
+    assert source.count(attempt_transport) == 6
     receive_block = source[source.index("bool CServerSocket::PacketReceived(") : source.index("void CServerSocket::SetConnectionState(")]
     state_block = source[source.index("void CServerSocket::LogConnectionStateTransition(") : source.index("void CServerSocket::SendPacket(")]
     send_block = source[source.index("void CServerSocket::SendPacket(") :]
@@ -2675,6 +2675,11 @@ def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality
         log_source.index("void DiagEventLogEd2kServerUdpPacket(")
     ]
     assert '\\"traceId\\":%I64u' in packet_logger
+    assert (
+        'const LPCTSTR pszPacketOutcome = bSend ? _T("attempted") : _T("accepted");'
+        in packet_logger
+    )
+    assert '_T("send_succeeded")' not in packet_logger
     assert socket_source.count(
         "DiagEventLogEd2kServerTcpPacket(pszDiagnosticPeer, m_ullDiagnosticAttemptId,"
     ) == 2
