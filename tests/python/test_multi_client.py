@@ -10,8 +10,8 @@ from emule_test_harness import multi_client
 def test_client_identities_use_stable_workspace_names() -> None:
     assert multi_client.CLIENT_IDENTITIES["emulebb"].profile_id == "cl-emulebb-001"
     assert multi_client.CLIENT_IDENTITIES["emulebb"].nick == "cl-emulebb-001"
-    assert multi_client.CLIENT_IDENTITIES["harness"].profile_id == "cl-harness-002"
-    assert multi_client.CLIENT_IDENTITIES["harness"].nick == "cl-harness-002"
+    assert multi_client.CLIENT_IDENTITIES["mfc_oracle"].profile_id == "cl-mfc-oracle-002"
+    assert multi_client.CLIENT_IDENTITIES["mfc_oracle"].nick == "cl-mfc-oracle-002"
     assert multi_client.CLIENT_IDENTITIES["emuleai"].profile_id == "cl-emuleai-003"
     assert multi_client.CLIENT_IDENTITIES["stock_emule"].profile_id == "cl-stock-emule-004"
     assert multi_client.CLIENT_IDENTITIES["emulebb_rust"].profile_id == "cl-emulebb-rust-005"
@@ -21,7 +21,7 @@ def test_client_identities_use_stable_workspace_names() -> None:
 
 def test_client_long_path_capabilities_are_explicit() -> None:
     report = multi_client.long_path_capability_report(
-        ["emulebb", "emulebb_rust", "emulebb_rust_peer", "harness"]
+        ["emulebb", "emulebb_rust", "emulebb_rust_peer", "mfc_oracle"]
     )
 
     # The eMuleBB family (MFC master + the Rust client) is long-path capable.
@@ -31,7 +31,7 @@ def test_client_long_path_capabilities_are_explicit() -> None:
     assert report["emulebb"]["supports_long_paths"] is True
     assert report["emulebb_rust"]["supports_long_paths"] is True
     assert report["emulebb_rust_peer"]["supports_long_paths"] is True
-    assert report["harness"]["supports_long_paths"] is True
+    assert report["mfc_oracle"]["supports_long_paths"] is True
 
 
 def test_workspace_parent_root_derives_canonical_root(tmp_path: Path, monkeypatch) -> None:
@@ -65,7 +65,7 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     )
 
     assert inventory["emulebb"].available is True
-    assert inventory["harness"].available is True
+    assert inventory["mfc_oracle"].available is True
     assert inventory["emuleai"].available is False
     assert inventory["stock_emule"].available is False
     assert inventory["emulebb_rust"].available is False
@@ -80,19 +80,19 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["amule"].launch_adapter == "amule-ec"
 
 
-def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
+def test_resolve_mfc_oracle_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
-    harness_dir = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release"
-    harness_dir.mkdir(parents=True)
-    renamed_exe = harness_dir / "emulebb.exe"
-    legacy_exe = harness_dir / "emule.exe"
+    oracle_dir = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release"
+    oracle_dir.mkdir(parents=True)
+    renamed_exe = oracle_dir / "emulebb.exe"
+    legacy_exe = oracle_dir / "emule.exe"
 
     renamed_exe.write_bytes(b"")
-    assert multi_client.resolve_harness_client(workspace, "Release").executable == renamed_exe.resolve()
+    assert multi_client.resolve_mfc_oracle_client(workspace, "Release").executable == renamed_exe.resolve()
 
     renamed_exe.unlink()
     legacy_exe.write_bytes(b"")
-    assert multi_client.resolve_harness_client(workspace, "Release").executable == legacy_exe.resolve()
+    assert multi_client.resolve_mfc_oracle_client(workspace, "Release").executable == legacy_exe.resolve()
 
 
 def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, monkeypatch) -> None:

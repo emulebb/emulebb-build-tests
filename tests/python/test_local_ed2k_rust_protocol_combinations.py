@@ -280,7 +280,7 @@ def test_rust_protocol_cases_materialize_run_specific_profile_seed() -> None:
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert "rust_emulebb.materialize_local_profile_seed(" in script_text
-    assert "harness-seed-config" in script_text
+    assert "mfc-oracle-seed-config" in script_text
 
 
 def test_rust_protocol_cases_separate_bind_server_and_peer_addresses() -> None:

@@ -30,7 +30,7 @@ from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
     resolve_amule_client,
-    resolve_harness_client,
+    resolve_mfc_oracle_client,
     resolve_stock_emule_client,
 )
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -93,7 +93,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--client2-app-exe")
-    parser.add_argument("--client2-identity", choices=["harness", "stock_emule", "amule"], default="harness")
+    parser.add_argument("--client2-identity", choices=["mfc_oracle", "stock_emule", "amule"], default="mfc_oracle")
     parser.add_argument("--client2-control-exe")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
@@ -189,7 +189,7 @@ def resolve_client2_app_exe(
     workspace_root: Path,
     configuration: str,
     override: str | None,
-    identity_key: str = "harness",
+    identity_key: str = "mfc_oracle",
     control_override: str | None = None,
 ) -> Path:
     """Resolves the MFC parity peer client executable."""
@@ -203,7 +203,7 @@ def resolve_client2_app_exe(
             control_override=control_override,
         )
     else:
-        availability = resolve_harness_client(workspace_root, configuration, override)
+        availability = resolve_mfc_oracle_client(workspace_root, configuration, override)
     if not availability.available or availability.executable is None:
         raise RuntimeError(f"Client2 {availability.identity.product} executable was not found: {availability.reason}.")
     return availability.executable

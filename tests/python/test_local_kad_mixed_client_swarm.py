@@ -48,8 +48,8 @@ def test_build_participant_specs_uses_stable_client_names() -> None:
     )
 
     assert specs["emulebb"].profile_id == "cl-emulebb-001"
-    assert specs["harness"].profile_id == "cl-harness-002"
-    assert set(specs) == {"emulebb", "harness"}
+    assert specs["mfc_oracle"].profile_id == "cl-mfc-oracle-002"
+    assert set(specs) == {"emulebb", "mfc_oracle"}
 
 
 def test_explicit_rest_bootstrap_plan_covers_available_targeted_paths() -> None:
@@ -61,8 +61,8 @@ def test_explicit_rest_bootstrap_plan_covers_available_targeted_paths() -> None:
     plan = [(path_id, source.profile_id, target.profile_id) for path_id, source, _target_key, target in module.explicit_rest_bootstrap_plan(specs)]
 
     assert plan == [
-        ("emulebb_to_harness", "cl-emulebb-001", "cl-harness-002"),
-        ("harness_to_emulebb", "cl-harness-002", "cl-emulebb-001"),
+        ("emulebb_to_mfc_oracle", "cl-emulebb-001", "cl-mfc-oracle-002"),
+        ("mfc_oracle_to_emulebb", "cl-mfc-oracle-002", "cl-emulebb-001"),
     ]
 
 

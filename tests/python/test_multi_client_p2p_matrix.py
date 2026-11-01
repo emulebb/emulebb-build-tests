@@ -264,7 +264,7 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
             "--app-exe",
             str(tmp_path / "emulebb.exe"),
             "--client2-app-exe",
-            str(tmp_path / "harness.exe"),
+            str(tmp_path / "mfc-oracle.exe"),
             "--profile-seed-dir",
             str(tmp_path / "seed"),
             "--lan-bind-addr",
@@ -279,8 +279,8 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     result = module.run_deterministic_transfer_scenario(paths, args)
 
     assert result["status"] == "passed"
-    assert result["id"] == "cl-emulebb-001-downloads-from-cl-harness-002"
-    assert result["clients"] == ["cl-emulebb-001", "cl-harness-002"]
+    assert result["id"] == "cl-emulebb-001-downloads-from-cl-mfc-oracle-002"
+    assert result["clients"] == ["cl-emulebb-001", "cl-mfc-oracle-002"]
     command = captured["command"]
     assert command[command.index("--artifacts-dir") + 1].endswith("\\h2") or command[command.index("--artifacts-dir") + 1].endswith("/h2")
     assert "--p2p-bind-interface-name" not in command
@@ -562,9 +562,9 @@ def test_matrix_main_stops_stray_ed2k_server_processes_after_child_failure(monke
     calls: list[str] = []
     workspace_root = tmp_path / "workspaces" / "workspace"
     app_exe = tmp_path / "emulebb.exe"
-    harness_exe = tmp_path / "harness.exe"
+    mfc_oracle_exe = tmp_path / "mfc-oracle.exe"
     app_exe.write_text("", encoding="utf-8")
-    harness_exe.write_text("", encoding="utf-8")
+    mfc_oracle_exe.write_text("", encoding="utf-8")
     paths = SimpleNamespace(
         workspace_root=workspace_root,
         app_exe=app_exe,
@@ -584,7 +584,7 @@ def test_matrix_main_stops_stray_ed2k_server_processes_after_child_failure(monke
 
     inventory = {
         "emulebb": available_client("emulebb"),
-        "harness": available_client("harness"),
+        "mfc_oracle": available_client("mfc_oracle"),
         "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
         "stock_emule": multi_client.ClientAvailability(
             multi_client.CLIENT_IDENTITIES["stock_emule"], False, None, "missing"
@@ -605,7 +605,7 @@ def test_matrix_main_stops_stray_ed2k_server_processes_after_child_failure(monke
     monkeypatch.setattr(
         module,
         "run_deterministic_transfer_scenario",
-        lambda _paths, _args: {"id": module.HARNESS_TRANSFER_SCENARIO_ID, "status": "failed"},
+        lambda _paths, _args: {"id": module.MFC_ORACLE_TRANSFER_SCENARIO_ID, "status": "failed"},
     )
     monkeypatch.setattr(module.ed2k_harness, "stop_server_processes", lambda: calls.append("stop_ed2k_server"))
     monkeypatch.setattr(module.harness_cli_common, "write_json_file", lambda _path, _report: calls.append("write_report"))
@@ -618,7 +618,7 @@ def test_matrix_main_stops_stray_ed2k_server_processes_after_child_failure(monke
             "--app-exe",
             str(app_exe),
             "--client2-app-exe",
-            str(harness_exe),
+            str(mfc_oracle_exe),
             "--lan-bind-addr",
             "192.0.2.10",
         ]
@@ -634,9 +634,9 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
     reports: list[dict[str, object]] = []
     workspace_root = tmp_path / "workspaces" / "workspace"
     app_exe = tmp_path / "emulebb.exe"
-    harness_exe = tmp_path / "harness.exe"
+    mfc_oracle_exe = tmp_path / "mfc-oracle.exe"
     app_exe.write_text("", encoding="utf-8")
-    harness_exe.write_text("", encoding="utf-8")
+    mfc_oracle_exe.write_text("", encoding="utf-8")
     paths = SimpleNamespace(
         workspace_root=workspace_root,
         app_exe=app_exe,
@@ -656,7 +656,7 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
 
     inventory = {
         "emulebb": available_client("emulebb"),
-        "harness": available_client("harness"),
+        "mfc_oracle": available_client("mfc_oracle"),
         "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
         "stock_emule": multi_client.ClientAvailability(
             multi_client.CLIENT_IDENTITIES["stock_emule"], False, None, "missing"
@@ -672,7 +672,7 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
     monkeypatch.setattr(
         module,
         "run_deterministic_transfer_scenario",
-        lambda _paths, _args: calls.append("h2") or {"id": module.HARNESS_TRANSFER_SCENARIO_ID, "status": "passed"},
+        lambda _paths, _args: calls.append("h2") or {"id": module.MFC_ORACLE_TRANSFER_SCENARIO_ID, "status": "passed"},
     )
     monkeypatch.setattr(
         module,
@@ -700,7 +700,7 @@ def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path
             "--app-exe",
             str(app_exe),
             "--client2-app-exe",
-            str(harness_exe),
+            str(mfc_oracle_exe),
             "--lan-bind-addr",
             "192.0.2.10",
             "--require-scenario",

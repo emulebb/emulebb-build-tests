@@ -11,7 +11,7 @@ from pathlib import Path
 from .paths import get_workspace_output_root
 
 CLIENT01_EMULEBB = "cl-emulebb-001"
-CLIENT02_HARNESS = "cl-harness-002"
+CLIENT02_MFC_ORACLE = "cl-mfc-oracle-002"
 CLIENT03_EMULEAI = "cl-emuleai-003"
 CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
@@ -19,7 +19,7 @@ CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 CLIENT07_AMULE = "cl-amule-007"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
-NICK_CLIENT02_HARNESS = "cl-harness-002"
+NICK_CLIENT02_MFC_ORACLE = "cl-mfc-oracle-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
 NICK_CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 NICK_CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
@@ -87,10 +87,10 @@ CLIENT_IDENTITIES = {
         role="primary eMuleBB client",
         supports_long_paths=True,
     ),
-    "harness": ClientIdentity(
-        key="harness",
-        profile_id=CLIENT02_HARNESS,
-        nick=NICK_CLIENT02_HARNESS,
+    "mfc_oracle": ClientIdentity(
+        key="mfc_oracle",
+        profile_id=CLIENT02_MFC_ORACLE,
+        nick=NICK_CLIENT02_MFC_ORACLE,
         product="eMuleBB MFC",
         role="MFC parity peer client",
         supports_long_paths=True,
@@ -247,15 +247,10 @@ def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
     )
 
 
-def resolve_harness_client(workspace_root: Path, configuration: str, override: str | None = None) -> ClientAvailability:
-    """Resolves the MFC parity peer executable.
+def resolve_mfc_oracle_client(workspace_root: Path, configuration: str, override: str | None = None) -> ClientAvailability:
+    """Resolves the maintained MFC diagnostics-oracle executable."""
 
-    The historical key stays `harness` for report/profile compatibility, but
-    current parity tests use the active emulebb-main worktree instead of the
-    retired tracing-harness worktree.
-    """
-
-    identity = CLIENT_IDENTITIES["harness"]
+    identity = CLIENT_IDENTITIES["mfc_oracle"]
     if override:
         executable = first_existing_file([Path(override)])
     else:
@@ -410,7 +405,7 @@ def resolve_windows_client_inventory(
     workspace_root: Path,
     app_exe: Path,
     configuration: str,
-    harness_exe: str | None = None,
+    mfc_oracle_exe: str | None = None,
     emuleai_exe: str | None = None,
     stock_emule_exe: str | None = None,
     amule_exe: str | None = None,
@@ -420,7 +415,7 @@ def resolve_windows_client_inventory(
 
     return {
         "emulebb": resolve_emulebb_client(app_exe),
-        "harness": resolve_harness_client(workspace_root, configuration, harness_exe),
+        "mfc_oracle": resolve_mfc_oracle_client(workspace_root, configuration, mfc_oracle_exe),
         "emuleai": resolve_emuleai_client(workspace_root, configuration, emuleai_exe),
         "stock_emule": resolve_stock_emule_client(workspace_root, configuration, stock_emule_exe),
         "emulebb_rust": resolve_emulebb_rust_client(workspace_root),

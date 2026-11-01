@@ -24,7 +24,7 @@ from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
-HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
+MFC_ORACLE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-mfc-oracle-002"
 STOCK_EMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-stock-emule-004"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
@@ -221,7 +221,7 @@ def build_child_script_command(script_name: str, scenario_artifacts: Path, args:
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the mandatory eMuleBB download from the MFC main parity peer."""
 
-    scenario_id = HARNESS_TRANSFER_SCENARIO_ID
+    scenario_id = MFC_ORACLE_TRANSFER_SCENARIO_ID
     scenario_artifacts = paths.source_artifacts_dir / "h2"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
     if args.client2_app_exe:
@@ -229,7 +229,7 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
 
     return run_child_scenario(
         scenario_id=scenario_id,
-        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["harness"].profile_id],
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["mfc_oracle"].profile_id],
         command=command,
         cwd=REPO_ROOT,
         report_path=scenario_artifacts / "deterministic-two-client-transfer.json",
@@ -443,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=paths.workspace_root,
             app_exe=paths.app_exe,
             configuration=args.configuration,
-            harness_exe=args.client2_app_exe,
+            mfc_oracle_exe=args.client2_app_exe,
             emuleai_exe=args.emuleai_exe,
             stock_emule_exe=args.stock_emule_exe,
             amule_exe=args.amule_daemon_exe,
@@ -452,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         report["client_inventory"] = {key: value.as_report() for key, value in inventory.items()}
         mandatory_missing = [
             row.identity.profile_id
-            for row in (inventory["emulebb"], inventory["harness"])
+            for row in (inventory["emulebb"], inventory["mfc_oracle"])
             if not row.available
         ]
         if mandatory_missing:
@@ -468,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         selected_optional_ids = set(args.require_scenario or ())
         run_all_optional = not selected_optional_ids
         scenarios = []
-        if run_all_optional or HARNESS_TRANSFER_SCENARIO_ID in selected_optional_ids:
+        if run_all_optional or MFC_ORACLE_TRANSFER_SCENARIO_ID in selected_optional_ids:
             scenarios.append(run_deterministic_transfer_scenario(paths, args))
         completed_optional_ids: set[str] = set()
         stock_emule = inventory["stock_emule"]

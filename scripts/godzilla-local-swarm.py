@@ -17,7 +17,6 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -59,7 +58,7 @@ rest_smoke = dtt.rest_smoke
 SUITE_NAME = "godzilla-local-swarm"
 API_KEY = "godzilla-local-swarm-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
-CLIENT02 = CLIENT_IDENTITIES["harness"]
+CLIENT02 = CLIENT_IDENTITIES["mfc_oracle"]
 DEFAULT_EMULEBB_FILES = 10_000
 MAX_GODZILLA_CLIENT_COUNT = 30
 BASE_GODZILLA_CLIENT_COUNT = 3
@@ -95,7 +94,7 @@ SHARED_FILES_ROUTE = "/api/v1/shared-files"
 OWNER_SEEDS = {
     "emulebb": 0xE001,
     "emulebbx": 0xE100,
-    "harness": 0xE002,
+    "mfc_oracle": 0xE002,
 }
 
 
@@ -810,7 +809,7 @@ def classify_godzilla_mixed_client_evidence(
 
     peer_transfer_count = 0
     if isinstance(queued_transfer_counts, dict):
-        peer_transfer_count = int(queued_transfer_counts.get("harness") or 0)
+        peer_transfer_count = int(queued_transfer_counts.get("mfc_oracle") or 0)
     return {
         "classification": "emulebb-mfc-peer-swarm",
         "evidence_strength": "full",
@@ -1511,12 +1510,12 @@ def rotate_source_clients(
         return client2_app, []
 
     events: list[dict[str, object]] = []
-    targets: list[str] = ["harness"]
+    targets: list[str] = ["mfc_oracle"]
     targets.extend(str(client["profile_id"]) for client in extra_emulebb_clients)
     for cycle in range(args.client_rotation_cycles):
         time.sleep(args.client_rotation_interval_seconds)
         target = targets[cycle % len(targets)]
-        if target == "harness":
+        if target == "mfc_oracle":
             client2_app, event = restart_mfc_peer_client(
                 app=client2_app,
                 app_exe=client2_app_exe,
@@ -1563,7 +1562,7 @@ def run_adverse_kill_recovery(
     client2_app_exe: Path,
     client2_profile_base: Path,
     client2_base_url: str,
-    harness_links: list[str],
+    mfc_oracle_links: list[str],
     base_url: str,
     admin_base_url: str,
     api_key: str,
@@ -1628,7 +1627,7 @@ def run_adverse_kill_recovery(
             process_id=app_process_id(client1_app),
             dump_dir=procdump_dump_dir,
         )
-        client2_app, event["harness_relaunch"] = restart_mfc_peer_client(
+        client2_app, event["mfc_oracle_relaunch"] = restart_mfc_peer_client(
             app=None,
             app_exe=client2_app_exe,
             profile_base=client2_profile_base,
@@ -1640,8 +1639,10 @@ def run_adverse_kill_recovery(
             timeout_seconds=args.adverse_recovery_timeout_seconds,
             visible_ui=args.visible_ui,
         )
-        if harness_links:
-            event["harness_relaunch"]["peer_download_add"] = queue_emulebb_downloads(client2_base_url, api_key, harness_links)
+        if mfc_oracle_links:
+            event["mfc_oracle_relaunch"]["peer_download_add"] = queue_emulebb_downloads(
+                client2_base_url, api_key, mfc_oracle_links
+            )
         event["after"] = sample_transfer_state(base_url, api_key, f"adverse-cycle-{cycle + 1}-after")
         event["finished_at"] = round(time.time(), 3)
         events.append(event)
@@ -1957,14 +1958,22 @@ def main(argv: list[str] | None = None) -> int:
                 count=args.extra_emulebb_files,
                 args=args,
             )
-        harness_library = generate_library(library_root / CLIENT02.profile_id, owner_key=CLIENT02.key, count=args.harness_files, args=args)
+        mfc_oracle_library = generate_library(
+            library_root / CLIENT02.profile_id,
+            owner_key=CLIENT02.key,
+            count=args.harness_files,
+            args=args,
+        )
         report["libraries"] = {
             CLIENT01.profile_id: {"root": str(library_root / CLIENT01.profile_id), "count": len(emulebb_library)},
             **{
                 profile_id: {"root": str(library_root / profile_id), "count": len(rows)}
                 for profile_id, rows in extra_emulebb_libraries.items()
             },
-            CLIENT02.profile_id: {"root": str(library_root / CLIENT02.profile_id), "count": len(harness_library)},
+            CLIENT02.profile_id: {
+                "root": str(library_root / CLIENT02.profile_id),
+                "count": len(mfc_oracle_library),
+            },
         }
 
         current_phase = "prepare_profiles"
@@ -2199,7 +2208,9 @@ def main(argv: list[str] | None = None) -> int:
                     visible_ui=args.visible_ui,
                 ),
             }
-        harness_known_met = try_wait_for_known_met_size(Path(client2["config_dir"]), args.harness_files, min(args.publish_timeout_seconds, 20.0))
+        mfc_oracle_known_met = try_wait_for_known_met_size(
+            Path(client2["config_dir"]), args.harness_files, min(args.publish_timeout_seconds, 20.0)
+        )
         client2_app, harness_republish = restart_mfc_peer_client(
             app=client2_app,
             app_exe=client2_app_exe,
@@ -2213,7 +2224,7 @@ def main(argv: list[str] | None = None) -> int:
             visible_ui=args.visible_ui,
         )
         report["checks"]["post_hash_publication"][CLIENT02.profile_id] = {
-            "known_met": harness_known_met,
+            "known_met": mfc_oracle_known_met,
             "restart": harness_republish,
         }
         current_phase = "wait_for_first_publication"
@@ -2255,7 +2266,7 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "queue_transfer_waves"
         server_collect_limit = max(args.transfer_count, args.peer_transfer_count, args.harness_transfer_count, 1)
-        harness_rows = harness_library[:server_collect_limit]
+        mfc_oracle_rows = mfc_oracle_library[:server_collect_limit]
         emulebb_rows = emulebb_library[:server_collect_limit]
         extra_rows_by_profile = {
             str(client["profile_id"]): extra_emulebb_libraries[str(client["profile_id"])][
@@ -2267,27 +2278,29 @@ def main(argv: list[str] | None = None) -> int:
             CLIENT02.key: ports["client2_tcp"],
             **{str(client["key"]): int(client["tcp_port"]) for client in extra_emulebb_clients},
         }
-        peer_harness_rows = harness_rows[: args.peer_transfer_count]
+        peer_mfc_oracle_rows = mfc_oracle_rows[: args.peer_transfer_count]
         mixed_rows = interleave_rows(
-            [harness_rows[args.peer_transfer_count :], *extra_rows_by_profile.values()],
-            max(0, args.transfer_count - len(peer_harness_rows)),
+            [mfc_oracle_rows[args.peer_transfer_count :], *extra_rows_by_profile.values()],
+            max(0, args.transfer_count - len(peer_mfc_oracle_rows)),
         )
-        emulebb_source_rows = (peer_harness_rows + mixed_rows)[: args.transfer_count]
+        emulebb_source_rows = (peer_mfc_oracle_rows + mixed_rows)[: args.transfer_count]
         emulebb_links = [
             build_file_link(row, source_ip=p2p_address, source_port=source_port_by_key[row.owner_key])
             for row in emulebb_source_rows
         ]
-        harness_download_rows = emulebb_rows[: args.harness_transfer_count]
-        harness_links = [
+        mfc_oracle_download_rows = emulebb_rows[: args.harness_transfer_count]
+        mfc_oracle_links = [
             build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
-            for row in harness_download_rows
+            for row in mfc_oracle_download_rows
         ]
         report["checks"]["emulebb_download_add"] = queue_emulebb_downloads(base_url, args.api_key, emulebb_links)
         report["checks"]["mfc_peer_download_links"] = write_download_link_file(
             paths.source_artifacts_dir / "mfc-peer-downloads.ed2k.txt",
-            harness_links,
+            mfc_oracle_links,
         )
-        report["checks"]["mfc_peer_download_add"] = queue_emulebb_downloads(client2_base_url, args.api_key, harness_links)
+        report["checks"]["mfc_peer_download_add"] = queue_emulebb_downloads(
+            client2_base_url, args.api_key, mfc_oracle_links
+        )
         extra_download_counts: dict[str, int] = {}
         extra_download_checks: dict[str, list[dict[str, object]]] = {}
         if extra_emulebb_clients and emulebb_rows:
@@ -2300,9 +2313,9 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["extra_emulebb_download_add"] = extra_download_checks
         report["queued_transfer_counts"] = {
             "emulebb": len(emulebb_links),
-            "peer_harness_to_emulebb": len(peer_harness_rows),
-            "harness": len(harness_links),
-            "peer_emulebb_to_harness": len(harness_links),
+            "peer_mfc_oracle_to_emulebb": len(peer_mfc_oracle_rows),
+            "mfc_oracle": len(mfc_oracle_links),
+            "peer_emulebb_to_mfc_oracle": len(mfc_oracle_links),
             "extra_emulebb": extra_download_counts,
         }
         report["mixed_client_evidence"] = classify_godzilla_mixed_client_evidence(
@@ -2319,7 +2332,7 @@ def main(argv: list[str] | None = None) -> int:
             client2_app_exe=client2_app_exe,
             client2_profile_base=Path(client2["profile_base"]),
             client2_base_url=client2_base_url,
-            harness_links=harness_links,
+            mfc_oracle_links=mfc_oracle_links,
             base_url=base_url,
             admin_base_url=admin_base_url,
             api_key=args.api_key,
@@ -2338,7 +2351,7 @@ def main(argv: list[str] | None = None) -> int:
             "ubuntu",
         ]
         current_phase = "spiral_hammer"
-        spiral_links = emulebb_links or harness_links
+        spiral_links = emulebb_links or mfc_oracle_links
         report["checks"]["spiral_hammer"] = run_spiral_hammer(
             base_url=base_url,
             api_key=args.api_key,
@@ -2382,7 +2395,7 @@ def main(argv: list[str] | None = None) -> int:
             client2_app_exe=client2_app_exe,
             client2_profile_base=Path(client2["profile_base"]),
             client2_base_url=client2_base_url,
-            client2_download_links=harness_links,
+            client2_download_links=mfc_oracle_links,
             extra_emulebb_clients=extra_emulebb_clients,
             admin_base_url=admin_base_url,
             api_key=args.api_key,
@@ -2414,7 +2427,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["log_marker_scan"] = scan_log_markers(
             {
                 "primary": Path(client1["profile_base"]) / "logs" / "emulebb-verbose.log",
-                "harness": Path(client2["profile_base"]) / "logs" / "emule.log",
+                "mfc_oracle": Path(client2["profile_base"]) / "logs" / "emule.log",
                 "server": server_log_path,
             },
             [

@@ -35,7 +35,7 @@ rest_smoke = protocol_matrix.rest_smoke
 SUITE_NAME = "local-ed2k-rust-protocol-combinations"
 API_KEY = "local-ed2k-rust-protocol-combinations-key"
 CLIENT_RUST = CLIENT_IDENTITIES["emulebb_rust"]
-CLIENT_HARNESS = CLIENT_IDENTITIES["harness"]
+CLIENT_MFC_ORACLE = CLIENT_IDENTITIES["mfc_oracle"]
 SERVER_UDP_FLAG_EXT_GETSOURCES = 0x0000_0001
 SERVER_UDP_FLAG_EXT_GETFILES = 0x0000_0002
 SERVER_UDP_FLAG_EXT_GETSOURCES2 = 0x0000_0020
@@ -246,7 +246,7 @@ def require_rust_source_metadata(
         or (source.get("address") == expected_ip and int(source.get("port") or 0) == expected_tcp_port)
     ]
     if not matching_sources:
-        raise RuntimeError(f"Rust transfer sources did not include harness endpoint {endpoint}.")
+        raise RuntimeError(f"Rust transfer sources did not include MFC oracle endpoint {endpoint}.")
     source = matching_sources[0]
     user_hash = source.get("userHash")
     has_user_hash = isinstance(user_hash, str) and len(user_hash) == 32 and user_hash.lower() == user_hash
@@ -474,7 +474,7 @@ def run_protocol_case(
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "protocol_surface": rust_protocol_surface(case),
-        "clients": [CLIENT_RUST.profile_id, CLIENT_HARNESS.profile_id],
+        "clients": [CLIENT_RUST.profile_id, CLIENT_MFC_ORACLE.profile_id],
         "checks": {},
     }
     server_process: subprocess.Popen | None = None
@@ -566,29 +566,29 @@ def run_protocol_case(
             "unicode_name": True,
         }
 
-        current_phase = "materialize_harness_profile_seed"
-        harness_seed_dir = rust_emulebb.materialize_local_profile_seed(
+        current_phase = "materialize_mfc_oracle_profile_seed"
+        mfc_oracle_seed_dir = rust_emulebb.materialize_local_profile_seed(
             profile_seed_dir,
-            case_dir / "harness-seed-config",
+            case_dir / "mfc-oracle-seed-config",
             server_address=ed2k_server_address,
             server_port=ports["ed2k_tcp"],
             server_name="emulebb-local-e2e",
         )
-        report["checks"]["harness_profile_seed"] = {
-            "serverMet": str(harness_seed_dir / "server.met"),
+        report["checks"]["mfc_oracle_profile_seed"] = {
+            "serverMet": str(mfc_oracle_seed_dir / "server.met"),
         }
 
-        current_phase = "prepare_harness_profile"
-        harness = live_common.prepare_scenario_profile(
-            harness_seed_dir,
+        current_phase = "prepare_mfc_oracle_profile"
+        mfc_oracle_profile = live_common.prepare_scenario_profile(
+            mfc_oracle_seed_dir,
             case_dir,
             [live_common.win_path(shared_dir, trailing_slash=True)],
-            CLIENT_HARNESS.profile_id,
+            CLIENT_MFC_ORACLE.profile_id,
         )
         dtt.configure_client_profile(
-            config_dir=Path(harness["config_dir"]),
+            config_dir=Path(mfc_oracle_profile["config_dir"]),
             app_exe=client2_app_exe,
-            nick=CLIENT_HARNESS.nick,
+            nick=CLIENT_MFC_ORACLE.nick,
             tcp_port=ports["client2_tcp"],
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
@@ -599,29 +599,33 @@ def run_protocol_case(
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=client_p2p_address,
         )
-        report["checks"]["harness_protocol_preferences"] = protocol_matrix.apply_protocol_preferences(
-            Path(harness["config_dir"]),
+        report["checks"]["mfc_oracle_protocol_preferences"] = protocol_matrix.apply_protocol_preferences(
+            Path(mfc_oracle_profile["config_dir"]),
             case,
         )
         dtt.write_server_met(
-            Path(harness["config_dir"]) / "server.met",
+            Path(mfc_oracle_profile["config_dir"]) / "server.met",
             address=ed2k_server_address,
             port=ports["ed2k_tcp"],
             name="emulebb-local-e2e",
         )
 
-        current_phase = "launch_harness_seed"
+        current_phase = "launch_mfc_oracle"
         client2_app = live_common.launch_app(
             client2_app_exe,
-            Path(harness["profile_base"]),
+            Path(mfc_oracle_profile["profile_base"]),
             minimized_to_tray=True,
         )
         client2_base_url = f"http://{args.lan_bind_addr}:{ports['client2_rest']}"
-        report["checks"]["harness_rest_ready"] = rest_smoke.compact_http_result(
+        report["checks"]["mfc_oracle_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(client2_base_url, args.api_key, args.rest_ready_timeout_seconds)
         )
-        report["checks"]["harness_shared_file_add"] = dtt.add_emule_shared_file(client2_base_url, args.api_key, fixture_file)
-        report["checks"]["harness_shared_files_reload"] = dtt.reload_emule_shared_files(client2_base_url, args.api_key)
+        report["checks"]["mfc_oracle_shared_file_add"] = dtt.add_emule_shared_file(
+            client2_base_url, args.api_key, fixture_file
+        )
+        report["checks"]["mfc_oracle_shared_files_reload"] = dtt.reload_emule_shared_files(
+            client2_base_url, args.api_key
+        )
         shared_link = dtt.wait_for_emule_shared_file_link(
             client2_base_url,
             args.api_key,
@@ -636,26 +640,26 @@ def run_protocol_case(
                 f"MFC parity peer exported ED2K link name {decoded_link_name!r}, expected {fixture_file.name!r}."
             )
         transfer_hash = str(link_info["hash"])
-        report["checks"]["harness_shared_file_link"] = {
+        report["checks"]["mfc_oracle_shared_file_link"] = {
             **shared_link,
             "parsed": link_info,
             "decodedName": decoded_link_name,
         }
-        report["checks"]["harness_server_client"] = ed2k_harness.wait_for_server_client(
+        report["checks"]["mfc_oracle_server_client"] = ed2k_harness.wait_for_server_client(
             admin_base_url,
             args.api_key,
-            CLIENT_HARNESS.nick,
+            CLIENT_MFC_ORACLE.nick,
             args.server_connect_timeout_seconds,
         )
-        harness_server_file = ed2k_harness.wait_for_server_file(
+        mfc_oracle_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
             args.server_publish_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = harness_server_file
-        harness_source_endpoint = ed2k_harness.require_published_endpoint(
-            harness_server_file,
+        report["checks"]["mfc_oracle_server_file"] = mfc_oracle_server_file
+        mfc_oracle_source_endpoint = ed2k_harness.require_published_endpoint(
+            mfc_oracle_server_file,
             port=ports["client2_tcp"],
         )
         secondary_shared_link = dtt.wait_for_emule_shared_file_link(
@@ -672,20 +676,20 @@ def run_protocol_case(
                 f"{secondary_decoded_name!r}, expected {secondary_fixture_file.name!r}."
             )
         secondary_expected_hash = str(secondary_link_info["hash"]).lower()
-        report["checks"]["harness_secondary_shared_file_link"] = {
+        report["checks"]["mfc_oracle_secondary_shared_file_link"] = {
             **secondary_shared_link,
             "parsed": secondary_link_info,
             "decodedName": secondary_decoded_name,
         }
-        harness_secondary_server_file = ed2k_harness.wait_for_server_file(
+        mfc_oracle_secondary_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             secondary_expected_hash,
             args.server_publish_timeout_seconds,
         )
-        report["checks"]["harness_secondary_server_file"] = harness_secondary_server_file
-        harness_secondary_source_endpoint = ed2k_harness.require_published_endpoint(
-            harness_secondary_server_file,
+        report["checks"]["mfc_oracle_secondary_server_file"] = mfc_oracle_secondary_server_file
+        mfc_oracle_secondary_source_endpoint = ed2k_harness.require_published_endpoint(
+            mfc_oracle_secondary_server_file,
             port=ports["client2_tcp"],
         )
         hash_only_shared_link = dtt.wait_for_emule_shared_file_link(
@@ -702,26 +706,26 @@ def run_protocol_case(
                 f"{hash_only_decoded_name!r}, expected {hash_only_fixture_file.name!r}."
             )
         hash_only_hash = str(hash_only_link_info["hash"]).lower()
-        report["checks"]["harness_hash_only_shared_file_link"] = {
+        report["checks"]["mfc_oracle_hash_only_shared_file_link"] = {
             **hash_only_shared_link,
             "parsed": hash_only_link_info,
             "decodedName": hash_only_decoded_name,
         }
-        harness_hash_only_server_file = ed2k_harness.wait_for_server_file(
+        mfc_oracle_hash_only_server_file = ed2k_harness.wait_for_server_file(
             admin_base_url,
             args.api_key,
             hash_only_hash,
             args.server_publish_timeout_seconds,
         )
-        report["checks"]["harness_hash_only_server_file"] = harness_hash_only_server_file
-        harness_hash_only_source_endpoint = ed2k_harness.require_published_endpoint(
-            harness_hash_only_server_file,
+        report["checks"]["mfc_oracle_hash_only_server_file"] = mfc_oracle_hash_only_server_file
+        mfc_oracle_hash_only_source_endpoint = ed2k_harness.require_published_endpoint(
+            mfc_oracle_hash_only_server_file,
             port=ports["client2_tcp"],
         )
-        report["checks"]["harness_published_endpoints"] = {
-            "primary": harness_source_endpoint,
-            "secondary": harness_secondary_source_endpoint,
-            "hashOnly": harness_hash_only_source_endpoint,
+        report["checks"]["mfc_oracle_published_endpoints"] = {
+            "primary": mfc_oracle_source_endpoint,
+            "secondary": mfc_oracle_secondary_source_endpoint,
+            "hashOnly": mfc_oracle_hash_only_source_endpoint,
         }
 
         current_phase = "launch_rust"
@@ -814,8 +818,8 @@ def run_protocol_case(
         report["checks"]["rust_source_metadata"] = require_rust_source_metadata(
             case,
             rust_sources,
-            expected_ip=str(harness_source_endpoint["host"]),
-            expected_tcp_port=int(harness_source_endpoint["port"]),
+            expected_ip=str(mfc_oracle_source_endpoint["host"]),
+            expected_tcp_port=int(mfc_oracle_source_endpoint["port"]),
         )
         source_user_hash = (
             str(report["checks"]["rust_source_metadata"]["userHash"])
@@ -847,8 +851,8 @@ def run_protocol_case(
             )
         secondary_source_link = ed2k_link_with_source(
             str(secondary_shared_link["link"]),
-            str(harness_secondary_source_endpoint["host"]),
-            int(harness_secondary_source_endpoint["port"]),
+            str(mfc_oracle_secondary_source_endpoint["host"]),
+            int(mfc_oracle_secondary_source_endpoint["port"]),
             source_user_hash,
             source_connect_options,
         )
@@ -883,8 +887,8 @@ def run_protocol_case(
         report["checks"]["rust_secondary_source_metadata"] = require_rust_source_metadata(
             case,
             secondary_rust_sources,
-            expected_ip=str(harness_secondary_source_endpoint["host"]),
-            expected_tcp_port=int(harness_secondary_source_endpoint["port"]),
+            expected_ip=str(mfc_oracle_secondary_source_endpoint["host"]),
+            expected_tcp_port=int(mfc_oracle_secondary_source_endpoint["port"]),
         )
         report["checks"]["rust_secondary_hashset_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
@@ -895,8 +899,8 @@ def run_protocol_case(
 
         hash_only_link = ed2k_link_with_source(
             f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/",
-            str(harness_hash_only_source_endpoint["host"]),
-            int(harness_hash_only_source_endpoint["port"]),
+            str(mfc_oracle_hash_only_source_endpoint["host"]),
+            int(mfc_oracle_hash_only_source_endpoint["port"]),
             source_user_hash,
             source_connect_options,
         )
@@ -955,8 +959,8 @@ def run_protocol_case(
         report["checks"]["rust_hash_only_source_metadata"] = require_rust_source_metadata(
             case,
             hash_only_sources,
-            expected_ip=str(harness_hash_only_source_endpoint["host"]),
-            expected_tcp_port=int(harness_hash_only_source_endpoint["port"]),
+            expected_ip=str(mfc_oracle_hash_only_source_endpoint["host"]),
+            expected_tcp_port=int(mfc_oracle_hash_only_source_endpoint["port"]),
         )
         report["checks"]["rust_hash_only_manifest_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
@@ -972,10 +976,10 @@ def run_protocol_case(
         }
         report["checks"]["ed2k_server_stats_final"] = ed2k_harness.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["profiles"] = {
-            CLIENT_HARNESS.profile_id: {
-                "profile_base": str(harness["profile_base"]),
-                "config_dir": str(harness["config_dir"]),
-                "preferences": dtt.read_preferences_snapshot(Path(harness["config_dir"])),
+            CLIENT_MFC_ORACLE.profile_id: {
+                "profile_base": str(mfc_oracle_profile["profile_base"]),
+                "config_dir": str(mfc_oracle_profile["config_dir"]),
+                "preferences": dtt.read_preferences_snapshot(Path(mfc_oracle_profile["config_dir"])),
             },
             CLIENT_RUST.profile_id: {
                 "profile_dir": str(rust_profile),
@@ -991,9 +995,9 @@ def run_protocol_case(
         if client2_app is not None:
             try:
                 live_common.close_app_cleanly(client2_app)
-                cleanup[CLIENT_HARNESS.profile_id] = {"ok": True}
+                cleanup[CLIENT_MFC_ORACLE.profile_id] = {"ok": True}
             except Exception as exc:
-                cleanup[CLIENT_HARNESS.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+                cleanup[CLIENT_MFC_ORACLE.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         rust_client.stop_process_tree(rust_process)
         ed2k_harness.stop_process(server_process)
         report["cleanup"] = cleanup
@@ -1040,7 +1044,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["server_build"] = ed2k_binary.build
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
-        report["clients"] = [asdict(CLIENT_RUST), asdict(CLIENT_HARNESS)]
+        report["clients"] = [asdict(CLIENT_RUST), asdict(CLIENT_MFC_ORACLE)]
 
         selected_cases = protocol_matrix.selected_cases(args.case)
         report["checks"]["protocol_matrix_coverage"] = require_protocol_coverage(

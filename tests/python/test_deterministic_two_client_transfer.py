@@ -906,7 +906,7 @@ def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(monke
 def test_godzilla_mixed_client_evidence_reports_mfc_peer_swarm() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_mfc_peer_evidence_test")
 
-    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"harness": 7})
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"mfc_oracle": 7})
 
     assert evidence["classification"] == "emulebb-mfc-peer-swarm"
     assert evidence["evidence_strength"] == "full"
@@ -1087,7 +1087,7 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert module.DEFAULT_FIXTURE_SIZE_BYTES == 132 * 1024 * 1024
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
-    assert args.client2_identity == "harness"
+    assert args.client2_identity == "mfc_oracle"
 
 
 def test_client2_identity_accepts_stock_baseline() -> None:

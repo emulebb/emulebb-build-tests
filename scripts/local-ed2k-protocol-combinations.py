@@ -40,7 +40,7 @@ rest_smoke = dtt.rest_smoke
 SUITE_NAME = "local-ed2k-protocol-combinations"
 API_KEY = "local-ed2k-protocol-combinations-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
-CLIENT02 = CLIENT_IDENTITIES["harness"]
+CLIENT02 = CLIENT_IDENTITIES["mfc_oracle"]
 PROTOCOL_PADDING_LENGTH = 128
 
 
