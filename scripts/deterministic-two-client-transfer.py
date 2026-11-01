@@ -1999,6 +1999,9 @@ def main(argv: list[str] | None = None) -> int:
                 withdraw_timeout_seconds=args.source_withdraw_timeout_seconds,
                 publish_timeout_seconds=args.server_publish_timeout_seconds,
             )
+            client2_process_id = live_common.resolve_app_process_id(client2_app)
+            if client2_process_id is None:
+                raise RuntimeError("Could not resolve the recycled client2 process identity.")
             report["source_lifecycle"] = {
                 "enabled": True,
                 "initial": {

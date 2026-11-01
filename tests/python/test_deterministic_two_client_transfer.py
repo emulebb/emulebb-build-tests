@@ -516,6 +516,7 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text
     assert "converged_live_wire.resolve_rust_regular_exe(" not in script_text
     assert "transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(" in script_text
+    assert script_text.count("client2_process_id = live_common.resolve_app_process_id(client2_app)") == 2
     assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
 
 
