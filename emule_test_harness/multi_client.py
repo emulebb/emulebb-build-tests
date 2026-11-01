@@ -7,6 +7,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .paths import get_workspace_output_root
 
@@ -252,27 +253,35 @@ def resolve_mfc_oracle_client(
     configuration: str,
     override: str | None = None,
     output_root: Path | None = None,
+    *,
+    flavor: Literal["standard", "diagnostics"] = "standard",
 ) -> ClientAvailability:
-    """Resolves the maintained MFC diagnostics-oracle executable."""
+    """Resolves one canonical maintained MFC oracle build flavor."""
 
     identity = CLIENT_IDENTITIES["mfc_oracle"]
     source_repo = (workspace_root / "app" / "emulebb-main").resolve()
+    if flavor == "standard":
+        executable_name = "emulebb.exe"
+    elif flavor == "diagnostics":
+        executable_name = "emulebb-diagnostics.exe"
+    else:  # pragma: no cover - guarded by the type contract
+        raise ValueError(f"Unsupported MFC oracle flavor: {flavor!r}.")
     base_dir = (
         output_root.resolve() if output_root is not None else get_workspace_output_root()
-    ) / "builds" / "app" / "main" / "x64" / configuration / "standard" / "bin"
+    ) / "builds" / "app" / "main" / "x64" / configuration / flavor / "bin"
     if override:
         executable = first_existing_file([Path(override)])
         expected_location = Path(override).resolve()
     else:
-        executable = first_existing_file([base_dir / "emulebb.exe"])
+        executable = first_existing_file([base_dir / executable_name])
         expected_location = base_dir
-    reason = "available" if executable is not None else "missing eMuleBB main executable"
+    reason = "available" if executable is not None else f"missing eMuleBB main {flavor} executable"
     return ClientAvailability(
         identity=identity,
         available=executable is not None,
         executable=executable,
         reason=reason if executable is not None else f"{reason} under {expected_location}",
-        launch_adapter="emulebb-main-rest-profile",
+        launch_adapter=f"emulebb-main-{flavor}-rest-profile",
         deterministic_transfer_adapter=True,
         source_repo=source_repo,
         source_revision=git_head_revision(source_repo),

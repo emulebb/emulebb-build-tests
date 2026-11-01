@@ -104,6 +104,37 @@ def test_resolve_mfc_oracle_client_uses_canonical_external_build(tmp_path: Path)
     assert availability.source_repo == source_repo.resolve()
 
 
+def test_resolve_mfc_oracle_client_selects_diagnostics_flavor(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspaces" / "workspace"
+    source_repo = workspace / "app" / "emulebb-main"
+    source_repo.mkdir(parents=True)
+    output_root = tmp_path / "output"
+    oracle_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "diagnostics"
+        / "bin"
+        / "emulebb-diagnostics.exe"
+    )
+    oracle_exe.parent.mkdir(parents=True)
+    oracle_exe.write_bytes(b"")
+
+    availability = multi_client.resolve_mfc_oracle_client(
+        workspace,
+        "Release",
+        output_root=output_root,
+        flavor="diagnostics",
+    )
+
+    assert availability.executable == oracle_exe.resolve()
+    assert availability.launch_adapter == "emulebb-main-diagnostics-rest-profile"
+    assert availability.source_repo == source_repo.resolve()
+
+
 def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))

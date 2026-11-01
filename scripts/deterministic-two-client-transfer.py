@@ -200,7 +200,12 @@ def resolve_client2_availability(
             executable_override=override,
             control_override=control_override,
         )
-    return resolve_mfc_oracle_client(workspace_root, configuration, override)
+    return resolve_mfc_oracle_client(
+        workspace_root,
+        configuration,
+        override,
+        flavor="diagnostics",
+    )
 
 
 def resolve_client2_app_exe(
@@ -1673,7 +1678,7 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_exe = converged_live_wire.resolve_rust_regular_exe(get_workspace_output_root())
+        rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(get_workspace_output_root())
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
         rust_output = paths.source_artifacts_dir / "rust-client.out"
         rust_client.write_rust_profile(

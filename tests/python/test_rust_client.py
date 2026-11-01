@@ -622,6 +622,32 @@ def test_start_rust_client_executable_uses_staged_binary(monkeypatch: pytest.Mon
     calls[0]["stdout"].close()
 
 
+def test_start_rust_client_executable_passes_child_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return object()
+
+    executable = tmp_path / "emulebb-rust-diagnostics.exe"
+    executable.write_bytes(b"exe")
+    child_env = {"EMULEBB_RUST_LOG_DIR": str(tmp_path / "diagnostics")}
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    rust_client.start_rust_client_executable(
+        executable,
+        tmp_path / "profile",
+        tmp_path / "rust.out",
+        env=child_env,
+    )
+
+    assert calls[0]["env"] is child_env
+    calls[0]["stdout"].close()
+
+
 def test_start_rust_client_executable_append_keeps_restart_log(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

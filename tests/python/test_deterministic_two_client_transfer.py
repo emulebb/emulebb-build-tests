@@ -283,9 +283,9 @@ def test_resolve_client2_app_exe_uses_canonical_external_build(
         / "main"
         / "x64"
         / "Release"
-        / "standard"
+        / "diagnostics"
         / "bin"
-        / "emulebb.exe"
+        / "emulebb-diagnostics.exe"
     )
     client2_exe.parent.mkdir(parents=True)
     client2_exe.write_bytes(b"")
