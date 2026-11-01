@@ -65,6 +65,7 @@ def test_protocol_live_suites_have_explicit_catalog_classification() -> None:
     assert by_path["scripts/godzilla-local-swarm.py"]["classification"] == "product-only"
     assert protocol["cleanupCandidates"] == [
         "scripts/local-ed2k-protocol-combinations.py",
+        "scripts/local-ed2k-rust-protocol-combinations.py",
         "scripts/local-ed2k-search-soak.py",
         "scripts/native-windows-parity-campaign.py",
         "scripts/rust-ed2k-total-parity-audit.py",
