@@ -2094,6 +2094,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.client2_identity == "mfc_oracle":
             if client2_process_id is None:
                 raise RuntimeError("MFC diagnostics require the launched process identity.")
+            current_phase = "stop_mfc_for_diagnostics"
+            live_common.close_app_cleanly(client2_app)
+            client2_app = None
+            report["checks"]["mfc_diagnostics_shutdown"] = {
+                "ok": True,
+                "processId": client2_process_id,
+            }
             current_phase = "collect_transfer_diagnostics"
             diagnostics = collect_transfer_diagnostics(
                 file_hash=transfer_hash,
