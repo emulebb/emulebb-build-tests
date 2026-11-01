@@ -28,6 +28,7 @@ from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
+from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
@@ -2130,50 +2131,47 @@ def main(argv: list[str] | None = None) -> int:
             client2_port=ports["client2_tcp"],
         )
 
-        current_phase = "add_transfer"
+        source_user_hash = None
+        source_connect_options = None
+        stimulus_mode = "direct-source-link"
         if protocol_case is not None:
-            search_result = rust_local_ed2k.wait_for_server_search_result(
-                base_url,
-                args.api_key,
-                query=fixture_file.name,
-                transfer_hash=transfer_hash,
-                timeout_seconds=args.server_publish_timeout_seconds,
+            source_user_hash = mfc_profile_import.read_preferences_dat_user_hash(
+                Path(client2["config_dir"]) / "preferences.dat"
+            ).hex()
+            source_connect_options = ed2k_protocol_cases.client_connect_options(
+                protocol_case
             )
-            search_id = str(search_result["search"]["id"])
-            report["checks"]["client1_transfer_stimulus"] = {
-                "mode": "server-search-result",
-                **search_result,
-            }
-            report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
-                base_url,
-                "POST",
-                f"/api/v1/searches/{search_id}/results/{transfer_hash}/operations/download",
-                args.api_key,
-                {"paused": False},
-            )
-        else:
-            direct_source_link = rust_local_ed2k.ed2k_link_with_source(
-                exported_link,
-                p2p_address,
-                ports["client2_tcp"],
-            )
-            report["checks"]["client1_transfer_stimulus"] = {
-                "mode": "direct-source-link",
-                "baseLink": exported_link,
-                "transferLink": direct_source_link,
-                "source": {"host": p2p_address, "port": ports["client2_tcp"]},
-            }
-            report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
-                base_url,
-                "POST",
-                "/api/v1/transfers",
-                args.api_key,
-                {
-                    "link": direct_source_link,
-                    "paused": False,
-                    "categoryId": 0,
-                },
-            )
+            stimulus_mode = "direct-source-link-with-profile-identity"
+        direct_source_link = rust_local_ed2k.ed2k_link_with_source(
+            exported_link,
+            p2p_address,
+            ports["client2_tcp"],
+            source_user_hash,
+            source_connect_options,
+        )
+        report["checks"]["client1_transfer_stimulus"] = {
+            "mode": stimulus_mode,
+            "baseLink": exported_link,
+            "transferLink": direct_source_link,
+            "source": {
+                "host": p2p_address,
+                "port": ports["client2_tcp"],
+                "userHash": source_user_hash,
+                "connectOptions": source_connect_options,
+            },
+        }
+        current_phase = "add_transfer"
+        report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
+            base_url,
+            "POST",
+            "/api/v1/transfers",
+            args.api_key,
+            {
+                "link": direct_source_link,
+                "paused": False,
+                "categoryId": 0,
+            },
+        )
         report["checks"]["client1_transfer_completed_file"] = rust_local_ed2k.wait_for_transfer_completed(
             base_url,
             args.api_key,

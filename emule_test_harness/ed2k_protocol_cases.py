@@ -116,6 +116,16 @@ def expected_payload_encoding(case: ProtocolCase) -> str:
     return "compressed" if case.fixture_pattern == COMPRESSIBLE else "uncompressed"
 
 
+def client_connect_options(case: ProtocolCase) -> int:
+    """Returns the stock source-hint crypt bits represented by one case."""
+
+    return (
+        int(case.client_crypt_supported)
+        | (int(case.client_crypt_requested) << 1)
+        | (int(case.client_crypt_required) << 2)
+    )
+
+
 def server_udp_flags(case: ProtocolCase) -> int:
     """Returns the stock server capability flags advertised to Rust."""
 

@@ -102,3 +102,7 @@ def test_expected_peer_transport_mode_is_derived_from_case() -> None:
     assert ed2k_protocol_cases.expected_payload_encoding(plain) == "uncompressed"
     compressible = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
     assert ed2k_protocol_cases.expected_payload_encoding(compressible) == "compressed"
+    required = ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
+    assert ed2k_protocol_cases.client_connect_options(plain) == 0
+    assert ed2k_protocol_cases.client_connect_options(obfuscated) == 0x03
+    assert ed2k_protocol_cases.client_connect_options(required) == 0x07

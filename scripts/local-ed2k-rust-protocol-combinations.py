@@ -111,16 +111,6 @@ def rust_transfer_display_name(transfer: dict[str, object]) -> str:
     return str(transfer.get("displayName") or transfer.get("name") or "")
 
 
-def client_connect_options(case: ed2k_protocol_cases.ProtocolCase) -> int:
-    """Returns the peer crypt bits represented by one protocol-matrix case."""
-
-    return (
-        int(case.client_crypt_supported)
-        | (int(case.client_crypt_requested) << 1)
-        | (int(case.client_crypt_required) << 2)
-    )
-
-
 def require_protocol_coverage(
     cases: list[ed2k_protocol_cases.ProtocolCase],
     *,
@@ -790,7 +780,11 @@ def run_protocol_case(
             if case.client_crypt_supported
             else None
         )
-        source_connect_options = client_connect_options(case) if source_user_hash else None
+        source_connect_options = (
+            ed2k_protocol_cases.client_connect_options(case)
+            if source_user_hash
+            else None
+        )
         report["checks"]["rust_hashset_metadata"] = require_rust_hashset_metadata(
             rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
             expected_hash=transfer_hash,

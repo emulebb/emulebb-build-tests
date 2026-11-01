@@ -117,14 +117,6 @@ def test_ed2k_link_with_source_appends_obfuscated_identity_hint() -> None:
     )
 
 
-def test_client_connect_options_preserve_each_crypt_preference_bit() -> None:
-    module = load_suite_module()
-
-    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]) == 0
-    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred"]) == 3
-    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]) == 7
-
-
 def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
     module = load_suite_module()
 
