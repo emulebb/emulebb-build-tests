@@ -154,6 +154,7 @@ Script inventory:
 | `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes UDP/eD2K diagnostic JSONL into candidate evidence |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
 | `scripts\stock-protocol-oracle-proof.py` | stock protocol oracle gate | maintained | validates complete binary/state coverage and pinned stock-source anchors; the overnight form also executes all five Rust packages containing cited proof selectors |
+| `scripts\local-ed2k-server-state-campaign.py` | upstream server dependency gate | maintained | proves stock LowID login, publish, hash/keyword search, plain/obfuscated source replies, and withdrawal with causal wire transcripts; infrastructure-only, not Rust parity evidence |
 | `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust route, query, body, Settings section-resource metadata, and section-resource response shapes against the Rust OpenAPI artifact |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
 | `scripts\native-windows-parity-campaign.py` | native Rust/MFC parity runner | maintained | fresh builds, protocol/state oracle stages, then sequential direct UPnP and forced-firewalled diagnostics captures |

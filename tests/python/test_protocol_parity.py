@@ -62,16 +62,25 @@ def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() ->
     }
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
-        "canonical": 8,
+        "canonical": 7,
         "duplicate": 1,
-        "historical": 1,
+        "historical": 2,
         "product-only": 2,
-        "support": 11,
+        "support": 12,
     }
     assert report["assets"]["cleanupCandidates"] == [
+        "scripts/local-ed2k-search-soak.py",
         "scripts/native-windows-parity-campaign.py",
         "scripts/rust-ed2k-total-parity-audit.py",
     ]
+
+    assets = {row["path"]: row for row in payload["assetClassifications"]}
+    assert assets["scripts/local-ed2k-server-state-campaign.py"]["classification"] == "support"
+    assert assets["scripts/local-ed2k-search-soak.py"]["classification"] == "historical"
+    server_queries = next(
+        group for group in payload["coverageGroups"] if group["groupId"] == "server-query-reply"
+    )
+    assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
 
 
 def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixture[str]) -> None:

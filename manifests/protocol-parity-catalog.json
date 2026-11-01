@@ -55,10 +55,16 @@
       "reason": "Primary local cross-client UDP reask and queue-state runner."
     },
     {
-      "campaignIds": ["server-session-source"],
-      "classification": "canonical",
+      "campaignIds": [],
+      "classification": "historical",
       "path": "scripts/local-ed2k-search-soak.py",
-      "reason": "Deterministic local server search and source-discovery runner."
+      "reason": "Legacy aggregate Rust search soak with fork-admin assumptions; retained for extraction only and cannot own parity evidence."
+    },
+    {
+      "campaignIds": ["server-session-source"],
+      "classification": "support",
+      "path": "scripts/local-ed2k-server-state-campaign.py",
+      "reason": "Upstream-clean server dependency gate with causal wire transcripts; proves harness infrastructure only, never Rust product parity."
     },
     {
       "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
@@ -316,7 +322,7 @@
       "groupId": "server-query-reply",
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["server-session-source"],
-      "deterministicRunner": "scripts/local-ed2k-search-soak.py",
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
       "latestEvidence": {
         "reason": "No current-head execution receipt is registered in the catalog.",
         "verdict": "evidence-incomplete"
