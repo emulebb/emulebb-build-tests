@@ -95,7 +95,7 @@ def _packet_matches(
         and body.get("opcode") == opcode
         and body.get("transportMode") == "plaintext"
         and body.get("obfuscated") is False
-        and _trace_id(record) is not None
+        and (direction == "send" or _trace_id(record) is not None)
     )
 
 

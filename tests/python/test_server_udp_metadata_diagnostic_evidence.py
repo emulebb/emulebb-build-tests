@@ -203,6 +203,19 @@ def test_builds_complete_bilateral_udp_metadata_proof() -> None:
     evidence.require_server_udp_metadata_diagnostic_evidence(result)
 
 
+def test_outbound_requests_do_not_require_receive_correlation_ids() -> None:
+    records = _records()
+    for index in (0, 3):
+        records[index]["keys"].pop("traceId")
+        records[index]["body"].pop("traceId")
+
+    result = _build(rust_records=records, mfc_records=records)
+
+    assert result["passed"] is True
+    assert result["clients"]["rust"]["wire"]["traceIds"]["statusRequest"] is None
+    assert result["clients"]["rust"]["wire"]["traceIds"]["descriptionRequest"] is None
+
+
 def test_rejects_mismatched_reply_challenge() -> None:
     records = _records()
     reply = records[1]
