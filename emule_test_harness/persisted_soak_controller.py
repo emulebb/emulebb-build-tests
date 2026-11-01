@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 import copy
+from functools import wraps
 import hashlib
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -138,7 +140,9 @@ class SessionConfig:
     inputs: Path
     vpn_guard_config: Path
     lan_bind_addr: str = DEFAULT_CONTROL_BIND
-    rest_timeout_seconds: float = soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
+    rest_timeout_seconds: float = (
+        soak_launch.DEFAULT_DUAL_CLIENT_REST_READY_TIMEOUT_SECONDS
+    )
     connect_timeout_seconds: float = 240.0
     rust_server: str = soak_launch.OPERATOR_SERVER
     mfc_server: str = soak_launch.OPERATOR_SERVER
@@ -164,13 +168,17 @@ def utc_timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def build_control_paths(output_root: Path, control_dir: Path | None = None) -> ControlPaths:
+def build_control_paths(
+    output_root: Path, control_dir: Path | None = None
+) -> ControlPaths:
     """Builds the stable detached-controller output layout."""
 
     resolved_output_root = output_root.resolve()
     root = (control_dir or resolved_output_root / "soak" / "control").resolve()
     if not path_is_relative_to(root, resolved_output_root):
-        raise RuntimeError(f"Persisted soak control files must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {root}")
+        raise RuntimeError(
+            f"Persisted soak control files must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {root}"
+        )
     return ControlPaths(
         control_dir=root,
         manifest=root / "persisted-soak.latest.json",
@@ -202,7 +210,11 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     temporary.replace(path)
 
 
@@ -217,6 +229,87 @@ def load_json(path: Path) -> dict[str, Any]:
     return parsed
 
 
+def require_finite_number(
+    value: float,
+    name: str,
+    *,
+    allow_zero: bool = False,
+) -> None:
+    """Rejects unbounded or non-positive controller timing values."""
+
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        qualifier = "non-negative" if allow_zero else "greater than zero"
+        raise ValueError(f"{name} must be finite and {qualifier}.")
+
+
+def transition_lock_path(paths: ControlPaths) -> Path:
+    """Returns the output-root lock shared by all persisted-soak controllers."""
+
+    return paths.last_run_manifest.parents[2] / ".persisted-soak-controller.lock"
+
+
+@contextmanager
+def session_transition_lock(paths: ControlPaths):
+    """Serializes start/stop transitions without retaining process ownership."""
+
+    lock_path = transition_lock_path(paths)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+b")
+    locked = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError(
+                f"Another persisted-soak start/stop transition is active: {lock_path}"
+            ) from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def serialized_session_transition(paths_position: int):
+    """Decorates one controller operation with the shared transition lock."""
+
+    def decorate(function):
+        @wraps(function)
+        def locked(*args, **kwargs):
+            paths = kwargs.get("paths")
+            if paths is None:
+                paths = args[paths_position]
+            if not isinstance(paths, ControlPaths):
+                raise TypeError("Persisted-soak transition requires ControlPaths.")
+            with session_transition_lock(paths):
+                return function(*args, **kwargs)
+
+        return locked
+
+    return decorate
+
+
 def file_sha256(path: Path) -> str:
     """Returns the SHA-256 digest for one file without loading it whole."""
 
@@ -227,7 +320,9 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def copy_hash_state_file(source: Path, destination: Path, *, kind: str) -> dict[str, Any]:
+def copy_hash_state_file(
+    source: Path, destination: Path, *, kind: str
+) -> dict[str, Any]:
     """Copies one stopped-profile hash-state file and verifies its digest."""
 
     if not source.is_file():
@@ -237,7 +332,9 @@ def copy_hash_state_file(source: Path, destination: Path, *, kind: str) -> dict[
     source_digest = file_sha256(source)
     destination_digest = file_sha256(destination)
     if destination_digest != source_digest:
-        raise RuntimeError(f"Hash-state backup digest mismatch for {kind}: {destination}")
+        raise RuntimeError(
+            f"Hash-state backup digest mismatch for {kind}: {destination}"
+        )
     return {
         "kind": kind,
         "source": str(source.resolve()),
@@ -253,15 +350,23 @@ def backup_rust_hash_database(source: Path, destination: Path) -> dict[str, Any]
     if not source.is_file():
         raise RuntimeError(f"Required Rust hash-state database is missing: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True)) as source_db:
+    with closing(
+        sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True)
+    ) as source_db:
         with closing(sqlite3.connect(destination)) as backup_db:
             source_db.backup(backup_db)
             integrity = backup_db.execute("PRAGMA quick_check").fetchone()
             if integrity is None or integrity[0] != "ok":
-                raise RuntimeError(f"Rust hash-state backup failed SQLite quick_check: {integrity!r}")
-            known_file_count = int(backup_db.execute("SELECT COUNT(*) FROM known_files").fetchone()[0])
+                raise RuntimeError(
+                    f"Rust hash-state backup failed SQLite quick_check: {integrity!r}"
+                )
+            known_file_count = int(
+                backup_db.execute("SELECT COUNT(*) FROM known_files").fetchone()[0]
+            )
             if known_file_count <= 0:
-                raise RuntimeError("Rust hash-state backup contains no known_files rows.")
+                raise RuntimeError(
+                    "Rust hash-state backup contains no known_files rows."
+                )
     return {
         "kind": "rust-metadata-db",
         "source": str(source.resolve()),
@@ -283,36 +388,65 @@ def backup_stopped_hash_state(
 
     manifest = load_json(paths.manifest)
     if manifest.get("state") != "stopped":
-        raise RuntimeError("Hash-state backup requires a successfully stopped persisted soak session.")
+        raise RuntimeError(
+            "Hash-state backup requires a successfully stopped persisted soak session."
+        )
     stop = manifest.get("stop") if isinstance(manifest.get("stop"), dict) else {}
-    finalization = stop.get("diagnosticFinalization") if isinstance(stop.get("diagnosticFinalization"), dict) else {}
+    finalization = (
+        stop.get("diagnosticFinalization")
+        if isinstance(stop.get("diagnosticFinalization"), dict)
+        else {}
+    )
     if finalization.get("ok") is not True:
-        raise RuntimeError("Hash-state backup requires successful diagnostic finalization.")
+        raise RuntimeError(
+            "Hash-state backup requires successful diagnostic finalization."
+        )
     status = session_status(paths, check_rest=False, check_vpn=False)
-    if status["launcher"]["alive"] or status["observer"]["alive"] or status["watcher"]["alive"]:
-        raise RuntimeError("Hash-state backup requires all persisted soak controller processes to be stopped.")
+    if (
+        status["launcher"]["alive"]
+        or status["observer"]["alive"]
+        or status["watcher"]["alive"]
+    ):
+        raise RuntimeError(
+            "Hash-state backup requires all persisted soak controller processes to be stopped."
+        )
 
-    preflight = manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
-    profiles = preflight.get("profiles") if isinstance(preflight.get("profiles"), dict) else {}
+    preflight = (
+        manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
+    )
+    profiles = (
+        preflight.get("profiles") if isinstance(preflight.get("profiles"), dict) else {}
+    )
     mfc_profile = Path(str(profiles.get("mfc") or "")).resolve()
     rust_profile = Path(str(profiles.get("rust") or "")).resolve()
     if not mfc_profile.is_dir() or not rust_profile.is_dir():
-        raise RuntimeError("Hash-state backup requires the stopped session's MFC and Rust profiles.")
+        raise RuntimeError(
+            "Hash-state backup requires the stopped session's MFC and Rust profiles."
+        )
 
     campaign_id = str(manifest.get("campaignId") or "unknown-campaign")
     resolved_output_root = output_root.resolve()
     final_dir = (
         destination_dir.resolve()
         if destination_dir is not None
-        else (resolved_output_root / "soak" / "profile-hash-backups" / f"{campaign_id}-{utc_timestamp()}").resolve()
+        else (
+            resolved_output_root
+            / "soak"
+            / "profile-hash-backups"
+            / f"{campaign_id}-{utc_timestamp()}"
+        ).resolve()
     )
     if not path_is_relative_to(final_dir, resolved_output_root):
-        raise RuntimeError(f"Hash-state backups must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {final_dir}")
+        raise RuntimeError(
+            f"Hash-state backups must stay below EMULEBB_WORKSPACE_OUTPUT_ROOT: {final_dir}"
+        )
     if final_dir.exists():
         raise RuntimeError(f"Hash-state backup destination already exists: {final_dir}")
     temporary_dir = final_dir.with_name(f".{final_dir.name}.{os.getpid()}.tmp")
     if temporary_dir.exists():
-        raise RuntimeError(f"Hash-state backup temporary destination already exists: {temporary_dir}")
+        raise RuntimeError(
+            f"Hash-state backup temporary destination already exists: {temporary_dir}"
+        )
 
     try:
         temporary_dir.mkdir(parents=True)
@@ -325,7 +459,9 @@ def backup_stopped_hash_state(
             known_met_backup,
             kind="mfc-known-met",
         )
-        known_met_summary["entryCount"] = len(mfc_known_met.parse_known_met(known_met_backup))
+        known_met_summary["entryCount"] = len(
+            mfc_known_met.parse_known_met(known_met_backup)
+        )
         if known_met_summary["entryCount"] <= 0:
             raise RuntimeError("MFC known.met backup contains no hash records.")
         files.append(known_met_summary)
@@ -345,7 +481,9 @@ def backup_stopped_hash_state(
             )
         )
         for file_summary in files:
-            file_summary["backup"] = str((final_dir / Path(str(file_summary["backup"])).name).resolve())
+            file_summary["backup"] = str(
+                (final_dir / Path(str(file_summary["backup"])).name).resolve()
+            )
         report = {
             "schema": HASH_BACKUP_SCHEMA,
             "ok": True,
@@ -372,11 +510,15 @@ def required_storage_policy(inputs: LiveWireInputs) -> soak_storage.SoakStorageP
     """Returns the mandatory persisted-soak storage policy."""
 
     if inputs.soak_storage is None:
-        raise RuntimeError("Persisted full-tunnel soaks require soak_storage in the live-wire inputs.")
+        raise RuntimeError(
+            "Persisted full-tunnel soaks require soak_storage in the live-wire inputs."
+        )
     return inputs.soak_storage
 
 
-def storage_plan_summary(root: Path, plan: soak_storage.StoragePrunePlan) -> dict[str, Any]:
+def storage_plan_summary(
+    root: Path, plan: soak_storage.StoragePrunePlan
+) -> dict[str, Any]:
     """Returns bounded planning evidence without an unbounded deletion listing."""
 
     reasons = Counter(deletion.reason for deletion in plan.deletions)
@@ -452,7 +594,9 @@ def latest_campaign_path(paths: ControlPaths, campaigns_root: Path) -> Path | No
         return None
     campaign = Path(raw_path).resolve()
     if not path_is_relative_to(campaign, campaigns_root):
-        raise RuntimeError(f"Last-run campaign escaped the owned campaign store: {campaign}")
+        raise RuntimeError(
+            f"Last-run campaign escaped the owned campaign store: {campaign}"
+        )
     return campaign
 
 
@@ -472,7 +616,9 @@ def session_storage_manifest(
         "policy": soak_storage.storage_policy_payload(policy),
         "policySha256": soak_storage.storage_policy_sha256(policy),
         "activeCampaignDir": str(active_campaign),
-        "previousCampaignDir": str(previous_campaign) if previous_campaign is not None else None,
+        "previousCampaignDir": str(previous_campaign)
+        if previous_campaign is not None
+        else None,
         "preflightPlan": preflight_plan,
         "launchEnforcement": launch_enforcement,
     }
@@ -501,7 +647,9 @@ def parse_session_storage_context(
         missing = ", ".join(sorted(expected_keys - actual_keys))
         unknown = ", ".join(sorted(actual_keys - expected_keys))
         detail = f"missing={missing or '-'} unknown={unknown or '-'}"
-        raise RuntimeError(f"Persisted soak storage context fields are invalid: {detail}.")
+        raise RuntimeError(
+            f"Persisted soak storage context fields are invalid: {detail}."
+        )
 
     root_value = storage.get("root")
     if not isinstance(root_value, str) or not root_value.strip():
@@ -513,7 +661,9 @@ def parse_session_storage_context(
 
     policy = soak_storage.parse_soak_storage_policy(storage.get("policy"))
     policy_sha256 = storage.get("policySha256")
-    if not isinstance(policy_sha256, str) or policy_sha256 != soak_storage.storage_policy_sha256(policy):
+    if not isinstance(
+        policy_sha256, str
+    ) or policy_sha256 != soak_storage.storage_policy_sha256(policy):
         raise RuntimeError("Persisted soak storage policy SHA-256 mismatch.")
     if not isinstance(storage.get("preflightPlan"), dict):
         raise RuntimeError("Persisted soak storage preflight plan is invalid.")
@@ -532,7 +682,9 @@ def parse_session_storage_context(
         raise RuntimeError("Persisted soak active campaign path is invalid.")
     active_campaign = Path(active_value).resolve()
     if active_campaign.parent != root or active_campaign.name != campaign_id:
-        raise RuntimeError(f"Persisted soak active campaign escaped its storage root: {active_campaign}")
+        raise RuntimeError(
+            f"Persisted soak active campaign escaped its storage root: {active_campaign}"
+        )
 
     previous_value = storage.get("previousCampaignDir")
     previous_campaign = None
@@ -541,7 +693,9 @@ def parse_session_storage_context(
             raise RuntimeError("Persisted soak previous campaign path is invalid.")
         previous_campaign = Path(previous_value).resolve()
         if previous_campaign.parent != root or previous_campaign == active_campaign:
-            raise RuntimeError(f"Persisted soak previous campaign escaped its storage root: {previous_campaign}")
+            raise RuntimeError(
+                f"Persisted soak previous campaign escaped its storage root: {previous_campaign}"
+            )
 
     return SessionStorageContext(
         root=root,
@@ -555,12 +709,16 @@ def parse_session_storage_context(
 def enforce_session_storage_context(context: SessionStorageContext) -> dict[str, Any]:
     """Applies and verifies one manifest-owned storage policy snapshot."""
 
-    pinned_paths = (context.previous_campaign,) if context.previous_campaign is not None else ()
+    pinned_paths = (
+        (context.previous_campaign,) if context.previous_campaign is not None else ()
+    )
     identity = {
         "policySha256": context.policy_sha256,
         "activeCampaignDir": str(context.active_campaign),
         "previousCampaignDir": (
-            str(context.previous_campaign) if context.previous_campaign is not None else None
+            str(context.previous_campaign)
+            if context.previous_campaign is not None
+            else None
         ),
     }
     try:
@@ -627,7 +785,10 @@ def advance_diagnostic_indexes(
             }
             continue
         diagnostic_dir_value = diagnostic_dirs.get(client)
-        if not isinstance(diagnostic_dir_value, str) or not diagnostic_dir_value.strip():
+        if (
+            not isinstance(diagnostic_dir_value, str)
+            or not diagnostic_dir_value.strip()
+        ):
             raise RuntimeError(
                 f"Watch status {client} diagnostic directory is invalid."
             )
@@ -676,7 +837,10 @@ def finalize_diagnostic_indexes(
     store = soak_storage.BoundedArtifactStore(context.root, context.policy)
     for client in ("rust", "mfc"):
         diagnostic_dir_value = diagnostic_dirs.get(client)
-        if not isinstance(diagnostic_dir_value, str) or not diagnostic_dir_value.strip():
+        if (
+            not isinstance(diagnostic_dir_value, str)
+            or not diagnostic_dir_value.strip()
+        ):
             raise RuntimeError(
                 f"Persisted session {client} diagnostic directory is invalid."
             )
@@ -838,7 +1002,6 @@ def reconcile_diagnostic_evidence_pins(
         )
 
     for candidate in candidates:
-
         source = Path(candidate["source"])
         if not source.is_file() and candidate["priority"] < 200:
             actions.append(
@@ -1214,7 +1377,9 @@ def preflight_campaign_storage(
     )
     if not plan.within_limits:
         constraints = ", ".join(plan.unresolved_constraints) or "unknown"
-        raise RuntimeError(f"Persisted soak storage cannot satisfy required limits: {constraints}.")
+        raise RuntimeError(
+            f"Persisted soak storage cannot satisfy required limits: {constraints}."
+        )
     return {
         **storage_plan_summary(root, plan),
         "reservation": reservation,
@@ -1240,7 +1405,9 @@ def enforce_campaign_storage(
     summary["reservation"] = reservation
     if not result.within_limits:
         constraints = ", ".join(result.verification.unresolved_constraints)
-        detail = constraints or (result.failures[0] if result.failures else "pending deletions remain")
+        detail = constraints or (
+            result.failures[0] if result.failures else "pending deletions remain"
+        )
         raise RuntimeError(f"Persisted soak storage enforcement failed: {detail}.")
     return summary
 
@@ -1248,7 +1415,9 @@ def enforce_campaign_storage(
 def command_fingerprint(command: list[str]) -> str:
     """Returns a stable non-secret command identity fingerprint."""
 
-    encoded = json.dumps(command, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded = json.dumps(command, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -1301,7 +1470,9 @@ def resolve_watcher_launcher_identity(
         and fallback_identity is not None
         and manifest_identity != fallback_identity
     ):
-        raise RuntimeError("Persisted soak launcher identity mismatches the watcher fallback.")
+        raise RuntimeError(
+            "Persisted soak launcher identity mismatches the watcher fallback."
+        )
     return fallback_identity or manifest_identity or {}
 
 
@@ -1316,16 +1487,26 @@ def wait_process_identity(
     deadline = time.monotonic() + timeout_seconds
     last_row: windows_processes.WindowsProcessInfo | None = None
     while time.monotonic() < deadline:
-        last_row = next((row for row in windows_processes.collect_processes() if row.pid == pid), None)
+        last_row = next(
+            (row for row in windows_processes.collect_processes() if row.pid == pid),
+            None,
+        )
         if last_row is not None and last_row.creation_date:
-            if last_row.command_line and not windows_processes.command_line_contains_markers(
-                last_row.command_line,
-                markers,
+            if (
+                last_row.command_line
+                and not windows_processes.command_line_contains_markers(
+                    last_row.command_line,
+                    markers,
+                )
             ):
-                raise RuntimeError(f"Process {pid} did not match the expected command identity.")
+                raise RuntimeError(
+                    f"Process {pid} did not match the expected command identity."
+                )
             return last_row
         time.sleep(0.1)
-    raise RuntimeError(f"Timed out recording exact process identity for pid {pid}: {last_row}")
+    raise RuntimeError(
+        f"Timed out recording exact process identity for pid {pid}: {last_row}"
+    )
 
 
 def preflight_session(
@@ -1342,14 +1523,22 @@ def preflight_session(
         raise RuntimeError(f"Live-wire inputs were not found: {inputs_path}")
     inputs = inputs or load_live_wire_inputs(inputs_path)
     if inputs.mfc_profile_dir is None or not inputs.mfc_profile_dir.is_dir():
-        raise RuntimeError("Persisted full-tunnel soaks require an existing MFC profile directory.")
+        raise RuntimeError(
+            "Persisted full-tunnel soaks require an existing MFC profile directory."
+        )
     if inputs.rust_profile_dir is None:
-        raise RuntimeError("Persisted full-tunnel soaks require rust_profile.profile_dir.")
+        raise RuntimeError(
+            "Persisted full-tunnel soaks require rust_profile.profile_dir."
+        )
     rust_profile_dir = inputs.rust_profile_dir.resolve()
     if rust_profile_dir.exists() and not rust_profile_dir.is_dir():
-        raise RuntimeError(f"Rust profile path exists and is not a directory: {rust_profile_dir}")
+        raise RuntimeError(
+            f"Rust profile path exists and is not a directory: {rust_profile_dir}"
+        )
     if not rust_profile_dir.parent.is_dir():
-        raise RuntimeError(f"Rust profile parent does not exist: {rust_profile_dir.parent}")
+        raise RuntimeError(
+            f"Rust profile parent does not exist: {rust_profile_dir.parent}"
+        )
     storage = preflight_campaign_storage(
         inputs,
         output_root,
@@ -1521,9 +1710,7 @@ def build_observer_action_config(
         "searchTimeoutSeconds": search_timeout_seconds,
     }
     try:
-        validated = converged_observer.parse_action_config(
-            {"actionDriving": payload}
-        )
+        validated = converged_observer.parse_action_config({"actionDriving": payload})
     except RuntimeError as error:
         raise ValueError(str(error)) from error
     return {
@@ -1631,7 +1818,9 @@ def spawn_detached(command: list[str]) -> subprocess.Popen[bytes]:
     )
 
 
-def process_identity(row: windows_processes.WindowsProcessInfo, command: list[str]) -> dict[str, Any]:
+def process_identity(
+    row: windows_processes.WindowsProcessInfo, command: list[str]
+) -> dict[str, Any]:
     """Builds the persisted exact identity for one controller-owned process."""
 
     return {
@@ -1677,6 +1866,66 @@ def stop_owned_process(
     }
 
 
+def rollback_unpublished_launcher(
+    paths: ControlPaths,
+    launcher_process: subprocess.Popen[bytes],
+) -> dict[str, Any]:
+    """Stops a launcher tree when exact identity publication fails."""
+
+    processes = windows_processes.collect_processes()
+    row = next(
+        (candidate for candidate in processes if candidate.pid == launcher_process.pid),
+        None,
+    )
+    captured_tree: tuple[dict[str, Any], ...] = ()
+    if (
+        row is not None
+        and row.creation_date
+        and (
+            not row.command_line
+            or windows_processes.command_line_contains_markers(
+                row.command_line,
+                ("launch-soak.py",),
+            )
+        )
+    ):
+        captured_tree = capture_exact_process_tree(
+            {"pid": row.pid, "creationDate": row.creation_date}
+        )
+
+    paths.control_dir.mkdir(parents=True, exist_ok=True)
+    requested_at = datetime.now(UTC).isoformat() + "\n"
+    paths.stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
+    paths.watch_stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
+    if launcher_process.poll() is None:
+        launcher_process.terminate()
+        wait = getattr(launcher_process, "wait", None)
+        if callable(wait):
+            try:
+                wait(timeout=WATCH_FAILURE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+    forced = (
+        stop_captured_process_tree(
+            captured_tree,
+            timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+        )
+        if captured_tree
+        else {
+            "forced": False,
+            "alreadyStopped": launcher_process.poll() is not None,
+            "verifiedStopped": launcher_process.poll() is not None,
+            "capturedCount": 0,
+        }
+    )
+    return {
+        "stopRequested": True,
+        "capturedCount": len(captured_tree),
+        "forced": forced,
+    }
+
+
+@serialized_session_transition(1)
 def start_session(
     config: SessionConfig,
     paths: ControlPaths,
@@ -1698,36 +1947,63 @@ def start_session(
 ) -> dict[str, Any]:
     """Starts one detached dual-client diagnostics session."""
 
-    if config.rest_timeout_seconds <= 0:
-        raise ValueError("rest_timeout_seconds must be greater than zero.")
-    if config.connect_timeout_seconds <= 0:
-        raise ValueError("connect_timeout_seconds must be greater than zero.")
-    if start_watch and watch_interval_seconds <= 0:
-        raise ValueError("watch_interval_seconds must be greater than zero.")
+    require_finite_number(config.rest_timeout_seconds, "rest_timeout_seconds")
+    require_finite_number(config.connect_timeout_seconds, "connect_timeout_seconds")
+    if start_watch:
+        require_finite_number(watch_interval_seconds, "watch_interval_seconds")
     if start_watch and watch_max_bytes <= 0:
         raise ValueError("watch_max_bytes must be greater than zero.")
     if start_watch and watch_segments <= 0:
         raise ValueError("watch_segments must be greater than zero.")
     if start_observer and not start_watch:
-        raise ValueError("The converged observer requires the persisted health watcher.")
+        raise ValueError(
+            "The converged observer requires the persisted health watcher."
+        )
     if observer_drive_actions and not start_observer:
         raise ValueError("Observer action driving requires the converged observer.")
-    if start_observer and observer_ready_timeout_seconds <= 0:
-        raise ValueError("observer_ready_timeout_seconds must be greater than zero.")
-    if start_observer and observer_poll_interval_seconds <= 0:
-        raise ValueError("observer_poll_interval_seconds must be greater than zero.")
-    if start_observer and observer_checkpoint_interval_seconds <= 0:
-        raise ValueError("observer_checkpoint_interval_seconds must be greater than zero.")
+    if start_observer:
+        require_finite_number(
+            observer_ready_timeout_seconds,
+            "observer_ready_timeout_seconds",
+        )
+        require_finite_number(
+            observer_poll_interval_seconds,
+            "observer_poll_interval_seconds",
+        )
+        require_finite_number(
+            observer_checkpoint_interval_seconds,
+            "observer_checkpoint_interval_seconds",
+        )
     if start_observer and observer_failure_threshold <= 0:
         raise ValueError("observer_failure_threshold must be greater than zero.")
+    if observer_drive_actions:
+        require_finite_number(
+            observer_action_start_delay_seconds,
+            "observer_action_start_delay_seconds",
+            allow_zero=True,
+        )
+        require_finite_number(
+            observer_action_search_interval_seconds,
+            "observer_action_search_interval_seconds",
+        )
+        require_finite_number(
+            observer_action_search_timeout_seconds,
+            "observer_action_search_timeout_seconds",
+        )
     existing = load_json(paths.manifest)
     processes = windows_processes.collect_processes()
     if exact_process_row(existing.get("launcher", {}), processes) is not None:
-        raise RuntimeError(f"A persisted soak launcher is already active: {paths.manifest}")
+        raise RuntimeError(
+            f"A persisted soak launcher is already active: {paths.manifest}"
+        )
     if exact_process_row(existing.get("watcher", {}), processes) is not None:
-        raise RuntimeError(f"A persisted soak watcher is already active: {paths.manifest}")
+        raise RuntimeError(
+            f"A persisted soak watcher is already active: {paths.manifest}"
+        )
     if exact_process_row(existing.get("observer", {}), processes) is not None:
-        raise RuntimeError(f"A persisted soak observer is already active: {paths.manifest}")
+        raise RuntimeError(
+            f"A persisted soak observer is already active: {paths.manifest}"
+        )
 
     output_root = get_workspace_output_root()
     inputs = load_live_wire_inputs(config.inputs.resolve())
@@ -1746,7 +2022,9 @@ def start_session(
     campaign_dir = (campaigns_root / campaign_id).resolve()
     campaign_output = build_campaign_output_paths(campaign_dir)
     if campaign_dir.exists():
-        raise RuntimeError(f"Persisted soak campaign path already exists: {campaign_dir}")
+        raise RuntimeError(
+            f"Persisted soak campaign path already exists: {campaign_dir}"
+        )
     previous_campaign = latest_campaign_path(paths, campaigns_root)
     protected_campaigns = tuple(
         dict.fromkeys(
@@ -1780,10 +2058,17 @@ def start_session(
     )
     launcher_process = spawn_detached(launch_command)
     try:
-        launcher_row = wait_process_identity(launcher_process.pid, markers=("launch-soak.py",))
-    except Exception:
-        if launcher_process.poll() is None:
-            launcher_process.terminate()
+        launcher_row = wait_process_identity(
+            launcher_process.pid, markers=("launch-soak.py",)
+        )
+    except Exception as error:
+        try:
+            rollback_unpublished_launcher(paths, launcher_process)
+        except Exception as rollback_error:  # noqa: BLE001 - retain both startup failures
+            error.add_note(
+                "Unpublished launcher rollback failed: "
+                f"{type(rollback_error).__name__}: {rollback_error}"
+            )
         raise
 
     manifest: dict[str, Any] = {
@@ -1920,7 +2205,9 @@ def start_session(
         )
         try:
             watch_process = spawn_detached(watch_command)
-            watch_row = wait_process_identity(watch_process.pid, markers=("persisted-soak-control.py", "watch"))
+            watch_row = wait_process_identity(
+                watch_process.pid, markers=("persisted-soak-control.py", "watch")
+            )
         except Exception as error:
             requested_at = datetime.now(UTC).isoformat() + "\n"
             paths.stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
@@ -1957,7 +2244,9 @@ def start_session(
     return manifest
 
 
-def process_summary(row: windows_processes.WindowsProcessInfo, role: str) -> dict[str, Any]:
+def process_summary(
+    row: windows_processes.WindowsProcessInfo, role: str
+) -> dict[str, Any]:
     """Returns a sanitized process summary."""
 
     return {
@@ -2029,7 +2318,11 @@ def rest_health(base_url: str, api_key: str) -> dict[str, Any]:
             },
         }
     except Exception as error:  # noqa: BLE001 - health status retains only bounded error metadata
-        return {"ok": False, "errorType": type(error).__name__, "error": str(error)[:256]}
+        return {
+            "ok": False,
+            "errorType": type(error).__name__,
+            "error": str(error)[:256],
+        }
 
 
 def diagnostic_writer_health(base_url: str, api_key: str) -> dict[str, Any]:
@@ -2073,7 +2366,11 @@ def full_tunnel_health() -> dict[str, Any]:
             "routesThroughHideMe": result["routesThroughHideMe"],
         }
     except Exception as error:  # noqa: BLE001 - health status retains only bounded error metadata
-        return {"ok": False, "errorType": type(error).__name__, "error": str(error)[:256]}
+        return {
+            "ok": False,
+            "errorType": type(error).__name__,
+            "error": str(error)[:256],
+        }
 
 
 def parse_aware_timestamp(value: object) -> datetime | None:
@@ -2102,14 +2399,25 @@ def watch_heartbeat_health(
     if not isinstance(watch_config, dict) or watch_config.get("enabled") is not True:
         return {"state": "disabled", "accepted": False}
     stale_seconds = watch_config.get("heartbeatStaleSeconds")
-    if isinstance(stale_seconds, bool) or not isinstance(stale_seconds, (int, float)) or stale_seconds <= 0:
+    if (
+        isinstance(stale_seconds, bool)
+        or not isinstance(stale_seconds, (int, float))
+        or stale_seconds <= 0
+    ):
         return {"state": "invalid", "accepted": False, "reason": "watch-config"}
 
     observed_now = (now or datetime.now(UTC)).astimezone(UTC)
     started_at = parse_aware_timestamp(manifest.get("startedUtc"))
     if not heartbeat:
-        if started_at is not None and (observed_now - started_at).total_seconds() <= stale_seconds:
-            return {"state": "pending", "accepted": False, "staleAfterSeconds": stale_seconds}
+        if (
+            started_at is not None
+            and (observed_now - started_at).total_seconds() <= stale_seconds
+        ):
+            return {
+                "state": "pending",
+                "accepted": False,
+                "staleAfterSeconds": stale_seconds,
+            }
         return {"state": "stale", "accepted": False, "reason": "missing"}
 
     campaign_id = manifest.get("campaignId")
@@ -2118,7 +2426,10 @@ def watch_heartbeat_health(
     if heartbeat.get("schema") != WATCH_SCHEMA:
         return {"state": "invalid", "accepted": False, "reason": "schema"}
     if not isinstance(campaign_id, str) or heartbeat.get("campaignId") != campaign_id:
-        if started_at is not None and (observed_now - started_at).total_seconds() <= stale_seconds:
+        if (
+            started_at is not None
+            and (observed_now - started_at).total_seconds() <= stale_seconds
+        ):
             return {
                 "state": "pending",
                 "accepted": False,
@@ -2126,13 +2437,19 @@ def watch_heartbeat_health(
                 "staleAfterSeconds": stale_seconds,
             }
         return {"state": "invalid", "accepted": False, "reason": "campaign"}
-    if not isinstance(manifest_storage, dict) or not isinstance(heartbeat_storage, dict):
+    if not isinstance(manifest_storage, dict) or not isinstance(
+        heartbeat_storage, dict
+    ):
         return {"state": "invalid", "accepted": False, "reason": "storage"}
     if heartbeat_storage.get("policySha256") != manifest_storage.get("policySha256"):
         return {"state": "invalid", "accepted": False, "reason": "policy-sha256"}
-    if heartbeat_storage.get("activeCampaignDir") != manifest_storage.get("activeCampaignDir"):
+    if heartbeat_storage.get("activeCampaignDir") != manifest_storage.get(
+        "activeCampaignDir"
+    ):
         return {"state": "invalid", "accepted": False, "reason": "active-campaign"}
-    if heartbeat_storage.get("previousCampaignDir") != manifest_storage.get("previousCampaignDir"):
+    if heartbeat_storage.get("previousCampaignDir") != manifest_storage.get(
+        "previousCampaignDir"
+    ):
         return {"state": "invalid", "accepted": False, "reason": "previous-campaign"}
 
     heartbeat_at = parse_aware_timestamp(heartbeat.get("timestampUtc"))
@@ -2170,7 +2487,11 @@ def status_findings(status: dict[str, Any]) -> list[str]:
         findings.append("launcher-not-running")
     manifest = status.get("manifest") or {}
     watcher = status.get("watcher") or {}
-    if manifest.get("state") == "running" and watcher.get("identity") and not watcher.get("alive"):
+    if (
+        manifest.get("state") == "running"
+        and watcher.get("identity")
+        and not watcher.get("alive")
+    ):
         findings.append("watcher-not-running")
     observer = status.get("observer") or {}
     if (
@@ -2184,7 +2505,10 @@ def status_findings(status: dict[str, Any]) -> list[str]:
     heartbeat_health = watcher.get("heartbeatHealth") or {}
     if manifest.get("state") == "running" and heartbeat_health.get("state") == "stale":
         findings.append("watcher-heartbeat-stale")
-    if manifest.get("state") == "running" and heartbeat_health.get("state") == "invalid":
+    if (
+        manifest.get("state") == "running"
+        and heartbeat_health.get("state") == "invalid"
+    ):
         findings.append("watcher-heartbeat-invalid")
     if status["clients"]["rustCount"] != 1:
         findings.append("rust-process-count")
@@ -2198,9 +2522,9 @@ def status_findings(status: dict[str, Any]) -> list[str]:
         if not health.get("ok"):
             findings.append(f"{client}-rest-unhealthy")
             continue
-        if not isinstance(health.get("vpnGuard"), dict) or not health[
-            "vpnGuard"
-        ].get("ok"):
+        if not isinstance(health.get("vpnGuard"), dict) or not health["vpnGuard"].get(
+            "ok"
+        ):
             findings.append(f"{client}-vpn-guard-unhealthy")
         if not isinstance(health.get("p2pBinding"), dict) or not health[
             "p2pBinding"
@@ -2356,23 +2680,85 @@ def parity_gate_status(paths: ControlPaths) -> dict[str, Any]:
     }
 
 
+def session_ownership_findings(
+    manifest: dict[str, Any],
+    *,
+    expected_campaign_id: str | None,
+    expected_identities: dict[str, dict[str, Any]] | None,
+) -> list[str]:
+    """Returns immutable campaign/role ownership mismatches."""
+
+    findings: list[str] = []
+    if (
+        expected_campaign_id is not None
+        and manifest.get("campaignId") != expected_campaign_id
+    ):
+        findings.append("campaign-replaced")
+    for role, expected in (expected_identities or {}).items():
+        if exact_identity_payload(manifest.get(role)) != exact_identity_payload(
+            expected
+        ):
+            findings.append(f"{role}-identity-replaced")
+    return findings
+
+
+def owned_session_identities(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Returns the exact controller identities owned by one started session."""
+
+    return {
+        role: identity
+        for role in ("launcher", "observer", "watcher")
+        if (identity := exact_identity_payload(manifest.get(role))) is not None
+    }
+
+
 def wait_for_parity_gate(
     paths: ControlPaths,
     *,
     timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
     poll_interval_seconds: float = DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    expected_campaign_id: str | None = None,
+    expected_identities: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Blocks until the current campaign gate is green, failed, or unhealthy."""
+    """Blocks until the exact owned campaign is green, failed, or unhealthy."""
 
-    if timeout_seconds <= 0:
-        raise ValueError("Gate timeout must be greater than zero.")
-    if poll_interval_seconds <= 0:
-        raise ValueError("Gate poll interval must be greater than zero.")
+    require_finite_number(timeout_seconds, "Gate timeout")
+    require_finite_number(poll_interval_seconds, "Gate poll interval")
     started = time.monotonic()
     samples = 0
     while True:
         samples += 1
+        manifest = load_json(paths.manifest)
+        ownership_findings = session_ownership_findings(
+            manifest,
+            expected_campaign_id=expected_campaign_id,
+            expected_identities=expected_identities,
+        )
+        if ownership_findings:
+            return {
+                "status": "campaign-replaced",
+                "reason": ownership_findings[0],
+                "findings": ownership_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": None,
+            }
         gate = parity_gate_status(paths)
+        manifest = load_json(paths.manifest)
+        ownership_findings = session_ownership_findings(
+            manifest,
+            expected_campaign_id=expected_campaign_id,
+            expected_identities=expected_identities,
+        )
+        if ownership_findings:
+            return {
+                "status": "campaign-replaced",
+                "reason": ownership_findings[0],
+                "findings": ownership_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
         status = gate.get("status")
         if status == "failed":
             return {
@@ -2391,12 +2777,14 @@ def wait_for_parity_gate(
                 "gate": gate,
             }
 
-        manifest = load_json(paths.manifest)
         processes = windows_processes.collect_processes()
         runtime_findings = []
         for role in ("launcher", "observer", "watcher"):
             identity = manifest.get(role)
-            if not isinstance(identity, dict) or exact_process_row(identity, processes) is None:
+            if (
+                not isinstance(identity, dict)
+                or exact_process_row(identity, processes) is None
+            ):
                 runtime_findings.append(f"{role}-not-running")
         if manifest.get("state") != "running":
             runtime_findings.append("session-not-running")
@@ -2410,6 +2798,35 @@ def wait_for_parity_gate(
                 "gate": gate,
             }
         if status == "green":
+            health = session_status(paths)
+            manifest = load_json(paths.manifest)
+            ownership_findings = session_ownership_findings(
+                manifest,
+                expected_campaign_id=expected_campaign_id,
+                expected_identities=expected_identities,
+            )
+            if ownership_findings:
+                return {
+                    "status": "campaign-replaced",
+                    "reason": ownership_findings[0],
+                    "findings": ownership_findings,
+                    "samples": samples,
+                    "elapsedSeconds": time.monotonic() - started,
+                    "gate": gate,
+                }
+            if health.get("ok") is not True:
+                health_findings = health.get("findings")
+                if not isinstance(health_findings, list) or not health_findings:
+                    health_findings = ["session-unhealthy"]
+                return {
+                    "status": "runtime-failed",
+                    "reason": str(health_findings[0]),
+                    "findings": health_findings,
+                    "samples": samples,
+                    "elapsedSeconds": time.monotonic() - started,
+                    "gate": gate,
+                    "health": health,
+                }
             return {
                 "status": status,
                 "reason": None,
@@ -2445,6 +2862,18 @@ def run_session_to_gate(
 ) -> dict[str, Any]:
     """Runs one maintained campaign to its gate and always stops it cleanly."""
 
+    require_finite_number(gate_timeout_seconds, "Gate timeout")
+    require_finite_number(gate_poll_interval_seconds, "Gate poll interval")
+    if success_target_per_method <= 0:
+        raise ValueError("Action success target must be greater than zero.")
+    require_finite_number(
+        action_start_delay_seconds,
+        "Action start delay",
+        allow_zero=True,
+    )
+    require_finite_number(action_search_interval_seconds, "Action search interval")
+    require_finite_number(action_search_timeout_seconds, "Action search timeout")
+    require_finite_number(graceful_stop_timeout_seconds, "Graceful stop timeout")
     started = start_session(
         config,
         paths,
@@ -2456,12 +2885,16 @@ def run_session_to_gate(
     )
     wait_result: dict[str, Any]
     stopped: dict[str, Any]
+    campaign_id = str(started.get("campaignId") or "")
+    identities = owned_session_identities(started)
     try:
         try:
             wait_result = wait_for_parity_gate(
                 paths,
                 timeout_seconds=gate_timeout_seconds,
                 poll_interval_seconds=gate_poll_interval_seconds,
+                expected_campaign_id=campaign_id,
+                expected_identities=identities,
             )
         except Exception as error:  # noqa: BLE001 - report wait failure after stop
             wait_result = {
@@ -2476,6 +2909,8 @@ def run_session_to_gate(
             stopped = stop_session(
                 paths,
                 graceful_timeout_seconds=graceful_stop_timeout_seconds,
+                expected_campaign_id=campaign_id,
+                expected_identities=identities,
             )
         except Exception as error:  # noqa: BLE001 - preserve the gate evidence
             stopped = {
@@ -2487,9 +2922,7 @@ def run_session_to_gate(
     return {
         "schema": RUN_TO_GATE_SCHEMA,
         "campaignId": started.get("campaignId"),
-        "ok": bool(
-            wait_result.get("status") == "green" and stopped.get("ok") is True
-        ),
+        "ok": bool(wait_result.get("status") == "green" and stopped.get("ok") is True),
         "start": {
             "campaignId": started.get("campaignId"),
             "campaignDir": started.get("campaignDir"),
@@ -2510,20 +2943,40 @@ def session_status(
 
     manifest = load_json(paths.manifest)
     processes = windows_processes.collect_processes()
-    launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
-    observer_identity = manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
-    watcher_identity = manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
+    launcher_identity = (
+        manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
+    )
+    observer_identity = (
+        manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
+    )
+    watcher_identity = (
+        manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
+    )
     launcher = exact_process_row(launcher_identity, processes)
     observer = exact_process_row(observer_identity, processes)
     watcher = exact_process_row(watcher_identity, processes)
-    tree = windows_processes.collect_process_tree(launcher.pid, processes) if launcher is not None else []
-    preflight = manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
-    executables = preflight.get("executables") if isinstance(preflight.get("executables"), dict) else {}
-    rust_name = Path(str(executables.get("rust") or "emulebb-rust-diagnostics.exe")).name.casefold()
+    tree = (
+        windows_processes.collect_process_tree(launcher.pid, processes)
+        if launcher is not None
+        else []
+    )
+    preflight = (
+        manifest.get("preflight") if isinstance(manifest.get("preflight"), dict) else {}
+    )
+    executables = (
+        preflight.get("executables")
+        if isinstance(preflight.get("executables"), dict)
+        else {}
+    )
+    rust_name = Path(
+        str(executables.get("rust") or "emulebb-rust-diagnostics.exe")
+    ).name.casefold()
     mfc_name = Path(str(executables.get("mfc") or "emule.exe")).name.casefold()
     rust_rows = [row for row in tree if row.name.casefold() == rust_name]
     mfc_rows = [row for row in tree if row.name.casefold() == mfc_name]
-    control = preflight.get("control") if isinstance(preflight.get("control"), dict) else {}
+    control = (
+        preflight.get("control") if isinstance(preflight.get("control"), dict) else {}
+    )
     last_run = load_json(paths.last_run_manifest)
     campaign_id = manifest.get("campaignId")
     writer_health_required = bool(
@@ -2560,7 +3013,9 @@ def session_status(
             )
     heartbeat = load_json(paths.watch_heartbeat)
     heartbeat_health = watch_heartbeat_health(manifest, heartbeat)
-    heartbeat_storage = heartbeat.get("storage") if heartbeat_health.get("accepted") else None
+    heartbeat_storage = (
+        heartbeat.get("storage") if heartbeat_health.get("accepted") else None
+    )
     observer_report = None
     observer_report_error = None
     try:
@@ -2635,7 +3090,9 @@ def rotated_path(path: Path, index: int) -> Path:
     return path.with_name(f"{path.name}.{index}")
 
 
-def append_bounded_jsonl(path: Path, payload: dict[str, Any], *, max_bytes: int, segments: int) -> None:
+def append_bounded_jsonl(
+    path: Path, payload: dict[str, Any], *, max_bytes: int, segments: int
+) -> None:
     """Appends one JSONL record and rotates a bounded number of segments."""
 
     if max_bytes <= 0:
@@ -2674,7 +3131,9 @@ def build_watch_sample(
         findings.append(STORAGE_FAILURE_FINDING)
     sample = {
         "schema": WATCH_SCHEMA,
-        "campaignId": status.get("manifest", {}).get("campaignId") if status is not None else None,
+        "campaignId": status.get("manifest", {}).get("campaignId")
+        if status is not None
+        else None,
         "timestampUtc": (
             status.get("timestampUtc")
             if status is not None and status_error is None
@@ -2687,9 +3146,15 @@ def build_watch_sample(
             and storage.get("ok")
         ),
         "findings": findings,
-        "launcherAlive": bool(status is not None and status.get("launcher", {}).get("alive")),
-        "rustProcessCount": status.get("clients", {}).get("rustCount", 0) if status is not None else 0,
-        "mfcProcessCount": status.get("clients", {}).get("mfcCount", 0) if status is not None else 0,
+        "launcherAlive": bool(
+            status is not None and status.get("launcher", {}).get("alive")
+        ),
+        "rustProcessCount": status.get("clients", {}).get("rustCount", 0)
+        if status is not None
+        else 0,
+        "mfcProcessCount": status.get("clients", {}).get("mfcCount", 0)
+        if status is not None
+        else 0,
         "rest": status.get("rest") if status is not None else None,
         "diagnosticWriters": (
             status.get("diagnosticWriters") if status is not None else None
@@ -2825,7 +3290,9 @@ def persist_watch_sample(
 ) -> None:
     """Persists one watch sample to both bounded history and heartbeat."""
 
-    append_bounded_jsonl(paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments)
+    append_bounded_jsonl(
+        paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments
+    )
     write_json_atomic(paths.watch_heartbeat, sample)
 
 
@@ -2840,7 +3307,9 @@ def persist_terminal_watch_sample(
 
     errors: list[str] = []
     try:
-        append_bounded_jsonl(paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments)
+        append_bounded_jsonl(
+            paths.watch_jsonl, sample, max_bytes=max_bytes, segments=segments
+        )
     except Exception as error:  # noqa: BLE001 - continue to the independent heartbeat sink
         errors.append(f"watchJsonl: {type(error).__name__}: {error}"[:1024])
     try:
@@ -2976,7 +3445,9 @@ def request_watch_failure_stop(
     requested_at = datetime.now(UTC).isoformat()
     stop_errors: list[str] = []
     try:
-        launcher_identity = resolve_watcher_launcher_identity(manifest, launcher_fallback)
+        launcher_identity = resolve_watcher_launcher_identity(
+            manifest, launcher_fallback
+        )
     except RuntimeError as error:
         stop_errors.append(f"launcherIdentity: {error}"[:1024])
         launcher_identity = (
@@ -2990,12 +3461,16 @@ def request_watch_failure_stop(
         try:
             captured_tree = capture_exact_process_tree(launcher_identity)
         except Exception as error:  # noqa: BLE001 - stop requests and exact fallback remain available
-            stop_errors.append(f"launcherTreeCapture: {type(error).__name__}: {error}"[:1024])
+            stop_errors.append(
+                f"launcherTreeCapture: {type(error).__name__}: {error}"[:1024]
+            )
 
     try:
         paths.control_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        stop_errors.append(f"{paths.control_dir}: {type(error).__name__}: {error}"[:1024])
+        stop_errors.append(
+            f"{paths.control_dir}: {type(error).__name__}: {error}"[:1024]
+        )
     for stop_path in (paths.stop_file, paths.watch_stop_file):
         try:
             stop_path.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
@@ -3033,15 +3508,21 @@ def request_watch_failure_stop(
         }
     else:
         try:
-            launcher_root_exited = wait_exact_exit(launcher_identity, graceful_timeout_seconds)
+            launcher_root_exited = wait_exact_exit(
+                launcher_identity, graceful_timeout_seconds
+            )
         except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
             launcher_root_exited = False
             stop_errors.append(f"launcherWait: {type(error).__name__}: {error}"[:1024])
         try:
-            captured_tree_stopped = bool(captured_tree) and not remaining_exact_tree_rows(captured_tree)
+            captured_tree_stopped = bool(
+                captured_tree
+            ) and not remaining_exact_tree_rows(captured_tree)
         except Exception as error:  # noqa: BLE001 - exact forced cleanup remains available
             captured_tree_stopped = False
-            stop_errors.append(f"launcherTreeVerify: {type(error).__name__}: {error}"[:1024])
+            stop_errors.append(
+                f"launcherTreeVerify: {type(error).__name__}: {error}"[:1024]
+            )
         launcher_graceful = launcher_root_exited and captured_tree_stopped
         if launcher_graceful:
             launcher_force = {
@@ -3310,7 +3791,9 @@ def watch_session(
                 persistence_errors=persistence_errors,
             )
         assert status is not None
-        if not status["launcher"]["alive"] or (max_samples > 0 and sample_count >= max_samples):
+        if not status["launcher"]["alive"] or (
+            max_samples > 0 and sample_count >= max_samples
+        ):
             break
         time.sleep(interval_seconds)
     return {
@@ -3332,7 +3815,9 @@ def wait_exact_exit(identity: dict[str, Any], timeout_seconds: float) -> bool:
     return exact_process_row(identity, windows_processes.collect_processes()) is None
 
 
-def stop_exact_process(identity: dict[str, Any], *, markers: tuple[str, ...], timeout_seconds: float) -> dict[str, Any]:
+def stop_exact_process(
+    identity: dict[str, Any], *, markers: tuple[str, ...], timeout_seconds: float
+) -> dict[str, Any]:
     """Force-stops one still-live exact process tree."""
 
     processes = windows_processes.collect_processes()
@@ -3345,7 +3830,9 @@ def stop_exact_process(identity: dict[str, Any], *, markers: tuple[str, ...], ti
         expected_command_line_markers=markers,
         expected_root_creation_date=row.creation_date,
     )
-    verified_root_stopped = exact_process_row(identity, windows_processes.collect_processes()) is None
+    verified_root_stopped = (
+        exact_process_row(identity, windows_processes.collect_processes()) is None
+    )
     remaining_pids = result.get("remaining_pids")
     verified_tree_stopped = bool(
         result.get("return_code") == 0
@@ -3422,9 +3909,17 @@ def finalize_stopped_session_diagnostics(
     return {"required": True, "ok": ok, "indexes": indexes}
 
 
-def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0) -> dict[str, Any]:
+@serialized_session_transition(0)
+def stop_session(
+    paths: ControlPaths,
+    *,
+    graceful_timeout_seconds: float = 90.0,
+    expected_campaign_id: str | None = None,
+    expected_identities: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Requests graceful teardown, then force-stops exact owned processes if needed."""
 
+    require_finite_number(graceful_timeout_seconds, "Graceful stop timeout")
     manifest = load_json(paths.manifest)
     if not manifest:
         return {
@@ -3432,13 +3927,36 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
             "noSession": True,
             "manifest": str(paths.manifest),
         }
-    launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
-    observer_identity = manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
-    watcher_identity = manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
+    ownership_findings = session_ownership_findings(
+        manifest,
+        expected_campaign_id=expected_campaign_id,
+        expected_identities=expected_identities,
+    )
+    if ownership_findings:
+        return {
+            "schema": "emulebb.persisted-soak-stop.v1",
+            "ok": False,
+            "notOwned": True,
+            "reason": ownership_findings[0],
+            "findings": ownership_findings,
+            "campaignId": manifest.get("campaignId"),
+            "expectedCampaignId": expected_campaign_id,
+        }
+    launcher_identity = (
+        manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
+    )
+    observer_identity = (
+        manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
+    )
+    watcher_identity = (
+        manifest.get("watcher") if isinstance(manifest.get("watcher"), dict) else {}
+    )
     paths.control_dir.mkdir(parents=True, exist_ok=True)
     requested_at = datetime.now(UTC).isoformat()
     paths.stop_file.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
-    paths.watch_stop_file.write_text(requested_at + "\n", encoding="utf-8", newline="\n")
+    paths.watch_stop_file.write_text(
+        requested_at + "\n", encoding="utf-8", newline="\n"
+    )
 
     observer_stop = stop_owned_process(
         observer_identity,
@@ -3449,9 +3967,13 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
     launcher_force = (
         {"forced": False, "alreadyStopped": True}
         if launcher_graceful
-        else stop_exact_process(launcher_identity, markers=("launch-soak.py",), timeout_seconds=15.0)
+        else stop_exact_process(
+            launcher_identity, markers=("launch-soak.py",), timeout_seconds=15.0
+        )
     )
-    watcher_graceful = wait_exact_exit(watcher_identity, min(graceful_timeout_seconds, 15.0))
+    watcher_graceful = wait_exact_exit(
+        watcher_identity, min(graceful_timeout_seconds, 15.0)
+    )
     watcher_force = (
         {"forced": False, "alreadyStopped": True}
         if watcher_graceful
@@ -3462,7 +3984,9 @@ def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0)
         )
     )
     stopped_utc = datetime.now(UTC).isoformat()
-    launcher_stopped = launcher_graceful or launcher_force.get("verifiedStopped") is True
+    launcher_stopped = (
+        launcher_graceful or launcher_force.get("verifiedStopped") is True
+    )
     watcher_stopped = watcher_graceful or watcher_force.get("verifiedStopped") is True
     try:
         diagnostic_finalization = finalize_stopped_session_diagnostics(
@@ -3516,7 +4040,11 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the operator CLI parser."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--control-dir", type=Path, help="Override the output-root soak control directory.")
+    parser.add_argument(
+        "--control-dir",
+        type=Path,
+        help="Override the output-root soak control directory.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     preflight = subparsers.add_parser(
@@ -3525,11 +4053,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_session_config_arguments(preflight)
 
-    start = subparsers.add_parser("start", help="Start detached MFC and Rust diagnostics plus health watch.")
+    start = subparsers.add_parser(
+        "start", help="Start detached MFC and Rust diagnostics plus health watch."
+    )
     add_session_config_arguments(start)
     start.add_argument("--no-watch", action="store_true")
     start.add_argument("--no-observer", action="store_true")
-    start.add_argument("--watch-interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS)
+    start.add_argument(
+        "--watch-interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS
+    )
     start.add_argument("--watch-max-bytes", type=int, default=DEFAULT_WATCH_MAX_BYTES)
     start.add_argument("--watch-segments", type=int, default=DEFAULT_WATCH_SEGMENTS)
     start.add_argument(
@@ -3619,12 +4151,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=90.0,
     )
 
-    status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
+    status = subparsers.add_parser(
+        "status", help="Print exact process, client, REST, VPN, and watch health."
+    )
     status.add_argument("--no-rest", action="store_true")
     status.add_argument("--no-vpn", action="store_true")
 
     watch = subparsers.add_parser("watch", help="Run periodic bounded health sampling.")
-    watch.add_argument("--interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS)
+    watch.add_argument(
+        "--interval-seconds", type=float, default=DEFAULT_WATCH_INTERVAL_SECONDS
+    )
     watch.add_argument("--max-bytes", type=int, default=DEFAULT_WATCH_MAX_BYTES)
     watch.add_argument("--segments", type=int, default=DEFAULT_WATCH_SEGMENTS)
     watch.add_argument("--max-samples", type=int, default=0)
@@ -3641,7 +4177,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional new backup directory below EMULEBB_WORKSPACE_OUTPUT_ROOT.",
     )
 
-    stop = subparsers.add_parser("stop", help="Gracefully stop the detached soak and health watcher.")
+    stop = subparsers.add_parser(
+        "stop", help="Gracefully stop the detached soak and health watcher."
+    )
     stop.add_argument("--graceful-timeout-seconds", type=float, default=90.0)
     return parser
 
@@ -3649,7 +4187,9 @@ def build_parser() -> argparse.ArgumentParser:
 def add_session_config_arguments(parser: argparse.ArgumentParser) -> None:
     """Adds the shared persisted-session selection arguments."""
 
-    parser.add_argument("--inputs", type=Path, default=REPO_ROOT / "live-wire-inputs.local.json")
+    parser.add_argument(
+        "--inputs", type=Path, default=REPO_ROOT / "live-wire-inputs.local.json"
+    )
     parser.add_argument(
         "--vpn-guard-live-config",
         type=Path,
@@ -3721,7 +4261,9 @@ def main(argv: list[str] | None = None) -> int:
             observer_action_search_timeout_seconds=args.observer_action_search_timeout_seconds,
         )
     elif args.command == "status":
-        result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
+        result = session_status(
+            paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn
+        )
     elif args.command == "gate-status":
         result = parity_gate_status(paths)
     elif args.command == "run-to-gate":
@@ -3730,23 +4272,21 @@ def main(argv: list[str] | None = None) -> int:
             paths,
             gate_timeout_seconds=args.gate_timeout_seconds,
             gate_poll_interval_seconds=args.gate_poll_interval_seconds,
-            success_target_per_method=(
-                args.observer_action_success_target_per_method
-            ),
+            success_target_per_method=(args.observer_action_success_target_per_method),
             action_start_delay_seconds=args.observer_action_start_delay_seconds,
             action_search_interval_seconds=(
                 args.observer_action_search_interval_seconds
             ),
-            action_search_timeout_seconds=(
-                args.observer_action_search_timeout_seconds
-            ),
+            action_search_timeout_seconds=(args.observer_action_search_timeout_seconds),
             graceful_stop_timeout_seconds=args.graceful_stop_timeout_seconds,
         )
     elif args.command == "watch":
         launcher_fallback = None
         if args.launcher_pid is not None or args.launcher_creation_date is not None:
             if args.launcher_pid is None or not args.launcher_creation_date:
-                raise RuntimeError("Watcher launcher fallback requires both PID and creation date.")
+                raise RuntimeError(
+                    "Watcher launcher fallback requires both PID and creation date."
+                )
             launcher_fallback = {
                 "pid": args.launcher_pid,
                 "creationDate": args.launcher_creation_date,
@@ -3767,7 +4307,9 @@ def main(argv: list[str] | None = None) -> int:
             destination_dir=args.destination_dir,
         )
     else:
-        result = stop_session(paths, graceful_timeout_seconds=args.graceful_timeout_seconds)
+        result = stop_session(
+            paths, graceful_timeout_seconds=args.graceful_timeout_seconds
+        )
     print(json.dumps(result, indent=2, sort_keys=True))
     if isinstance(result, dict) and result.get("ok") is False:
         return 1
