@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
+from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
@@ -25,12 +26,11 @@ from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 
-protocol_matrix = load_script_module("local_ed2k_protocol_combinations_for_rust", "local-ed2k-protocol-combinations.py")
 rust_emulebb = load_script_module("emulebb_rust_emulebb_cross_client_for_protocol_matrix", "emulebb-rust-emulebb-cross-client.py")
-dtt = protocol_matrix.dtt
-harness_cli_common = protocol_matrix.harness_cli_common
-live_common = protocol_matrix.live_common
-rest_smoke = protocol_matrix.rest_smoke
+dtt = load_script_module("deterministic_two_client_transfer_for_protocol_matrix", "deterministic-two-client-transfer.py")
+harness_cli_common = dtt.harness_cli_common
+live_common = dtt.live_common
+rest_smoke = dtt.rest_smoke
 
 SUITE_NAME = "local-ed2k-rust-protocol-combinations"
 API_KEY = "local-ed2k-rust-protocol-combinations-key"
@@ -70,13 +70,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
-    parser.add_argument("--case", action="append", choices=tuple(protocol_matrix.PROTOCOL_CASE_MAP.keys()))
+    parser.add_argument("--case", action="append", choices=tuple(ed2k_protocol_cases.PROTOCOL_CASE_MAP))
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
 
 
-def server_udp_flags(case: protocol_matrix.ProtocolCase) -> int:
+def server_udp_flags(case: ed2k_protocol_cases.ProtocolCase) -> int:
     """Returns the stock capability flags advertised to Rust for one server case."""
 
     flags = (
@@ -92,7 +92,7 @@ def server_udp_flags(case: protocol_matrix.ProtocolCase) -> int:
     return flags
 
 
-def rust_server_entry(case: protocol_matrix.ProtocolCase, host: str, tcp_port: int) -> dict[str, object]:
+def rust_server_entry(case: ed2k_protocol_cases.ProtocolCase, host: str, tcp_port: int) -> dict[str, object]:
     """Builds the ED2K server-entry metadata Rust needs for obfuscated sessions."""
 
     udp_key = 0x11223344 if case.server_protocol_obfuscation and case.server_udp else 0
@@ -109,10 +109,10 @@ def rust_server_entry(case: protocol_matrix.ProtocolCase, host: str, tcp_port: i
     }
 
 
-def rust_protocol_surface(case: protocol_matrix.ProtocolCase) -> dict[str, object]:
+def rust_protocol_surface(case: ed2k_protocol_cases.ProtocolCase) -> dict[str, object]:
     """Returns the protocol surface covered by one Rust matrix case."""
 
-    surface = protocol_matrix.protocol_surface(case)
+    surface = ed2k_protocol_cases.protocol_surface(case)
     surface["rust_client_crypt"] = {
         "obfuscation_enabled": case.client_crypt_supported,
         "required_preference_supported": False,
@@ -121,19 +121,29 @@ def rust_protocol_surface(case: protocol_matrix.ProtocolCase) -> dict[str, objec
     return surface
 
 
-def protocol_fixture_name(case: protocol_matrix.ProtocolCase) -> str:
+def apply_mfc_protocol_preferences(
+    config_dir: Path,
+    case: ed2k_protocol_cases.ProtocolCase,
+) -> dict[str, str]:
+    """Applies the shared case's exact MFC oracle preferences."""
+
+    live_common.apply_emule_preferences(config_dir, ed2k_protocol_cases.mfc_preference_updates(case))
+    return ed2k_protocol_cases.mfc_preference_snapshot(case)
+
+
+def protocol_fixture_name(case: ed2k_protocol_cases.ProtocolCase) -> str:
     """Returns the synthetic Unicode fixture filename used by every Rust protocol case."""
 
     return f"rust-{case.artifact_id}-{UNICODE_FIXTURE_SUFFIX}.bin"
 
 
-def secondary_protocol_fixture_name(case: protocol_matrix.ProtocolCase) -> str:
+def secondary_protocol_fixture_name(case: ed2k_protocol_cases.ProtocolCase) -> str:
     """Returns the second synthetic Unicode fixture filename for multi-transfer coverage."""
 
     return f"rust-{case.artifact_id}-multi-{UNICODE_FIXTURE_SUFFIX}.bin"
 
 
-def hash_only_protocol_fixture_name(case: protocol_matrix.ProtocolCase) -> str:
+def hash_only_protocol_fixture_name(case: ed2k_protocol_cases.ProtocolCase) -> str:
     """Returns the synthetic Unicode fixture filename used for hash-only metadata recovery."""
 
     return f"rust-{case.artifact_id}-hash-only-{UNICODE_FIXTURE_SUFFIX}.bin"
@@ -151,7 +161,7 @@ def rust_transfer_display_name(transfer: dict[str, object]) -> str:
     return str(transfer.get("displayName") or transfer.get("name") or "")
 
 
-def client_connect_options(case: protocol_matrix.ProtocolCase) -> int:
+def client_connect_options(case: ed2k_protocol_cases.ProtocolCase) -> int:
     """Returns the peer crypt bits represented by one protocol-matrix case."""
 
     return (
@@ -162,19 +172,19 @@ def client_connect_options(case: protocol_matrix.ProtocolCase) -> int:
 
 
 def require_protocol_coverage(
-    cases: list[protocol_matrix.ProtocolCase],
+    cases: list[ed2k_protocol_cases.ProtocolCase],
     *,
     require_full_matrix: bool,
 ) -> dict[str, object]:
     """Summarizes and, for full runs, enforces the Rust ED2K protocol coverage contract."""
 
     selected_names = {case.name for case in cases}
-    required_names = {case.name for case in protocol_matrix.PROTOCOL_CASES}
+    required_names = {case.name for case in ed2k_protocol_cases.PROTOCOL_CASES}
     missing_names = sorted(required_names - selected_names)
     coverage = {
         "caseCount": len(cases),
         "selectedCaseNames": [case.name for case in cases],
-        "requiredCaseNames": [case.name for case in protocol_matrix.PROTOCOL_CASES],
+        "requiredCaseNames": [case.name for case in ed2k_protocol_cases.PROTOCOL_CASES],
         "fullMatrixRequired": require_full_matrix,
         "missingRequiredCaseNames": missing_names,
         "plainServerPlainClients": any(
@@ -229,7 +239,7 @@ def require_protocol_coverage(
 
 
 def require_rust_source_metadata(
-    case: protocol_matrix.ProtocolCase,
+    case: ed2k_protocol_cases.ProtocolCase,
     sources: list[dict[str, object]],
     *,
     expected_ip: str,
@@ -458,7 +468,7 @@ def require_case_result_coverage(cases: list[dict[str, object]]) -> dict[str, ob
 
 def run_protocol_case(
     *,
-    case: protocol_matrix.ProtocolCase,
+    case: ed2k_protocol_cases.ProtocolCase,
     args: argparse.Namespace,
     paths,
     profile_seed_dir: Path,
@@ -524,19 +534,19 @@ def run_protocol_case(
 
         shared_dir = case_dir / "client2-shared"
         fixture_file = shared_dir / protocol_fixture_name(case)
-        fixture_sha256 = protocol_matrix.write_protocol_fixture_file(
+        fixture_sha256 = ed2k_protocol_cases.write_fixture(
             fixture_file,
             args.fixture_size_bytes,
             case.fixture_pattern,
         )
         secondary_fixture_file = shared_dir / secondary_protocol_fixture_name(case)
-        secondary_fixture_sha256 = protocol_matrix.write_protocol_fixture_file(
+        secondary_fixture_sha256 = ed2k_protocol_cases.write_fixture(
             secondary_fixture_file,
             SECONDARY_FIXTURE_SIZE_BYTES,
             case.fixture_pattern,
         )
         hash_only_fixture_file = shared_dir / hash_only_protocol_fixture_name(case)
-        hash_only_fixture_sha256 = protocol_matrix.write_protocol_fixture_file(
+        hash_only_fixture_sha256 = ed2k_protocol_cases.write_fixture(
             hash_only_fixture_file,
             HASH_ONLY_FIXTURE_SIZE_BYTES,
             case.fixture_pattern,
@@ -599,7 +609,7 @@ def run_protocol_case(
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=client_p2p_address,
         )
-        report["checks"]["mfc_oracle_protocol_preferences"] = protocol_matrix.apply_protocol_preferences(
+        report["checks"]["mfc_oracle_protocol_preferences"] = apply_mfc_protocol_preferences(
             Path(mfc_oracle_profile["config_dir"]),
             case,
         )
@@ -1046,7 +1056,7 @@ def main(argv: list[str] | None = None) -> int:
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
         report["clients"] = [asdict(CLIENT_RUST), asdict(CLIENT_MFC_ORACLE)]
 
-        selected_cases = protocol_matrix.selected_cases(args.case)
+        selected_cases = ed2k_protocol_cases.selected_cases(args.case)
         report["checks"]["protocol_matrix_coverage"] = require_protocol_coverage(
             selected_cases,
             require_full_matrix=not args.case,

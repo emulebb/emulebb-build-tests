@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import cpu_profile  # noqa: E402
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
+from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixtureConfig,
@@ -50,7 +51,6 @@ def load_local_module(module_name: str, filename: str):
 
 
 dtt = load_local_module("deterministic_two_client_transfer_godzilla", "deterministic-two-client-transfer.py")
-protocol_matrix = load_local_module("local_ed2k_protocol_combinations_godzilla", "local-ed2k-protocol-combinations.py")
 harness_cli_common = dtt.harness_cli_common
 live_common = dtt.live_common
 rest_smoke = dtt.rest_smoke
@@ -203,7 +203,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--file-base-size-bytes", type=int, default=DEFAULT_FILE_BASE_SIZE_BYTES)
     parser.add_argument("--file-medium-size-bytes", type=int, default=DEFAULT_FILE_MEDIUM_SIZE_BYTES)
     parser.add_argument("--file-large-size-bytes", type=int, default=DEFAULT_FILE_LARGE_SIZE_BYTES)
-    parser.add_argument("--protocol-case", choices=tuple(protocol_matrix.PROTOCOL_CASE_MAP.keys()), default=DEFAULT_PROTOCOL_CASE)
+    parser.add_argument(
+        "--protocol-case",
+        choices=tuple(ed2k_protocol_cases.PROTOCOL_CASE_MAP),
+        default=DEFAULT_PROTOCOL_CASE,
+    )
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     args = parser.parse_args(argv_tokens)
@@ -493,7 +497,7 @@ def protocol_preferences(case) -> dict[str, object]:
         "crypt_layer_supported": bool(case.client_crypt_supported),
         "crypt_layer_requested": bool(case.client_crypt_requested),
         "crypt_layer_required": bool(case.client_crypt_required),
-        "crypt_tcp_padding_length": int(protocol_matrix.PROTOCOL_PADDING_LENGTH),
+        "crypt_tcp_padding_length": ed2k_protocol_cases.PROTOCOL_PADDING_LENGTH,
     }
 
 
@@ -1870,7 +1874,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             merge_local_dumps_config(paths.local_dumps, harness_local_dumps)
             harness_cli_common.write_json_file(paths.source_artifacts_dir / "local-dumps.json", paths.local_dumps)
-        protocol_case = protocol_matrix.PROTOCOL_CASE_MAP[args.protocol_case]
+        protocol_case = ed2k_protocol_cases.PROTOCOL_CASE_MAP[args.protocol_case]
         client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
         args.lan_bind_addr = resolve_lan_bind_addr(args, p2p_address)
@@ -1921,7 +1925,7 @@ def main(argv: list[str] | None = None) -> int:
             "client_crypt_supported": protocol_case.client_crypt_supported,
             "client_crypt_requested": protocol_case.client_crypt_requested,
             "client_crypt_required": protocol_case.client_crypt_required,
-            "crypt_tcp_padding_length": protocol_matrix.PROTOCOL_PADDING_LENGTH,
+            "crypt_tcp_padding_length": ed2k_protocol_cases.PROTOCOL_PADDING_LENGTH,
         }
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"

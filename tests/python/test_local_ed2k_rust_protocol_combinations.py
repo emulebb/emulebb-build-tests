@@ -27,7 +27,7 @@ def load_suite_module():
 
 def test_rust_server_entry_advertises_obfuscated_tcp_and_udp() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
 
     entry = module.rust_server_entry(case, "192.0.2.10", 4661)
 
@@ -42,7 +42,7 @@ def test_rust_server_entry_advertises_obfuscated_tcp_and_udp() -> None:
 
 def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
 
     entry = module.rust_server_entry(case, "192.0.2.10", 4661)
 
@@ -55,7 +55,7 @@ def test_rust_server_entry_omits_obfuscation_for_plain_case() -> None:
 
 def test_rust_protocol_surface_discloses_single_obfuscation_toggle() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
 
     surface = module.rust_protocol_surface(case)
 
@@ -67,9 +67,9 @@ def test_rust_protocol_surface_discloses_single_obfuscation_toggle() -> None:
 def test_rust_protocol_fixture_name_is_unicode_for_every_case() -> None:
     module = load_suite_module()
 
-    names = [module.protocol_fixture_name(case) for case in module.protocol_matrix.PROTOCOL_CASES]
-    secondary_names = [module.secondary_protocol_fixture_name(case) for case in module.protocol_matrix.PROTOCOL_CASES]
-    hash_only_names = [module.hash_only_protocol_fixture_name(case) for case in module.protocol_matrix.PROTOCOL_CASES]
+    names = [module.protocol_fixture_name(case) for case in module.ed2k_protocol_cases.PROTOCOL_CASES]
+    secondary_names = [module.secondary_protocol_fixture_name(case) for case in module.ed2k_protocol_cases.PROTOCOL_CASES]
+    hash_only_names = [module.hash_only_protocol_fixture_name(case) for case in module.ed2k_protocol_cases.PROTOCOL_CASES]
 
     assert all("Unicode-\u00e9-\u6f22" in name for name in names)
     assert all("Unicode-\u00e9-\u6f22" in name for name in secondary_names)
@@ -77,9 +77,9 @@ def test_rust_protocol_fixture_name_is_unicode_for_every_case() -> None:
     assert all(not name.isascii() for name in names)
     assert all(not name.isascii() for name in secondary_names)
     assert all(not name.isascii() for name in hash_only_names)
-    assert len(set(names)) == len(module.protocol_matrix.PROTOCOL_CASES)
-    assert len(set(secondary_names)) == len(module.protocol_matrix.PROTOCOL_CASES)
-    assert len(set(hash_only_names)) == len(module.protocol_matrix.PROTOCOL_CASES)
+    assert len(set(names)) == len(module.ed2k_protocol_cases.PROTOCOL_CASES)
+    assert len(set(secondary_names)) == len(module.ed2k_protocol_cases.PROTOCOL_CASES)
+    assert len(set(hash_only_names)) == len(module.ed2k_protocol_cases.PROTOCOL_CASES)
     assert set(names).isdisjoint(secondary_names)
     assert set(names).isdisjoint(hash_only_names)
     assert set(secondary_names).isdisjoint(hash_only_names)
@@ -148,25 +148,25 @@ def test_ed2k_link_with_source_appends_obfuscated_identity_hint() -> None:
 def test_client_connect_options_preserve_each_crypt_preference_bit() -> None:
     module = load_suite_module()
 
-    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]) == 0
-    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-preferred"]) == 3
-    assert module.client_connect_options(module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required"]) == 7
+    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]) == 0
+    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-preferred"]) == 3
+    assert module.client_connect_options(module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]) == 7
 
 
 def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
     module = load_suite_module()
 
     coverage = module.require_protocol_coverage(
-        list(module.protocol_matrix.PROTOCOL_CASES),
+        list(module.ed2k_protocol_cases.PROTOCOL_CASES),
         require_full_matrix=True,
     )
 
-    assert coverage["caseCount"] == len(module.protocol_matrix.PROTOCOL_CASES)
+    assert coverage["caseCount"] == len(module.ed2k_protocol_cases.PROTOCOL_CASES)
     assert coverage["missingRequiredCaseNames"] == []
     assert coverage["plainServerPlainClients"] is True
     assert coverage["obfuscatedPreferred"] is True
     assert coverage["obfuscatedRequired"] is True
-    assert all(case.server_udp for case in module.protocol_matrix.PROTOCOL_CASES)
+    assert all(case.server_udp for case in module.ed2k_protocol_cases.PROTOCOL_CASES)
     assert coverage["compressibleFixture"] is True
     assert coverage["lowCompressibilityFixture"] is True
     assert coverage["unicodeFixtureNames"] is True
@@ -176,7 +176,7 @@ def test_full_rust_protocol_coverage_requires_all_surfaces() -> None:
 
 def test_full_rust_protocol_coverage_rejects_missing_surfaces() -> None:
     module = load_suite_module()
-    cases = [module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]]
+    cases = [module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]]
 
     try:
         module.require_protocol_coverage(cases, require_full_matrix=True)
@@ -189,7 +189,7 @@ def test_full_rust_protocol_coverage_rejects_missing_surfaces() -> None:
 
 def test_selected_rust_protocol_coverage_reports_partial_surface_without_failing() -> None:
     module = load_suite_module()
-    cases = [module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]]
+    cases = [module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]]
 
     coverage = module.require_protocol_coverage(cases, require_full_matrix=False)
 
@@ -338,7 +338,7 @@ def test_rust_search_by_name_uses_canonical_display_name(monkeypatch) -> None:
 
 def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required-compressible"]
 
     metadata = module.require_rust_source_metadata(
         case,
@@ -362,7 +362,7 @@ def test_obfuscated_rust_source_metadata_requires_peer_user_hash() -> None:
 
 def test_rust_source_metadata_accepts_public_rest_address_and_port() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
 
     metadata = module.require_rust_source_metadata(
         case,
@@ -384,7 +384,7 @@ def test_rust_source_metadata_accepts_public_rest_address_and_port() -> None:
 
 def test_obfuscated_rust_source_metadata_rejects_missing_peer_user_hash() -> None:
     module = load_suite_module()
-    case = module.protocol_matrix.PROTOCOL_CASE_MAP["obfuscated-required"]
+    case = module.ed2k_protocol_cases.PROTOCOL_CASE_MAP["obfuscated-required"]
 
     try:
         module.require_rust_source_metadata(

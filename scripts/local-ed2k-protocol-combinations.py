@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, asdict
-import hashlib
 import importlib.util
 import subprocess
 import sys
@@ -16,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
+from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 
 
@@ -41,63 +40,6 @@ SUITE_NAME = "local-ed2k-protocol-combinations"
 API_KEY = "local-ed2k-protocol-combinations-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["mfc_oracle"]
-PROTOCOL_PADDING_LENGTH = 128
-
-
-@dataclass(frozen=True)
-class ProtocolCase:
-    """One local ED2K protocol surface covered by the live matrix."""
-
-    name: str
-    artifact_id: str
-    server_protocol_obfuscation: bool
-    server_udp: bool
-    client_crypt_supported: bool
-    client_crypt_requested: bool
-    client_crypt_required: bool
-    fixture_pattern: str = "low-compressibility"
-
-
-PROTOCOL_CASES = (
-    ProtocolCase(
-        name="plain-server-plain-clients",
-        artifact_id="plain",
-        server_protocol_obfuscation=False,
-        server_udp=True,
-        client_crypt_supported=False,
-        client_crypt_requested=False,
-        client_crypt_required=False,
-    ),
-    ProtocolCase(
-        name="obfuscated-preferred",
-        artifact_id="obf-pref",
-        server_protocol_obfuscation=True,
-        server_udp=True,
-        client_crypt_supported=True,
-        client_crypt_requested=True,
-        client_crypt_required=False,
-    ),
-    ProtocolCase(
-        name="obfuscated-required",
-        artifact_id="obf-req",
-        server_protocol_obfuscation=True,
-        server_udp=True,
-        client_crypt_supported=True,
-        client_crypt_requested=True,
-        client_crypt_required=True,
-    ),
-    ProtocolCase(
-        name="obfuscated-required-compressible",
-        artifact_id="obf-req-z",
-        server_protocol_obfuscation=True,
-        server_udp=True,
-        client_crypt_supported=True,
-        client_crypt_requested=True,
-        client_crypt_required=True,
-        fixture_pattern="compressible",
-    ),
-)
-PROTOCOL_CASE_MAP = {case.name: case for case in PROTOCOL_CASES}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
-    parser.add_argument("--case", action="append", choices=tuple(PROTOCOL_CASE_MAP.keys()))
+    parser.add_argument("--case", action="append", choices=tuple(ed2k_protocol_cases.PROTOCOL_CASE_MAP))
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser
@@ -133,81 +75,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def selected_cases(names: list[str] | None) -> list[ProtocolCase]:
-    """Returns requested protocol cases in stable matrix order."""
-
-    if not names:
-        return list(PROTOCOL_CASES)
-    wanted = set(names)
-    return [case for case in PROTOCOL_CASES if case.name in wanted]
-
-
-def bool_pref(value: bool) -> str:
-    """Converts a boolean to an eMule integer preference string."""
-
-    return "1" if value else "0"
-
-
-def apply_protocol_preferences(config_dir: Path, case: ProtocolCase) -> dict[str, object]:
+def apply_protocol_preferences(
+    config_dir: Path,
+    case: ed2k_protocol_cases.ProtocolCase,
+) -> dict[str, object]:
     """Applies protocol-obfuscation preferences shared by both MFC parity clients."""
 
-    live_common.apply_emule_preferences(
-        config_dir,
-        (
-            ("CryptLayerSupported", bool_pref(case.client_crypt_supported)),
-            ("CryptLayerRequested", bool_pref(case.client_crypt_requested)),
-            ("CryptLayerRequired", bool_pref(case.client_crypt_required)),
-            ("CryptTCPPaddingLength", str(PROTOCOL_PADDING_LENGTH)),
-        ),
-    )
-    return {
-        "CryptLayerSupported": bool_pref(case.client_crypt_supported),
-        "CryptLayerRequested": bool_pref(case.client_crypt_requested),
-        "CryptLayerRequired": bool_pref(case.client_crypt_required),
-        "CryptTCPPaddingLength": str(PROTOCOL_PADDING_LENGTH),
-    }
-
-
-def write_protocol_fixture_file(path: Path, size_bytes: int, pattern: str) -> str:
-    """Writes the case fixture and returns its SHA-256 proof hash."""
-
-    if pattern == "low-compressibility":
-        return dtt.write_fixture_file(path, size_bytes)
-    if pattern != "compressible":
-        raise ValueError(f"Unsupported protocol fixture pattern: {pattern!r}")
-    if size_bytes <= 0:
-        raise ValueError("Fixture size must be greater than zero.")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    block = (b"emulebb-local-ed2k-compressible-fixture\n" * 2048)[:64 * 1024]
-    remaining = size_bytes
-    with path.open("wb") as handle:
-        while remaining > 0:
-            chunk = block[: min(len(block), remaining)]
-            handle.write(chunk)
-            digest.update(chunk)
-            remaining -= len(chunk)
-    return digest.hexdigest()
-
-
-def protocol_surface(case: ProtocolCase) -> dict[str, object]:
-    """Returns the explicit protocol surface covered by one matrix case."""
-
-    surface = asdict(case)
-    surface["client_data_compression"] = {
-        "mode": "stock-auto-negotiated",
-        "preference_toggle": False,
-        "evidence": (
-            "eMule advertises data compression capability during client hello; "
-            "the matrix varies fixture compressibility because no stock profile toggle exists."
-        ),
-    }
-    return surface
+    live_common.apply_emule_preferences(config_dir, ed2k_protocol_cases.mfc_preference_updates(case))
+    return ed2k_protocol_cases.mfc_preference_snapshot(case)
 
 
 def run_protocol_case(
     *,
-    case: ProtocolCase,
+    case: ed2k_protocol_cases.ProtocolCase,
     args: argparse.Namespace,
     paths,
     profile_seed_dir: Path,
@@ -222,7 +102,7 @@ def run_protocol_case(
         "name": case.name,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "protocol_surface": protocol_surface(case),
+        "protocol_surface": ed2k_protocol_cases.protocol_surface(case),
         "checks": {},
     }
     server_process: subprocess.Popen | None = None
@@ -261,7 +141,11 @@ def run_protocol_case(
         report["ed2k_server"] = ed2k_server.config
 
         fixture_file = case_dir / "client2-shared" / f"{case.artifact_id}.bin"
-        fixture_sha256 = write_protocol_fixture_file(fixture_file, args.fixture_size_bytes, case.fixture_pattern)
+        fixture_sha256 = ed2k_protocol_cases.write_fixture(
+            fixture_file,
+            args.fixture_size_bytes,
+            case.fixture_pattern,
+        )
         report["fixture"] = {
             "path": str(fixture_file),
             "name": fixture_file.name,
@@ -471,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["server_build"] = ed2k_binary.build
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
 
-        for case in selected_cases(args.case):
+        for case in ed2k_protocol_cases.selected_cases(args.case):
             case_report = run_protocol_case(
                 case=case,
                 args=args,
