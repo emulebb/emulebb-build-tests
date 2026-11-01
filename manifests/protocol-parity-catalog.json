@@ -103,10 +103,10 @@
       "reason": "Local fault discovery feeds deterministic regressions but is not standalone parity proof."
     },
     {
-      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
-      "classification": "support",
+      "campaignIds": [],
+      "classification": "historical",
       "path": "scripts/local-ed2k-protocol-combinations.py",
-      "reason": "MFC oracle-only protocol matrix supporting the Rust-owned matrix."
+      "reason": "Retired MFC-versus-MFC protocol matrix retained only for extraction by the historical aggregate campaign; shared cases now belong to the harness and Rust-owned matrix."
     },
     {
       "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],

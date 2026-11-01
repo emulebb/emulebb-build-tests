@@ -993,7 +993,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-protocol-combinations.py",
+        "local-ed2k-rust-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]
@@ -1001,7 +1001,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
-        "local-ed2k-protocol-combinations",
+        "local-ed2k-rust-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
     ]
@@ -1060,7 +1060,7 @@ def test_multi_client_required_profile_enables_required_optional_clients(tmp_pat
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-protocol-combinations.py",
+        "local-ed2k-rust-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]

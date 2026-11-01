@@ -30,12 +30,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# Shared seed fixture patterns (mirrors local-ed2k-protocol-combinations.py):
+from emule_test_harness.ed2k_protocol_cases import COMPRESSIBLE, LOW_COMPRESSIBILITY
+
+# Shared seed fixture patterns (aligned with ed2k_protocol_cases.py):
 # "compressible" packs a repeating block so the protocol's zlib path engages;
 # "low-compressibility" is high-entropy so compression is a no-op. ``None`` keeps
 # the tiny default text seed.
-COMPRESSIBLE = "compressible"
-LOW_COMPRESSIBILITY = "low-compressibility"
 VALID_COMPRESSION_FIXTURES = frozenset({COMPRESSIBLE, LOW_COMPRESSIBILITY})
 
 # Search methods accepted by both clients' POST /api/v1/searches.
