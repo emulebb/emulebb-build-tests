@@ -18,12 +18,11 @@ EXPECTED_EXTENSION_TAGS: dict[str, dict[int | str, object]] = {
     "rust": {"offerfiles_v": 1},
     "mfc": {},
 }
-REQUIRED_SERVER_FLAGS = (
+REQUIRED_STOCK_SERVER_FLAGS = (
     ed2k_wire.SRVCAP_ZLIB
     | ed2k_wire.SRVCAP_NEWTAGS
     | ed2k_wire.SRVCAP_UNICODE
     | ed2k_wire.SRVCAP_LARGEFILES
-    | ed2k_wire.SRVCAP_SUPPORTCRYPT
 )
 
 
@@ -181,7 +180,7 @@ def _client_evidence(
         and stock_tags.get(CT_VERSION, 0) > 0
         and isinstance(flags, int)
         and not isinstance(flags, bool)
-        and flags & REQUIRED_SERVER_FLAGS == REQUIRED_SERVER_FLAGS
+        and flags & REQUIRED_STOCK_SERVER_FLAGS == REQUIRED_STOCK_SERVER_FLAGS
         and isinstance(stock_tags.get(CT_UDP_PORTS), int)
         and extension_tags == EXPECTED_EXTENSION_TAGS[client]
         and _user_hash_has_stock_markers(decoded_login.get("user_hash"))

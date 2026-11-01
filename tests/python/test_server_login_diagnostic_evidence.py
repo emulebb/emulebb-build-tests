@@ -37,7 +37,7 @@ def login_payload(
     client: str,
     nickname: str,
     tcp_port: int,
-    server_flags: int = evidence.REQUIRED_SERVER_FLAGS,
+    server_flags: int = evidence.REQUIRED_STOCK_SERVER_FLAGS,
     extra_tags: list[bytes] | None = None,
 ) -> bytes:
     nickname_bytes = nickname.encode("utf-8")
@@ -237,7 +237,7 @@ def test_shared_server_flags_must_match() -> None:
             client="mfc",
             nickname=MFC_NICKNAME,
             tcp_port=MFC_PORT,
-            server_flags=evidence.REQUIRED_SERVER_FLAGS | 0x4000,
+            server_flags=evidence.REQUIRED_STOCK_SERVER_FLAGS | 0x4000,
         ),
         outcome="send_succeeded",
         transport_mode="plaintext",
