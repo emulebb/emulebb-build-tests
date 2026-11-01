@@ -5,50 +5,101 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness.protocol_goldens import (
+from emule_test_harness.protocol_parity import (
     build_dumpcap_command,
+    build_catalog_report,
+    CATALOG_SCHEMA,
     compare_record_sets,
-    default_golden_path,
-    GOLDEN_SCHEMA_VERSION,
+    default_catalog_path,
+    NORMALIZED_EVIDENCE_SCHEMA,
     normalize_ed2k_records,
     normalize_udp_records,
     pcap_tool_status,
     REQUIRED_STOCK_COVERAGE_IDS,
     run_compare_cli,
     run_normalize_cli,
-    validate_golden_manifest,
+    run_validate_cli,
+    validate_protocol_catalog,
 )
 
 
 def test_tracked_protocol_oracle_manifest_validates() -> None:
-    validation = validate_golden_manifest(default_golden_path(Path(__file__).resolve().parents[2]))
+    validation = validate_protocol_catalog(default_catalog_path(Path(__file__).resolve().parents[2]))
 
     assert validation.errors == ()
 
 
 def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> None:
-    manifest_path = default_golden_path(Path(__file__).resolve().parents[2])
+    manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     coverage_ids = [coverage_id for group in payload["coverageGroups"] for coverage_id in group["coverageIds"]]
 
     assert len(REQUIRED_STOCK_COVERAGE_IDS) == 97
     assert len(coverage_ids) == len(set(coverage_ids))
     assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
-    assert payload["stockOracle"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
+    assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
+
+
+def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() -> None:
+    manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validation = validate_protocol_catalog(manifest_path)
+
+    report = build_catalog_report(payload, validation)
+
+    assert report["valid"] is True
+    assert report["coverage"] == {
+        "coveredGroupCount": 0,
+        "requiredGroupCount": 15,
+        "coverageIdCount": 97,
+        "verdictCounts": {
+            "parity": 0,
+            "divergence": 0,
+            "evidence-incomplete": 15,
+            "not-observed": 0,
+            "intentional-difference": 0,
+        },
+    }
+    assert report["unconfiguredAuthorityIds"] == ["amule-stable"]
+
+
+def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run_validate_cli(["--test-repo-root", str(Path(__file__).resolve().parents[2]), "--format", "json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
+    assert report["coverage"]["coveredGroupCount"] == 0
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
-    source = default_golden_path(Path(__file__).resolve().parents[2])
+    source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
     payload["records"][-1]["payloadDigest"] = "sha256:" + "0" * 64
     payload["coverageGroups"][-1]["coverageIds"].remove("queue.admission")
     manifest = tmp_path / "drifted.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
-    validation = validate_golden_manifest(manifest)
+    validation = validate_protocol_catalog(manifest)
 
     assert any("payloadDigest does not match fixtureBase64" in error for error in validation.errors)
     assert any("missing required coverage IDs" in error for error in validation.errors)
+
+
+def test_catalog_rejects_unproven_green_and_analysis_only_authority(tmp_path: Path) -> None:
+    source = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["coverageGroups"][0]["authorityIds"].append("amule-head")
+    payload["coverageGroups"][0]["latestEvidence"] = {
+        "reason": "invalid synthetic green",
+        "verdict": "parity",
+    }
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_protocol_catalog(catalog)
+
+    assert any("cannot use analysis-only amule-head" in error for error in validation.errors)
+    assert any("latestEvidence.receipt is required for verdict parity" in error for error in validation.errors)
 
 
 def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> None:
@@ -56,7 +107,7 @@ def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> 
     manifest.write_text(
         json.dumps(
             {
-                "schemaVersion": GOLDEN_SCHEMA_VERSION,
+                "schema": CATALOG_SCHEMA,
                 "scenarios": [{"scenarioId": "kad.example.v1", "protocol": "kad2"}],
                 "records": [
                     {
@@ -75,7 +126,7 @@ def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    validation = validate_golden_manifest(manifest)
+    validation = validate_protocol_catalog(manifest)
 
     assert any("wire_hex" in error for error in validation.errors)
 
@@ -85,7 +136,7 @@ def test_protocol_oracle_manifest_rejects_unredacted_ipv4(tmp_path: Path) -> Non
     manifest.write_text(
         json.dumps(
             {
-                "schemaVersion": GOLDEN_SCHEMA_VERSION,
+                "schema": CATALOG_SCHEMA,
                 "scenarios": [{"scenarioId": "ed2k.example.v1", "protocol": "ed2k"}],
                 "records": [
                     {
@@ -105,7 +156,7 @@ def test_protocol_oracle_manifest_rejects_unredacted_ipv4(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    validation = validate_golden_manifest(manifest)
+    validation = validate_protocol_catalog(manifest)
 
     assert any("unredacted IPv4" in error for error in validation.errors)
 
@@ -200,7 +251,7 @@ def test_normalize_cli_writes_manifest(tmp_path: Path) -> None:
     assert run_normalize_cli(["--scenario-id", "kad.cli.v1", "--udp-jsonl", str(udp_jsonl), "--output", str(output)]) == 0
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schemaVersion"] == GOLDEN_SCHEMA_VERSION
+    assert payload["schema"] == NORMALIZED_EVIDENCE_SCHEMA
     assert payload["records"][0]["opcodeName"] == "KADEMLIA2_HELLO_REQ"
 
 
@@ -208,7 +259,7 @@ def test_compare_cli_detects_manifest_drift(tmp_path: Path) -> None:
     left = tmp_path / "left.json"
     right = tmp_path / "right.json"
     payload = {
-        "schemaVersion": GOLDEN_SCHEMA_VERSION,
+        "schema": NORMALIZED_EVIDENCE_SCHEMA,
         "records": [{"scenarioId": "a", "recordType": "udp-packet"}],
     }
     left.write_text(json.dumps(payload), encoding="utf-8")
@@ -218,7 +269,7 @@ def test_compare_cli_detects_manifest_drift(tmp_path: Path) -> None:
 
 
 def test_pcap_helper_reports_tool_availability_and_command_shape(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("emule_test_harness.protocol_goldens.shutil.which", lambda name: f"C:/Tools/{name}.exe")
+    monkeypatch.setattr("emule_test_harness.protocol_parity.shutil.which", lambda name: f"C:/Tools/{name}.exe")
 
     status = pcap_tool_status()
     command = build_dumpcap_command(output_path=tmp_path / "capture.pcapng", capture_filter="udp port 4662", interface="1")
@@ -229,7 +280,7 @@ def test_pcap_helper_reports_tool_availability_and_command_shape(monkeypatch, tm
 
 
 def test_pcap_helper_fails_when_dumpcap_missing(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("emule_test_harness.protocol_goldens.shutil.which", lambda name: None)
+    monkeypatch.setattr("emule_test_harness.protocol_parity.shutil.which", lambda name: None)
 
     with pytest.raises(RuntimeError, match="dumpcap is not available"):
         build_dumpcap_command(output_path=tmp_path / "capture.pcapng", capture_filter="udp")

@@ -150,8 +150,8 @@ Script inventory:
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
-| `scripts\validate-protocol-goldens.py` | protocol parity guard | maintained | validates compact Kad/eD2K oracle goldens and redaction rules |
-| `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
+| `scripts\validate-protocol-catalog.py` | protocol parity guard | maintained | validates the single eD2K/Kad coverage, authority, and evidence catalog |
+| `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes UDP/eD2K diagnostic JSONL into candidate evidence |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
 | `scripts\stock-protocol-oracle-proof.py` | stock protocol oracle gate | maintained | validates complete binary/state coverage and pinned stock-source anchors; the overnight form also executes all five Rust packages containing cited proof selectors |
 | `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust route, query, body, Settings section-resource metadata, and section-resource response shapes against the Rust OpenAPI artifact |

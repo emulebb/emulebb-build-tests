@@ -426,7 +426,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 7
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/allRequirementsPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/failedRequirementCount"] == 0
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/stockOraclePassed"] is True
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolCatalogPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed"] is True
     assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed"] is True
@@ -595,7 +595,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                         "stockRecordCount": 17,
                         "binaryVectorCount": 15,
                         "stateVectorCount": 2,
-                        "baselineRevisionPinned": True,
+                        "stockSourceRevisionPinned": True,
                         "sourceAnchorsPassed": True,
                         "rustProofSelectorsPassed": True,
                         "rustProofExecutionRequired": True,
@@ -622,7 +622,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                         "allRequirementsPassed": True,
                         "failedRequirementCount": 0,
                         "failedRequirementIds": [],
-                        "stockOraclePassed": True,
+                        "protocolCatalogPassed": True,
                         "protocolVariantsPassed": True,
                         "multiUnicodeMetadataPassed": True,
                         "privateEd2kModulesPassed": True,

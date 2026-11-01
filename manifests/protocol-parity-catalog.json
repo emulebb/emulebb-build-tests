@@ -1,4 +1,114 @@
 {
+  "authorities": [
+    {
+      "authorityId": "rust-product",
+      "path": "repos/emulebb-rust",
+      "role": "product-under-test"
+    },
+    {
+      "authorityId": "stock-source",
+      "path": "repos/emule-stock",
+      "revision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b",
+      "role": "wire-and-state-intent"
+    },
+    {
+      "authorityId": "stock-instrumented",
+      "path": "workspaces/workspace/app/emulebb-community-baseline",
+      "revision": "c547b7cf2b6b59d971600111e425330ec8d2944d",
+      "role": "frozen-executable-reference"
+    },
+    {
+      "authorityId": "mfc-oracle",
+      "path": "workspaces/workspace/app/emulebb-main",
+      "role": "preferred-observable-runtime-oracle"
+    },
+    {
+      "authorityId": "amule-stable",
+      "role": "frozen-independent-parity-reference",
+      "status": "not-configured"
+    },
+    {
+      "authorityId": "amule-head",
+      "path": "repos/amule",
+      "revision": "827e602708ea57fcf96c4ffb38bd8a2f3ac48aa1",
+      "role": "analysis-only"
+    }
+  ],
+  "campaigns": [
+    {
+      "campaignId": "server-session-source",
+      "coverageGroupIds": [
+        "server-session",
+        "server-query-reply"
+      ]
+    },
+    {
+      "campaignId": "peer-handshake-ident",
+      "coverageGroupIds": [
+        "peer-framing",
+        "tag-vocabulary",
+        "peer-startup-profiles",
+        "secure-ident"
+      ]
+    },
+    {
+      "campaignId": "transfer-blocks",
+      "coverageGroupIds": [
+        "file-size-boundaries",
+        "transfer-blocks"
+      ]
+    },
+    {
+      "campaignId": "source-queue-callback",
+      "coverageGroupIds": [
+        "source-exchange-two",
+        "lowid-callbacks",
+        "queue-upload-state"
+      ]
+    },
+    {
+      "campaignId": "client-udp-reask",
+      "coverageGroupIds": [
+        "client-udp"
+      ]
+    },
+    {
+      "campaignId": "kad-bootstrap-routing",
+      "coverageGroupIds": [
+        "kad-contact-versions",
+        "nodes-dat-persistence"
+      ]
+    },
+    {
+      "campaignId": "kad-search-publish-firewall",
+      "coverageGroupIds": [
+        "kad-crypto-flows"
+      ]
+    }
+  ],
+  "contract": {
+    "evidenceLayers": [
+      "codec-transcript",
+      "deterministic-state-machine",
+      "local-cross-client",
+      "public-discovery"
+    ],
+    "provenanceRequired": [
+      "artifactSha256",
+      "runnerRevision",
+      "profileAuthority",
+      "subjects.authorityId",
+      "subjects.sourceRevision",
+      "subjects.executableSha256"
+    ],
+    "verdicts": [
+      "parity",
+      "divergence",
+      "evidence-incomplete",
+      "not-observed",
+      "intentional-difference"
+    ]
+  },
   "coverageGroups": [
     {
       "coverageIds": [
@@ -8,6 +118,21 @@
         "server.connect.fallback"
       ],
       "groupId": "server-session",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.server.session",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one authenticated server session with the selected transport or one bounded fallback",
+        "start": "server disconnected",
+        "stimulus": "connect and send login request"
+      },
       "recordIds": [
         "stock.server.connect-state",
         "stock.server.login"
@@ -47,6 +172,21 @@
         "server.reply.callback"
       ],
       "groupId": "server-query-reply",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/local-ed2k-search-soak.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.server.query",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "causally matched search, source, status, description, or callback reply",
+        "start": "authenticated server session",
+        "stimulus": "issue one typed server query"
+      },
       "recordIds": [
         "stock.server.query-corpus",
         "stock.server.reply-corpus"
@@ -94,6 +234,21 @@
         "peer.framing.coalesced"
       ],
       "groupId": "peer-framing",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.peer.framing",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "complete ordered frames independent of segmentation or coalescing",
+        "start": "peer transport connected with an empty receive buffer",
+        "stimulus": "deliver E3, C5, or D4 frames in complete, fragmented, or coalesced chunks"
+      },
       "recordIds": [
         "stock.peer.framing-corpus"
       ],
@@ -127,6 +282,21 @@
         "tags.malformed-bounds"
       ],
       "groupId": "tag-vocabulary",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.tags",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "known tags decode exactly, unknown tags are bounded, and malformed tails fail closed",
+        "start": "tag decoder at a declared tag boundary",
+        "stimulus": "decode each stock tag representation and malformed boundary"
+      },
       "recordIds": [
         "stock.tags.corpus"
       ],
@@ -171,6 +341,21 @@
         "peer.startup.sx2"
       ],
       "groupId": "peer-startup-profiles",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.peer.startup",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "compatible startup negotiation followed by the supported capability profile",
+        "start": "new inbound or outbound peer session",
+        "stimulus": "exchange hello and emule-info profiles"
+      },
       "recordIds": [
         "stock.peer.startup-corpus"
       ],
@@ -214,6 +399,21 @@
         "peer.boundary.uint32-plus-one"
       ],
       "groupId": "file-size-boundaries",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["transfer-blocks"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.file-size",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "the exact small-file or large-file representation without truncation",
+        "start": "file-size field not encoded",
+        "stimulus": "encode and decode values adjacent to UINT32_MAX"
+      },
       "recordIds": [
         "stock.peer.boundary-corpus"
       ],
@@ -245,6 +445,21 @@
         "transfer.block.compression-bomb"
       ],
       "groupId": "transfer-blocks",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["transfer-blocks"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.transfer.blocks",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "valid blocks advance exact ranges while hostile compression is rejected without corruption",
+        "start": "requested part range is outstanding",
+        "stimulus": "receive uncompressed, compressed, invalid-zlib, or expansion-bomb block data"
+      },
       "recordIds": [
         "stock.transfer.block-corpus"
       ],
@@ -288,6 +503,21 @@
         "sx2.part-needed-filter"
       ],
       "groupId": "source-exchange-two",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/emulebb-rust-emulebb-cross-client.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.source-exchange",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "version-appropriate useful sources with compatible crypt options and no unneeded parts",
+        "start": "peer transfer has a known file and source set",
+        "stimulus": "request or receive SX2 source exchange"
+      },
       "recordIds": [
         "stock.sx2.corpus"
       ],
@@ -332,6 +562,21 @@
         "ident.invalid-key"
       ],
       "groupId": "secure-ident",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.secure-ident",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one valid identity transition or an explicit bounded rejection",
+        "start": "peer identity is unverified",
+        "stimulus": "exchange public key, challenge, and signature for v1 or v2"
+      },
       "recordIds": [
         "stock.ident.corpus"
       ],
@@ -371,6 +616,21 @@
         "lowid.relayed-reask"
       ],
       "groupId": "lowid-callbacks",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/local-ed2k-protocol-combinations.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.lowid.callback",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one routed callback or reask through the selected server, direct, or buddy path",
+        "start": "LowID source is unreachable directly",
+        "stimulus": "request server, direct, buddy, or relayed callback"
+      },
       "recordIds": [
         "stock.lowid.corpus"
       ],
@@ -417,6 +677,21 @@
         "client-udp.unsolicited"
       ],
       "groupId": "client-udp",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["client-udp-reask"],
+      "deterministicRunner": "scripts/emulebb-rust-reask-cross-client.py",
+      "latestEvidence": {
+        "reason": "The retained fixture-owned proof predates the current branch and has no current-head receipt.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.client-udp",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "eligible requests produce one correlated send lifecycle and replies update only the owning source",
+        "start": "download source is due or ineligible for UDP reask",
+        "stimulus": "evaluate and optionally send direct or buddy-relayed reask"
+      },
       "recordIds": [
         "stock.client-udp.corpus"
       ],
@@ -461,6 +736,21 @@
         "kad.frame.e5"
       ],
       "groupId": "kad-contact-versions",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["kad-bootstrap-routing"],
+      "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "kad.routing.contacts",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "supported contact versions enter routing with the exact compatible E4 or E5 frame",
+        "start": "routing table lacks the candidate contact",
+        "stimulus": "decode and process contact versions 2 through 10"
+      },
       "recordIds": [
         "stock.kad.contacts-corpus"
       ],
@@ -499,6 +789,21 @@
         "kad.flow.callback"
       ],
       "groupId": "kad-crypto-flows",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["kad-search-publish-firewall"],
+      "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "kad.operations",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "causally matched encrypted or clear search, publish, firewall, buddy, and callback lifecycles",
+        "start": "Kad routing is ready and no operation owns the target",
+        "stimulus": "start one target-owned Kad operation"
+      },
       "recordIds": [
         "stock.kad.flow-corpus"
       ],
@@ -554,6 +859,21 @@
         "nodes-dat.restart"
       ],
       "groupId": "nodes-dat-persistence",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["kad-bootstrap-routing"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "kad.persistence.nodes-dat",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "exact supported layout persists and reloads the same contacts and bootstrap mode",
+        "start": "nodes.dat is absent or contains one supported version",
+        "stimulus": "load, persist, and restart with versions 0 through 3"
+      },
       "recordIds": [
         "stock.nodes-dat.corpus"
       ],
@@ -591,6 +911,21 @@
         "queue.abuse-escalation"
       ],
       "groupId": "queue-upload-state",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "latestEvidence": {
+        "reason": "No current-head execution receipt is registered in the catalog.",
+        "verdict": "evidence-incomplete"
+      },
+      "protocolDomain": "ed2k.upload.queue",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "deterministic admission, rank, slot promotion, upload, recycle, and abuse outcome",
+        "start": "requester is outside the upload queue",
+        "stimulus": "submit valid, repeated, or abusive upload requests"
+      },
       "recordIds": [
         "stock.queue.state"
       ],
@@ -626,7 +961,7 @@
       ]
     }
   ],
-  "description": "Normalized Kad/eD2K protocol oracle evidence. Raw tracing-harness JSONL and packet captures stay in generated reports.",
+  "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
   "records": [
     {
       "direction": "send",
@@ -1128,7 +1463,7 @@
       "transport": "state"
     }
   ],
-  "scenarioSource": "main/community native protocol-parity plus tracing-harness JSONL normalizer contract",
+  "scenarioSource": "stock/community source anchors, native protocol fixtures, and diagnostic evidence normalization",
   "scenarios": [
     {
       "description": "Community-compatible compact eD2K search request vectors.",
@@ -1143,10 +1478,10 @@
       "source": "native-protocol-parity"
     },
     {
-      "description": "Kad UDP opcode and transport-mode buckets expected from tracing-harness oracle dumps.",
+      "description": "Kad UDP opcode and transport-mode buckets expected from diagnostic oracle captures.",
       "protocol": "kad2",
       "scenarioId": "kad.udp.publish-search.v1",
-      "source": "tracing-harness"
+      "source": "diagnostic-capture"
     },
     {
       "description": "Stock clear/obfuscated server connection and downgrade state machine.",
@@ -1251,11 +1586,11 @@
       "source": "community-stock-source"
     }
   ],
-  "schemaVersion": "emulebb-build-tests.protocol-oracle-golden.v1",
-  "stockOracle": {
-    "baselinePath": "workspaces/workspace/app/emulebb-community-baseline",
-    "baselineRevision": "f808d546cc12aeb64aaae5017f4f06c89e1cb9da",
-    "derivation": "Canonical synthetic fixtures transcribed from the pinned community/stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 97
+  "schema": "emulebb-build-tests.protocol-parity-catalog",
+  "stockAuthority": {
+    "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
+    "requiredCoverageCount": 97,
+    "sourcePath": "repos/emule-stock",
+    "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }
 }

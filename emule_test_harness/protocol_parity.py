@@ -1,4 +1,4 @@
-"""Protocol oracle golden-vector normalization and validation helpers."""
+"""Protocol-parity catalog, evidence normalization, and validation helpers."""
 
 from __future__ import annotations
 
@@ -17,7 +17,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-GOLDEN_SCHEMA_VERSION = "emulebb-build-tests.protocol-oracle-golden.v1"
+CATALOG_SCHEMA = "emulebb-build-tests.protocol-parity-catalog"
+NORMALIZED_EVIDENCE_SCHEMA = "emulebb-build-tests.protocol-normalized-evidence"
+CATALOG_EVIDENCE_LAYERS = (
+    "codec-transcript",
+    "deterministic-state-machine",
+    "local-cross-client",
+    "public-discovery",
+)
+CATALOG_PROVENANCE_FIELDS = (
+    "artifactSha256",
+    "runnerRevision",
+    "profileAuthority",
+    "subjects.authorityId",
+    "subjects.sourceRevision",
+    "subjects.executableSha256",
+)
+CATALOG_VERDICTS = (
+    "parity",
+    "divergence",
+    "evidence-incomplete",
+    "not-observed",
+    "intentional-difference",
+)
+CATALOG_AUTHORITY_ROLES = frozenset(
+    {
+        "analysis-only",
+        "frozen-executable-reference",
+        "frozen-independent-parity-reference",
+        "preferred-observable-runtime-oracle",
+        "product-under-test",
+        "wire-and-state-intent",
+    }
+)
 SENSITIVE_FIELD_NAMES = {
     "decoded_hex",
     "payload_hex",
@@ -170,8 +202,8 @@ KAD_OPCODE_NAME_BY_HEX = {
 
 
 @dataclass(frozen=True)
-class ProtocolGoldenValidation:
-    """Result of validating one protocol oracle golden manifest."""
+class ProtocolCatalogValidation:
+    """Result of validating the tracked protocol-parity catalog."""
 
     errors: tuple[str, ...]
 
@@ -182,10 +214,10 @@ class ProtocolGoldenValidation:
         return not self.errors
 
 
-def default_golden_path(test_repo_root: Path) -> Path:
-    """Returns the tracked protocol oracle golden manifest path."""
+def default_catalog_path(test_repo_root: Path) -> Path:
+    """Returns the tracked protocol-parity catalog path."""
 
-    return test_repo_root.resolve() / "manifests" / "protocol-oracle-golden.v1.json"
+    return test_repo_root.resolve() / "manifests" / "protocol-parity-catalog.json"
 
 
 def load_json(path: Path) -> Any:
@@ -211,7 +243,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def normalize_udp_records(records: Iterable[dict[str, Any]], *, scenario_id: str) -> list[dict[str, Any]]:
-    """Normalizes tracing-harness UDP packet JSONL rows into compact oracle records."""
+    """Normalizes diagnostic UDP packet JSONL rows into compact oracle records."""
 
     normalized: list[dict[str, Any]] = []
     for record in records:
@@ -239,7 +271,7 @@ def normalize_udp_records(records: Iterable[dict[str, Any]], *, scenario_id: str
 
 
 def normalize_ed2k_records(records: Iterable[dict[str, Any]], *, scenario_id: str) -> list[dict[str, Any]]:
-    """Normalizes tracing-harness eD2K TCP JSONL rows into compact oracle records."""
+    """Normalizes diagnostic eD2K TCP JSONL rows into compact oracle records."""
 
     normalized: list[dict[str, Any]] = []
     for record in records:
@@ -291,15 +323,21 @@ def summarize_state_sequences(records: Iterable[dict[str, Any]], *, scenario_id:
     return sorted(sequence_records, key=_record_sort_key)
 
 
-def validate_golden_manifest(path: Path, *, workspace_root: Path | None = None) -> ProtocolGoldenValidation:
-    """Validates a tracked protocol oracle golden manifest."""
+def validate_protocol_catalog(path: Path, *, workspace_root: Path | None = None) -> ProtocolCatalogValidation:
+    """Validates the tracked protocol-parity catalog."""
 
     errors: list[str] = []
     payload = load_json(path)
     if not isinstance(payload, dict):
-        return ProtocolGoldenValidation(("manifest must be a JSON object",))
-    if payload.get("schemaVersion") != GOLDEN_SCHEMA_VERSION:
-        errors.append(f"schemaVersion must be {GOLDEN_SCHEMA_VERSION}")
+        return ProtocolCatalogValidation(("catalog must be a JSON object",))
+    if payload.get("schema") != CATALOG_SCHEMA:
+        errors.append(f"schema must be {CATALOG_SCHEMA}")
+    _validate_catalog_contract(
+        payload,
+        errors,
+        repo_root=path.resolve().parent.parent,
+        workspace_root=workspace_root,
+    )
     scenarios = payload.get("scenarios")
     records = payload.get("records")
     if not isinstance(scenarios, list) or not scenarios:
@@ -313,24 +351,97 @@ def validate_golden_manifest(path: Path, *, workspace_root: Path | None = None) 
     _validate_records(records, scenario_ids, errors)
     _validate_stock_oracle(payload, records, errors, workspace_root=workspace_root)
     _validate_no_sensitive_payload(payload, errors)
-    return ProtocolGoldenValidation(tuple(errors))
+    return ProtocolCatalogValidation(tuple(errors))
 
 
-def render_validation_lines(validation: ProtocolGoldenValidation, path: Path) -> list[str]:
+def render_validation_lines(validation: ProtocolCatalogValidation, path: Path) -> list[str]:
     """Renders a concise validation summary for operators and CI logs."""
 
-    lines = [f"Protocol oracle golden manifest: {path}", f"Protocol oracle golden validation: {'PASS' if validation.passed else 'FAIL'}"]
+    lines = [f"Protocol-parity catalog: {path}", f"Protocol-parity catalog validation: {'PASS' if validation.passed else 'FAIL'}"]
     for error in validation.errors:
         lines.append(f"FAIL {error}")
     return lines
 
 
-def write_normalized_manifest(path: Path, *, scenarios: list[dict[str, Any]], records: list[dict[str, Any]]) -> None:
-    """Writes one normalized protocol oracle manifest."""
+def build_catalog_report(
+    payload: dict[str, Any],
+    validation: ProtocolCatalogValidation,
+) -> dict[str, Any]:
+    """Builds the machine-readable current coverage and evidence report."""
+
+    groups = payload.get("coverageGroups")
+    group_rows = [group for group in groups if isinstance(group, dict)] if isinstance(groups, list) else []
+    verdict_counts: Counter[str] = Counter()
+    entries: list[dict[str, Any]] = []
+    for group in group_rows:
+        latest = group.get("latestEvidence")
+        latest_row = latest if isinstance(latest, dict) else {}
+        verdict = str(latest_row.get("verdict") or "evidence-incomplete")
+        verdict_counts[verdict] += 1
+        entries.append(
+            {
+                "authorityIds": _string_list(group.get("authorityIds")),
+                "campaignIds": _string_list(group.get("campaignIds")),
+                "coverageIdCount": len(_string_list(group.get("coverageIds"))),
+                "deterministicRunner": group.get("deterministicRunner"),
+                "groupId": group.get("groupId"),
+                "protocolDomain": group.get("protocolDomain"),
+                "publicDiscoveryRunner": group.get("publicDiscoveryRunner"),
+                "reason": latest_row.get("reason"),
+                "requiredEvidenceLayers": _string_list(group.get("requiredEvidenceLayers")),
+                "verdict": verdict,
+            }
+        )
+    covered = verdict_counts["parity"] + verdict_counts["intentional-difference"]
+    authorities = payload.get("authorities")
+    authority_rows = [row for row in authorities if isinstance(row, dict)] if isinstance(authorities, list) else []
+    campaigns = payload.get("campaigns")
+    campaign_rows = [row for row in campaigns if isinstance(row, dict)] if isinstance(campaigns, list) else []
+    return {
+        "schema": "emulebb-build-tests.protocol-parity-catalog-report",
+        "catalogSchema": payload.get("schema"),
+        "valid": validation.passed,
+        "validationErrors": list(validation.errors),
+        "authorityCount": len(authority_rows),
+        "unconfiguredAuthorityIds": sorted(
+            str(row.get("authorityId")) for row in authority_rows if row.get("status") == "not-configured"
+        ),
+        "campaignCount": len(campaign_rows),
+        "coverage": {
+            "coveredGroupCount": covered,
+            "requiredGroupCount": len(group_rows),
+            "coverageIdCount": sum(len(_string_list(group.get("coverageIds"))) for group in group_rows),
+            "verdictCounts": {verdict: verdict_counts.get(verdict, 0) for verdict in CATALOG_VERDICTS},
+        },
+        "entries": sorted(entries, key=lambda row: str(row.get("groupId") or "")),
+    }
+
+
+def render_catalog_report_lines(report: dict[str, Any]) -> list[str]:
+    """Renders a concise coverage summary without hiding uncovered entries."""
+
+    coverage = report["coverage"]
+    counts = coverage["verdictCounts"]
+    lines = [
+        f"Protocol groups covered: {coverage['coveredGroupCount']}/{coverage['requiredGroupCount']}",
+        f"Protocol coverage IDs cataloged: {coverage['coverageIdCount']}",
+        "Protocol verdicts: " + ", ".join(f"{verdict}={counts[verdict]}" for verdict in CATALOG_VERDICTS),
+    ]
+    unconfigured = report["unconfiguredAuthorityIds"]
+    if unconfigured:
+        lines.append("Unconfigured authorities: " + ", ".join(unconfigured))
+    for entry in report["entries"]:
+        if entry["verdict"] not in {"parity", "intentional-difference"}:
+            lines.append(f"UNCOVERED {entry['groupId']}: {entry['verdict']} - {entry['reason']}")
+    return lines
+
+
+def write_normalized_evidence(path: Path, *, scenarios: list[dict[str, Any]], records: list[dict[str, Any]]) -> None:
+    """Writes one normalized protocol evidence artifact."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schemaVersion": GOLDEN_SCHEMA_VERSION,
+        "schema": NORMALIZED_EVIDENCE_SCHEMA,
         "description": "Normalized Kad/eD2K protocol oracle evidence. Raw packet captures stay in generated reports.",
         "scenarios": sorted(scenarios, key=lambda item: str(item.get("scenarioId") or "")),
         "records": sorted(records, key=_record_sort_key),
@@ -375,24 +486,36 @@ def build_dumpcap_command(*, output_path: Path, capture_filter: str, interface: 
 
 
 def run_validate_cli(argv: list[str] | None = None) -> int:
-    """Runs the protocol oracle golden validator CLI."""
+    """Runs the protocol-parity catalog validator CLI."""
 
-    parser = argparse.ArgumentParser(description="Validate tracked protocol oracle golden manifests.")
+    parser = argparse.ArgumentParser(description="Validate the tracked protocol-parity catalog.")
     parser.add_argument("--test-repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--manifest-path", type=Path)
+    parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
-    manifest_path = (args.manifest_path or default_golden_path(args.test_repo_root)).resolve()
+    manifest_path = (args.manifest_path or default_catalog_path(args.test_repo_root)).resolve()
     workspace_root = Path(os.environ["EMULEBB_WORKSPACE_ROOT"]) if os.environ.get("EMULEBB_WORKSPACE_ROOT") else None
-    validation = validate_golden_manifest(manifest_path, workspace_root=workspace_root)
-    for line in render_validation_lines(validation, manifest_path):
-        print(line)
+    validation = validate_protocol_catalog(manifest_path, workspace_root=workspace_root)
+    payload = load_json(manifest_path)
+    report = build_catalog_report(payload, validation) if isinstance(payload, dict) else {
+        "schema": "emulebb-build-tests.protocol-parity-catalog-report",
+        "valid": False,
+        "validationErrors": list(validation.errors),
+    }
+    if args.format == "json":
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        for line in render_validation_lines(validation, manifest_path):
+            print(line)
+        for line in render_catalog_report_lines(report):
+            print(line)
     return 0 if validation.passed else 1
 
 
 def run_normalize_cli(argv: list[str] | None = None) -> int:
-    """Runs the tracing-harness JSONL normalizer CLI."""
+    """Runs the diagnostic JSONL evidence normalizer CLI."""
 
-    parser = argparse.ArgumentParser(description="Normalize tracing-harness protocol JSONL dumps into oracle records.")
+    parser = argparse.ArgumentParser(description="Normalize protocol diagnostic JSONL into comparable evidence records.")
     parser.add_argument("--scenario-id", required=True)
     parser.add_argument("--udp-jsonl", type=Path, action="append", default=[])
     parser.add_argument("--ed2k-jsonl", type=Path, action="append", default=[])
@@ -408,13 +531,13 @@ def run_normalize_cli(argv: list[str] | None = None) -> int:
         raw_ed2k_records.extend(loaded)
         records.extend(normalize_ed2k_records(loaded, scenario_id=args.scenario_id))
     records.extend(summarize_state_sequences(raw_ed2k_records, scenario_id=args.scenario_id))
-    write_normalized_manifest(
+    write_normalized_evidence(
         args.output,
         scenarios=[
             {
                 "scenarioId": args.scenario_id,
                 "protocol": "mixed",
-                "source": "tracing-harness",
+                "source": "diagnostic-capture",
             }
         ],
         records=records,
@@ -461,6 +584,286 @@ def run_pcap_cli(argv: list[str] | None = None) -> int:
         print(subprocess.list2cmdline(command))
         return 0
     return subprocess.call(command)
+
+
+def _validate_catalog_contract(
+    payload: dict[str, Any],
+    errors: list[str],
+    *,
+    repo_root: Path,
+    workspace_root: Path | None,
+) -> None:
+    """Validates catalog ownership, evidence semantics, and executable routes."""
+
+    contract = payload.get("contract")
+    if not isinstance(contract, dict):
+        errors.append("contract must be an object")
+    else:
+        _require_exact_string_list(contract, "evidenceLayers", CATALOG_EVIDENCE_LAYERS, "contract", errors)
+        _require_exact_string_list(contract, "provenanceRequired", CATALOG_PROVENANCE_FIELDS, "contract", errors)
+        _require_exact_string_list(contract, "verdicts", CATALOG_VERDICTS, "contract", errors)
+
+    authorities = payload.get("authorities")
+    authority_ids: set[str] = set()
+    if not isinstance(authorities, list) or not authorities:
+        errors.append("authorities must be a non-empty list")
+        authorities = []
+    for index, authority in enumerate(authorities):
+        if not isinstance(authority, dict):
+            errors.append(f"authorities[{index}] must be an object")
+            continue
+        authority_id = authority.get("authorityId")
+        role = authority.get("role")
+        if not isinstance(authority_id, str) or not authority_id:
+            errors.append(f"authorities[{index}].authorityId must be a non-empty string")
+            continue
+        if authority_id in authority_ids:
+            errors.append(f"duplicate authorityId: {authority_id}")
+        authority_ids.add(authority_id)
+        if role not in CATALOG_AUTHORITY_ROLES:
+            errors.append(f"authorities[{index}].role is unsupported")
+        path_value = authority.get("path")
+        revision = authority.get("revision")
+        status = authority.get("status")
+        if path_value is None:
+            if status != "not-configured":
+                errors.append(f"authorities[{index}] without path must be not-configured")
+            if revision is not None:
+                errors.append(f"authorities[{index}] without path cannot pin a revision")
+            continue
+        if not isinstance(path_value, str) or not path_value:
+            errors.append(f"authorities[{index}].path must be a non-empty string")
+            continue
+        if revision is not None and (not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None):
+            errors.append(f"authorities[{index}].revision must be a lowercase 40-character git revision")
+        if workspace_root is not None:
+            _validate_authority_checkout(
+                workspace_root.resolve(),
+                authority_id,
+                path_value,
+                revision,
+                errors,
+            )
+
+    groups = payload.get("coverageGroups")
+    group_ids = {
+        group.get("groupId")
+        for group in groups
+        if isinstance(groups, list) and isinstance(group, dict) and isinstance(group.get("groupId"), str)
+    } if isinstance(groups, list) else set()
+
+    campaigns = payload.get("campaigns")
+    campaign_ids: set[str] = set()
+    group_campaign_owner: dict[str, str] = {}
+    if not isinstance(campaigns, list) or not campaigns:
+        errors.append("campaigns must be a non-empty list")
+        campaigns = []
+    for index, campaign in enumerate(campaigns):
+        if not isinstance(campaign, dict):
+            errors.append(f"campaigns[{index}] must be an object")
+            continue
+        campaign_id = campaign.get("campaignId")
+        if not isinstance(campaign_id, str) or not campaign_id:
+            errors.append(f"campaigns[{index}].campaignId must be a non-empty string")
+            continue
+        if campaign_id in campaign_ids:
+            errors.append(f"duplicate campaignId: {campaign_id}")
+        campaign_ids.add(campaign_id)
+        selected_groups = _string_list(campaign.get("coverageGroupIds"))
+        if not selected_groups:
+            errors.append(f"campaigns[{index}].coverageGroupIds must be a non-empty string list")
+        for group_id in selected_groups:
+            if group_id not in group_ids:
+                errors.append(f"campaign {campaign_id} references unknown coverage group {group_id}")
+            previous = group_campaign_owner.get(group_id)
+            if previous is not None:
+                errors.append(f"coverage group {group_id} belongs to both {previous} and {campaign_id}")
+            group_campaign_owner[group_id] = campaign_id
+
+    for group_id in sorted(group_ids - set(group_campaign_owner)):
+        errors.append(f"coverage group {group_id} is not selected by a campaign")
+
+    if isinstance(groups, list):
+        for index, group in enumerate(groups):
+            if isinstance(group, dict):
+                _validate_catalog_group(
+                    group,
+                    index,
+                    authority_ids=authority_ids,
+                    campaign_ids=campaign_ids,
+                    campaign_owner=group_campaign_owner,
+                    repo_root=repo_root,
+                    errors=errors,
+                )
+
+
+def _validate_catalog_group(
+    group: dict[str, Any],
+    index: int,
+    *,
+    authority_ids: set[str],
+    campaign_ids: set[str],
+    campaign_owner: dict[str, str],
+    repo_root: Path,
+    errors: list[str],
+) -> None:
+    """Validates one state-machine coverage group in the catalog."""
+
+    prefix = f"coverageGroups[{index}]"
+    group_id = group.get("groupId")
+    if not isinstance(group_id, str) or not group_id:
+        return
+    protocol_domain = group.get("protocolDomain")
+    if not isinstance(protocol_domain, str) or not protocol_domain:
+        errors.append(f"{prefix}.protocolDomain must be a non-empty string")
+
+    selected_authorities = _string_list(group.get("authorityIds"))
+    if not selected_authorities:
+        errors.append(f"{prefix}.authorityIds must be a non-empty string list")
+    for authority_id in selected_authorities:
+        if authority_id not in authority_ids:
+            errors.append(f"coverage group {group_id} references unknown authority {authority_id}")
+        if authority_id == "amule-head":
+            errors.append(f"coverage group {group_id} cannot use analysis-only amule-head as parity authority")
+
+    selected_campaigns = _string_list(group.get("campaignIds"))
+    expected_campaign = campaign_owner.get(group_id)
+    if len(selected_campaigns) != 1 or selected_campaigns[0] not in campaign_ids:
+        errors.append(f"{prefix}.campaignIds must select one declared campaign")
+    elif expected_campaign is not None and selected_campaigns[0] != expected_campaign:
+        errors.append(
+            f"coverage group {group_id} declares campaign {selected_campaigns[0]} but is owned by {expected_campaign}"
+        )
+
+    state_model = group.get("stateModel")
+    if not isinstance(state_model, dict):
+        errors.append(f"{prefix}.stateModel must be an object")
+    else:
+        for field in ("start", "stimulus", "expected"):
+            if not isinstance(state_model.get(field), str) or not state_model[field]:
+                errors.append(f"{prefix}.stateModel.{field} must be a non-empty string")
+
+    layers = _string_list(group.get("requiredEvidenceLayers"))
+    unknown_layers = set(layers) - set(CATALOG_EVIDENCE_LAYERS)
+    if unknown_layers:
+        errors.append(f"coverage group {group_id} has unknown evidence layers: {sorted(unknown_layers)}")
+    for required in ("codec-transcript", "deterministic-state-machine"):
+        if required not in layers:
+            errors.append(f"coverage group {group_id} must require {required} evidence")
+    if "public-discovery" in layers:
+        errors.append(f"coverage group {group_id} cannot require public-discovery as parity evidence")
+
+    _validate_repo_runner(group.get("deterministicRunner"), f"{prefix}.deterministicRunner", repo_root, errors, required=True)
+    _validate_repo_runner(group.get("publicDiscoveryRunner"), f"{prefix}.publicDiscoveryRunner", repo_root, errors, required=False)
+
+    latest = group.get("latestEvidence")
+    if not isinstance(latest, dict):
+        errors.append(f"{prefix}.latestEvidence must be an object")
+        return
+    verdict = latest.get("verdict")
+    if verdict not in CATALOG_VERDICTS:
+        errors.append(f"{prefix}.latestEvidence.verdict is unsupported")
+    if not isinstance(latest.get("reason"), str) or not latest["reason"]:
+        errors.append(f"{prefix}.latestEvidence.reason must be a non-empty string")
+    if verdict in {"parity", "divergence", "intentional-difference"}:
+        receipt = latest.get("receipt")
+        if not isinstance(receipt, dict):
+            errors.append(f"{prefix}.latestEvidence.receipt is required for verdict {verdict}")
+        else:
+            artifact_sha256 = receipt.get("artifactSha256")
+            if not isinstance(artifact_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None:
+                errors.append(f"{prefix}.latestEvidence.receipt.artifactSha256 must be a lowercase SHA-256")
+            runner_revision = receipt.get("runnerRevision")
+            if not isinstance(runner_revision, str) or re.fullmatch(r"[0-9a-f]{40}", runner_revision) is None:
+                errors.append(f"{prefix}.latestEvidence.receipt.runnerRevision must be a lowercase git revision")
+            if not isinstance(receipt.get("profileAuthority"), str) or not receipt["profileAuthority"]:
+                errors.append(f"{prefix}.latestEvidence.receipt.profileAuthority must be a non-empty string")
+            subjects = receipt.get("subjects")
+            if not isinstance(subjects, list) or not subjects:
+                errors.append(f"{prefix}.latestEvidence.receipt.subjects must be a non-empty list")
+            else:
+                subject_ids: set[str] = set()
+                for subject_index, subject in enumerate(subjects):
+                    subject_prefix = f"{prefix}.latestEvidence.receipt.subjects[{subject_index}]"
+                    if not isinstance(subject, dict):
+                        errors.append(f"{subject_prefix} must be an object")
+                        continue
+                    subject_id = subject.get("authorityId")
+                    if subject_id not in authority_ids:
+                        errors.append(f"{subject_prefix}.authorityId must reference a declared authority")
+                    elif subject_id in subject_ids:
+                        errors.append(f"{subject_prefix}.authorityId is duplicated")
+                    else:
+                        subject_ids.add(subject_id)
+                    source_revision = subject.get("sourceRevision")
+                    if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+                        errors.append(f"{subject_prefix}.sourceRevision must be a lowercase git revision")
+                    executable_sha256 = subject.get("executableSha256")
+                    if not isinstance(executable_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", executable_sha256) is None:
+                        errors.append(f"{subject_prefix}.executableSha256 must be a lowercase SHA-256")
+                if "rust-product" not in subject_ids:
+                    errors.append(f"{prefix}.latestEvidence.receipt.subjects must include rust-product")
+                if "local-cross-client" in layers:
+                    executable_oracles = set(selected_authorities) - {"stock-source"}
+                    if len(subject_ids) < 2 or not subject_ids.intersection(executable_oracles):
+                        errors.append(
+                            f"{prefix}.latestEvidence.receipt.subjects must include Rust and one selected executable oracle"
+                        )
+
+
+def _validate_repo_runner(
+    value: Any,
+    field: str,
+    repo_root: Path,
+    errors: list[str],
+    *,
+    required: bool,
+) -> None:
+    if value is None and not required:
+        return
+    if not isinstance(value, str) or not value:
+        errors.append(f"{field} must be a non-empty repository-relative path" if required else f"{field} must be null or a path")
+        return
+    path = (repo_root / value).resolve()
+    if repo_root not in path.parents or not path.is_file():
+        errors.append(f"{field} does not resolve to a tracked file: {value}")
+
+
+def _validate_authority_checkout(
+    workspace_root: Path,
+    authority_id: str,
+    relative_path: str,
+    revision: Any,
+    errors: list[str],
+) -> None:
+    root = (workspace_root / relative_path).resolve()
+    if workspace_root not in root.parents or not root.is_dir():
+        errors.append(f"authority {authority_id} path is missing: {root}")
+        return
+    if revision is None:
+        return
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    observed = completed.stdout.strip() if completed.returncode == 0 else "unavailable"
+    if observed != revision:
+        errors.append(f"authority {authority_id} revision drift: expected {revision}, got {observed}")
+
+
+def _require_exact_string_list(
+    value: dict[str, Any],
+    field: str,
+    expected: tuple[str, ...],
+    prefix: str,
+    errors: list[str],
+) -> None:
+    observed = value.get(field)
+    if observed != list(expected):
+        errors.append(f"{prefix}.{field} must equal {list(expected)}")
 
 
 def _validate_scenarios(scenarios: list[Any], errors: list[str]) -> set[str]:
@@ -523,26 +926,26 @@ def _validate_stock_oracle(
 ) -> None:
     """Validates the source-anchored Phase-4 stock oracle coverage contract."""
 
-    oracle = payload.get("stockOracle")
+    oracle = payload.get("stockAuthority")
     groups = payload.get("coverageGroups")
     if oracle is None and groups is None:
         return
     if not isinstance(oracle, dict):
-        errors.append("stockOracle must be an object")
+        errors.append("stockAuthority must be an object")
         return
     if not isinstance(groups, list) or not groups:
         errors.append("coverageGroups must be a non-empty list")
         return
 
-    baseline_path = oracle.get("baselinePath")
-    baseline_revision = oracle.get("baselineRevision")
-    if not isinstance(baseline_path, str) or not baseline_path:
-        errors.append("stockOracle.baselinePath must be a non-empty string")
-    if not isinstance(baseline_revision, str) or re.fullmatch(r"[0-9a-f]{40}", baseline_revision) is None:
-        errors.append("stockOracle.baselineRevision must be a lowercase 40-character git revision")
+    source_path = oracle.get("sourcePath")
+    source_revision = oracle.get("sourceRevision")
+    if not isinstance(source_path, str) or not source_path:
+        errors.append("stockAuthority.sourcePath must be a non-empty string")
+    if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        errors.append("stockAuthority.sourceRevision must be a lowercase 40-character git revision")
     if oracle.get("requiredCoverageCount") != len(REQUIRED_STOCK_COVERAGE_IDS):
         errors.append(
-            "stockOracle.requiredCoverageCount must equal "
+            "stockAuthority.requiredCoverageCount must equal "
             f"{len(REQUIRED_STOCK_COVERAGE_IDS)}"
         )
 
@@ -643,11 +1046,11 @@ def _validate_stock_oracle(
     if unexpected:
         errors.append(f"stock oracle has unknown coverage IDs: {sorted(unexpected)}")
 
-    if workspace_root is not None and isinstance(baseline_path, str) and isinstance(baseline_revision, str):
+    if workspace_root is not None and isinstance(source_path, str) and isinstance(source_revision, str):
         _validate_stock_workspace_anchors(
             workspace_root.resolve(),
-            baseline_path,
-            baseline_revision,
+            source_path,
+            source_revision,
             source_anchors,
             rust_proofs,
             errors,
@@ -690,13 +1093,13 @@ def _validate_stock_record(record: dict[str, Any], index: int, errors: list[str]
 
 def _validate_stock_workspace_anchors(
     workspace_root: Path,
-    baseline_path: str,
-    baseline_revision: str,
+    source_path: str,
+    source_revision: str,
     source_anchors: list[tuple[str, list[str], str]],
     rust_proofs: list[tuple[str, str, str]],
     errors: list[str],
 ) -> None:
-    baseline_root = (workspace_root / baseline_path).resolve()
+    baseline_root = (workspace_root / source_path).resolve()
     rust_root = (workspace_root / "repos" / "emulebb-rust").resolve()
     if not baseline_root.is_dir():
         errors.append(f"stock oracle baseline path is missing: {baseline_root}")
@@ -708,10 +1111,10 @@ def _validate_stock_workspace_anchors(
         capture_output=True,
         text=True,
     )
-    if revision.returncode != 0 or revision.stdout.strip() != baseline_revision:
+    if revision.returncode != 0 or revision.stdout.strip() != source_revision:
         errors.append(
-            "stock oracle baseline revision drift: "
-            f"expected {baseline_revision}, got {revision.stdout.strip() or 'unavailable'}"
+            "stock authority revision drift: "
+            f"expected {source_revision}, got {revision.stdout.strip() or 'unavailable'}"
         )
 
     anchored_paths = sorted({relative_path for relative_path, _, _ in source_anchors})

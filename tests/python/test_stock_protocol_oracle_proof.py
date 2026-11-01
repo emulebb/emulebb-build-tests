@@ -22,7 +22,7 @@ def load_suite_module():
 
 def test_build_checks_reports_complete_binary_state_and_anchor_evidence() -> None:
     module = load_suite_module()
-    manifest_path = module.default_golden_path(Path(__file__).resolve().parents[2])
+    manifest_path = module.default_catalog_path(Path(__file__).resolve().parents[2])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     checks = module.build_checks(manifest, ())
@@ -43,7 +43,7 @@ def test_build_checks_reports_complete_binary_state_and_anchor_evidence() -> Non
         "rustProofPackageCount": 0,
         "rustProofPackages": [],
         "rustProofExecutionsPassed": False,
-        "baselineRevisionPinned": True,
+        "stockSourceRevisionPinned": True,
         "sourceAnchorsPassed": True,
         "rustProofSelectorsPassed": True,
         "binaryDigestsPassed": True,
@@ -52,7 +52,7 @@ def test_build_checks_reports_complete_binary_state_and_anchor_evidence() -> Non
 
 def test_build_checks_surfaces_anchor_and_digest_failures() -> None:
     module = load_suite_module()
-    manifest_path = module.default_golden_path(Path(__file__).resolve().parents[2])
+    manifest_path = module.default_catalog_path(Path(__file__).resolve().parents[2])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     checks = module.build_checks(
@@ -91,7 +91,7 @@ def test_rust_proof_packages_run_through_workspace_wrapper(monkeypatch, tmp_path
 
 def test_build_checks_requires_every_rust_proof_package_when_execution_is_blocking() -> None:
     module = load_suite_module()
-    manifest_path = module.default_golden_path(Path(__file__).resolve().parents[2])
+    manifest_path = module.default_catalog_path(Path(__file__).resolve().parents[2])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     rows = [{"package": package, "status": "passed"} for package in module.RUST_PROOF_PACKAGES]
 

@@ -132,7 +132,7 @@ def test_deterministic_stage_runs_oracle_and_both_full_protocol_matrices() -> No
     commands = module.deterministic_commands("192.0.2.10", Path("mfc-diag.exe"))
     rendered = [" ".join(command) for command in commands]
 
-    assert any("validate-protocol-goldens.py" in command for command in rendered)
+    assert any("validate-protocol-catalog.py" in command for command in rendered)
     assert any("stock-protocol-oracle-proof.py" in command for command in rendered)
     assert any("local-ed2k-protocol-combinations.py" in command for command in rendered)
     assert any("local-ed2k-rust-protocol-combinations.py" in command for command in rendered)

@@ -47,7 +47,7 @@ def seed_complete_evidence(output_root: Path) -> None:
                     "stockRecordCount": 17,
                     "binaryVectorCount": 15,
                     "stateVectorCount": 2,
-                    "baselineRevisionPinned": True,
+                    "stockSourceRevisionPinned": True,
                     "sourceAnchorsPassed": True,
                     "rustProofSelectorsPassed": True,
                     "rustProofExecutionRequired": True,
@@ -199,7 +199,7 @@ def test_total_parity_audit_accepts_complete_output_root_evidence(monkeypatch, t
         "allRequirementsPassed": True,
         "failedRequirementCount": 0,
         "failedRequirementIds": [],
-        "stockOraclePassed": True,
+        "protocolCatalogPassed": True,
         "protocolVariantsPassed": True,
         "multiUnicodeMetadataPassed": True,
         "privateEd2kModulesPassed": True,
@@ -253,4 +253,4 @@ def test_main_writes_total_audit_latest_under_workspace_output_root(monkeypatch,
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "passed"
     assert report["checks"]["rust_ed2k_total_parity_audit"]["requirementCount"] == 7
-    assert report["checks"]["rust_ed2k_total_parity_audit"]["stockOraclePassed"] is True
+    assert report["checks"]["rust_ed2k_total_parity_audit"]["protocolCatalogPassed"] is True

@@ -590,7 +590,7 @@ def sanitized_binary_provenance(
 
 def deterministic_commands(local_address: str, mfc_diagnostics: Path) -> tuple[tuple[str, ...], ...]:
     return (
-        (sys.executable, str(REPO_ROOT / "scripts/validate-protocol-goldens.py")),
+        (sys.executable, str(REPO_ROOT / "scripts/validate-protocol-catalog.py")),
         (
             sys.executable,
             str(REPO_ROOT / "scripts/stock-protocol-oracle-proof.py"),

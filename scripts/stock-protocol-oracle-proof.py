@@ -16,11 +16,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.artifact_names import utc_run_id  # noqa: E402
 from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root  # noqa: E402
-from emule_test_harness.protocol_goldens import (  # noqa: E402
+from emule_test_harness.protocol_parity import (  # noqa: E402
     REQUIRED_STOCK_COVERAGE_IDS,
-    default_golden_path,
+    default_catalog_path,
     load_json,
-    validate_golden_manifest,
+    validate_protocol_catalog,
 )
 
 SUITE_NAME = "stock-protocol-oracle-proof"
@@ -157,7 +157,7 @@ def build_checks(
         "rustProofPackageCount": len(execution_rows),
         "rustProofPackages": execution_packages,
         "rustProofExecutionsPassed": executions_passed,
-        "baselineRevisionPinned": not any("baseline revision drift" in error for error in errors),
+        "stockSourceRevisionPinned": not any("stock authority revision drift" in error for error in errors),
         "sourceAnchorsPassed": not any("source anchor" in error for error in errors),
         "rustProofSelectorsPassed": not any("Rust proof" in error for error in errors),
         "binaryDigestsPassed": not any("fixtureBase64" in error or "payloadDigest" in error for error in errors),
@@ -170,13 +170,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
-    manifest_path = (args.manifest_path or default_golden_path(REPO_ROOT)).resolve()
+    manifest_path = (args.manifest_path or default_catalog_path(REPO_ROOT)).resolve()
     run_id = utc_run_id()
     run_dir = args.artifacts_dir.resolve() if args.artifacts_dir else output_root / "reports" / SUITE_NAME / run_id
     latest_dir = output_root / "reports" / SUITE_NAME / "latest"
     started = datetime.now(UTC).isoformat()
 
-    validation = validate_golden_manifest(manifest_path, workspace_root=workspace_root)
+    validation = validate_protocol_catalog(manifest_path, workspace_root=workspace_root)
     manifest = load_json(manifest_path)
     rust_proof_runs = run_rust_proof_packages(workspace_root) if args.execute_rust_proofs else []
     checks = build_checks(
