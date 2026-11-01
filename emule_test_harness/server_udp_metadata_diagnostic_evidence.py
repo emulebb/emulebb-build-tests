@@ -78,6 +78,8 @@ def _packet_matches(
     direction: str,
     opcode: int,
     outcome: str,
+    transport_mode: str,
+    obfuscated: bool,
 ) -> bool:
     keys = _keys(record)
     body = _body(record)
@@ -93,8 +95,8 @@ def _packet_matches(
         and body.get("outcome") == outcome
         and body.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
         and body.get("opcode") == opcode
-        and body.get("transportMode") == "plaintext"
-        and body.get("obfuscated") is False
+        and body.get("transportMode") == transport_mode
+        and body.get("obfuscated") is obfuscated
         and (direction == "send" or _trace_id(record) is not None)
     )
 
@@ -106,6 +108,8 @@ def _one_packet(
     direction: str,
     opcode: int,
     outcome: str,
+    transport_mode: str,
+    obfuscated: bool,
 ) -> tuple[dict[str, Any] | None, int]:
     matches = [
         record
@@ -116,27 +120,85 @@ def _one_packet(
             direction=direction,
             opcode=opcode,
             outcome=outcome,
+            transport_mode=transport_mode,
+            obfuscated=obfuscated,
         )
     ]
     return (matches[0] if len(matches) == 1 else None, len(matches))
 
 
-def _wire_evidence(records: list[dict[str, Any]], *, udp_endpoint: str) -> dict[str, Any]:
-    specifications = (
-        ("statusRequest", "send", ed2k_wire.OP_GLOBSERVSTATREQ, "attempted"),
-        ("statusReply", "recv", ed2k_wire.OP_GLOBSERVSTATRES, "accepted"),
-        ("descriptionRequest", "send", ed2k_wire.OP_SERVER_DESC_REQ, "attempted"),
-        ("descriptionReply", "recv", ed2k_wire.OP_SERVER_DESC_RES, "accepted"),
+def _description_transports(
+    *,
+    udp_endpoint: str,
+    status_reply: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    transports: list[dict[str, Any]] = [
+        {
+            "udpEndpoint": udp_endpoint,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+        }
+    ]
+    obfuscation_port = (
+        _positive_int(status_reply.get("obfuscation_port_udp"))
+        if status_reply is not None
+        else None
     )
+    if obfuscation_port is not None and obfuscation_port <= 65535:
+        host, _ = udp_endpoint.rsplit(":", 1)
+        transports.append(
+            {
+                "udpEndpoint": f"{host}:{obfuscation_port}",
+                "transportMode": "obfuscated",
+                "obfuscated": True,
+            }
+        )
+    return transports
+
+
+def _one_packet_across_transports(
+    records: list[dict[str, Any]],
+    *,
+    transports: list[dict[str, Any]],
+    direction: str,
+    opcode: int,
+    outcome: str,
+) -> tuple[dict[str, Any] | None, int, dict[str, Any] | None]:
+    matches = [
+        (record, transport)
+        for record in records
+        for transport in transports
+        if _packet_matches(
+            record,
+            udp_endpoint=str(transport["udpEndpoint"]),
+            direction=direction,
+            opcode=opcode,
+            outcome=outcome,
+            transport_mode=str(transport["transportMode"]),
+            obfuscated=bool(transport["obfuscated"]),
+        )
+    ]
+    if len(matches) != 1:
+        return None, len(matches), None
+    record, transport = matches[0]
+    return record, 1, transport
+
+
+def _wire_evidence(records: list[dict[str, Any]], *, udp_endpoint: str) -> dict[str, Any]:
     packets: dict[str, dict[str, Any] | None] = {}
     counts: dict[str, int] = {}
-    for name, direction, opcode, outcome in specifications:
+    for name, direction, opcode, outcome in (
+        ("statusRequest", "send", ed2k_wire.OP_GLOBSERVSTATREQ, "attempted"),
+        ("statusReply", "recv", ed2k_wire.OP_GLOBSERVSTATRES, "accepted"),
+    ):
         packets[name], counts[name] = _one_packet(
             records,
             udp_endpoint=udp_endpoint,
             direction=direction,
             opcode=opcode,
             outcome=outcome,
+            transport_mode="plaintext",
+            obfuscated=False,
         )
     decode_errors: list[str] = []
     status_request = status_reply = description_request = description_reply = None
@@ -154,6 +216,36 @@ def _wire_evidence(records: list[dict[str, Any]], *, udp_endpoint: str) -> dict[
         )
     except ed2k_wire.Ed2kWireError as exc:
         decode_errors.append(f"status: {exc}")
+
+    description_transports = _description_transports(
+        udp_endpoint=udp_endpoint,
+        status_reply=status_reply,
+    )
+    packets["descriptionRequest"], counts["descriptionRequest"], request_transport = (
+        _one_packet_across_transports(
+            records,
+            transports=description_transports,
+            direction="send",
+            opcode=ed2k_wire.OP_SERVER_DESC_REQ,
+            outcome="attempted",
+        )
+    )
+    packets["descriptionReply"], counts["descriptionReply"], reply_transport = (
+        _one_packet_across_transports(
+            records,
+            transports=description_transports,
+            direction="recv",
+            opcode=ed2k_wire.OP_SERVER_DESC_RES,
+            outcome="accepted",
+        )
+    )
+    description_transport = (
+        request_transport
+        if request_transport is not None and request_transport == reply_transport
+        else None
+    )
+    if request_transport is not None and reply_transport is not None and description_transport is None:
+        decode_errors.append("description: request and reply used different transports")
     try:
         payload = _payload(packets["descriptionRequest"])
         if payload is None:
@@ -182,6 +274,7 @@ def _wire_evidence(records: list[dict[str, Any]], *, udp_endpoint: str) -> dict[
         and status_reply is not None
         and description_request is not None
         and description_reply is not None
+        and description_transport is not None
         and strict_sequence
         and not decode_errors
     )
@@ -198,6 +291,14 @@ def _wire_evidence(records: list[dict[str, Any]], *, udp_endpoint: str) -> dict[
         "statusReply": status_reply,
         "descriptionRequest": description_request,
         "descriptionReply": description_reply,
+        "transports": {
+            "status": {
+                "udpEndpoint": udp_endpoint,
+                "transportMode": "plaintext",
+                "obfuscated": False,
+            },
+            "description": description_transport,
+        },
         "decodeErrors": decode_errors,
     }
 
@@ -211,6 +312,8 @@ def _applied_record(
     server_endpoint: str,
     trace_id: int | None,
     challenge: int | None,
+    transport_mode: str,
+    obfuscated: bool,
 ) -> tuple[dict[str, Any] | None, int]:
     matches = []
     for record in records:
@@ -228,8 +331,8 @@ def _applied_record(
             and body.get("outcome") == "applied"
             and body.get("flow") == "server"
             and body.get("phase") == "udp"
-            and body.get("transportMode") == "plaintext"
-            and body.get("obfuscated") is False
+            and body.get("transportMode") == transport_mode
+            and body.get("obfuscated") is obfuscated
             and str(body.get("serverEndpoint") or "").casefold()
             == server_endpoint.casefold()
             and body.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
@@ -254,6 +357,12 @@ def _applied_evidence(
         if isinstance(wire.get("descriptionReply"), dict)
         else {}
     )
+    transports = wire.get("transports") if isinstance(wire.get("transports"), dict) else {}
+    description_transport = (
+        transports.get("description")
+        if isinstance(transports.get("description"), dict)
+        else {}
+    )
     status_record, status_count = _applied_record(
         records,
         event="server_status_applied",
@@ -262,15 +371,19 @@ def _applied_evidence(
         server_endpoint=server_endpoint,
         trace_id=_positive_int(traces.get("statusReply")),
         challenge=_positive_int(status.get("challenge")),
+        transport_mode="plaintext",
+        obfuscated=False,
     )
     description_record, description_count = _applied_record(
         records,
         event="server_description_applied",
         opcode=ed2k_wire.OP_SERVER_DESC_RES,
-        udp_endpoint=udp_endpoint,
+        udp_endpoint=str(description_transport.get("udpEndpoint") or ""),
         server_endpoint=server_endpoint,
         trace_id=_positive_int(traces.get("descriptionReply")),
         challenge=_positive_int(description.get("challenge")),
+        transport_mode=str(description_transport.get("transportMode") or ""),
+        obfuscated=description_transport.get("obfuscated") is True,
     )
     status_body = _body(status_record)
     description_body = _body(description_record)

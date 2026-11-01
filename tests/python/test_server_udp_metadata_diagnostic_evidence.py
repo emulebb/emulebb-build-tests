@@ -11,6 +11,7 @@ from emule_test_harness import server_udp_metadata_diagnostic_evidence as eviden
 ANCHOR = "127.0.0.1:4661"
 TARGET = "127.0.0.1:4761"
 TARGET_UDP = "127.0.0.1:4765"
+TARGET_OBFUSCATED_UDP = "127.0.0.1:4775"
 SEED_NAME = "seed-before-udp"
 SEED_DESCRIPTION = "seed description before UDP metadata"
 SERVER_NAME = "emulebb-local-e2e"
@@ -22,13 +23,23 @@ def _tag(tag_id: int, value: str) -> bytes:
     return bytes([0x80 | ed2k_wire.TAGTYPE_STRING, tag_id]) + struct.pack("<H", len(encoded)) + encoded
 
 
-def _packet(seq: int, opcode: int, direction: str, payload: bytes, trace_id: int) -> dict[str, object]:
+def _packet(
+    seq: int,
+    opcode: int,
+    direction: str,
+    payload: bytes,
+    trace_id: int,
+    *,
+    peer: str = TARGET_UDP,
+    transport_mode: str = "plaintext",
+    obfuscated: bool = False,
+) -> dict[str, object]:
     return {
         "family": "ed2k_server_udp",
         "event": "packet",
         "seq": seq,
         "keys": {
-            "peer": TARGET_UDP,
+            "peer": peer,
             "traceId": trace_id,
             "protocolMarker": ed2k_wire.PROTO_EDONKEY,
             "opcode": opcode,
@@ -41,8 +52,8 @@ def _packet(seq: int, opcode: int, direction: str, payload: bytes, trace_id: int
             "traceId": trace_id,
             "protocolMarker": ed2k_wire.PROTO_EDONKEY,
             "opcode": opcode,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": obfuscated,
             "payloadLen": len(payload),
             "payloadHex": payload.hex(),
             "payloadHexTruncated": False,
@@ -57,13 +68,17 @@ def _applied(
     challenge: int,
     trace_id: int,
     fields: dict[str, object],
+    *,
+    peer: str = TARGET_UDP,
+    transport_mode: str = "plaintext",
+    obfuscated: bool = False,
 ) -> dict[str, object]:
     return {
         "family": "ed2k_server_udp",
         "event": event,
         "seq": seq,
         "keys": {
-            "peer": TARGET_UDP,
+            "peer": peer,
             "traceId": trace_id,
             "protocolMarker": ed2k_wire.PROTO_EDONKEY,
             "opcode": opcode,
@@ -79,14 +94,14 @@ def _applied(
             "opcode": opcode,
             "challenge": challenge,
             "serverEndpoint": TARGET,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": obfuscated,
             **fields,
         },
     }
 
 
-def _records() -> list[dict[str, object]]:
+def _records(*, obfuscated_description: bool = False) -> list[dict[str, object]]:
     status_challenge = 0x55AA_1234
     description_challenge = 0x4321_F0FF
     status = struct.pack(
@@ -99,8 +114,8 @@ def _records() -> list[dict[str, object]]:
         200000,
         0x123,
         0,
-        0,
-        0,
+        4775,
+        4761,
         0,
     )
     description = (
@@ -125,13 +140,31 @@ def _records() -> list[dict[str, object]]:
                 "hardFiles": 200000,
                 "udpFlags": 0x123,
                 "lowIdUsers": 0,
-                "obfuscationPortUdp": 0,
-                "obfuscationPortTcp": 0,
+                "obfuscationPortUdp": 4775,
+                "obfuscationPortTcp": 4761,
                 "udpKey": 0,
             },
         ),
-        _packet(4, ed2k_wire.OP_SERVER_DESC_REQ, "send", struct.pack("<I", description_challenge), 30),
-        _packet(5, ed2k_wire.OP_SERVER_DESC_RES, "recv", description, 40),
+        _packet(
+            4,
+            ed2k_wire.OP_SERVER_DESC_REQ,
+            "send",
+            struct.pack("<I", description_challenge),
+            30,
+            peer=TARGET_OBFUSCATED_UDP if obfuscated_description else TARGET_UDP,
+            transport_mode="obfuscated" if obfuscated_description else "plaintext",
+            obfuscated=obfuscated_description,
+        ),
+        _packet(
+            5,
+            ed2k_wire.OP_SERVER_DESC_RES,
+            "recv",
+            description,
+            40,
+            peer=TARGET_OBFUSCATED_UDP if obfuscated_description else TARGET_UDP,
+            transport_mode="obfuscated" if obfuscated_description else "plaintext",
+            obfuscated=obfuscated_description,
+        ),
         _applied(
             6,
             "server_description_applied",
@@ -145,6 +178,9 @@ def _records() -> list[dict[str, object]]:
                 "dynamicHost": "",
                 "version": "",
             },
+            peer=TARGET_OBFUSCATED_UDP if obfuscated_description else TARGET_UDP,
+            transport_mode="obfuscated" if obfuscated_description else "plaintext",
+            obfuscated=obfuscated_description,
         ),
     ]
 
@@ -203,6 +239,22 @@ def test_builds_complete_bilateral_udp_metadata_proof() -> None:
     evidence.require_server_udp_metadata_diagnostic_evidence(result)
 
 
+def test_accepts_negotiated_obfuscated_rust_description_and_plaintext_mfc() -> None:
+    result = _build(rust_records=_records(obfuscated_description=True))
+
+    assert result["passed"] is True
+    assert result["clients"]["rust"]["wire"]["transports"]["description"] == {
+        "udpEndpoint": TARGET_OBFUSCATED_UDP,
+        "transportMode": "obfuscated",
+        "obfuscated": True,
+    }
+    assert result["clients"]["mfc"]["wire"]["transports"]["description"] == {
+        "udpEndpoint": TARGET_UDP,
+        "transportMode": "plaintext",
+        "obfuscated": False,
+    }
+
+
 def test_outbound_requests_do_not_require_receive_correlation_ids() -> None:
     records = _records()
     for index in (0, 3):
@@ -258,3 +310,19 @@ def test_rejects_duplicate_matching_packet() -> None:
 
     assert result["passed"] is False
     assert result["clients"]["rust"]["wire"]["packetCounts"]["statusRequest"] == 2
+
+
+def test_rejects_description_packets_on_both_negotiated_transports() -> None:
+    records = _records()
+    obfuscated_records = _records(obfuscated_description=True)
+    records.extend(obfuscated_records[3:5])
+
+    result = _build(rust_records=records)
+
+    assert result["passed"] is False
+    assert result["clients"]["rust"]["wire"]["packetCounts"] == {
+        "statusRequest": 1,
+        "statusReply": 1,
+        "descriptionRequest": 2,
+        "descriptionReply": 2,
+    }
