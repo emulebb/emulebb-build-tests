@@ -9,7 +9,7 @@ artifact sibling, then tears the client down.
 
 Run it once per client (``--client rust`` then ``--client mfc``) — SEQUENTIALLY,
 never simultaneously: two HighID clients on one hide.me egress IP share a
-``client_id`` and the operator flaps rust off (see the converged-soak-live memo).
+``client_id`` and the operator flaps rust off (see the persisted-soak runbook).
 The two recordings are then diffed offline by ``actionId`` — apples-to-apples,
 reproducible, contention-free.
 

@@ -1,6 +1,7 @@
 """Shared bring-up for the rust<->MFC soak (launcher + observer reuse this).
 
-Both `scripts/launch-soak.py` (the pure launcher) and `scripts/converged-soak-live.py`
+Both `scripts/launch-soak.py` (the pure launcher) and
+`scripts/converged-soak-observer.py`
 (the live observer/analysis) stand up the SAME persistent, isolated profiles under
 `$EMULEBB_WORKSPACE_OUTPUT_ROOT/soak/`, connected to the SAME operator eD2K server,
 bootstrapped from the SAME nodes.dat, sharing the SAME library roots. This module

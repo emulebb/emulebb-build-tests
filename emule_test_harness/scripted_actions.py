@@ -2,7 +2,7 @@
 
 The same action set is executed identically against ONE client at a time (rust
 solo, then MFC solo — never simultaneously, which flaps rust off the operator via
-the shared HighID ``client_id`` = egress IP; see the ``converged-soak-live`` memo).
+the shared HighID ``client_id`` = egress IP; see the persisted-soak runbook).
 Each action emits ``begin``/``end`` markers carrying ``ts_utc`` so the offline diff
 can slice the ``[t0, t1]`` diag/packet window per action and correlate the two solo
 recordings by ``actionId``.

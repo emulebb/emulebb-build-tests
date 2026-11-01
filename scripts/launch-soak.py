@@ -9,7 +9,7 @@ bounded Rust diagnostic bundles are captured into the campaign evidence store.
 
 No test/diff logic lives here. Analysis runs separately from this repo
 (``analyze-packet-coverage.py``, ``diag_event_diff``, or the live observer
-``converged-soak-live.py``) over the captured dumps when you ask for it.
+``converged-soak-observer.py``) over the captured dumps when you ask for it.
 
 REST control binds X_LOCAL_IP for split-tunnel or loopback for full-tunnel;
 P2P binds the hide.me tunnel. The Rust
