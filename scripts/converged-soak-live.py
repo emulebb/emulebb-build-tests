@@ -59,7 +59,7 @@ from emule_test_harness import (
 )
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
-from emule_test_harness import soak_launch, soak_run_layout, vpn_guard_live
+from emule_test_harness import soak_launch, soak_run_layout, soak_storage, vpn_guard_live
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import (
@@ -1597,11 +1597,18 @@ def main(argv: list[str] | None = None) -> int:
     report_dir = run_paths.report_dir
     actions_dir = run_paths.actions_dir
     reject_windows_temp_path(report_dir, "soak report directory")
+    if inputs.soak_storage is None:
+        raise RuntimeError("Persisted soaks require soak_storage in the live-wire inputs.")
+    artifact_store = soak_storage.BoundedArtifactStore(
+        run_paths.campaigns_root,
+        inputs.soak_storage,
+    )
     preflight_manifest = soak_run_layout.prepare_clean_run(
         paths=run_paths,
         rust_profile_dir=rust_profile_dir,
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_log_dir,
+        artifact_store=artifact_store,
     )
     mfc_overlay_journal = soak_root / "transactions" / "mfc-preferences"
     mfc_preferences_path = (
