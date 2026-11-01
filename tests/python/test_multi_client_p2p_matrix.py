@@ -71,7 +71,7 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     rows_by_id = {row["id"]: row for row in rows}
 
     assert {row["status"] for row in rows} == {"skipped"}
-    assert rows_by_id["cl-emulebb-001-downloads-from-cl-emuleai-003"]["missing_clients"] == ["cl-emuleai-003"]
+    assert rows_by_id[module.EMULEAI_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-emuleai-003"]
     assert rows_by_id[module.STOCK_EMULE_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-stock-emule-004"]
     assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == [
         "cl-emulebb-rust-005",
@@ -285,8 +285,9 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     result = module.run_deterministic_transfer_scenario(paths, args)
 
     assert result["status"] == "passed"
-    assert result["id"] == "cl-emulebb-001-downloads-from-cl-mfc-oracle-002"
-    assert result["clients"] == ["cl-emulebb-001", "cl-mfc-oracle-002"]
+    assert result["id"] == "rust-downloads-from-mfc-oracle"
+    assert result["clients"] == ["cl-emulebb-rust-005", "cl-mfc-oracle-002"]
+    assert result["report_path"].endswith("deterministic-two-client-transfer-result.json")
     command = captured["command"]
     assert command[command.index("--artifacts-dir") + 1].endswith("\\h2") or command[command.index("--artifacts-dir") + 1].endswith("/h2")
     assert "--p2p-bind-interface-name" not in command
@@ -310,7 +311,7 @@ def test_stock_transfer_scenario_uses_stock_identity(monkeypatch, tmp_path: Path
 
     assert result["status"] == "passed"
     assert result["id"] == module.STOCK_EMULE_TRANSFER_SCENARIO_ID
-    assert result["clients"] == ["cl-emulebb-001", "cl-stock-emule-004"]
+    assert result["clients"] == ["cl-emulebb-rust-005", "cl-stock-emule-004"]
     command = captured["command"]
     assert option_value(command, "--client2-app-exe") == str(stock_executable.resolve())
     assert option_value(command, "--client2-identity") == "stock_emule"
@@ -334,7 +335,7 @@ def test_amule_transfer_scenario_uses_daemon_and_control(monkeypatch, tmp_path: 
 
     assert result["status"] == "passed"
     assert result["id"] == module.AMULE_TRANSFER_SCENARIO_ID
-    assert result["clients"] == ["cl-emulebb-001", "cl-amule-007"]
+    assert result["clients"] == ["cl-emulebb-rust-005", "cl-amule-007"]
     command = captured["command"]
     assert option_value(command, "--client2-app-exe") == str(daemon_executable.resolve())
     assert option_value(command, "--client2-control-exe") == str(control_executable.resolve())

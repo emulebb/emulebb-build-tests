@@ -200,7 +200,7 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} "
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
+        "--require-scenario rust-mfc-bidirectional-transfer"
     )
     rust_protocol_combinations_command = (
         "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} "
@@ -645,7 +645,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                     "status": "passed",
                     "scenarios": [
                         {
-                        "id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                        "id": "rust-mfc-bidirectional-transfer",
                         "status": "passed",
                         "report": {
                             "status": "passed",
@@ -672,7 +672,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                     "status": "passed",
                     "scenarios": [
                         {
-                        "id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                        "id": "rust-rust-bidirectional-product-integration",
                         "status": "passed",
                         "report": {
                             "status": "passed",

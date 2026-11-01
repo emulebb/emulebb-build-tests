@@ -120,7 +120,7 @@ SCENARIO_REQUIREMENTS: tuple[Requirement, ...] = (
         "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
         (
             ("/status", "passed"),
-            ("/scenarios/*/id", "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"),
+            ("/scenarios/*/id", "rust-mfc-bidirectional-transfer"),
             ("/scenarios/*/status", "passed"),
             ("/scenarios/*/report/status", "passed"),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers", True),
@@ -137,7 +137,7 @@ SCENARIO_REQUIREMENTS: tuple[Requirement, ...] = (
         "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
         (
             ("/status", "passed"),
-            ("/scenarios/*/id", "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"),
+            ("/scenarios/*/id", "rust-rust-bidirectional-product-integration"),
             ("/scenarios/*/status", "passed"),
             ("/scenarios/*/report/status", "passed"),
             ("/scenarios/*/report/checks/multiTransferCount", 3),

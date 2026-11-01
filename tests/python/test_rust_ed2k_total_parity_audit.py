@@ -132,7 +132,7 @@ def seed_complete_evidence(output_root: Path) -> None:
             "status": "passed",
             "scenarios": [
                 {
-                    "id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                    "id": "rust-mfc-bidirectional-transfer",
                     "status": "passed",
                     "report": {
                         "status": "passed",
@@ -157,7 +157,7 @@ def seed_complete_evidence(output_root: Path) -> None:
             "status": "passed",
             "scenarios": [
                 {
-                    "id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                    "id": "rust-rust-bidirectional-product-integration",
                     "status": "passed",
                     "report": {
                         "status": "passed",

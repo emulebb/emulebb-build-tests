@@ -24,18 +24,26 @@ from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
-MFC_ORACLE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-mfc-oracle-002"
-STOCK_EMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-stock-emule-004"
-RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
-RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
-AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-007"
+MFC_ORACLE_TRANSFER_SCENARIO_ID = "rust-downloads-from-mfc-oracle"
+STOCK_EMULE_TRANSFER_SCENARIO_ID = "rust-downloads-from-stock-emule"
+RUST_BIDIRECTIONAL_SCENARIO_ID = "rust-rust-bidirectional-product-integration"
+RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "rust-mfc-bidirectional-transfer"
+AMULE_TRANSFER_SCENARIO_ID = "rust-downloads-from-amule-stable"
+EMULEAI_TRANSFER_SCENARIO_ID = "rust-downloads-from-emuleai"
 OPTIONAL_SCENARIO_DEFINITIONS = (
-    ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
+    (EMULEAI_TRANSFER_SCENARIO_ID, "emuleai"),
     (STOCK_EMULE_TRANSFER_SCENARIO_ID, "stock_emule"),
     (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
     (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
     (AMULE_TRANSFER_SCENARIO_ID, "amule"),
 )
+SCENARIO_CLIENT_KEYS = {
+    EMULEAI_TRANSFER_SCENARIO_ID: ("emulebb_rust", "emuleai"),
+    STOCK_EMULE_TRANSFER_SCENARIO_ID: ("emulebb_rust", "stock_emule"),
+    RUST_BIDIRECTIONAL_SCENARIO_ID: ("emulebb_rust", "emulebb_rust_peer"),
+    RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID: ("emulebb", "emulebb_rust"),
+    AMULE_TRANSFER_SCENARIO_ID: ("emulebb_rust", "amule"),
+}
 
 
 harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
@@ -219,7 +227,7 @@ def build_child_script_command(script_name: str, scenario_artifacts: Path, args:
 
 
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the mandatory eMuleBB download from the MFC main parity peer."""
+    """Runs the mandatory Rust download from the MFC diagnostics oracle."""
 
     scenario_id = MFC_ORACLE_TRANSFER_SCENARIO_ID
     scenario_artifacts = paths.source_artifacts_dir / "h2"
@@ -229,10 +237,10 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
 
     return run_child_scenario(
         scenario_id=scenario_id,
-        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["mfc_oracle"].profile_id],
+        clients=[CLIENT_IDENTITIES["emulebb_rust"].profile_id, CLIENT_IDENTITIES["mfc_oracle"].profile_id],
         command=command,
         cwd=REPO_ROOT,
-        report_path=scenario_artifacts / "deterministic-two-client-transfer.json",
+        report_path=scenario_artifacts / "deterministic-two-client-transfer-result.json",
     )
 
 
@@ -251,7 +259,7 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
     )
     return run_child_scenario(
         scenario_id=STOCK_EMULE_TRANSFER_SCENARIO_ID,
-        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["stock_emule"].profile_id],
+        clients=[CLIENT_IDENTITIES["emulebb_rust"].profile_id, CLIENT_IDENTITIES["stock_emule"].profile_id],
         command=command,
         cwd=REPO_ROOT,
         report_path=scenario_artifacts / "deterministic-two-client-transfer-result.json",
@@ -280,7 +288,7 @@ def run_amule_transfer_scenario(
     )
     return run_child_scenario(
         scenario_id=AMULE_TRANSFER_SCENARIO_ID,
-        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
+        clients=[CLIENT_IDENTITIES["emulebb_rust"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
         command=command,
         cwd=REPO_ROOT,
         report_path=scenario_artifacts / "deterministic-two-client-transfer-result.json",
@@ -330,7 +338,7 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
 
 
 def run_emulebb_rust_emulebb_bidirectional_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the REST-controlled bidirectional Rust/eMuleBB transfer scenario."""
+    """Runs the legacy REST-controlled bidirectional Rust/MFC feature donor."""
 
     scenario_artifacts = paths.source_artifacts_dir / "r5-e1"
     command = build_child_script_command("emulebb-rust-emulebb-cross-client.py", scenario_artifacts, args)
@@ -365,13 +373,14 @@ def build_optional_scenario_rows(
         required = require_optional_clients or scenario_id in required_scenario_ids
         client_keys = definition[1:]
         availability = [inventory[key] for key in client_keys]
+        clients = [CLIENT_IDENTITIES[key].profile_id for key in SCENARIO_CLIENT_KEYS[scenario_id]]
         if selected_scenario_ids and scenario_id not in selected_scenario_ids:
             rows.append(
                 {
                     "id": scenario_id,
                     "status": "skipped",
                     "reason": "not selected by --require-scenario",
-                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                    "clients": clients,
                 }
             )
             continue
@@ -383,7 +392,7 @@ def build_optional_scenario_rows(
                     "status": "failed" if required else "skipped",
                     "reason": "optional client artifact missing",
                     "missing_clients": [row.identity.profile_id for row in missing],
-                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                    "clients": clients,
                 }
             )
             continue
@@ -396,7 +405,7 @@ def build_optional_scenario_rows(
                     "reason": "deterministic transfer adapter is not enabled for optional client",
                     "adapter_blocked_clients": [row.identity.profile_id for row in adapter_blocked],
                     "launch_adapters": {row.identity.profile_id: row.launch_adapter for row in availability},
-                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                    "clients": clients,
                 }
             )
             continue
@@ -405,7 +414,7 @@ def build_optional_scenario_rows(
                 "id": scenario_id,
                 "status": "failed" if required else "skipped",
                 "reason": "optional deterministic scenario runner is not implemented yet",
-                "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                "clients": clients,
             }
         )
     return rows
