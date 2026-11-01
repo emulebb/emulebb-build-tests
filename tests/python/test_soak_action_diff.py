@@ -637,11 +637,64 @@ def test_server_search_ignores_unrelated_diagnostic_family_gap() -> None:
     assert report["verdict"] == "coverage-parity"
     assert report["diagOk"] is True
     assert report["diagConformance"]["gatedFamilies"] == ["ed2k_tcp"]
-    families = {
-        family["family"]: family
-        for family in report["diagConformance"]["families"]
-    }
-    assert families["kad_event"]["ok"] is False
+    assert [
+        family["family"] for family in report["diagConformance"]["families"]
+    ] == ["ed2k_tcp"]
+    assert report["diagStrictOk"] is False
+
+
+def test_server_search_ignores_unrelated_same_family_schema_gap() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [_pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3)]
+    mfc_packets = [_pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3)]
+
+    def ed2k_tcp_diag(
+        ts: datetime,
+        *,
+        opcode: int,
+        direction: str,
+        background_only: bool = False,
+    ) -> dict:
+        body = {
+            "direction": direction,
+            "protocolMarker": 0xE3,
+            "opcode": opcode,
+        }
+        if background_only:
+            body["backgroundOracleOnly"] = True
+        record = _diag("ed2k_tcp", "packet", ts, body)
+        record["keys"] = {"protocolMarker": 0xE3, "opcode": opcode}
+        return record
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 0},
+        rust_diag=[
+            ed2k_tcp_diag(_ts(1), opcode=0x16, direction="send"),
+        ],
+        mfc_diag=[
+            ed2k_tcp_diag(_ts(3), opcode=0x16, direction="send"),
+            ed2k_tcp_diag(
+                _ts(4),
+                opcode=0x47,
+                direction="send",
+                background_only=True,
+            ),
+        ],
+    )
+
+    assert report["diagStrictOk"] is False
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagConformance"]["families"][0]["bodyKeyViolations"] == []
 
 
 def test_diff_action_fails_on_diag_oracle_body_key_gap() -> None:
@@ -901,6 +954,51 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
         "mfc": 2,
     }
     assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is True
+
+
+def test_search_gate_kad_ignores_unrelated_same_family_schema_gap() -> None:
+    pair = _search_pair("kad")
+    background_packet = _kad_diag(0x20, "send", _ts(3))
+    background_packet["body"]["backgroundOracleOnly"] = True
+    background_lookup = _kad_lookup(
+        "unrelated-mfc-search",
+        "lookup_complete",
+        7,
+        _ts(4),
+    )
+    background_lookup["body"]["backgroundOracleOnly"] = True
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "send", _ts(2)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(2)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+            background_packet,
+            background_lookup,
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["diagStrictOk"] is False
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagConformance"]["gatedFamilies"] == [
+        "kad_event",
+        "kad_udp",
+    ]
+    assert all(
+        not family["bodyKeyViolations"]
+        for family in report["diagConformance"]["families"]
+    )
 
 
 def test_search_gate_kad_rejects_not_dispatched_terminal_receipt() -> None:

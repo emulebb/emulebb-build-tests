@@ -661,6 +661,104 @@ def action_required_diagnostic_families(
     return ()
 
 
+def _wire_record_matches(
+    record: dict[str, Any],
+    *,
+    family: str,
+    direction: str,
+    protocol_marker: int,
+    opcodes: set[int],
+) -> bool:
+    body = record.get("body")
+    return bool(
+        record.get("family") == family
+        and record.get("event") == "packet"
+        and isinstance(body, dict)
+        and body.get("direction") == direction
+        and body.get("protocolMarker") == protocol_marker
+        and body.get("opcode") in opcodes
+    )
+
+
+def action_conformance_records(
+    records: list[dict[str, Any]],
+    *,
+    kind: str,
+    method: str | None,
+    search_id: str | None,
+) -> list[dict[str, Any]]:
+    """Selects only diagnostics causally attributable to one driven action."""
+
+    if kind != SEARCH or method is None:
+        return list(records)
+    normalized = str(method).strip().lower()
+    if normalized == SEARCH_METHOD_SERVER:
+        return [
+            record
+            for record in records
+            if _wire_record_matches(
+                record,
+                family=ED2K_TCP_FAMILY,
+                direction="send",
+                protocol_marker=0xE3,
+                opcodes={0x16},
+            )
+            or _wire_record_matches(
+                record,
+                family=ED2K_TCP_FAMILY,
+                direction="recv",
+                protocol_marker=0xE3,
+                opcodes={0x33},
+            )
+        ]
+    if normalized == SEARCH_METHOD_GLOBAL:
+        return [
+            record
+            for record in records
+            if _wire_record_matches(
+                record,
+                family=ED2K_SERVER_UDP_FAMILY,
+                direction="send",
+                protocol_marker=0xE3,
+                opcodes={0x90, 0x92, 0x98},
+            )
+        ]
+    if normalized != SEARCH_METHOD_KAD:
+        return list(records)
+
+    selected: list[dict[str, Any]] = []
+    for record in records:
+        if _wire_record_matches(
+            record,
+            family=KAD_UDP_FAMILY,
+            direction="send",
+            protocol_marker=0xE4,
+            opcodes={KAD2_SEARCH_KEY_REQ},
+        ) or _wire_record_matches(
+            record,
+            family=KAD_UDP_FAMILY,
+            direction="recv",
+            protocol_marker=0xE4,
+            opcodes={KAD2_SEARCH_RES},
+        ):
+            selected.append(record)
+            continue
+        keys = record.get("keys")
+        body = record.get("body")
+        if (
+            record.get("family") == KAD_EVENT_FAMILY
+            and record.get("event") == "lookup"
+            and isinstance(keys, dict)
+            and keys.get("searchId") == search_id
+            and isinstance(body, dict)
+            and body.get("action") == "search"
+            and body.get("searchKind") == "keyword"
+            and body.get("milestone") in {"lookup_started", "lookup_complete"}
+        ):
+            selected.append(record)
+    return selected
+
+
 def _diag_wire_opcode_exercised(
     records: list[dict[str, Any]] | None,
     alternatives: list[dict[str, Any]],
@@ -1189,9 +1287,25 @@ def diff_action(
     diag_conformance: dict[str, Any] | None = None
     if rust_diag or mfc_diag:
         diag_diff = diag_event_diff.diff_traces(rust_diag_slice, mfc_diag_slice)
+        rust_search_id = (
+            search_ids.get("rust") if isinstance(search_ids, dict) else None
+        )
+        mfc_search_id = (
+            search_ids.get("mfc") if isinstance(search_ids, dict) else None
+        )
         diag_conformance = diag_event_diff.family_conformance(
-            rust_diag_slice,
-            mfc_diag_slice,
+            action_conformance_records(
+                rust_diag_slice,
+                kind=pair.kind,
+                method=method,
+                search_id=rust_search_id,
+            ),
+            action_conformance_records(
+                mfc_diag_slice,
+                kind=pair.kind,
+                method=method,
+                search_id=mfc_search_id,
+            ),
             required_families=action_required_diagnostic_families(pair.kind, method),
         )
 
