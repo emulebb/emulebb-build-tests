@@ -255,7 +255,8 @@
         "rust-mfc-transfer-20261101t195457z",
         "rust-mfc-transfer-20261101t204626z",
         "rust-mfc-transfer-20261101t212829z",
-        "rust-mfc-transfer-20261101t220451z"
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z"
       ],
       "verdict": "parity"
     },
@@ -278,7 +279,8 @@
         "rust-mfc-transfer-20261101t195457z",
         "rust-mfc-transfer-20261101t204626z",
         "rust-mfc-transfer-20261101t212829z",
-        "rust-mfc-transfer-20261101t220451z"
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z"
       ],
       "verdict": "parity"
     },
@@ -296,7 +298,8 @@
         "rust-mfc-transfer-20261101t195457z",
         "rust-mfc-transfer-20261101t204626z",
         "rust-mfc-transfer-20261101t212829z",
-        "rust-mfc-transfer-20261101t220451z"
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z"
       ],
       "verdict": "parity"
     },
@@ -355,6 +358,20 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "server.reply.udp-description",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each causally decoded, applied, and exposed one challenged UDP description reply at sequences 22/23 over obfuscated/plaintext transport.",
+      "receiptIds": ["rust-mfc-transfer-20261101t230237z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.udp-status",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each causally decoded, applied, and exposed one challenged UDP status reply at sequences 19/20.",
+      "receiptIds": ["rust-mfc-transfer-20261101t230237z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "server.search.keyword",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each emitted one identical encoded keyword request over obfuscated server transport at sequences 18/13.",
@@ -381,7 +398,8 @@
         "rust-mfc-transfer-20261101t195457z",
         "rust-mfc-transfer-20261101t204626z",
         "rust-mfc-transfer-20261101t212829z",
-        "rust-mfc-transfer-20261101t220451z"
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z"
       ],
       "verdict": "parity"
     }
@@ -1532,6 +1550,35 @@
           "authorityId": "rust-product",
           "executableSha256": "29efd66ad3841672b7a8fbd86f0a5b2a536f8d7383de224b01f63f7f4d7349ff",
           "sourceRevision": "3c2c0b27a67bdd7b5af21d9fe611a139831ec1ba"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T230237Z-emulebb-main-release-11248/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "e89a79f10dc17e238a9084379fdc2aa69348eae3d069843ffa89618be6874a59",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.udp-description",
+        "server.reply.udp-status",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t230237z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "ba77ac42536e425df260cdcad6ae3272da6ca750",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "10de8cb83f390ea2759ab123992fbe352fa554200b21bf6f44fff5fef8f640c1",
+          "sourceRevision": "c32a15896e952468463c75ff4d89b919ca1f94e5"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "d9dc0cc3daf16563ce51c5b06dbed4cd6ae48999d98adc4b8c34ef2abfb2617c",
+          "sourceRevision": "fd6390543d5042162c6ec4a6f8e27d70f47bc9f6"
         }
       ]
     }
