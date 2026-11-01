@@ -38,6 +38,48 @@ def test_login_request_uses_stock_tags_without_private_highid_controls() -> None
     assert b"wire-probe" in payload
     assert ed2k_wire.DEFAULT_SERVER_FLAGS & ed2k_wire.SRVCAP_LUGDUNUM_NAT_CALLBACK
 
+    assert ed2k_wire.decode_login_request(payload) == {
+        "user_hash": bytes(range(16)).hex().upper(),
+        "client_id": 0,
+        "tcp_port": 4662,
+        "tag_count": 2,
+        "tags": [
+            {"name": ed2k_wire.CT_NAME, "value": "wire-probe"},
+            {
+                "name": ed2k_wire.CT_SERVER_FLAGS,
+                "value": ed2k_wire.DEFAULT_SERVER_FLAGS,
+            },
+        ],
+    }
+
+
+@pytest.mark.unit
+def test_login_request_decoder_rejects_trailing_bytes() -> None:
+    payload = ed2k_wire.encode_login_request(
+        user_hash=bytes(range(16)),
+        tcp_port=4662,
+        nickname="wire-probe",
+    )
+
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="trailing bytes"):
+        ed2k_wire.decode_login_request(payload + b"\x00")
+
+
+@pytest.mark.unit
+def test_server_session_reply_decoders_are_exact() -> None:
+    assert ed2k_wire.decode_id_change(struct.pack("<I", 7) + b"extension") == {
+        "assigned_id": 7,
+        "id_kind": "low-id",
+        "extension_hex": b"extension".hex().upper(),
+    }
+    assert ed2k_wire.decode_server_status(struct.pack("<II", 2, 1)) == {
+        "users": 2,
+        "files": 1,
+    }
+
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="trailing bytes"):
+        ed2k_wire.decode_server_status(struct.pack("<II", 2, 1) + b"\x00")
+
 
 @pytest.mark.unit
 def test_search_result_decoder_preserves_hash_size_and_source_counts() -> None:

@@ -206,6 +206,56 @@ def encode_login_request(
     )
 
 
+def decode_login_request(payload: bytes) -> dict[str, object]:
+    """Decodes one complete ``OP_LOGINREQUEST`` payload without losing tag order."""
+
+    reader = _Reader(payload)
+    user_hash = reader.take(16)
+    client_id = reader.u32()
+    tcp_port = reader.u16()
+    tag_count = reader.u32()
+    tags: list[dict[str, object]] = []
+    for _ in range(tag_count):
+        name, value = _decode_tag(reader)
+        if isinstance(value, bytes):
+            normalized_value: object = value.hex().upper()
+        else:
+            normalized_value = value
+        tags.append({"name": name, "value": normalized_value})
+    if reader.remaining:
+        raise Ed2kWireError(f"LOGINREQUEST has {reader.remaining} trailing bytes.")
+    return {
+        "user_hash": user_hash.hex().upper(),
+        "client_id": client_id,
+        "tcp_port": tcp_port,
+        "tag_count": tag_count,
+        "tags": tags,
+    }
+
+
+def decode_id_change(payload: bytes) -> dict[str, object]:
+    """Decodes the assigned client ID from an accepted ``OP_IDCHANGE`` payload."""
+
+    reader = _Reader(payload)
+    assigned_id = reader.u32()
+    return {
+        "assigned_id": assigned_id,
+        "id_kind": "low-id" if assigned_id < LOW_ID_CEILING else "high-id",
+        "extension_hex": reader.take(reader.remaining).hex().upper(),
+    }
+
+
+def decode_server_status(payload: bytes) -> dict[str, int]:
+    """Decodes one exact eight-byte ``OP_SERVERSTATUS`` payload."""
+
+    reader = _Reader(payload)
+    users = reader.u32()
+    files = reader.u32()
+    if reader.remaining:
+        raise Ed2kWireError(f"SERVERSTATUS has {reader.remaining} trailing bytes.")
+    return {"users": users, "files": files}
+
+
 def encode_offer_file(*, file_hash: bytes, name: str, size: int) -> bytes:
     """Builds one complete-file OFFERFILES payload."""
 
