@@ -802,6 +802,48 @@ def test_is_port_available_rejects_non_ipv4_address(host: str) -> None:
         module.is_port_available(0, host=host)
 
 
+def test_require_local_control_bind_addr_accepts_explicit_loopback() -> None:
+    module = load_suite_module()
+
+    assert module.require_local_control_bind_addr("127.0.0.1") == "127.0.0.1"
+
+
+@pytest.mark.parametrize("host", ["", "0.0.0.0", "localhost", "::1"])
+def test_require_local_control_bind_addr_rejects_non_ipv4_unicast(host: str, monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.delenv("EMULEBB_LAN_BIND_ADDR", raising=False)
+    monkeypatch.delenv("EMULEBB_LIVE_BIND_ADDR", raising=False)
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    with pytest.raises(ValueError, match="explicit LAN address"):
+        module.require_local_control_bind_addr(host)
+
+
+def test_choose_distinct_ports_probes_explicit_loopback(monkeypatch) -> None:
+    module = load_suite_module()
+    observed_hosts: list[str] = []
+
+    def fake_is_port_available(
+        _port: int,
+        *,
+        host: str,
+        udp: bool = False,
+    ) -> bool:
+        del udp
+        observed_hosts.append(host)
+        return True
+
+    monkeypatch.setattr(module, "is_port_available", fake_is_port_available)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6209)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    module.choose_distinct_ports("127.0.0.1")
+
+    assert observed_hosts
+    assert set(observed_hosts) == {"127.0.0.1"}
+
+
 def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_suite_module()
     availability_checks: list[tuple[int, str | None, bool]] = []
@@ -1380,6 +1422,31 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert "SparsePartFiles=0" in emule_section
     assert f"Nick={module.CLIENT01.nick}" in emule_section
     assert "EnableUPnP=0" in text
+
+
+def test_configure_client_profile_accepts_loopback_for_rest_control(tmp_path: Path, monkeypatch) -> None:
+    module = load_suite_module()
+    config_dir = tmp_path / "profile" / "config"
+    config_dir.mkdir(parents=True)
+    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+    observed: list[object] = []
+    monkeypatch.setattr(module.live_common, "apply_webserver_profile", lambda _config, spec: observed.append(spec))
+
+    module.configure_client_profile(
+        config_dir=config_dir,
+        app_exe=tmp_path / "app" / "emulebb.exe",
+        nick=module.CLIENT01.nick,
+        tcp_port=4662,
+        udp_port=4672,
+        ed2k_enabled=True,
+        autoconnect=False,
+        rest_api_key="key",
+        rest_port=4711,
+        lan_bind_addr="127.0.0.1",
+    )
+
+    assert len(observed) == 1
+    assert observed[0].lan_bind_addr == "127.0.0.1"
 
 
 def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp_path: Path) -> None:

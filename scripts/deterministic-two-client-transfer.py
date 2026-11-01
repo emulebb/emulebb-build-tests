@@ -703,10 +703,17 @@ def is_port_available(
     return True
 
 
+def require_local_control_bind_addr(lan_bind_addr: str | None = None) -> str:
+    """Returns the explicit IPv4 bind used by this deterministic local suite."""
+
+    candidate = lan_bind_addr or rest_smoke.lan_bind_addr_from_env()
+    return rest_smoke.require_webserver_bind_addr(candidate, allow_loopback=True)
+
+
 def choose_tcp_port_with_udp_offset(lan_bind_addr: str | None = None, offset: int = 4) -> int:
     """Chooses a TCP port whose conventional ED2K UDP status port is free."""
 
-    lan_bind_addr = rest_smoke.require_lan_bind_addr(lan_bind_addr, allow_env_fallback=True)
+    lan_bind_addr = require_local_control_bind_addr(lan_bind_addr)
     max_tcp_port = min(ED2K_LOCAL_PORT_MAX, 65535 - offset)
     if ED2K_LOCAL_PORT_MIN > max_tcp_port:
         raise RuntimeError("ED2K local port scan range cannot fit the UDP offset.")
@@ -784,7 +791,7 @@ def choose_distinct_ports(
         used.add(value)
         ports[name] = value
 
-    lan_bind_addr = rest_smoke.require_lan_bind_addr(lan_bind_addr, allow_env_fallback=True)
+    lan_bind_addr = require_local_control_bind_addr(lan_bind_addr)
     ed2k_tcp = choose_tcp_port_with_udp_offset(lan_bind_addr)
     add("ed2k_tcp", ed2k_tcp)
     add("ed2k_udp", ed2k_tcp + 4)
@@ -1437,7 +1444,7 @@ def configure_client_profile(
                 app_exe=app_exe,
                 api_key=rest_api_key,
                 port=rest_port,
-                lan_bind_addr=rest_smoke.require_lan_bind_addr(lan_bind_addr),
+                lan_bind_addr=require_local_control_bind_addr(lan_bind_addr),
             ),
         )
 
