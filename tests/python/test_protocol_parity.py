@@ -52,7 +52,7 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 0,
-        "coveredIdCount": 7,
+        "coveredIdCount": 9,
         "groupVerdictCounts": {
             "parity": 0,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 7,
+            "parity": 9,
             "divergence": 0,
-            "evidence-incomplete": 93,
+            "evidence-incomplete": 91,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -95,6 +95,8 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
         "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+        "server.connect.obfuscated",
+        "server.connect.plaintext",
         "server.login.request",
         "transfer.block.compressed",
         "transfer.block.uncompressed",
@@ -124,6 +126,22 @@ def test_catalog_report_records_partial_per_id_evidence_without_false_group_cove
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][5]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][6]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.obfuscated",
         "server.login.request",
         "transfer.block.uncompressed",
     ]
