@@ -751,6 +751,32 @@ def test_choose_distinct_ports_adds_dedicated_search_publisher(monkeypatch) -> N
     assert len(ports) == len(set(ports.values()))
 
 
+def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch) -> None:
+    module = load_suite_module()
+    checks: list[tuple[int, bool]] = []
+
+    def available(port: int, *, host: str, udp: bool = False) -> bool:
+        assert host in {"172.24.112.1", "127.0.0.1"}
+        checks.append((port, udp))
+        return True
+
+    monkeypatch.setattr(module, "is_port_available", available)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6240)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_metadata_target=True,
+    )
+
+    target = ports["metadata_ed2k_tcp"]
+    assert target not in {6200, 6204, 6208, 6212, 6214}
+    assert ports["metadata_ed2k_udp"] == target + 4
+    assert all((target + offset, True) in checks for offset in (4, 8, 12, 14))
+    assert len(ports) == len(set(ports.values()))
+
+
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
     observed: dict[str, str | None] = {}
@@ -861,9 +887,40 @@ def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_
     assert data[5:9] == bytes([10, 44, 55, 66])
     port, tag_count = struct.unpack("<HI", data[9:15])
     assert port == 4711
-    assert tag_count == 3
+    assert tag_count == 4
     assert b"local-ed2k" in data
     assert b"10.44.55.66" in data
+
+
+def test_write_server_met_entries_preserves_anchor_then_low_priority_target(tmp_path: Path) -> None:
+    module = load_suite_module()
+    server_met = tmp_path / "server.met"
+
+    module.write_server_met_entries(
+        server_met,
+        [
+            {
+                "address": "10.44.55.66",
+                "port": 4711,
+                "name": "anchor",
+                "priority": module.SERVER_PRIORITY_HIGH,
+            },
+            {
+                "address": "10.44.55.66",
+                "port": 4811,
+                "name": "stale-target",
+                "description": "stale-before-udp-metadata",
+                "priority": module.SERVER_PRIORITY_LOW,
+            },
+        ],
+    )
+
+    data = server_met.read_bytes()
+    assert data[:5] == struct.pack("<BI", module.SERVER_MET_HEADER, 2)
+    assert data.find(struct.pack("<H", 4711)) < data.find(struct.pack("<H", 4811))
+    assert b"anchor" in data
+    assert b"stale-target" in data
+    assert b"stale-before-udp-metadata" in data
 
 
 def test_deterministic_transfer_uses_canonical_server_facade() -> None:

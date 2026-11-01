@@ -91,9 +91,14 @@ TRANSFER_SCENARIOS = (
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
+TAGTYPE_UINT32 = 0x03
 ST_SERVERNAME = 0x01
 ST_DYNIP = 0x85
 ST_DESCRIPTION = 0x0B
+ST_PREFERENCE = 0x0E
+SERVER_PRIORITY_NORMAL = 0
+SERVER_PRIORITY_HIGH = 1
+SERVER_PRIORITY_LOW = 2
 
 
 class TransferCompletionTimeout(RuntimeError):
@@ -655,10 +660,36 @@ def choose_available_local_port(
     raise RuntimeError("Could not allocate a local port in the ED2K harness range.")
 
 
+def choose_server_port_block(lan_bind_addr: str, used: set[int]) -> int:
+    """Chooses one TCP base with every upstream server UDP companion free."""
+
+    maximum_base = ED2K_LOCAL_PORT_MAX - 14
+    start = random.randrange(ED2K_LOCAL_PORT_MIN, maximum_base + 1)
+    candidates = itertools.chain(
+        range(start, maximum_base + 1),
+        range(ED2K_LOCAL_PORT_MIN, start),
+    )
+    for tcp_port in candidates:
+        block = (tcp_port, *(tcp_port + offset for offset in (4, 8, 12, 14)))
+        if any(port in used for port in block):
+            continue
+        if not is_port_available(tcp_port, host=lan_bind_addr):
+            continue
+        if not all(
+            is_port_available(port, host=lan_bind_addr, udp=True)
+            for port in block[1:]
+        ):
+            continue
+        used.update(block)
+        return tcp_port
+    raise RuntimeError("Could not allocate a complete local ED2K server port block.")
+
+
 def choose_distinct_ports(
     lan_bind_addr: str | None = None,
     *,
     include_search_publisher: bool = False,
+    include_metadata_target: bool = False,
 ) -> dict[str, int]:
     """Allocates the suite's local ports without intentional reuse."""
 
@@ -675,8 +706,17 @@ def choose_distinct_ports(
     ed2k_tcp = choose_tcp_port_with_udp_offset(lan_bind_addr)
     add("ed2k_tcp", ed2k_tcp)
     add("ed2k_udp", ed2k_tcp + 4)
+    if include_metadata_target:
+        # The upstream server also owns +8/+12/+14. Reserve the anchor's full
+        # block before choosing a second server even though callers consume
+        # only its TCP and primary UDP ports directly.
+        used.update(ed2k_tcp + offset for offset in (8, 12, 14))
+        metadata_tcp = choose_server_port_block(lan_bind_addr, used)
+        ports["metadata_ed2k_tcp"] = metadata_tcp
+        ports["metadata_ed2k_udp"] = metadata_tcp + 4
     for name in (
         "ed2k_admin",
+        *(("metadata_ed2k_admin",) if include_metadata_target else ()),
         "client1_rest",
         "client2_rest",
         "client1_tcp",
@@ -704,21 +744,53 @@ def choose_distinct_ports(
 def write_server_met(path: Path, *, address: str, port: int, name: str) -> None:
     """Writes a minimal eMule-compatible `server.met` containing one local server."""
 
-    if not 0 < port <= 65535:
-        raise ValueError("Server port must be in the range 1..65535.")
-    ip_bytes = ipaddress.IPv4Address(address).packed
+    write_server_met_entries(
+        path,
+        [
+            {
+                "address": address,
+                "port": port,
+                "name": name,
+                "priority": SERVER_PRIORITY_NORMAL,
+            }
+        ],
+    )
+
+
+def write_server_met_entries(path: Path, entries: list[dict[str, object]]) -> None:
+    """Writes ordered deterministic server entries with explicit priorities."""
+
+    if not entries:
+        raise ValueError("server.met requires at least one server entry.")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tags = [
-        build_old_ed2k_string_tag(ST_SERVERNAME, name),
-        build_old_ed2k_string_tag(ST_DYNIP, address),
-        build_old_ed2k_string_tag(ST_DESCRIPTION, "workspace deterministic ED2K server"),
-    ]
     payload = bytearray()
-    payload.extend(struct.pack("<BI", SERVER_MET_HEADER, 1))
-    payload.extend(ip_bytes)
-    payload.extend(struct.pack("<HI", port, len(tags)))
-    for tag in tags:
-        payload.extend(tag)
+    payload.extend(struct.pack("<BI", SERVER_MET_HEADER, len(entries)))
+    for entry in entries:
+        address = str(entry.get("address") or "")
+        port = int(entry.get("port") or 0)
+        name = str(entry.get("name") or "")
+        priority = int(entry.get("priority", SERVER_PRIORITY_NORMAL))
+        if not 0 < port <= 65535:
+            raise ValueError("Server port must be in the range 1..65535.")
+        if priority not in {
+            SERVER_PRIORITY_NORMAL,
+            SERVER_PRIORITY_HIGH,
+            SERVER_PRIORITY_LOW,
+        }:
+            raise ValueError("Server priority must be normal (0), high (1), or low (2).")
+        tags = [
+            build_old_ed2k_string_tag(ST_SERVERNAME, name),
+            build_old_ed2k_string_tag(ST_DYNIP, address),
+            build_old_ed2k_string_tag(
+                ST_DESCRIPTION,
+                str(entry.get("description") or "workspace deterministic ED2K server"),
+            ),
+            build_old_ed2k_u32_tag(ST_PREFERENCE, priority),
+        ]
+        payload.extend(ipaddress.IPv4Address(address).packed)
+        payload.extend(struct.pack("<HI", port, len(tags)))
+        for tag in tags:
+            payload.extend(tag)
     path.write_bytes(bytes(payload))
 
 
@@ -729,6 +801,14 @@ def build_old_ed2k_string_tag(name_id: int, value: str) -> bytes:
     if len(encoded) > 0xFFFF:
         raise ValueError("server.met tag string is too long.")
     return struct.pack("<BHBH", TAGTYPE_STRING, 1, name_id, len(encoded)) + encoded
+
+
+def build_old_ed2k_u32_tag(name_id: int, value: int) -> bytes:
+    """Builds one old-style eD2K uint32 tag as stored in `server.met`."""
+
+    if not 0 <= value <= 0xFFFF_FFFF:
+        raise ValueError("server.met uint32 tag value is out of range.")
+    return struct.pack("<BHBI", TAGTYPE_UINT32, 1, name_id, value)
 
 
 def parse_ed2k_file_link(link: str) -> dict[str, object]:
