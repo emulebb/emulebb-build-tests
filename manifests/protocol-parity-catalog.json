@@ -261,12 +261,27 @@
   },
   "coverageEvidence": [
     {
+      "coverageId": "peer.startup.aich",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Matched one exact MD4+AICH hashset answer and persisted two exact AICH part hashes in Rust.",
+      "receiptIds": ["rust-mfc-transfer-20261101t190951z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "peer.startup.multipacket-ext2",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Matched one exact EXT2 startup request and answer with decoded filename and status.",
+      "receiptIds": ["rust-mfc-transfer-20261101t190951z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "queue.admission",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "MFC recorded 58 exact-hash upload admissions in the causally ordered completed transfer.",
       "receiptIds": [
         "rust-mfc-transfer-20261101t183823z",
-        "rust-mfc-transfer-20261101t185931z"
+        "rust-mfc-transfer-20261101t185931z",
+        "rust-mfc-transfer-20261101t190951z"
       ],
       "verdict": "parity"
     },
@@ -281,7 +296,10 @@
       "coverageId": "transfer.block.uncompressed",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "All 1024 uncompressed payload frames matched exactly before manifest-backed completion.",
-      "receiptIds": ["rust-mfc-transfer-20261101t183823z"],
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t183823z",
+        "rust-mfc-transfer-20261101t190951z"
+      ],
       "verdict": "parity"
     }
   ],
@@ -1110,6 +1128,33 @@
       "receiptId": "rust-mfc-transfer-20261101t185931z",
       "runnerPath": "scripts/deterministic-two-client-transfer.py",
       "runnerRevision": "03a21bbebaece261061f8f309e625a9a2e461ad4",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T190951Z-emulebb-main-release-14504/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "387b4e7f69ed5b9ace9d95aab93a99cb29ac03002811f1fbea3224526f90973f",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t190951z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "ddbd352ede4a2037ee358b5882210c0cf516b70e",
       "subjects": [
         {
           "authorityId": "mfc-oracle",
