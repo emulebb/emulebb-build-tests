@@ -46,7 +46,7 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
-def test_wait_for_applied_server_metadata_joins_active_endpoint_to_server_entity(monkeypatch) -> None:
+def test_wait_for_server_list_metadata_joins_active_server_to_distinct_entity(monkeypatch) -> None:
     status_responses = iter(
         [
             {
@@ -75,7 +75,7 @@ def test_wait_for_applied_server_metadata_joins_active_endpoint_to_server_entity
         [
             {
                 "address": "127.0.0.1",
-                "port": 4661,
+                "port": 4761,
                 "name": "seed-before-server-ident",
                 "description": "seed",
                 "users": 2,
@@ -83,7 +83,7 @@ def test_wait_for_applied_server_metadata_joins_active_endpoint_to_server_entity
             },
             {
                 "address": "127.0.0.1",
-                "port": 4661,
+                "port": 4761,
                 "name": "emulebb-local-e2e",
                 "description": "deterministic server",
                 "users": 2,
@@ -100,22 +100,26 @@ def test_wait_for_applied_server_metadata_joins_active_endpoint_to_server_entity
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
     monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
 
-    result = rust_local_ed2k.wait_for_applied_server_metadata(
+    result = rust_local_ed2k.wait_for_server_list_metadata(
         "http://127.0.0.1:4711",
         "key",
-        expected_address="127.0.0.1",
-        expected_port=4661,
+        current_server_address="127.0.0.1",
+        current_server_port=4661,
+        metadata_server_address="127.0.0.1",
+        metadata_server_port=4761,
         expected_name="emulebb-local-e2e",
         expected_description="deterministic server",
+        expected_users=2,
+        expected_files=1,
         timeout_seconds=1.0,
     )
 
     assert result["serverEntity"]["name"] == "emulebb-local-e2e"
     assert calls == [
         ("GET", "/api/v1/status"),
-        ("GET", "/api/v1/servers/127.0.0.1:4661"),
+        ("GET", "/api/v1/servers/127.0.0.1:4761"),
         ("GET", "/api/v1/status"),
-        ("GET", "/api/v1/servers/127.0.0.1:4661"),
+        ("GET", "/api/v1/servers/127.0.0.1:4761"),
     ]
 
 

@@ -123,17 +123,21 @@ def wait_for_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float)
     )
 
 
-def wait_for_applied_server_metadata(
+def wait_for_server_list_metadata(
     base_url: str,
     api_key: str,
     *,
-    expected_address: str,
-    expected_port: int,
+    current_server_address: str,
+    current_server_port: int,
+    metadata_server_address: str,
+    metadata_server_port: int,
     expected_name: str,
     expected_description: str,
+    expected_users: int | None = None,
+    expected_files: int | None = None,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits for the active endpoint and its exact applied server-list metadata."""
+    """Waits for one server-list entity while independently proving the active server."""
 
     last_status: dict[str, object] = {}
 
@@ -144,7 +148,7 @@ def wait_for_applied_server_metadata(
         server_entity = request_json(
             base_url,
             "GET",
-            f"/api/v1/servers/{expected_address}:{expected_port}",
+            f"/api/v1/servers/{metadata_server_address}:{metadata_server_port}",
             api_key,
         )
         last_status.clear()
@@ -165,17 +169,23 @@ def wait_for_applied_server_metadata(
             isinstance(value, int) and not isinstance(value, bool) and value >= 0
             for value in (users, files)
         )
+        counters_match = bool(
+            counters_valid
+            and (expected_users is None or users == expected_users)
+            and (expected_files is None or files == expected_files)
+        )
         if (
             connection_status.get("connected") is True
             and current.get("current") is True
-            and str(current.get("address") or "").casefold() == expected_address.casefold()
-            and current.get("port") == expected_port
+            and str(current.get("address") or "").casefold()
+            == current_server_address.casefold()
+            and current.get("port") == current_server_port
             and str(server_entity.get("address") or "").casefold()
-            == expected_address.casefold()
-            and server_entity.get("port") == expected_port
+            == metadata_server_address.casefold()
+            and server_entity.get("port") == metadata_server_port
             and server_entity.get("name") == expected_name
             and server_entity.get("description") == expected_description
-            and counters_valid
+            and counters_match
         ):
             return {
                 "connectionStatus": connection_status,
@@ -188,7 +198,7 @@ def wait_for_applied_server_metadata(
             probe,
             timeout_seconds=timeout_seconds,
             interval_seconds=0.25,
-            description="applied current ED2K server metadata",
+            description="applied ED2K server-list metadata",
         )
     except RuntimeError as exc:
         detail = json.dumps(last_status, sort_keys=True, separators=(",", ":"))

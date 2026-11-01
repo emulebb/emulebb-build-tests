@@ -2584,20 +2584,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
             current_phase = "wait_for_applied_server_tcp_metadata"
             rest_snapshots = {
-                "rust": rust_local_ed2k.wait_for_applied_server_metadata(
+                "rust": rust_local_ed2k.wait_for_server_list_metadata(
                     base_url,
                     args.api_key,
-                    expected_address=server_address,
-                    expected_port=ports["ed2k_tcp"],
+                    current_server_address=server_address,
+                    current_server_port=ports["ed2k_tcp"],
+                    metadata_server_address=server_address,
+                    metadata_server_port=ports["ed2k_tcp"],
                     expected_name=SERVER_IDENT_NAME,
                     expected_description=SERVER_IDENT_DESCRIPTION,
                     timeout_seconds=args.server_connect_timeout_seconds,
                 ),
-                "mfc": rust_local_ed2k.wait_for_applied_server_metadata(
+                "mfc": rust_local_ed2k.wait_for_server_list_metadata(
                     client2_base_url,
                     args.api_key,
-                    expected_address=server_address,
-                    expected_port=ports["ed2k_tcp"],
+                    current_server_address=server_address,
+                    current_server_port=ports["ed2k_tcp"],
+                    metadata_server_address=server_address,
+                    metadata_server_port=ports["ed2k_tcp"],
                     expected_name=SERVER_IDENT_NAME,
                     expected_description=SERVER_IDENT_DESCRIPTION,
                     timeout_seconds=args.server_connect_timeout_seconds,
