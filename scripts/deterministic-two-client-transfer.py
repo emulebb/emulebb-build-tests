@@ -31,6 +31,7 @@ from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
+from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
@@ -134,6 +135,11 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError("OFFERFILES v1 fallback proof requires --verify-source-lifecycle.")
     if args.client2_identity == "mfc_oracle" and args.protocol_case is None:
         raise ValueError("MFC oracle transfers require an explicit --protocol-case.")
+    if args.client2_identity == "mfc_oracle" and args.fixture_size_bytes <= rust_metadata.ED2K_PART_SIZE:
+        raise ValueError(
+            "MFC oracle transfers require a fixture larger than one eD2K part "
+            f"({rust_metadata.ED2K_PART_SIZE} bytes) for canonical startup evidence."
+        )
     if args.client2_identity != "mfc_oracle" and args.protocol_case is not None:
         raise ValueError("--protocol-case is valid only with --client2-identity mfc_oracle.")
 
@@ -150,8 +156,11 @@ def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
 def collect_transfer_diagnostics(
     *,
     file_hash: str,
+    expected_file_name: str,
+    expected_file_size: int,
     expected_transport_mode: str,
     expected_payload_encoding: str,
+    rust_metadata_path: Path,
     rust_diagnostics_dir: Path,
     rust_process_id: int,
     mfc_diagnostics_dir: Path,
@@ -171,10 +180,14 @@ def collect_transfer_diagnostics(
         process_id=mfc_process_id,
         allow_incomplete_active_tail=True,
     )
+    manifest = rust_metadata.read_transfer_manifest(rust_metadata_path, file_hash)
     evidence = transfer_diagnostic_evidence.build_transfer_diagnostic_evidence(
         file_hash=file_hash,
+        expected_file_name=expected_file_name,
+        expected_file_size=expected_file_size,
         expected_transport_mode=expected_transport_mode,
         expected_payload_encoding=expected_payload_encoding,
+        rust_manifest=manifest,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
     )
@@ -2200,12 +2213,15 @@ def main(argv: list[str] | None = None) -> int:
             current_phase = "collect_transfer_diagnostics"
             diagnostics = collect_transfer_diagnostics(
                 file_hash=transfer_hash,
+                expected_file_name=fixture_file.name,
+                expected_file_size=int(link_info["size"]),
                 expected_transport_mode=ed2k_protocol_cases.expected_peer_transport_mode(
                     protocol_case
                 ),
                 expected_payload_encoding=ed2k_protocol_cases.expected_payload_encoding(
                     protocol_case
                 ),
+                rust_metadata_path=rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
                 mfc_diagnostics_dir=Path(client2["log_dir"]),

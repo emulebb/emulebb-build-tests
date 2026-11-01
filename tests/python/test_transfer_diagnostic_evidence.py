@@ -5,6 +5,9 @@ import pytest
 from emule_test_harness import transfer_diagnostic_evidence as evidence
 
 FILE_HASH = "00112233445566778899aabbccddeeff"
+FILE_NAME = "fixture.bin"
+FILE_SIZE = 9_728_001
+AICH_ROOT = bytes.fromhex("44" * 20)
 
 
 def record(
@@ -26,6 +29,123 @@ def record(
         "keys": keys or {},
         "body": body or {},
     }
+
+
+def packet_body(
+    *,
+    direction: str,
+    outcome: str,
+    opcode: int,
+    opcode_name: str,
+    payload: bytes,
+) -> dict[str, object]:
+    frame = bytes([0xC5]) + (len(payload) + 1).to_bytes(4, "little") + bytes([opcode]) + payload
+    body: dict[str, object] = {
+        "direction": direction,
+        "outcome": outcome,
+        "opcodeName": opcode_name,
+        "protocolMarker": 0xC5,
+        "opcode": opcode,
+        "clearFrameHex": frame.hex(),
+        "payloadHex": payload.hex(),
+        "payloadHexTruncated": False,
+        "payloadLen": len(payload),
+        "transportMode": "plaintext",
+        "obfuscated": False,
+    }
+    if direction == "send":
+        body["attemptedLen"] = len(frame)
+        body["writtenLen"] = len(frame)
+    return body
+
+
+def modern_startup_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    file_identifier = (
+        b"\x07"
+        + bytes.fromhex(FILE_HASH)
+        + FILE_SIZE.to_bytes(8, "little")
+        + AICH_ROOT
+    )
+    multipacket_request = file_identifier + b"\x58\x02\x00\x00\x00\x00\x4f"
+    encoded_name = FILE_NAME.encode("utf-8")
+    multipacket_answer = (
+        file_identifier
+        + b"\x59"
+        + len(encoded_name).to_bytes(2, "little")
+        + encoded_name
+        + b"\x50\x02\x00\x03"
+    )
+    hashset_request = file_identifier + b"\x03"
+    hashset_answer = (
+        file_identifier
+        + b"\x03"
+        + bytes.fromhex(FILE_HASH)
+        + b"\x02\x00"
+        + bytes.fromhex("11" * 16 + "22" * 16)
+        + AICH_ROOT
+        + b"\x02\x00"
+        + bytes.fromhex("55" * 20 + "66" * 20)
+    )
+    pairs = (
+        (0xA9, "OP_MULTIPACKET_EXT2", multipacket_request, "rust"),
+        (0xB0, "OP_MULTIPACKETANSWER_EXT2", multipacket_answer, "mfc"),
+        (0xB1, "OP_HASHSETREQUEST2", hashset_request, "rust"),
+        (0xB2, "OP_HASHSETANSWER2", hashset_answer, "mfc"),
+    )
+    rust: list[dict[str, object]] = []
+    mfc: list[dict[str, object]] = []
+    for seq, (opcode, opcode_name, payload, sender) in enumerate(pairs, start=2):
+        receiver = "mfc" if sender == "rust" else "rust"
+        keys = {"fileHash": FILE_HASH, "protocolMarker": 0xC5, "opcode": opcode}
+        send = record(
+            sender,
+            seq,
+            "ed2k_tcp",
+            "packet",
+            keys=keys,
+            body=packet_body(
+                direction="send",
+                outcome="send_succeeded",
+                opcode=opcode,
+                opcode_name=opcode_name,
+                payload=payload,
+            ),
+        )
+        receive = record(
+            receiver,
+            seq,
+            "ed2k_tcp",
+            "packet",
+            keys=keys,
+            body=packet_body(
+                direction="recv",
+                outcome="accepted",
+                opcode=opcode,
+                opcode_name=opcode_name,
+                payload=payload,
+            ),
+        )
+        (rust if sender == "rust" else mfc).append(send)
+        (rust if receiver == "rust" else mfc).append(receive)
+    return rust, mfc
+
+
+def complete_manifest() -> dict[str, object]:
+    return {
+        "file_hash": FILE_HASH,
+        "canonical_name": FILE_NAME,
+        "file_size": FILE_SIZE,
+        "completed": True,
+        "md4_hashset_acquired": True,
+        "md4_hashset": ["11" * 16, "22" * 16],
+        "aich_hashset_acquired": True,
+        "aich_root": AICH_ROOT.hex(),
+        "aich_hashset": ["55" * 20, "66" * 20],
+    }
+
+
+def packet_named(records: list[dict[str, object]], opcode_name: str) -> dict[str, object]:
+    return next(record for record in records if record["body"].get("opcodeName") == opcode_name)
 
 
 def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -51,7 +171,9 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         "transportMode": "plaintext",
         "obfuscated": False,
     }
+    startup_rust, startup_mfc = modern_startup_records()
     rust = [
+        *startup_rust,
         record("rust", 10, "sched", "source_engaged", keys={"fileHash": FILE_HASH}, body={"outcome": "engaged"}),
         record(
             "rust",
@@ -87,6 +209,7 @@ def complete_records() -> tuple[list[dict[str, object]], list[dict[str, object]]
         ),
     ]
     mfc = [
+        *startup_mfc,
         record(
             "mfc",
             20,
@@ -143,8 +266,11 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH.upper(),
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -157,7 +283,12 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     assert report["wireChecks"]["requestTransport"]["ok"] is True
     assert report["wireChecks"]["payloadTransport"]["ok"] is True
     assert report["coverageClaims"] == {
-        "eligibleCoverageIds": ["queue.admission", "transfer.block.uncompressed"],
+        "eligibleCoverageIds": [
+            "peer.startup.aich",
+            "peer.startup.multipacket-ext2",
+            "queue.admission",
+            "transfer.block.uncompressed",
+        ],
         "evidenceLayers": [
             "codec-transcript",
             "deterministic-state-machine",
@@ -174,8 +305,11 @@ def test_build_transfer_diagnostic_evidence_rejects_hashless_completion() -> Non
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -193,8 +327,11 @@ def test_build_transfer_diagnostic_evidence_rejects_zero_payload() -> None:
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -205,7 +342,10 @@ def test_build_transfer_diagnostic_evidence_rejects_zero_payload() -> None:
 
 def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_variant() -> None:
     rust, mfc = complete_records()
-    for packet in (rust[2], mfc[2]):
+    for packet in (
+        packet_named(rust, "OP_SENDINGPART"),
+        packet_named(mfc, "OP_SENDINGPART"),
+    ):
         packet["keys"]["opcode"] = 64
         packet["body"]["opcode"] = 64
         packet["body"]["opcodeName"] = "OP_COMPRESSEDPART"
@@ -213,14 +353,19 @@ def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_var
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="compressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
 
     assert report["ok"] is True
     assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
         "queue.admission",
         "transfer.block.compressed",
     ]
@@ -231,12 +376,15 @@ def test_build_transfer_diagnostic_evidence_claims_only_observed_compression_var
 
 def test_build_transfer_diagnostic_evidence_rejects_unmatched_wire_frame() -> None:
     rust, mfc = complete_records()
-    mfc[1]["body"]["clearFrameHex"] = "e31100000047ffff"
+    packet_named(mfc, "OP_REQUESTPARTS")["body"]["clearFrameHex"] = "e31100000047ffff"
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -252,8 +400,11 @@ def test_build_transfer_diagnostic_evidence_rejects_out_of_order_chain() -> None
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -264,14 +415,22 @@ def test_build_transfer_diagnostic_evidence_rejects_out_of_order_chain() -> None
 
 def test_build_transfer_diagnostic_evidence_accepts_bilateral_obfuscated_transport() -> None:
     rust, mfc = complete_records()
-    for packet in (rust[1], rust[2], mfc[1], mfc[2]):
+    for packet in (
+        packet_named(rust, "OP_REQUESTPARTS"),
+        packet_named(rust, "OP_SENDINGPART"),
+        packet_named(mfc, "OP_REQUESTPARTS"),
+        packet_named(mfc, "OP_SENDINGPART"),
+    ):
         packet["body"]["transportMode"] = "obfuscated"
         packet["body"]["obfuscated"] = True
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="obfuscated",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -283,13 +442,17 @@ def test_build_transfer_diagnostic_evidence_accepts_bilateral_obfuscated_transpo
 
 def test_build_transfer_diagnostic_evidence_rejects_transport_mismatch() -> None:
     rust, mfc = complete_records()
-    rust[2]["body"]["transportMode"] = "obfuscated"
-    rust[2]["body"]["obfuscated"] = True
+    rust_payload = packet_named(rust, "OP_SENDINGPART")
+    rust_payload["body"]["transportMode"] = "obfuscated"
+    rust_payload["body"]["obfuscated"] = True
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -304,8 +467,11 @@ def test_build_transfer_diagnostic_evidence_rejects_wrong_payload_encoding() -> 
 
     report = evidence.build_transfer_diagnostic_evidence(
         file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
         expected_transport_mode="plaintext",
         expected_payload_encoding="compressed",
+        rust_manifest=complete_manifest(),
         rust_records=rust,
         mfc_records=mfc,
     )
@@ -313,6 +479,53 @@ def test_build_transfer_diagnostic_evidence_rejects_wrong_payload_encoding() -> 
     assert report["ok"] is False
     assert report["wireChecks"]["payloadEncoding"]["observedOpcodes"] == ["OP_SENDINGPART"]
     assert "Payload frames used only the selected encoding" in report["failures"]
+
+
+def test_build_transfer_diagnostic_evidence_rejects_startup_filename_drift() -> None:
+    rust, mfc = complete_records()
+    answer = packet_named(mfc, "OP_MULTIPACKETANSWER_EXT2")
+    answer["body"]["payloadHex"] = str(answer["body"]["payloadHex"]).replace(
+        FILE_NAME.encode("utf-8").hex(),
+        "x".encode("utf-8").hex() * len(FILE_NAME),
+    )
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_manifest=complete_manifest(),
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is False
+    assert report["startupChecks"]["multipacketAnswerSemantics"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_build_transfer_diagnostic_evidence_rejects_unpersisted_aich_hashset() -> None:
+    rust, mfc = complete_records()
+    manifest = complete_manifest()
+    manifest["aich_hashset_acquired"] = False
+    manifest["aich_hashset"] = []
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_manifest=manifest,
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["ok"] is False
+    assert report["startupChecks"]["persistedManifest"]["checks"]["aichAcquired"] is False
+    assert report["startupChecks"]["persistedManifest"]["checks"]["aichHashset"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
 @pytest.mark.parametrize("value", ["", "xyz", "0" * 31, "0" * 33])

@@ -150,6 +150,23 @@ def test_mfc_oracle_requires_explicit_protocol_case() -> None:
     assert selected.protocol_case == "obfuscated-required-compressible"
 
 
+def test_mfc_oracle_requires_fixture_large_enough_for_startup_hashsets() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--fixture-size-bytes",
+            str(module.rust_metadata.ED2K_PART_SIZE),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="larger than one eD2K part"):
+        module.validate_args(args)
+
+
 def test_reference_clients_reject_mfc_protocol_case() -> None:
     module = load_suite_module()
     args = module.parse_args(
