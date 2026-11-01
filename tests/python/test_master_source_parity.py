@@ -2703,6 +2703,18 @@ def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality
         '_T("warning"), strKeys, strBody);'
     ) in fallback_logger
 
+    automatic_fallback_block = connect_source[
+        connect_source.index("case ServerConnectSeams::EServerListExhaustionAction::FallbackToPlain:") :
+        connect_source.index("case ServerConnectSeams::EServerListExhaustionAction::ScheduleRetry:")
+    ]
+    automatic_fallback_event = (
+        "LogServerTransportFallback(pFailedServer, ullFailedAttemptId, pszFailureReason);"
+    )
+    assert automatic_fallback_event in automatic_fallback_block
+    assert automatic_fallback_block.index(automatic_fallback_event) < automatic_fallback_block.index(
+        "m_bTryObfuscated = false;"
+    )
+
     failure_block = connect_source[
         connect_source.index("if (singleconnecting) {") :
         connect_source.index("StopConnectionTry();", connect_source.index("if (singleconnecting) {"))
@@ -2715,6 +2727,10 @@ def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality
     assert failure_block.index(failure_event) < failure_block.index(
         "ConnectToServer(pServer, false, true);"
     )
+    assert (
+        'TryAnotherConnectionRequest(pServer, sender->m_ullDiagnosticAttemptId, '
+        '_T("connection_failed"));'
+    ) in connect_source
 
     timeout_block = connect_source[
         connect_source.index("if (curTick >= tmpkey + dwServerConnectTimeout)") :
@@ -2729,6 +2745,15 @@ def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality
     assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(
         "ConnectToServer(pRetryServer, false, true);"
     )
+    timeout_attempt_capture = "const ULONGLONG ullFailedAttemptId = tmpsock->m_ullDiagnosticAttemptId;"
+    automatic_timeout_retry = (
+        'TryAnotherConnectionRequest(pFailedServer, ullFailedAttemptId, '
+        '_T("connection_timeout"));'
+    )
+    assert timeout_attempt_capture in timeout_block
+    assert automatic_timeout_retry in timeout_block
+    assert timeout_block.index(timeout_attempt_capture) < timeout_block.index("DestroySocket(tmpsock);")
+    assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(automatic_timeout_retry)
 
 
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
