@@ -60,7 +60,7 @@ def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() ->
             "intentional-difference": 0,
         },
     }
-    assert report["unconfiguredAuthorityIds"] == ["amule-stable"]
+    assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
         "canonical": 8,
         "duplicate": 1,

@@ -137,7 +137,7 @@ CLIENT_IDENTITIES = {
         profile_id=CLIENT07_AMULE,
         nick=NICK_CLIENT07_AMULE,
         product="aMule",
-        role="moving official-upstream protocol parity reference",
+        role="frozen aMule 3.0.1 protocol parity reference",
         supports_long_paths=False,
     ),
 }
@@ -335,19 +335,19 @@ def resolve_stock_emule_client(
     )
 
 
-def resolve_amule_client(
+def resolve_amule_stable_client(
     workspace_root: Path,
     executable_override: str | None = None,
     control_override: str | None = None,
     output_root: Path | None = None,
 ) -> ClientAvailability:
-    """Resolves the staged official aMule runtime and its EC control executable."""
+    """Resolves the staged frozen aMule runtime and its EC control executable."""
 
     identity = CLIENT_IDENTITIES["amule"]
     try:
-        root = resolve_manifest_repo(workspace_root, "amule")
+        root = resolve_manifest_repo(workspace_root, "amule_stable")
     except (OSError, json.JSONDecodeError, RuntimeError) as exc:
-        return unavailable_manifest_client(identity, "amule", "amule-ec", exc)
+        return unavailable_manifest_client(identity, "amule_stable", "amule-ec", exc)
     staged_bin = (output_root.resolve() if output_root is not None else get_workspace_output_root()) / "tools" / "amule" / "bin"
     executable_candidates = [Path(executable_override)] if executable_override else [
         staged_bin / "amuled.exe",
@@ -420,5 +420,5 @@ def resolve_windows_client_inventory(
         "stock_emule": resolve_stock_emule_client(workspace_root, configuration, stock_emule_exe),
         "emulebb_rust": resolve_emulebb_rust_client(workspace_root),
         "emulebb_rust_peer": resolve_emulebb_rust_client(workspace_root, identity_key="emulebb_rust_peer"),
-        "amule": resolve_amule_client(workspace_root, amule_exe, amule_control_exe),
+        "amule": resolve_amule_stable_client(workspace_root, amule_exe, amule_control_exe),
     }

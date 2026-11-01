@@ -129,12 +129,12 @@ def test_resolve_stock_emule_client_accepts_fixed_baseline_build(tmp_path: Path,
     assert stock.source_revision == "a" * 40
 
 
-def test_resolve_amule_client_requires_staged_runtime_and_control(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_amule_stable_client_requires_staged_runtime_and_control(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
     workspace = root / "workspaces" / "workspace"
     output_root = tmp_path / "output"
     write_workspace_manifest(workspace, root)
-    amule_repo = root / "repos" / "amule"
+    amule_repo = root / "repos" / "amule-stable"
     amule_repo.mkdir(parents=True)
     amuled_exe = output_root / "tools" / "amule" / "bin" / "amuled.exe"
     amulecmd_exe = amuled_exe.with_name("amulecmd.exe")
@@ -142,9 +142,9 @@ def test_resolve_amule_client_requires_staged_runtime_and_control(tmp_path: Path
     amuled_exe.write_bytes(b"")
     monkeypatch.setattr(multi_client, "git_head_revision", lambda repo: "b" * 40 if repo == amule_repo else None)
 
-    missing_control = multi_client.resolve_amule_client(workspace, output_root=output_root)
+    missing_control = multi_client.resolve_amule_stable_client(workspace, output_root=output_root)
     amulecmd_exe.write_bytes(b"")
-    available = multi_client.resolve_amule_client(workspace, output_root=output_root)
+    available = multi_client.resolve_amule_stable_client(workspace, output_root=output_root)
 
     assert missing_control.available is False
     assert "EC control executable is missing" in missing_control.reason
@@ -201,7 +201,7 @@ def write_workspace_manifest(workspace: Path, root: Path) -> None:
                 "workspace": {
                     "repos": {
                         "emuleai": os.path.relpath(root / "repos" / "eMuleAI", workspace),
-                        "amule": os.path.relpath(root / "repos" / "amule", workspace),
+                        "amule_stable": os.path.relpath(root / "repos" / "amule-stable", workspace),
                         "emulebb_rust": os.path.relpath(root / "repos" / "emulebb-rust", workspace),
                     }
                 }

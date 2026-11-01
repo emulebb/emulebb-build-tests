@@ -24,13 +24,14 @@
     },
     {
       "authorityId": "amule-stable",
-      "role": "frozen-independent-parity-reference",
-      "status": "not-configured"
+      "path": "repos/amule-stable",
+      "revision": "02db0d7faecfc377694ff6242bc23346185990ed",
+      "role": "frozen-independent-parity-reference"
     },
     {
       "authorityId": "amule-head",
       "path": "repos/amule",
-      "revision": "827e602708ea57fcf96c4ffb38bd8a2f3ac48aa1",
+      "revision": "59425b0c7d9f0e661dd57e7c42b5e92069cf0774",
       "role": "analysis-only"
     }
   ],

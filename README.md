@@ -160,7 +160,7 @@ Script inventory:
 | `scripts\soak-scripted-capture.py` | capture-then-diff recorder | maintained | VPN solo capture by default; the policy-bounded `--route direct` mode adds isolated profiles, PCAPNG, path audits, exact completion verification, and owned firewall rules |
 | `scripts\soak-offline-diff.py` | capture-then-diff adjudicator | maintained | correlates opaque actions and emits parity, divergence, harness-failure, or external-inconclusive verdicts |
 | `scripts\persisted-soak-control.py` | persisted full-tunnel diagnostics controller | maintained | starts, observes, watches, reports, and gracefully stops detached Rust-plus-MFC diagnostics against operator-selected persisted profiles |
-| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, and Rust cross-client transfers; records optional eMuleAI readiness and the explicit aMule EC-adapter gap |
+| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, frozen aMule 3.0.1, and Rust cross-client transfers; records optional eMuleAI readiness |
 | `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through required UPnP TCP/UDP mappings, public server/Kad imports, independent disconnect/reconnect, a rendered-UI synthetic shared-tree reload with eD2K offer and acknowledged Kad keyword/source publishing, safe PDF-only searches, received bytes from a sourced PDF below 5 MiB, visible Stop and confirmed Delete actions, restart persistence, and pass-clean/fail-retain disposal |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
@@ -174,16 +174,16 @@ External parity references in the multi-client matrix:
 
 - `cl-stock-emule-004` resolves the fixed `app\emulebb-community-baseline`
   worktree and runs through the deterministic two-client transfer adapter
-- `cl-amule-007` resolves the official `repos\amule` source revision and the
+- `cl-amule-007` resolves only the frozen `repos\amule-stable` 3.0.1 source
+  revision and the
   staged `tools\amule\bin\amuled.exe`/`amulecmd.exe` runtime under
   `EMULEBB_WORKSPACE_OUTPUT_ROOT`
-- aMule discovery is reported with its exact Git revision, but its deterministic
-  scenario remains blocked until a native External Connections adapter exists;
-  requiring `cl-emulebb-001-downloads-from-cl-amule-007` therefore fails rather
-  than silently claiming parity
+- aMule discovery and deterministic transfer evidence report the exact frozen
+  source revision; moving `repos\amule` HEAD is analysis-only and cannot be
+  selected by this runtime path
 - `--stock-emule-exe`, `--amule-daemon-exe`, and `--amule-control-exe`
-  override only runtime discovery; `--amule-exe` remains a compatibility alias,
-  and none of these options alter source provenance or adapter status
+  override only runtime discovery; none alter source provenance or adapter
+  status
 | `scripts\rust-shared-library-io.py` | operator-facing Rust I/O characterization | maintained | owned 100k-file SSD fixture with long paths, live watcher lifecycle, restart/no-change proof, and offline 1% mutation |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
@@ -440,7 +440,7 @@ Aggregate live E2E lane:
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
   local dump/crash smoke, and auto-browse coverage
 - `--profile multi-client-p2p` runs the deterministic eD2K/Kad matrix for
-  eMuleBB MFC, Rust, fixed stock, and official aMule readiness; generic REST and
+  eMuleBB MFC, Rust, fixed stock, and frozen aMule 3.0.1; generic REST and
   qBittorrent-compatible controller coverage remains in the REST API suites
 - `--profile release-expanded-quick`, `--profile stabilization-stress-quick`,
   and `--profile cpu-heavy-quick` are the first-pass failure triage gates; they

@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from emule_test_harness import multi_client
 
 
@@ -184,8 +186,12 @@ def test_matrix_accepts_external_parity_runtime_overrides() -> None:
     assert args.amule_daemon_exe == "amuled.exe"
     assert args.amule_control_exe == "amulecmd.exe"
 
-    alias_args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--amule-exe", "amule.exe"])
-    assert alias_args.amule_daemon_exe == "amule.exe"
+
+def test_matrix_rejects_removed_amule_exe_alias() -> None:
+    module = load_suite_module()
+
+    with pytest.raises(SystemExit):
+        module.parse_args(["--lan-bind-addr", "192.0.2.10", "--amule-exe", "amule.exe"])
 
 
 def test_matrix_accepts_targeted_required_scenario() -> None:

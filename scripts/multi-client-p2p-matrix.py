@@ -69,7 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
     parser.add_argument("--stock-emule-exe")
-    parser.add_argument("--amule-daemon-exe", "--amule-exe", dest="amule_daemon_exe")
+    parser.add_argument("--amule-daemon-exe")
     parser.add_argument("--amule-control-exe")
     parser.add_argument("--require-optional-clients", action="store_true")
     parser.add_argument(

@@ -29,7 +29,7 @@ from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
-    resolve_amule_client,
+    resolve_amule_stable_client,
     resolve_mfc_oracle_client,
     resolve_stock_emule_client,
 )
@@ -197,7 +197,7 @@ def resolve_client2_app_exe(
     if identity_key == "stock_emule":
         availability = resolve_stock_emule_client(workspace_root, configuration, override)
     elif identity_key == "amule":
-        availability = resolve_amule_client(
+        availability = resolve_amule_stable_client(
             workspace_root,
             executable_override=override,
             control_override=control_override,
@@ -219,7 +219,7 @@ def resolve_client2_control_exe(
 
     if identity_key != "amule":
         return None
-    availability = resolve_amule_client(
+    availability = resolve_amule_stable_client(
         workspace_root,
         executable_override=executable_override,
         control_override=override,
