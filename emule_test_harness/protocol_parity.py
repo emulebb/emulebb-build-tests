@@ -26,7 +26,9 @@ CATALOG_EVIDENCE_LAYERS = (
     "public-discovery",
 )
 CATALOG_PROVENANCE_FIELDS = (
+    "artifactLocator",
     "artifactSha256",
+    "runnerPath",
     "runnerRevision",
     "profileAuthority",
     "subjects.authorityId",
@@ -380,28 +382,68 @@ def build_catalog_report(
 
     groups = payload.get("coverageGroups")
     group_rows = [group for group in groups if isinstance(group, dict)] if isinstance(groups, list) else []
-    verdict_counts: Counter[str] = Counter()
+    evidence = payload.get("coverageEvidence")
+    evidence_rows = [row for row in evidence if isinstance(row, dict)] if isinstance(evidence, list) else []
+    evidence_by_coverage_id = {
+        str(row.get("coverageId")): row
+        for row in evidence_rows
+        if isinstance(row.get("coverageId"), str)
+    }
+    id_verdict_counts: Counter[str] = Counter()
+    group_verdict_counts: Counter[str] = Counter()
     entries: list[dict[str, Any]] = []
     for group in group_rows:
-        latest = group.get("latestEvidence")
-        latest_row = latest if isinstance(latest, dict) else {}
-        verdict = str(latest_row.get("verdict") or "evidence-incomplete")
-        verdict_counts[verdict] += 1
+        coverage_rows: list[dict[str, Any]] = []
+        for coverage_id in _string_list(group.get("coverageIds")):
+            recorded = evidence_by_coverage_id.get(coverage_id)
+            if recorded is None:
+                row = {
+                    "coverageId": coverage_id,
+                    "reason": "No current-head execution receipt is registered for this coverage ID.",
+                    "receiptIds": [],
+                    "verdict": "evidence-incomplete",
+                }
+            else:
+                row = {
+                    "coverageId": coverage_id,
+                    "reason": recorded.get("reason"),
+                    "receiptIds": _string_list(recorded.get("receiptIds")),
+                    "verdict": str(recorded.get("verdict") or "evidence-incomplete"),
+                }
+            id_verdict_counts[row["verdict"]] += 1
+            coverage_rows.append(row)
+        verdicts = {row["verdict"] for row in coverage_rows}
+        if "divergence" in verdicts:
+            group_verdict = "divergence"
+        elif "evidence-incomplete" in verdicts:
+            group_verdict = "evidence-incomplete"
+        elif "not-observed" in verdicts:
+            group_verdict = "not-observed"
+        elif "intentional-difference" in verdicts:
+            group_verdict = "intentional-difference"
+        else:
+            group_verdict = "parity"
+        group_verdict_counts[group_verdict] += 1
         entries.append(
             {
                 "authorityIds": _string_list(group.get("authorityIds")),
                 "campaignIds": _string_list(group.get("campaignIds")),
+                "coverageEvidence": coverage_rows,
                 "coverageIdCount": len(_string_list(group.get("coverageIds"))),
+                "coveredCoverageIdCount": sum(
+                    row["verdict"] in {"parity", "intentional-difference"}
+                    for row in coverage_rows
+                ),
                 "deterministicRunner": group.get("deterministicRunner"),
                 "groupId": group.get("groupId"),
                 "protocolDomain": group.get("protocolDomain"),
                 "publicDiscoveryRunner": group.get("publicDiscoveryRunner"),
-                "reason": latest_row.get("reason"),
                 "requiredEvidenceLayers": _string_list(group.get("requiredEvidenceLayers")),
-                "verdict": verdict,
+                "verdict": group_verdict,
             }
         )
-    covered = verdict_counts["parity"] + verdict_counts["intentional-difference"]
+    covered_groups = group_verdict_counts["parity"] + group_verdict_counts["intentional-difference"]
+    covered_ids = id_verdict_counts["parity"] + id_verdict_counts["intentional-difference"]
     authorities = payload.get("authorities")
     authority_rows = [row for row in authorities if isinstance(row, dict)] if isinstance(authorities, list) else []
     campaigns = payload.get("campaigns")
@@ -432,10 +474,18 @@ def build_catalog_report(
             ),
         },
         "coverage": {
-            "coveredGroupCount": covered,
+            "coveredGroupCount": covered_groups,
+            "coveredIdCount": covered_ids,
+            "groupVerdictCounts": {
+                verdict: group_verdict_counts.get(verdict, 0)
+                for verdict in CATALOG_VERDICTS
+            },
+            "idVerdictCounts": {
+                verdict: id_verdict_counts.get(verdict, 0)
+                for verdict in CATALOG_VERDICTS
+            },
             "requiredGroupCount": len(group_rows),
-            "coverageIdCount": sum(len(_string_list(group.get("coverageIds"))) for group in group_rows),
-            "verdictCounts": {verdict: verdict_counts.get(verdict, 0) for verdict in CATALOG_VERDICTS},
+            "requiredIdCount": sum(len(_string_list(group.get("coverageIds"))) for group in group_rows),
         },
         "entries": sorted(entries, key=lambda row: str(row.get("groupId") or "")),
     }
@@ -445,11 +495,15 @@ def render_catalog_report_lines(report: dict[str, Any]) -> list[str]:
     """Renders a concise coverage summary without hiding uncovered entries."""
 
     coverage = report["coverage"]
-    counts = coverage["verdictCounts"]
+    id_counts = coverage["idVerdictCounts"]
+    group_counts = coverage["groupVerdictCounts"]
     lines = [
-        f"Protocol groups covered: {coverage['coveredGroupCount']}/{coverage['requiredGroupCount']}",
-        f"Protocol coverage IDs cataloged: {coverage['coverageIdCount']}",
-        "Protocol verdicts: " + ", ".join(f"{verdict}={counts[verdict]}" for verdict in CATALOG_VERDICTS),
+        f"Protocol coverage IDs covered: {coverage['coveredIdCount']}/{coverage['requiredIdCount']}",
+        f"Protocol groups fully covered: {coverage['coveredGroupCount']}/{coverage['requiredGroupCount']}",
+        "Coverage ID verdicts: "
+        + ", ".join(f"{verdict}={id_counts[verdict]}" for verdict in CATALOG_VERDICTS),
+        "Group verdicts: "
+        + ", ".join(f"{verdict}={group_counts[verdict]}" for verdict in CATALOG_VERDICTS),
         "Protocol assets: "
         + ", ".join(
             f"{classification}={count}"
@@ -461,7 +515,16 @@ def render_catalog_report_lines(report: dict[str, Any]) -> list[str]:
         lines.append("Unconfigured authorities: " + ", ".join(unconfigured))
     for entry in report["entries"]:
         if entry["verdict"] not in {"parity", "intentional-difference"}:
-            lines.append(f"UNCOVERED {entry['groupId']}: {entry['verdict']} - {entry['reason']}")
+            uncovered = [
+                row["coverageId"]
+                for row in entry["coverageEvidence"]
+                if row["verdict"] not in {"parity", "intentional-difference"}
+            ]
+            label = "PARTIAL" if entry["coveredCoverageIdCount"] else "UNCOVERED"
+            lines.append(
+                f"{label} {entry['groupId']}: {entry['coveredCoverageIdCount']}/{entry['coverageIdCount']} covered; "
+                f"remaining={','.join(uncovered)}"
+            )
     return lines
 
 
@@ -724,6 +787,13 @@ def _validate_catalog_contract(
                     repo_root=repo_root,
                     errors=errors,
                 )
+        _validate_catalog_evidence(
+            payload,
+            groups=groups,
+            authority_ids=authority_ids,
+            repo_root=repo_root,
+            errors=errors,
+        )
     _validate_asset_classifications(
         payload,
         campaign_ids=campaign_ids,
@@ -792,59 +862,176 @@ def _validate_catalog_group(
     _validate_repo_runner(group.get("deterministicRunner"), f"{prefix}.deterministicRunner", repo_root, errors, required=True)
     _validate_repo_runner(group.get("publicDiscoveryRunner"), f"{prefix}.publicDiscoveryRunner", repo_root, errors, required=False)
 
-    latest = group.get("latestEvidence")
-    if not isinstance(latest, dict):
-        errors.append(f"{prefix}.latestEvidence must be an object")
-        return
-    verdict = latest.get("verdict")
-    if verdict not in CATALOG_VERDICTS:
-        errors.append(f"{prefix}.latestEvidence.verdict is unsupported")
-    if not isinstance(latest.get("reason"), str) or not latest["reason"]:
-        errors.append(f"{prefix}.latestEvidence.reason must be a non-empty string")
-    if verdict in {"parity", "divergence", "intentional-difference"}:
-        receipt = latest.get("receipt")
+    if "latestEvidence" in group:
+        errors.append(f"{prefix}.latestEvidence is obsolete; register top-level per-ID coverageEvidence")
+
+
+def _validate_catalog_evidence(
+    payload: dict[str, Any],
+    *,
+    groups: list[Any],
+    authority_ids: set[str],
+    repo_root: Path,
+    errors: list[str],
+) -> None:
+    """Validates immutable receipts and their per-coverage-ID assessments."""
+
+    group_by_coverage_id: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for coverage_id in _string_list(group.get("coverageIds")):
+            group_by_coverage_id[coverage_id] = group
+
+    receipts = payload.get("evidenceReceipts")
+    if not isinstance(receipts, list):
+        errors.append("evidenceReceipts must be a list")
+        receipts = []
+    receipt_by_id: dict[str, dict[str, Any]] = {}
+    receipt_subject_ids: dict[str, set[str]] = {}
+    for index, receipt in enumerate(receipts):
+        prefix = f"evidenceReceipts[{index}]"
         if not isinstance(receipt, dict):
-            errors.append(f"{prefix}.latestEvidence.receipt is required for verdict {verdict}")
+            errors.append(f"{prefix} must be an object")
+            continue
+        receipt_id = receipt.get("receiptId")
+        if not isinstance(receipt_id, str) or re.fullmatch(r"[a-z0-9][a-z0-9.-]*", receipt_id) is None:
+            errors.append(f"{prefix}.receiptId must be a lowercase stable identifier")
+            continue
+        if receipt_id in receipt_by_id:
+            errors.append(f"duplicate evidence receipt: {receipt_id}")
+        receipt_by_id[receipt_id] = receipt
+        receipt_subject_ids[receipt_id] = _validate_evidence_receipt(
+            receipt,
+            prefix=prefix,
+            authority_ids=authority_ids,
+            repo_root=repo_root,
+            errors=errors,
+        )
+
+    evidence = payload.get("coverageEvidence")
+    if not isinstance(evidence, list):
+        errors.append("coverageEvidence must be a list")
+        evidence = []
+    observed_coverage_ids: set[str] = set()
+    referenced_receipt_ids: set[str] = set()
+    previous_coverage_id: str | None = None
+    for index, row in enumerate(evidence):
+        prefix = f"coverageEvidence[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        coverage_id = row.get("coverageId")
+        if not isinstance(coverage_id, str) or not coverage_id:
+            errors.append(f"{prefix}.coverageId must be a non-empty string")
+            continue
+        if previous_coverage_id is not None and coverage_id <= previous_coverage_id:
+            errors.append("coverageEvidence must be sorted by unique coverageId")
+        previous_coverage_id = coverage_id
+        if coverage_id in observed_coverage_ids:
+            errors.append(f"duplicate coverage evidence: {coverage_id}")
+        observed_coverage_ids.add(coverage_id)
+        group = group_by_coverage_id.get(coverage_id)
+        if group is None:
+            errors.append(f"{prefix}.coverageId references unknown coverage ID {coverage_id}")
+            continue
+
+        verdict = row.get("verdict")
+        if verdict not in CATALOG_VERDICTS:
+            errors.append(f"{prefix}.verdict is unsupported")
+        elif verdict == "evidence-incomplete":
+            errors.append(f"{prefix}.verdict cannot be evidence-incomplete; absence represents missing evidence")
+        if not isinstance(row.get("reason"), str) or not row["reason"]:
+            errors.append(f"{prefix}.reason must be a non-empty string")
+
+        expected_layers = _string_list(group.get("requiredEvidenceLayers"))
+        if row.get("evidenceLayers") != expected_layers:
+            errors.append(f"{prefix}.evidenceLayers must equal the owning coverage group's required layers")
+
+        receipt_ids = _string_list(row.get("receiptIds"))
+        if not receipt_ids:
+            errors.append(f"{prefix}.receiptIds must be a non-empty string list")
+        elif receipt_ids != sorted(set(receipt_ids)):
+            errors.append(f"{prefix}.receiptIds must be sorted and unique")
+        expected_runner = group.get("deterministicRunner")
+        selected_authorities = set(_string_list(group.get("authorityIds")))
+        for receipt_id in receipt_ids:
+            referenced_receipt_ids.add(receipt_id)
+            receipt = receipt_by_id.get(receipt_id)
+            if receipt is None:
+                errors.append(f"{prefix}.receiptIds references unknown receipt {receipt_id}")
+                continue
+            if receipt.get("runnerPath") != expected_runner:
+                errors.append(f"{prefix} receipt {receipt_id} was produced by a different runner")
+            subject_ids = receipt_subject_ids.get(receipt_id, set())
+            if "rust-product" not in subject_ids:
+                errors.append(f"{prefix} receipt {receipt_id} must include rust-product")
+            if "local-cross-client" in expected_layers:
+                executable_oracles = selected_authorities - {"stock-source"}
+                if not subject_ids.intersection(executable_oracles):
+                    errors.append(
+                        f"{prefix} receipt {receipt_id} must include one selected executable oracle"
+                    )
+
+    unused_receipts = set(receipt_by_id) - referenced_receipt_ids
+    if unused_receipts:
+        errors.append(f"evidenceReceipts contains unreferenced receipts: {sorted(unused_receipts)}")
+
+
+def _validate_evidence_receipt(
+    receipt: dict[str, Any],
+    *,
+    prefix: str,
+    authority_ids: set[str],
+    repo_root: Path,
+    errors: list[str],
+) -> set[str]:
+    """Validates one compact immutable receipt and returns its subjects."""
+
+    locator = receipt.get("artifactLocator")
+    if not isinstance(locator, str) or not locator.startswith("output-root:"):
+        errors.append(f"{prefix}.artifactLocator must use output-root:<relative-path>")
+    else:
+        relative = locator.removeprefix("output-root:")
+        if not relative or relative.startswith("/") or "\\" in relative or ".." in relative.split("/"):
+            errors.append(f"{prefix}.artifactLocator must be a normalized output-root-relative path")
+        if "/latest/" in f"/{relative}/":
+            errors.append(f"{prefix}.artifactLocator must identify an immutable timestamped artifact")
+
+    artifact_sha256 = receipt.get("artifactSha256")
+    if not isinstance(artifact_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None:
+        errors.append(f"{prefix}.artifactSha256 must be a lowercase SHA-256")
+    _validate_repo_runner(receipt.get("runnerPath"), f"{prefix}.runnerPath", repo_root, errors, required=True)
+    runner_revision = receipt.get("runnerRevision")
+    if not isinstance(runner_revision, str) or re.fullmatch(r"[0-9a-f]{40}", runner_revision) is None:
+        errors.append(f"{prefix}.runnerRevision must be a lowercase git revision")
+    if not isinstance(receipt.get("profileAuthority"), str) or not receipt["profileAuthority"]:
+        errors.append(f"{prefix}.profileAuthority must be a non-empty string")
+
+    subjects = receipt.get("subjects")
+    subject_ids: set[str] = set()
+    if not isinstance(subjects, list) or not subjects:
+        errors.append(f"{prefix}.subjects must be a non-empty list")
+        return subject_ids
+    for subject_index, subject in enumerate(subjects):
+        subject_prefix = f"{prefix}.subjects[{subject_index}]"
+        if not isinstance(subject, dict):
+            errors.append(f"{subject_prefix} must be an object")
+            continue
+        subject_id = subject.get("authorityId")
+        if subject_id not in authority_ids:
+            errors.append(f"{subject_prefix}.authorityId must reference a declared authority")
+        elif subject_id in subject_ids:
+            errors.append(f"{subject_prefix}.authorityId is duplicated")
         else:
-            artifact_sha256 = receipt.get("artifactSha256")
-            if not isinstance(artifact_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None:
-                errors.append(f"{prefix}.latestEvidence.receipt.artifactSha256 must be a lowercase SHA-256")
-            runner_revision = receipt.get("runnerRevision")
-            if not isinstance(runner_revision, str) or re.fullmatch(r"[0-9a-f]{40}", runner_revision) is None:
-                errors.append(f"{prefix}.latestEvidence.receipt.runnerRevision must be a lowercase git revision")
-            if not isinstance(receipt.get("profileAuthority"), str) or not receipt["profileAuthority"]:
-                errors.append(f"{prefix}.latestEvidence.receipt.profileAuthority must be a non-empty string")
-            subjects = receipt.get("subjects")
-            if not isinstance(subjects, list) or not subjects:
-                errors.append(f"{prefix}.latestEvidence.receipt.subjects must be a non-empty list")
-            else:
-                subject_ids: set[str] = set()
-                for subject_index, subject in enumerate(subjects):
-                    subject_prefix = f"{prefix}.latestEvidence.receipt.subjects[{subject_index}]"
-                    if not isinstance(subject, dict):
-                        errors.append(f"{subject_prefix} must be an object")
-                        continue
-                    subject_id = subject.get("authorityId")
-                    if subject_id not in authority_ids:
-                        errors.append(f"{subject_prefix}.authorityId must reference a declared authority")
-                    elif subject_id in subject_ids:
-                        errors.append(f"{subject_prefix}.authorityId is duplicated")
-                    else:
-                        subject_ids.add(subject_id)
-                    source_revision = subject.get("sourceRevision")
-                    if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
-                        errors.append(f"{subject_prefix}.sourceRevision must be a lowercase git revision")
-                    executable_sha256 = subject.get("executableSha256")
-                    if not isinstance(executable_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", executable_sha256) is None:
-                        errors.append(f"{subject_prefix}.executableSha256 must be a lowercase SHA-256")
-                if "rust-product" not in subject_ids:
-                    errors.append(f"{prefix}.latestEvidence.receipt.subjects must include rust-product")
-                if "local-cross-client" in layers:
-                    executable_oracles = set(selected_authorities) - {"stock-source"}
-                    if len(subject_ids) < 2 or not subject_ids.intersection(executable_oracles):
-                        errors.append(
-                            f"{prefix}.latestEvidence.receipt.subjects must include Rust and one selected executable oracle"
-                        )
+            subject_ids.add(subject_id)
+        source_revision = subject.get("sourceRevision")
+        if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+            errors.append(f"{subject_prefix}.sourceRevision must be a lowercase git revision")
+        executable_sha256 = subject.get("executableSha256")
+        if not isinstance(executable_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", executable_sha256) is None:
+            errors.append(f"{subject_prefix}.executableSha256 must be a lowercase SHA-256")
+    return subject_ids
 
 
 def _validate_asset_classifications(

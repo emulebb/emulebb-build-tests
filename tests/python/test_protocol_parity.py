@@ -40,7 +40,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
 
 
-def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() -> None:
+def test_catalog_report_derives_missing_per_id_evidence_without_false_group_coverage() -> None:
     manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     validation = validate_protocol_catalog(manifest_path)
@@ -50,15 +50,23 @@ def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 0,
-        "requiredGroupCount": 15,
-        "coverageIdCount": 97,
-        "verdictCounts": {
+        "coveredIdCount": 0,
+        "groupVerdictCounts": {
             "parity": 0,
             "divergence": 0,
             "evidence-incomplete": 15,
             "not-observed": 0,
             "intentional-difference": 0,
         },
+        "idVerdictCounts": {
+            "parity": 0,
+            "divergence": 0,
+            "evidence-incomplete": 97,
+            "not-observed": 0,
+            "intentional-difference": 0,
+        },
+        "requiredGroupCount": 15,
+        "requiredIdCount": 97,
     }
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
@@ -81,6 +89,28 @@ def test_catalog_report_does_not_treat_missing_current_receipts_as_coverage() ->
         group for group in payload["coverageGroups"] if group["groupId"] == "server-query-reply"
     )
     assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
+
+
+def test_catalog_report_keeps_partially_proven_group_incomplete() -> None:
+    manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["coverageEvidence"] = [
+        {
+            "coverageId": "transfer.block.uncompressed",
+            "reason": "exact uncompressed transfer",
+            "receiptIds": ["example"],
+            "verdict": "parity",
+        }
+    ]
+
+    report = build_catalog_report(payload, validate_protocol_catalog(manifest_path))
+
+    assert report["coverage"]["coveredIdCount"] == 1
+    assert report["coverage"]["coveredGroupCount"] == 0
+    transfer = next(row for row in report["entries"] if row["groupId"] == "transfer-blocks")
+    assert transfer["coveredCoverageIdCount"] == 1
+    assert transfer["coverageIdCount"] == 4
+    assert transfer["verdict"] == "evidence-incomplete"
 
 
 def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixture[str]) -> None:
@@ -109,17 +139,35 @@ def test_catalog_rejects_unproven_green_and_analysis_only_authority(tmp_path: Pa
     source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
     payload["coverageGroups"][0]["authorityIds"].append("amule-head")
-    payload["coverageGroups"][0]["latestEvidence"] = {
+    payload["coverageEvidence"] = [{
+        "coverageId": "server.login.request",
+        "evidenceLayers": payload["coverageGroups"][0]["requiredEvidenceLayers"],
         "reason": "invalid synthetic green",
+        "receiptIds": ["missing"],
         "verdict": "parity",
-    }
+    }]
     catalog = tmp_path / "catalog.json"
     catalog.write_text(json.dumps(payload), encoding="utf-8")
 
     validation = validate_protocol_catalog(catalog)
 
     assert any("cannot use analysis-only amule-head" in error for error in validation.errors)
-    assert any("latestEvidence.receipt is required for verdict parity" in error for error in validation.errors)
+    assert any("references unknown receipt missing" in error for error in validation.errors)
+
+
+def test_catalog_rejects_legacy_group_evidence(tmp_path: Path) -> None:
+    source = default_catalog_path(Path(__file__).resolve().parents[2])
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["coverageGroups"][0]["latestEvidence"] = {
+        "reason": "obsolete group-wide verdict",
+        "verdict": "evidence-incomplete",
+    }
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_protocol_catalog(catalog)
+
+    assert any("latestEvidence is obsolete" in error for error in validation.errors)
 
 
 def test_catalog_rejects_unclassified_canonical_runner(tmp_path: Path) -> None:

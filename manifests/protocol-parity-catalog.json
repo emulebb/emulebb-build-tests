@@ -242,7 +242,9 @@
       "public-discovery"
     ],
     "provenanceRequired": [
+      "artifactLocator",
       "artifactSha256",
+      "runnerPath",
       "runnerRevision",
       "profileAuthority",
       "subjects.authorityId",
@@ -257,6 +259,7 @@
       "intentional-difference"
     ]
   },
+  "coverageEvidence": [],
   "coverageGroups": [
     {
       "coverageIds": [
@@ -269,10 +272,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["server-session-source"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.server.session",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -323,10 +322,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["server-session-source"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.server.query",
       "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -385,10 +380,6 @@
       "authorityIds": ["stock-source", "stock-instrumented"],
       "campaignIds": ["peer-handshake-ident"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.peer.framing",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
@@ -433,10 +424,6 @@
       "authorityIds": ["stock-source", "stock-instrumented"],
       "campaignIds": ["peer-handshake-ident"],
       "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.tags",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
@@ -492,10 +479,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["peer-handshake-ident"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.peer.startup",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -550,10 +533,6 @@
       "authorityIds": ["stock-source", "stock-instrumented"],
       "campaignIds": ["transfer-blocks"],
       "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.file-size",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
@@ -596,10 +575,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["transfer-blocks"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.transfer.blocks",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -654,10 +629,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["source-queue-callback"],
       "deterministicRunner": "scripts/emulebb-rust-emulebb-cross-client.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.source-exchange",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -713,10 +684,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["peer-handshake-ident"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.secure-ident",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -767,10 +734,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["source-queue-callback"],
       "deterministicRunner": "scripts/local-ed2k-rust-protocol-combinations.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.lowid.callback",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -828,10 +791,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["client-udp-reask"],
       "deterministicRunner": "scripts/emulebb-rust-reask-cross-client.py",
-      "latestEvidence": {
-        "reason": "The retained fixture-owned proof predates the current branch and has no current-head receipt.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.client-udp",
       "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -887,10 +846,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["kad-bootstrap-routing"],
       "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "kad.routing.contacts",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -940,10 +895,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["kad-search-publish-firewall"],
       "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "kad.operations",
       "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -1010,10 +961,6 @@
       "authorityIds": ["stock-source", "stock-instrumented"],
       "campaignIds": ["kad-bootstrap-routing"],
       "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "kad.persistence.nodes-dat",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
@@ -1062,10 +1009,6 @@
       "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
       "campaignIds": ["source-queue-callback"],
       "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
-      "latestEvidence": {
-        "reason": "No current-head execution receipt is registered in the catalog.",
-        "verdict": "evidence-incomplete"
-      },
       "protocolDomain": "ed2k.upload.queue",
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
@@ -1110,6 +1053,7 @@
     }
   ],
   "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
+  "evidenceReceipts": [],
   "records": [
     {
       "direction": "send",
