@@ -52,7 +52,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 3,
-        "coveredIdCount": 18,
+        "coveredIdCount": 19,
         "groupVerdictCounts": {
             "parity": 3,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 18,
+            "parity": 19,
             "divergence": 0,
-            "evidence-incomplete": 82,
+            "evidence-incomplete": 81,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -100,13 +100,14 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.connect.plaintext",
         "server.login.request",
         "server.reply.search",
-            "server.reply.sources",
+        "server.reply.sources",
         "server.reply.tcp-ident",
         "server.reply.tcp-status",
         "server.reply.udp-description",
         "server.reply.udp-status",
         "server.search.keyword",
-            "server.source.tcp-plain",
+        "server.source.tcp-obfuscated",
+        "server.source.tcp-plain",
         "transfer.block.compressed",
         "transfer.block.uncompressed",
     ]
@@ -184,6 +185,22 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "queue.admission",
         "server.reply.udp-description",
         "server.reply.udp-status",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][11]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.tcp-plain",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][12]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.tcp-obfuscated",
         "transfer.block.uncompressed",
     ]
 
