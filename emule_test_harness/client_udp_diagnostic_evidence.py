@@ -1387,7 +1387,7 @@ def _file_not_found_transition_evidence(
             and identity(record)
             and _body(record).get("outcome") == "applied"
             and _body(record).get("replyOpcode") == OP_FILENOTFOUND
-            and _body(record).get("queueRank") is None
+            and "queueRank" not in _body(record)
             and _body(record).get("requestPendingAfter") is False
             and _body(record).get("remoteQueueFullAfter") is False
             and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
