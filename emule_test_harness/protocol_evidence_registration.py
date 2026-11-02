@@ -10,7 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from emule_test_harness import diag_event_runs
 from emule_test_harness import buddy_callback_diagnostic_evidence
@@ -4345,13 +4345,17 @@ def _positive_sequence(value: Any, field: str) -> int:
     return _positive_int(value, field)
 
 
-def _rebuild_client_udp_clear_evidence(
+def _rebuild_client_udp_ack_evidence(
     report: dict[str, Any],
     *,
     run_directory: Path,
     file_hash: str,
     part_count: int,
     stock_record: dict[str, Any],
+    scenario: str,
+    raw_evidence_schema: str,
+    evidence_builder: Callable[..., dict[str, Any]],
+    evidence_requirement: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
     receipt = _object(report.get("rawEvidence"), "rawEvidence")
     if set(receipt) != {"path", "sizeBytes", "sha256"}:
@@ -4362,19 +4366,21 @@ def _rebuild_client_udp_clear_evidence(
     if raw_path.stat().st_size != raw_size or _file_sha256(raw_path) != raw_sha256:
         raise ValueError("rawEvidence bytes do not match the immutable receipt")
 
-    raw = _json_object_file(raw_path, "client-UDP clear raw evidence")
+    raw = _json_object_file(raw_path, f"client-UDP {scenario} raw evidence")
     if set(raw) != {"schema", "scenario", "fileHash", "partCount", "transitions"}:
-        raise ValueError("client-UDP clear raw evidence envelope is not exact")
+        raise ValueError(f"client-UDP {scenario} raw evidence envelope is not exact")
     if (
-        raw.get("schema") != client_udp_diagnostic_evidence.CLEAR_RAW_EVIDENCE_SCHEMA
-        or raw.get("scenario") != "clear"
+        raw.get("schema") != raw_evidence_schema
+        or raw.get("scenario") != scenario
         or raw.get("fileHash") != file_hash
         or raw.get("partCount") != part_count
     ):
-        raise ValueError("client-UDP clear raw evidence identity is invalid")
+        raise ValueError(f"client-UDP {scenario} raw evidence identity is invalid")
     raw_transitions = raw.get("transitions")
     if not isinstance(raw_transitions, list) or len(raw_transitions) != 2:
-        raise ValueError("client-UDP clear raw evidence must contain two transitions")
+        raise ValueError(
+            f"client-UDP {scenario} raw evidence must contain two transitions"
+        )
 
     expected_fields = {
         "requester",
@@ -4430,19 +4436,56 @@ def _rebuild_client_udp_clear_evidence(
             )
         )
 
-    rebuilt = client_udp_diagnostic_evidence.build_client_udp_clear_diagnostic_evidence(
+    rebuilt = evidence_builder(
         file_hash=bytes.fromhex(file_hash),
         part_count=part_count,
         stock_record=stock_record,
         transitions=transitions,
     )
     try:
-        client_udp_diagnostic_evidence.require_client_udp_clear_diagnostic_evidence(
-            rebuilt
-        )
+        evidence_requirement(rebuilt)
     except RuntimeError as exc:
-        raise ValueError("raw client-UDP clear diagnostics are not claimable") from exc
+        raise ValueError(
+            f"raw client-UDP {scenario} diagnostics are not claimable"
+        ) from exc
     return rebuilt
+
+
+def _validate_client_udp_encrypted_packet(
+    value: Any,
+    *,
+    clear_frame_hex: str,
+    field: str,
+) -> dict[str, Any]:
+    packet = _object(value, field)
+    raw_hex = str(packet.get("rawHex") or "")
+    try:
+        raw = bytes.fromhex(raw_hex)
+        clear = bytes.fromhex(clear_frame_hex)
+    except ValueError as exc:
+        raise ValueError(f"{field} contains malformed hex") from exc
+    if raw.hex() != raw_hex or len(raw) != len(clear) + 8:
+        raise ValueError(f"{field} does not have the exact encrypted wire length")
+    if (
+        not raw
+        or raw == clear
+        or raw[0] & 0x01 != 0x01
+        or raw[0] in client_udp_diagnostic_evidence.CLIENT_UDP_RESERVED_MARKERS
+    ):
+        raise ValueError(f"{field} does not have a stock encrypted marker")
+    expected = {
+        "ok": True,
+        "transportMode": "obfuscated",
+        "obfuscated": True,
+        "rawHex": raw_hex,
+        "clearFrameHex": clear_frame_hex,
+        "rawLen": len(raw),
+        "clearFrameLen": len(clear),
+        "overheadBytes": client_udp_diagnostic_evidence.CLIENT_UDP_CRYPT_OVERHEAD,
+        "wireMarker": raw[0],
+    }
+    _require_exact_value(packet, expected, field)
+    return expected
 
 
 def _validate_client_udp_ack_client(
@@ -4451,7 +4494,7 @@ def _validate_client_udp_ack_client(
     *,
     file_hash: str,
     part_count: int,
-    require_clear_transport: bool,
+    expected_should_crypt: bool | None,
 ) -> dict[str, Any]:
     client = _object(value, f"evidence.clients.{client_id}")
     responder = "mfc" if client_id == "rust" else "rust"
@@ -4471,7 +4514,7 @@ def _validate_client_udp_ack_client(
         source_udp_endpoint,
         f"evidence.clients.{client_id}.sourceUdpEndpoint",
     )
-    _canonical_ipv4_endpoint(
+    requester_udp_host, _requester_udp_port = _canonical_ipv4_endpoint(
         requester_udp_endpoint,
         f"evidence.clients.{client_id}.requesterUdpEndpoint",
     )
@@ -4580,7 +4623,8 @@ def _validate_client_udp_ack_client(
     )
 
     clear_transport = None
-    if require_clear_transport:
+    encrypted_transport = None
+    if expected_should_crypt is False:
         plaintext = {"transportMode": "plaintext", "obfuscated": False}
         clear_transport = {
             "registrationShouldCrypt": False,
@@ -4594,6 +4638,53 @@ def _validate_client_udp_ack_client(
             client.get("clearTransport"),
             clear_transport,
             f"evidence.clients.{client_id}.clearTransport",
+        )
+    elif expected_should_crypt is True:
+        encrypted = _object(
+            client.get("encryptedTransport"),
+            f"evidence.clients.{client_id}.encryptedTransport",
+        )
+        request_out = _validate_client_udp_encrypted_packet(
+            encrypted.get("requestOut"),
+            clear_frame_hex=request_raw.hex(),
+            field=f"evidence.clients.{client_id}.encryptedTransport.requestOut",
+        )
+        request_in = _validate_client_udp_encrypted_packet(
+            encrypted.get("requestIn"),
+            clear_frame_hex=request_raw.hex(),
+            field=f"evidence.clients.{client_id}.encryptedTransport.requestIn",
+        )
+        ack_out = _validate_client_udp_encrypted_packet(
+            encrypted.get("ackOut"),
+            clear_frame_hex=ack_raw.hex(),
+            field=f"evidence.clients.{client_id}.encryptedTransport.ackOut",
+        )
+        ack_in = _validate_client_udp_encrypted_packet(
+            encrypted.get("ackIn"),
+            clear_frame_hex=ack_raw.hex(),
+            field=f"evidence.clients.{client_id}.encryptedTransport.ackIn",
+        )
+        encrypted_transport = {
+            "registrationShouldCrypt": True,
+            "requestOut": request_out,
+            "requestIn": request_in,
+            "ackOut": ack_out,
+            "ackIn": ack_in,
+            "requestWireBytesEqual": request_out["rawHex"] == request_in["rawHex"],
+            "ackWireBytesEqual": ack_out["rawHex"] == ack_in["rawHex"],
+            "ok": True,
+        }
+        if (
+            encrypted_transport["requestWireBytesEqual"] is not True
+            or encrypted_transport["ackWireBytesEqual"] is not True
+        ):
+            raise ValueError(
+                f"evidence.clients.{client_id} encrypted datagram changed in flight"
+            )
+        _require_exact_value(
+            encrypted,
+            encrypted_transport,
+            f"evidence.clients.{client_id}.encryptedTransport",
         )
 
     diagnostics = _object(
@@ -4712,7 +4803,9 @@ def _validate_client_udp_ack_client(
         "sourceTcpEndpoint": source_tcp_endpoint,
         "sourceUdpEndpoint": source_udp_endpoint,
         "sourceUserHash": source_user_hash,
+        "requesterUdpHost": requester_udp_host,
         "clearTransport": clear_transport,
+        "encryptedTransport": encrypted_transport,
     }
 
 
@@ -5438,7 +5531,11 @@ def _build_client_udp_ack_registration(
     coverage_id: str,
     receipt_suffix: str,
     reason: str,
-    require_clear_transport: bool,
+    expected_transport_mode: str,
+    expected_should_crypt: bool | None,
+    raw_evidence_schema: str | None = None,
+    evidence_builder: Callable[..., dict[str, Any]] | None = None,
+    evidence_requirement: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Independently validate one immutable bilateral request/ACK campaign."""
 
@@ -5475,10 +5572,10 @@ def _build_client_udp_ack_registration(
     network = _object(report.get("network"), "network")
     if (
         network.get("publicTraffic") is not False
-        or network.get("transportMode") != "plaintext"
+        or network.get("transportMode") != expected_transport_mode
     ):
         raise ValueError(
-            f"client-UDP {scenario} campaign must be local plaintext traffic"
+            f"client-UDP {scenario} campaign has the wrong local transport mode"
         )
 
     fixture = _object(report.get("fixture"), "fixture")
@@ -5524,13 +5621,19 @@ def _build_client_udp_ack_registration(
         },
         "evidence.coverageClaims",
     )
-    if require_clear_transport:
-        rebuilt_evidence = _rebuild_client_udp_clear_evidence(
+    if raw_evidence_schema is not None:
+        if evidence_builder is None or evidence_requirement is None:
+            raise ValueError("raw client-UDP evidence has no independent reducer")
+        rebuilt_evidence = _rebuild_client_udp_ack_evidence(
             report,
             run_directory=run_directory,
             file_hash=file_hash,
             part_count=part_count,
             stock_record=stock_record,
+            scenario=scenario,
+            raw_evidence_schema=raw_evidence_schema,
+            evidence_builder=evidence_builder,
+            evidence_requirement=evidence_requirement,
         )
         _require_exact_value(evidence, rebuilt_evidence, "evidence")
 
@@ -5545,7 +5648,7 @@ def _build_client_udp_ack_registration(
             clients[client_id],
             file_hash=file_hash,
             part_count=part_count,
-            require_clear_transport=require_clear_transport,
+            expected_should_crypt=expected_should_crypt,
         )
         for client_id in ("rust", "mfc")
     }
@@ -5611,6 +5714,24 @@ def _build_client_udp_ack_registration(
             observation,
             f"checks.rust.rustHighIdClients[{index}]",
         )
+    if expected_should_crypt is True:
+        rust_source_host, _rust_source_port = _canonical_ipv4_endpoint(
+            validated["rust"]["sourceTcpEndpoint"],
+            "validated Rust source endpoint",
+        )
+        if rust_check["publication"].get("address") != rust_source_host:
+            raise ValueError(
+                "encrypted Rust direction responder HighID is not its wire address"
+            )
+        rust_high_id_addresses = {
+            str(observation.get("address") or "")
+            for observation in rust_high_id_clients
+            if isinstance(observation, dict)
+        }
+        if validated["rust"]["requesterUdpHost"] not in rust_high_id_addresses:
+            raise ValueError(
+                "encrypted Rust requester HighID is not its UDP wire address"
+            )
     registration = _object(rust_check.get("registration"), "checks.rust.registration")
     _require_exact_value(
         registration,
@@ -5638,6 +5759,22 @@ def _build_client_udp_ack_registration(
         mfc_check.get("mfcHighIdClient"),
         "checks.mfc.mfcHighIdClient",
     )
+    if expected_should_crypt is True:
+        mfc_source_host, _mfc_source_port = _canonical_ipv4_endpoint(
+            validated["mfc"]["sourceTcpEndpoint"],
+            "validated MFC source endpoint",
+        )
+        if mfc_check["publication"].get("address") != mfc_source_host:
+            raise ValueError(
+                "encrypted MFC direction responder HighID is not its wire address"
+            )
+        if (
+            mfc_check["mfcHighIdClient"].get("address")
+            != validated["mfc"]["requesterUdpHost"]
+        ):
+            raise ValueError(
+                "encrypted MFC requester HighID is not its UDP wire address"
+            )
     occupied_slot = _object(mfc_check.get("occupiedSlot"), "checks.mfc.occupiedSlot")
     occupied_policy = _object(
         occupied_slot.get("policy"),
@@ -5743,7 +5880,8 @@ def _build_client_udp_v4_registration(
             "applied the same queue-rank and complete-source state through causally "
             "ordered bilateral diagnostics."
         ),
-        require_clear_transport=False,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
     )
 
 
@@ -5769,7 +5907,51 @@ def _build_client_udp_clear_registration(
             "same clear OP_EMULEPROT reask and ACK bytes, and causally applied the "
             "same queue-rank and complete-source state."
         ),
-        require_clear_transport=True,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=False,
+        raw_evidence_schema=client_udp_diagnostic_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+        evidence_builder=(
+            client_udp_diagnostic_evidence.build_client_udp_clear_diagnostic_evidence
+        ),
+        evidence_requirement=(
+            client_udp_diagnostic_evidence.require_client_udp_clear_diagnostic_evidence
+        ),
+    )
+
+
+def _build_client_udp_encrypted_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral encrypted receipt."""
+
+    return _build_client_udp_ack_registration(
+        report_path,
+        output_root=output_root,
+        catalog_path=catalog_path,
+        scenario="encrypted",
+        campaign_schema="emulebb-build-tests.client-udp-encrypted-campaign.v1",
+        evidence_schema=client_udp_diagnostic_evidence.ENCRYPTED_SCHEMA,
+        coverage_id=client_udp_diagnostic_evidence.ENCRYPTED_COVERAGE_ID,
+        receipt_suffix="encrypted",
+        reason=(
+            "Rust and MFC each selected the crypt client-UDP path, exchanged "
+            "stock eight-byte obfuscated envelopes around identical clear V4 "
+            "reask and ACK frames, and causally applied the same queue state."
+        ),
+        expected_transport_mode="obfuscated",
+        expected_should_crypt=True,
+        raw_evidence_schema=(
+            client_udp_diagnostic_evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA
+        ),
+        evidence_builder=(
+            client_udp_diagnostic_evidence.build_client_udp_encrypted_diagnostic_evidence
+        ),
+        evidence_requirement=(
+            client_udp_diagnostic_evidence.require_client_udp_encrypted_diagnostic_evidence
+        ),
     )
 
 
@@ -6402,6 +6584,12 @@ def build_client_udp_registration(
             output_root=output_root,
             catalog_path=catalog_path,
         )
+    if scenario == "encrypted":
+        return _build_client_udp_encrypted_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
     if scenario == "queue-full":
         return _build_client_udp_queue_full_registration(
             report_path,
@@ -6672,7 +6860,7 @@ def run_client_udp_registration_cli(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["v4", "clear", "queue-full", "file-not-found"],
+        choices=["v4", "clear", "encrypted", "queue-full", "file-not-found"],
         required=True,
     )
     parser.add_argument("--report", type=Path, required=True)

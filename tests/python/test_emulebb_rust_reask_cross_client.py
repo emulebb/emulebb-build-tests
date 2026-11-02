@@ -159,8 +159,38 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
         module.udp_evidence.require_client_udp_clear_diagnostic_evidence
     )
 
+    encrypted = module.parse_args(
+        [
+            "--scenario",
+            "encrypted",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert module.SCENARIO_COVERAGE_IDS[encrypted.scenario] == ("client-udp.encrypted")
+    assert module.SCENARIO_CAMPAIGN_SCHEMAS[encrypted.scenario] == (
+        "emulebb-build-tests.client-udp-encrypted-campaign.v1"
+    )
+    assert module.SCENARIO_OBFUSCATION[encrypted.scenario] is True
+    assert module.SCENARIO_EVIDENCE_BUILDERS[encrypted.scenario] is (
+        module.udp_evidence.build_client_udp_encrypted_diagnostic_evidence
+    )
+    assert module.SCENARIO_EVIDENCE_REQUIREMENTS[encrypted.scenario] is (
+        module.udp_evidence.require_client_udp_encrypted_diagnostic_evidence
+    )
 
-def test_clear_raw_evidence_serializes_complete_reducer_inputs() -> None:
+
+@pytest.mark.parametrize(
+    ("scenario", "schema"),
+    [
+        ("clear", "CLEAR_RAW_EVIDENCE_SCHEMA"),
+        ("encrypted", "ENCRYPTED_RAW_EVIDENCE_SCHEMA"),
+    ],
+)
+def test_ack_raw_evidence_serializes_complete_reducer_inputs(
+    scenario: str,
+    schema: str,
+) -> None:
     module = _load_module()
     transition = module.udp_evidence.ClientUdpV4Transition(
         requester="rust",
@@ -174,15 +204,16 @@ def test_clear_raw_evidence_serializes_complete_reducer_inputs() -> None:
         responder_records=[{"seq": 2}],
     )
 
-    payload = module.build_clear_raw_evidence(
+    payload = module.build_ack_raw_evidence(
+        scenario=scenario,
         file_hash=FILE_HASH,
         part_count=1,
         transitions=[transition],
     )
 
     assert payload == {
-        "schema": module.udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
-        "scenario": "clear",
+        "schema": getattr(module.udp_evidence, schema),
+        "scenario": scenario,
         "fileHash": FILE_HASH,
         "partCount": 1,
         "transitions": [

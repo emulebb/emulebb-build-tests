@@ -147,6 +147,9 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "transportMode": "plaintext",
                 "obfuscated": False,
                 "rawHex": REQUEST_RAW.hex(),
+                "rawLen": len(REQUEST_RAW),
+                "payloadHex": REQUEST_RAW[2:].hex(),
+                "payloadLen": len(REQUEST_RAW) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -183,6 +186,9 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "transportMode": "plaintext",
                 "obfuscated": False,
                 "rawHex": ACK_RAW.hex(),
+                "rawLen": len(ACK_RAW),
+                "payloadHex": ACK_RAW[2:].hex(),
+                "payloadLen": len(ACK_RAW) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -231,6 +237,9 @@ def responder_records(requester: str) -> list[dict[str, Any]]:
                 "transportMode": "plaintext",
                 "obfuscated": False,
                 "rawHex": REQUEST_RAW.hex(),
+                "rawLen": len(REQUEST_RAW),
+                "payloadHex": REQUEST_RAW[2:].hex(),
+                "payloadLen": len(REQUEST_RAW) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -254,6 +263,9 @@ def responder_records(requester: str) -> list[dict[str, Any]]:
                 "transportMode": "plaintext",
                 "obfuscated": False,
                 "rawHex": ACK_RAW.hex(),
+                "rawLen": len(ACK_RAW),
+                "payloadHex": ACK_RAW[2:].hex(),
+                "payloadLen": len(ACK_RAW) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -318,6 +330,35 @@ def transition(requester: str) -> evidence.ClientUdpV4Transition:
         control_receipt=control(requester),
         requester_records=requester_records(requester),
         responder_records=responder_records(requester),
+    )
+
+
+def encrypted_transition(requester: str) -> evidence.ClientUdpV4Transition:
+    original = transition(requester)
+    requester_rows = copy.deepcopy(list(original.requester_records))
+    responder_rows = copy.deepcopy(list(original.responder_records))
+    requester_rows[0]["body"]["shouldCrypt"] = True
+    seed = 0x11 if requester == "rust" else 0x22
+    request_wire = bytes((0x01,)) + bytes((seed,)) * 7 + REQUEST_RAW
+    ack_wire = bytes((0x03,)) + bytes((seed ^ 0xFF,)) * 7 + ACK_RAW
+
+    def mark_obfuscated(record: dict[str, Any], wire: bytes) -> None:
+        body = record["body"]
+        body["transportMode"] = "obfuscated"
+        body["obfuscated"] = True
+        body["rawHex"] = wire.hex()
+        body["rawLen"] = len(wire)
+
+    mark_obfuscated(requester_rows[3], request_wire)
+    mark_obfuscated(requester_rows[5], ack_wire)
+    mark_obfuscated(responder_rows[0], request_wire)
+    mark_obfuscated(responder_rows[1], ack_wire)
+    return evidence.ClientUdpV4Transition(
+        **{
+            **original.__dict__,
+            "requester_records": requester_rows,
+            "responder_records": responder_rows,
+        }
     )
 
 
@@ -765,12 +806,28 @@ def passing_clear_report(
     )
 
 
+def passing_encrypted_report(
+    *,
+    rust_transition: evidence.ClientUdpV4Transition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_encrypted_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[
+            rust_transition or encrypted_transition("rust"),
+            encrypted_transition("mfc"),
+        ],
+    )
+
+
 def immutable_campaign_report(
     tmp_path: Path,
     *,
     scenario: str = "v4",
 ) -> tuple[Path, Path, dict[str, Any]]:
-    assert scenario in {"v4", "clear"}
+    assert scenario in {"v4", "clear", "encrypted"}
     output_root = tmp_path / "output"
     run_dir = (
         output_root
@@ -781,9 +838,20 @@ def immutable_campaign_report(
     fixture_path = run_dir / "fixture" / f"client-udp-{scenario}.bin"
     fixture_path.parent.mkdir(parents=True)
     fixture_path.write_bytes(b"fixture")
-    transitions = [transition("rust"), transition("mfc")]
+    transitions = (
+        [encrypted_transition("rust"), encrypted_transition("mfc")]
+        if scenario == "encrypted"
+        else [transition("rust"), transition("mfc")]
+    )
     diagnostics = (
-        evidence.build_client_udp_clear_diagnostic_evidence(
+        evidence.build_client_udp_encrypted_diagnostic_evidence(
+            file_hash=FILE_HASH,
+            part_count=PART_COUNT,
+            stock_record=STOCK_RECORD,
+            transitions=transitions,
+        )
+        if scenario == "encrypted"
+        else evidence.build_client_udp_clear_diagnostic_evidence(
             file_hash=FILE_HASH,
             part_count=PART_COUNT,
             stock_record=STOCK_RECORD,
@@ -806,7 +874,10 @@ def immutable_campaign_report(
         "coverageId": f"client-udp.{scenario}",
         "status": "passed",
         "currentPhase": "complete",
-        "network": {"publicTraffic": False, "transportMode": "plaintext"},
+        "network": {
+            "publicTraffic": False,
+            "transportMode": "obfuscated" if scenario == "encrypted" else "plaintext",
+        },
         "fixture": {
             "path": str(fixture_path),
             "sizeBytes": fixture_path.stat().st_size,
@@ -841,14 +912,20 @@ def immutable_campaign_report(
                 },
                 "publication": {
                     "clientName": "mfc-responder",
-                    "address": "192.0.2.1",
+                    "address": (
+                        "127.0.0.10" if scenario == "encrypted" else "192.0.2.1"
+                    ),
                     "highId": True,
                     "sharedFiles": 1,
                 },
                 "rustHighIdClients": [
                     {
                         "clientName": f"rust-{index}",
-                        "address": f"192.0.2.{index + 2}",
+                        "address": (
+                            "127.0.0.20"
+                            if scenario == "encrypted" and index == 2
+                            else f"192.0.2.{index + 2}"
+                        ),
                         "highId": True,
                         "sharedFiles": 0,
                     }
@@ -873,7 +950,9 @@ def immutable_campaign_report(
                 ],
                 "publication": {
                     "clientName": "rust-responder",
-                    "address": "192.0.2.10",
+                    "address": (
+                        "127.0.0.30" if scenario == "encrypted" else "192.0.2.10"
+                    ),
                     "highId": True,
                     "sharedFiles": 1,
                 },
@@ -885,7 +964,9 @@ def immutable_campaign_report(
                 },
                 "mfcHighIdClient": {
                     "clientName": "mfc-requester",
-                    "address": "192.0.2.12",
+                    "address": (
+                        "127.0.0.40" if scenario == "encrypted" else "192.0.2.12"
+                    ),
                     "highId": True,
                     "sharedFiles": 0,
                 },
@@ -908,11 +989,15 @@ def immutable_campaign_report(
         },
         "evidence": diagnostics,
     }
-    if scenario == "clear":
-        raw_path = run_dir / "client-udp-clear-raw-evidence.json"
+    if scenario in {"clear", "encrypted"}:
+        raw_path = run_dir / f"client-udp-{scenario}-raw-evidence.json"
         raw_payload = {
-            "schema": evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
-            "scenario": "clear",
+            "schema": (
+                evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA
+                if scenario == "encrypted"
+                else evidence.CLEAR_RAW_EVIDENCE_SCHEMA
+            ),
+            "scenario": scenario,
             "fileHash": FILE_HASH.hex(),
             "partCount": PART_COUNT,
             "transitions": [
@@ -1271,6 +1356,91 @@ def test_bilateral_client_udp_clear_is_claimable() -> None:
         "ackIn": {"transportMode": "plaintext", "obfuscated": False},
         "ok": True,
     }
+
+
+@pytest.mark.unit
+def test_bilateral_client_udp_encrypted_is_claimable() -> None:
+    report = passing_encrypted_report()
+
+    evidence.require_client_udp_encrypted_diagnostic_evidence(report)
+    assert report["schema"] == evidence.ENCRYPTED_SCHEMA
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["client-udp.encrypted"]
+    transport = report["clients"]["rust"]["encryptedTransport"]
+    assert transport["registrationShouldCrypt"] is True
+    assert transport["requestWireBytesEqual"] is True
+    assert transport["ackWireBytesEqual"] is True
+    assert transport["requestOut"]["overheadBytes"] == 8
+    assert transport["requestOut"]["clearFrameHex"] == REQUEST_RAW.hex()
+    assert transport["ackOut"]["clearFrameHex"] == ACK_RAW.hex()
+
+
+@pytest.mark.unit
+def test_encrypted_requires_true_registered_crypt_decision() -> None:
+    original = encrypted_transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[0]["body"]["shouldCrypt"] = False
+    wrong = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_encrypted_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["encryptedTransport"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("plaintext", False),
+        ("bad-overhead", False),
+        ("reserved-marker", False),
+        ("changed-in-flight", False),
+    ],
+)
+def test_encrypted_rejects_invalid_wire_evidence(
+    mutation: str,
+    expected: bool,
+) -> None:
+    original = encrypted_transition("rust")
+    requester_rows = copy.deepcopy(list(original.requester_records))
+    responder_rows = copy.deepcopy(list(original.responder_records))
+    if mutation == "plaintext":
+        requester_rows[3]["body"].update(
+            {
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "rawHex": REQUEST_RAW.hex(),
+                "rawLen": len(REQUEST_RAW),
+            }
+        )
+    elif mutation == "bad-overhead":
+        raw = bytes.fromhex(requester_rows[3]["body"]["rawHex"])[1:]
+        requester_rows[3]["body"]["rawHex"] = raw.hex()
+        requester_rows[3]["body"]["rawLen"] = len(raw)
+    elif mutation == "reserved-marker":
+        raw = bytearray.fromhex(requester_rows[3]["body"]["rawHex"])
+        raw[0] = evidence.OP_EMULEPROT
+        requester_rows[3]["body"]["rawHex"] = raw.hex()
+    elif mutation == "changed-in-flight":
+        raw = bytearray.fromhex(responder_rows[0]["body"]["rawHex"])
+        raw[1] ^= 0xFF
+        responder_rows[0]["body"]["rawHex"] = raw.hex()
+    wrong = evidence.ClientUdpV4Transition(
+        **{
+            **original.__dict__,
+            "requester_records": requester_rows,
+            "responder_records": responder_rows,
+        }
+    )
+
+    report = passing_encrypted_report(rust_transition=wrong)
+
+    assert report["ok"] is expected
+    assert report["clients"]["rust"]["encryptedTransport"]["ok"] is expected
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
 @pytest.mark.unit
@@ -1666,6 +1836,88 @@ def test_immutable_clear_campaign_builds_exact_catalog_registration(
             "verdict": "parity",
         }
     ]
+
+
+@pytest.mark.unit
+def test_immutable_encrypted_campaign_builds_exact_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_campaign_report(
+        tmp_path,
+        scenario="encrypted",
+    )
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="encrypted",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == "rust-mfc-client-udp-encrypted-20261102t123752z"
+    assert receipt["coverageIds"] == ["client-udp.encrypted"]
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.encrypted",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC each selected the crypt client-UDP path, exchanged "
+                "stock eight-byte obfuscated envelopes around identical clear V4 "
+                "reask and ACK frames, and causally applied the same queue state."
+            ),
+            "receiptIds": ["rust-mfc-client-udp-encrypted-20261102t123752z"],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_encrypted_registration_rereduces_hashed_raw_diagnostics(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="encrypted",
+    )
+    raw_path = Path(report["rawEvidence"]["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["transitions"][0]["requesterRecords"][0]["body"]["shouldCrypt"] = False
+    raw_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    report["rawEvidence"]["sizeBytes"] = raw_path.stat().st_size
+    report["rawEvidence"]["sha256"] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw client-UDP encrypted diagnostics"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="encrypted",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_encrypted_registration_rejects_high_id_wire_address_mismatch(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="encrypted",
+    )
+    report["checks"]["mfcRequesterRustResponder"]["mfcHighIdClient"]["address"] = (
+        "192.0.2.99"
+    )
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="MFC requester HighID"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="encrypted",
+            output_root=output_root,
+        )
 
 
 @pytest.mark.unit

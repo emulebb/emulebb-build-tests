@@ -8,8 +8,9 @@ fixture and one upstream-clean local eD2K server:
 
 Each requester must queue and detach naturally. The harness then wakes exactly
 that already queued source once through the diagnostics-only scheduler control.
-For clear, both clients must record a false per-source crypt decision before the
-ordinary scheduler emits the exact plaintext request and ACK frames.
+For clear or encrypted transport, both clients must record the corresponding
+per-source crypt decision before the ordinary scheduler emits the exact request
+and ACK frames.
 For queue-full, the exact requester is removed from the responder's real upload
 queue before one exact, expiring queue-pressure prerequisite is armed. The
 ordinary scheduler and production packet path remain responsible for the
@@ -84,24 +85,28 @@ RUST_LOG = (
 SCENARIO_COVERAGE_IDS = {
     "v4": udp_evidence.COVERAGE_ID,
     "clear": udp_evidence.CLEAR_COVERAGE_ID,
+    "encrypted": udp_evidence.ENCRYPTED_COVERAGE_ID,
     "queue-full": udp_evidence.QUEUE_FULL_COVERAGE_ID,
     "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
 }
 SCENARIO_CAMPAIGN_SCHEMAS = {
     "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
     "clear": "emulebb-build-tests.client-udp-clear-campaign.v1",
+    "encrypted": "emulebb-build-tests.client-udp-encrypted-campaign.v1",
     "queue-full": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
     "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
 }
 SCENARIO_REPLY_OPCODES = {
     "v4": udp_evidence.OP_REASKACK,
     "clear": udp_evidence.OP_REASKACK,
+    "encrypted": udp_evidence.OP_REASKACK,
     "queue-full": udp_evidence.OP_QUEUEFULL,
     "file-not-found": udp_evidence.OP_FILENOTFOUND,
 }
 SCENARIO_EVIDENCE_BUILDERS = {
     "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.build_client_udp_clear_diagnostic_evidence,
+    "encrypted": udp_evidence.build_client_udp_encrypted_diagnostic_evidence,
     "queue-full": udp_evidence.build_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.build_client_udp_file_not_found_diagnostic_evidence
@@ -110,24 +115,40 @@ SCENARIO_EVIDENCE_BUILDERS = {
 SCENARIO_EVIDENCE_REQUIREMENTS = {
     "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.require_client_udp_clear_diagnostic_evidence,
+    "encrypted": udp_evidence.require_client_udp_encrypted_diagnostic_evidence,
     "queue-full": udp_evidence.require_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.require_client_udp_file_not_found_diagnostic_evidence
     ),
 }
+SCENARIO_OBFUSCATION = {
+    scenario: scenario == "encrypted" for scenario in SCENARIO_COVERAGE_IDS
+}
+SCENARIO_RAW_EVIDENCE_SCHEMAS = {
+    "clear": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+    "encrypted": udp_evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,
+}
 
 
-def build_clear_raw_evidence(
+def build_ack_raw_evidence(
     *,
+    scenario: str,
     file_hash: str,
     part_count: int,
     transitions: list[udp_evidence.ClientUdpV4Transition],
 ) -> dict[str, object]:
-    """Serialize the complete reducer inputs for independent receipt validation."""
+    """Serialize complete ACK reducer inputs for independent receipt validation."""
+
+    try:
+        schema = SCENARIO_RAW_EVIDENCE_SCHEMAS[scenario]
+    except KeyError as exc:
+        raise ValueError(
+            f"scenario has no raw ACK evidence schema: {scenario!r}"
+        ) from exc
 
     return {
-        "schema": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
-        "scenario": "clear",
+        "schema": schema,
+        "scenario": scenario,
         "fileHash": _canonical_hash(file_hash, field="file_hash"),
         "partCount": part_count,
         "transitions": [
@@ -730,6 +751,7 @@ def start_rust(
     used_ports,
     label,
     enable_reask,
+    obfuscation_enabled,
     diagnostics=False,
     upload_limit_kibps=None,
     base_upload_slots=None,
@@ -755,13 +777,9 @@ def start_rust(
         kad_port=kad_port,
         server_endpoint=server_endpoint,
         enable_udp_reask=enable_reask,
-        # Plaintext locally: the client-UDP reask obfuscation keys on our public
-        # IP, but the ed2k_server lab server reports a fake one (2.0.0.1) that does not
-        # match our LAN IP, so an obfuscated reask can't be deobfuscated by the
-        # peer. Real networks report the true public IP (no mismatch); the
-        # obfuscated path is covered by unit tests. Plaintext isolates the reask
-        # logic for this local cross-client check.
-        obfuscation_enabled=False,
+        # The hairpin server reports each client's actual TEST-NET bind address,
+        # so this selects the production clear or user-hash-keyed UDP path.
+        obfuscation_enabled=obfuscation_enabled,
         local_only_discovery=True,
         upload_limit_kibps=upload_limit_kibps,
         base_upload_slots=base_upload_slots,
@@ -1419,6 +1437,7 @@ def start_mfc(
     p2p_address: str,
     server_address: str,
     ports: dict[str, int],
+    obfuscation_enabled: bool,
     saturate_upload_queue: bool = False,
 ) -> dict[str, object]:
     profile_root = paths.source_artifacts_dir / artifact_label
@@ -1443,8 +1462,8 @@ def start_mfc(
         enable_diagnostic_rest_endpoints=True,
         p2p_bind_interface_name=args.p2p_bind_interface_name,
         p2p_bind_addr=p2p_address,
-        crypt_layer_supported=False,
-        crypt_layer_requested=False,
+        crypt_layer_supported=obfuscation_enabled,
+        crypt_layer_requested=obfuscation_enabled,
         crypt_layer_required=False,
     )
     if saturate_upload_queue:
@@ -1533,6 +1552,7 @@ def run_rust_requester_phase(
     rust_clients: list[RustRuntime] = []
     withdrawn_fixture_path = None
     try:
+        obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
         mfc = start_mfc(
             args=args,
             paths=paths,
@@ -1541,6 +1561,7 @@ def run_rust_requester_phase(
             p2p_address=mfc_responder_ip,
             server_address=server_address,
             ports=ports,
+            obfuscation_enabled=obfuscation_enabled,
             saturate_upload_queue=True,
         )
         dtt.add_emule_shared_file(mfc["baseUrl"], args.api_key, fixture_path)
@@ -1574,6 +1595,7 @@ def run_rust_requester_phase(
                 used_ports=used_ports,
                 label=f"{scenario}-occupier-{index + 1}",
                 enable_reask=False,
+                obfuscation_enabled=obfuscation_enabled,
             )
             for index in range(2)
         ]
@@ -1588,6 +1610,7 @@ def run_rust_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-rust-requester",
             enable_reask=True,
+            obfuscation_enabled=obfuscation_enabled,
             diagnostics=True,
         )
         rust_clients.append(requester)
@@ -1795,6 +1818,7 @@ def run_mfc_requester_phase(
     occupier = None
     withdrawn_fixture_path = None
     try:
+        obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
         uploader = start_rust(
             repo=rust_repo,
             paths=paths,
@@ -1805,6 +1829,7 @@ def run_mfc_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-rust-responder",
             enable_reask=True,
+            obfuscation_enabled=obfuscation_enabled,
             diagnostics=True,
             upload_limit_kibps=4,
             base_upload_slots=1,
@@ -1842,6 +1867,7 @@ def run_mfc_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-responder-occupier",
             enable_reask=False,
+            obfuscation_enabled=obfuscation_enabled,
         )
         occupier_high_id_client = wait_for_server_high_id_client(
             admin_base_url,
@@ -1871,6 +1897,7 @@ def run_mfc_requester_phase(
             p2p_address=p2p_address,
             server_address=server_address,
             ports=ports,
+            obfuscation_enabled=obfuscation_enabled,
         )
         mfc_high_id_client = wait_for_server_high_id_client(
             admin_base_url,
@@ -2114,7 +2141,9 @@ def main(argv: list[str] | None = None) -> int:
             "serverAddress": server_address,
             "mfcResponderAddress": high_id_address,
             "rustPeerAddresses": peer_ips,
-            "transportMode": "plaintext",
+            "transportMode": (
+                "obfuscated" if SCENARIO_OBFUSCATION[args.scenario] else "plaintext"
+            ),
             "publicTraffic": False,
         }
         report["builds"]["ed2kServer"] = {
@@ -2182,13 +2211,15 @@ def main(argv: list[str] | None = None) -> int:
 
         report["currentPhase"] = "causal-evidence"
         transitions = [rust_transition, mfc_transition]
-        if args.scenario == "clear":
+        if args.scenario in SCENARIO_RAW_EVIDENCE_SCHEMAS:
             raw_evidence_path = (
-                paths.source_artifacts_dir / "client-udp-clear-raw-evidence.json"
+                paths.source_artifacts_dir
+                / f"client-udp-{args.scenario}-raw-evidence.json"
             )
             harness_cli_common.write_json_file(
                 raw_evidence_path,
-                build_clear_raw_evidence(
+                build_ack_raw_evidence(
+                    scenario=args.scenario,
                     file_hash=rust_check["fileHash"],
                     part_count=part_count,
                     transitions=transitions,
