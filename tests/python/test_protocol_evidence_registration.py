@@ -18,7 +18,9 @@ from emule_test_harness import server_udp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_source_diagnostic_evidence
 from emule_test_harness import scripted_ed2k_udp_source
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
-from emule_test_harness.protocol_evidence_registration import build_transfer_registration
+from emule_test_harness.protocol_evidence_registration import (
+    build_transfer_registration,
+)
 from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCHEMA
 
 FILE_HASH = "00112233445566778899aabbccddeeff"
@@ -66,7 +68,9 @@ def bilateral_login_evidence(
             "attemptPhases": ["connection"] * len(transport_plan),
             "attemptStates": ["connecting"] * len(transport_plan),
             "attemptStartSequences": (
-                [failed_attempt_sequence, final_attempt_sequence] if fallback else [final_attempt_sequence]
+                [failed_attempt_sequence, final_attempt_sequence]
+                if fallback
+                else [final_attempt_sequence]
             ),
             "attemptTraceIds": [1, 2] if fallback else [2],
             "attemptPlanExact": True,
@@ -80,13 +84,19 @@ def bilateral_login_evidence(
             "deliveryProven": True,
             "sendOutcomeSequence": (7 if fallback else 3) if client == "rust" else None,
             "sendOutcomeTraceId": 2 if client == "rust" else None,
-            "sendOutcomeTransportMode": final_transport_mode if client == "rust" else None,
+            "sendOutcomeTransportMode": final_transport_mode
+            if client == "rust"
+            else None,
             "failedAttemptStartSequence": failed_attempt_sequence,
             "failedAttemptLoginSequence": 2 if fallback and client == "mfc" else None,
             "finalAttemptStartSequence": final_attempt_sequence,
             "loginSequence": login_sequence,
-            "idChangeSequence": (8 if client == "rust" else 7) if fallback else (4 if client == "rust" else 3),
-            "loginAcceptedSequence": (9 if client == "rust" else 8) if fallback else (5 if client == "rust" else 4),
+            "idChangeSequence": (8 if client == "rust" else 7)
+            if fallback
+            else (4 if client == "rust" else 3),
+            "loginAcceptedSequence": (9 if client == "rust" else 8)
+            if fallback
+            else (5 if client == "rust" else 4),
             "loginAcceptedCount": 1,
             "connectionFailureSequence": 3 if fallback else None,
             "transportFallbackSequence": 4 if fallback else None,
@@ -269,9 +279,13 @@ def driven_server_search(
         "searchId": search_id,
     }
     result["displayName" if client == "rust" else "name"] = SEARCH_FILE_NAME
-    created_method = {"requestedMethod": "server"} if client == "rust" else {"method": "server"}
+    created_method = (
+        {"requestedMethod": "server"} if client == "rust" else {"method": "server"}
+    )
     result_method = (
-        {"requestedMethod": "server", "resolvedMethod": "server"} if client == "rust" else {"method": "server"}
+        {"requestedMethod": "server", "resolvedMethod": "server"}
+        if client == "rust"
+        else {"method": "server"}
     )
     return {
         "request": {
@@ -314,9 +328,7 @@ def bilateral_search_evidence(
     variant: str,
     criteria: ed2k_wire.ServerSearchCriteria,
 ) -> dict[str, object]:
-    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
-        variant
-    ]
+    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[variant]
     payload_hex = ed2k_wire.encode_search_request(SEARCH_QUERY, criteria).hex()
     wire_result = {
         "hash": SEARCH_FILE_HASH.upper(),
@@ -461,9 +473,7 @@ def attach_server_search(
     scenario: str = "server-keyword-search",
 ) -> dict[str, object]:
     variant, criteria = server_search_contract(scenario)
-    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
-        variant
-    ]
+    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[variant]
     driven_searches = {
         "rust": driven_server_search("rust", "rust-search-1", criteria),
         "mfc": driven_server_search("mfc", "mfc-search-1", criteria),
@@ -510,9 +520,7 @@ def attach_server_search(
     report["checks"]["client_server_searches"] = driven_searches
     report["checks"]["client_server_search_diagnostics"] = evidence
     report["diagnostics"]["serverSearch"] = evidence
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        coverage_ids
-    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(coverage_ids)
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
 
@@ -619,7 +627,9 @@ def bilateral_server_tcp_metadata_evidence() -> dict[str, object]:
             "eligibleCoverageIds": list(
                 server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
             ),
-            "evidenceLayers": list(server_tcp_metadata_diagnostic_evidence.EVIDENCE_LAYERS),
+            "evidenceLayers": list(
+                server_tcp_metadata_diagnostic_evidence.EVIDENCE_LAYERS
+            ),
         },
         "captures": {
             "rust": {"processId": 101, "selectedSegments": ["rust.jsonl"]},
@@ -674,9 +684,11 @@ def _server_source_records(
     if transport_mode == "obfuscated":
         source_payload += b"\x81" + SERVER_SOURCE_PUBLISHER_HASH
     reply_payload = bytes.fromhex(SERVER_SOURCE_FILE_HASH) + b"\x01" + source_payload
-    request_opcode = server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE_BY_TRANSPORT[
-        transport_mode
-    ]
+    request_opcode = (
+        server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE_BY_TRANSPORT[
+            transport_mode
+        ]
+    )
     reply_opcode = server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE_BY_TRANSPORT[
         transport_mode
     ]
@@ -802,9 +814,7 @@ def _server_source_records(
     return [request, reply, applied]
 
 
-def _write_server_source_segment(
-    path: Path, records: list[dict[str, object]]
-) -> None:
+def _write_server_source_segment(path: Path, records: list[dict[str, object]]) -> None:
     path.write_text(
         "".join(f"{json.dumps(record)}\n" for record in records),
         encoding="utf-8",
@@ -866,19 +876,21 @@ def attach_server_source(
             "sources": 1,
         },
     }
-    evidence = server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
-        expected_file_hash=SERVER_SOURCE_FILE_HASH,
-        expected_file_name=SERVER_SOURCE_FILE_NAME,
-        expected_file_size=SERVER_SOURCE_FILE_SIZE,
-        server_endpoint=endpoint,
-        publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
-        publisher_host=SERVER_SOURCE_PUBLISHER_HOST,
-        publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
-        publisher_user_hash=SERVER_SOURCE_PUBLISHER_HASH.hex(),
-        expected_transport_mode=transport_mode,
-        rust_records=records["rust"],
-        mfc_records=records["mfc"],
-        transfer_rows=transfer_rows,
+    evidence = (
+        server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
+            expected_file_hash=SERVER_SOURCE_FILE_HASH,
+            expected_file_name=SERVER_SOURCE_FILE_NAME,
+            expected_file_size=SERVER_SOURCE_FILE_SIZE,
+            server_endpoint=endpoint,
+            publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
+            publisher_host=SERVER_SOURCE_PUBLISHER_HOST,
+            publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+            publisher_user_hash=SERVER_SOURCE_PUBLISHER_HASH.hex(),
+            expected_transport_mode=transport_mode,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+            transfer_rows=transfer_rows,
+        )
     )
     evidence["captures"] = captures
 
@@ -1060,9 +1072,7 @@ def _server_udp_source_records(
         else ed2k_wire.OP_GLOBGETSOURCES2
     )
     request_opcode_name = (
-        "OP_GLOBGETSOURCES"
-        if source_request_version == 1
-        else "OP_GLOBGETSOURCES2"
+        "OP_GLOBGETSOURCES" if source_request_version == 1 else "OP_GLOBGETSOURCES2"
     )
     request_datagram = (
         ed2k_wire.encode_server_udp_source_v1_request([file_hash])
@@ -1329,8 +1339,7 @@ def attach_server_udp_source(
 
     transcript = _server_udp_source_transcript(source_request_version)
     transcript_path = (
-        run_directory
-        / f"server-udp-source-v{source_request_version}-transcript.json"
+        run_directory / f"server-udp-source-v{source_request_version}-transcript.json"
     )
     transcript_path.write_text(json.dumps(transcript), encoding="utf-8")
     transfer_rows = {
@@ -1434,9 +1443,11 @@ def attach_server_udp_source(
 
 def _udp_tag(tag_id: int, value: str) -> bytes:
     encoded = value.encode()
-    return bytes([0x80 | ed2k_wire.TAGTYPE_STRING, tag_id]) + struct.pack(
-        "<H", len(encoded)
-    ) + encoded
+    return (
+        bytes([0x80 | ed2k_wire.TAGTYPE_STRING, tag_id])
+        + struct.pack("<H", len(encoded))
+        + encoded
+    )
 
 
 def _udp_record(
@@ -1773,7 +1784,12 @@ def attach_server_udp_metadata(
 
 def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     output_root = tmp_path / "output"
-    run = output_root / "reports" / "deterministic-two-client-transfer" / "20261101T183823Z-test"
+    run = (
+        output_root
+        / "reports"
+        / "deterministic-two-client-transfer"
+        / "20261101T183823Z-test"
+    )
     fixture_path = run / "client2-shared" / "fixture.bin"
     delivered_path = run / "profiles" / "rust" / "incoming" / "fixture.bin"
     fixture_path.parent.mkdir(parents=True)
@@ -1917,7 +1933,9 @@ def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]
     return report_path, output_root, report
 
 
-def test_build_transfer_registration_accepts_only_causally_claimed_ids(tmp_path: Path) -> None:
+def test_build_transfer_registration_accepts_only_causally_claimed_ids(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, _ = write_transfer_report(tmp_path)
 
     registration = build_transfer_registration(report_path, output_root=output_root)
@@ -1944,14 +1962,18 @@ def test_build_transfer_registration_accepts_only_causally_claimed_ids(tmp_path:
 
 def test_build_transfer_registration_rejects_coverage_overclaim(tmp_path: Path) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
-    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append("queue.rank-transition")
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        "queue.rank-transition"
+    )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="claims do not match"):
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_path: Path) -> None:
+def test_build_transfer_registration_accepts_hash_only_metadata_recovery(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     report["transfer_scenario"] = "hash-only-metadata-recovery"
     report["diagnostics"]["metadataRecoveryRequired"] = True
@@ -1973,7 +1995,10 @@ def test_build_transfer_registration_accepts_hash_only_metadata_recovery(tmp_pat
 
     registration = build_transfer_registration(report_path, output_root=output_root)
 
-    assert "peer.startup.metadata-recovery" in registration["evidenceReceipt"]["coverageIds"]
+    assert (
+        "peer.startup.metadata-recovery"
+        in registration["evidenceReceipt"]["coverageIds"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -2004,7 +2029,9 @@ def test_build_transfer_registration_accepts_bilateral_server_login(
     ]
 
 
-def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_one_sided_server_login(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence()
     login["clients"]["mfc"]["ok"] = False
@@ -2015,7 +2042,9 @@ def test_build_transfer_registration_rejects_one_sided_server_login(tmp_path: Pa
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_revalidates_final_trace_components(tmp_path: Path) -> None:
+def test_build_transfer_registration_revalidates_final_trace_components(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     plan = ("obfuscated", "plaintext")
     login = bilateral_login_evidence(plan)
@@ -2054,7 +2083,9 @@ def test_build_transfer_registration_joins_singular_attempt_to_final_trace(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_boolean_login_count(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_boolean_login_count(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence(("plaintext",))
     login["clients"]["rust"]["finalLoginPacketCount"] = True
@@ -2065,7 +2096,9 @@ def test_build_transfer_registration_rejects_boolean_login_count(tmp_path: Path)
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_duplicate_acceptance_count(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_duplicate_acceptance_count(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence(("plaintext",))
     login["clients"]["rust"]["loginAcceptedCount"] = 2
@@ -2091,7 +2124,9 @@ def test_build_transfer_registration_rejects_wrong_failed_attempt_login_count(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_revalidates_failed_login_trace(tmp_path: Path) -> None:
+def test_build_transfer_registration_revalidates_failed_login_trace(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     plan = ("obfuscated", "plaintext")
     login = bilateral_login_evidence(plan)
@@ -2103,7 +2138,9 @@ def test_build_transfer_registration_revalidates_failed_login_trace(tmp_path: Pa
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_revalidates_rust_send_outcome(tmp_path: Path) -> None:
+def test_build_transfer_registration_revalidates_rust_send_outcome(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence(("plaintext",))
     login["clients"]["rust"]["sendOutcomeTraceId"] = 99
@@ -2114,7 +2151,9 @@ def test_build_transfer_registration_revalidates_rust_send_outcome(tmp_path: Pat
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_late_rust_send_outcome(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_late_rust_send_outcome(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence(("plaintext",))
     login["clients"]["rust"]["sendOutcomeSequence"] = 6
@@ -2125,7 +2164,9 @@ def test_build_transfer_registration_rejects_late_rust_send_outcome(tmp_path: Pa
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_malformed_attempt_shape(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_malformed_attempt_shape(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     login = bilateral_login_evidence(("plaintext",))
     login["clients"]["rust"]["attemptPhases"] = ["malformed"]
@@ -2177,7 +2218,9 @@ def test_build_transfer_registration_rejects_retired_server_login_mode_field(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_path: Path) -> None:
+def test_build_transfer_registration_accepts_exact_server_keyword_search(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     attach_server_search(report)
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -2249,7 +2292,9 @@ def test_build_transfer_registration_rejects_legacy_server_search_schema(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     evidence = attach_server_search(report)
-    evidence["schema"] = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
+    evidence["schema"] = (
+        "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
+    )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected schema"):
@@ -2273,7 +2318,9 @@ def test_build_transfer_registration_joins_search_result_to_neutral_publisher(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     attach_server_search(report)
-    report["server_search_fixture"]["publication"]["search_result"]["result_source_id"] = 99
+    report["server_search_fixture"]["publication"]["search_result"][
+        "result_source_id"
+    ] = 99
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="not joined to the neutral publisher"):
@@ -2357,7 +2404,9 @@ def test_build_transfer_registration_rejects_wire_rest_source_mismatch_even_when
         driven["result"]["completeSources"] = 0
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="wire result is not joined to its applied REST result"):
+    with pytest.raises(
+        ValueError, match="wire result is not joined to its applied REST result"
+    ):
         build_transfer_registration(report_path, output_root=output_root)
 
 
@@ -2467,7 +2516,9 @@ def test_build_transfer_registration_accepts_exact_server_tcp_metadata(
         if row["coverageId"]
         in server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     }
-    assert set(rows) == set(server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
+    assert set(rows) == set(
+        server_tcp_metadata_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
     assert "per-client dynamic counts" in rows["server.reply.tcp-status"]["reason"]
 
 
@@ -2487,7 +2538,9 @@ def test_build_transfer_registration_rejects_legacy_tcp_metadata_schema(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     evidence = attach_server_tcp_metadata(report)
-    evidence["schema"] = "emulebb-build-tests.deterministic-server-tcp-metadata-diagnostics.v0"
+    evidence["schema"] = (
+        "emulebb-build-tests.deterministic-server-tcp-metadata-diagnostics.v0"
+    )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected schema"):
@@ -2523,7 +2576,9 @@ def test_build_transfer_registration_rejects_tcp_metadata_raw_rest_drift(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     attach_server_tcp_metadata(report)
-    report["checks"]["client_server_tcp_metadata_rest"]["mfc"]["serverEntity"]["files"] = 999
+    report["checks"]["client_server_tcp_metadata_rest"]["mfc"]["serverEntity"][
+        "files"
+    ] = 999
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="raw REST server entity does not match"):
@@ -2591,8 +2646,7 @@ def test_build_transfer_registration_accepts_exact_server_tcp_source(
     reasons = {
         row["coverageId"]: row["reason"]
         for row in registration["coverageEvidence"]
-        if row["coverageId"]
-        in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        if row["coverageId"] in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
     }
     assert "singular HighID source" in reasons["server.reply.sources"]
     assert "plaintext GETSOURCES" in reasons["server.source.tcp-plain"]
@@ -2613,12 +2667,11 @@ def test_build_transfer_registration_accepts_obfuscated_server_tcp_source(
 
     registration = build_transfer_registration(report_path, output_root=output_root)
 
-    assert "server.source.tcp-obfuscated" in registration["evidenceReceipt"][
-        "coverageIds"
-    ]
+    assert (
+        "server.source.tcp-obfuscated" in registration["evidenceReceipt"]["coverageIds"]
+    )
     reasons = {
-        row["coverageId"]: row["reason"]
-        for row in registration["coverageEvidence"]
+        row["coverageId"]: row["reason"] for row in registration["coverageEvidence"]
     }
     assert "obfuscated GETSOURCES" in reasons["server.source.tcp-obfuscated"]
 
@@ -2699,7 +2752,9 @@ def test_build_transfer_registration_rejects_legacy_server_source_schema(
         run_directory=report_path.parent,
         monkeypatch=monkeypatch,
     )
-    evidence["schema"] = "emulebb-build-tests.deterministic-server-source-diagnostics.v0"
+    evidence["schema"] = (
+        "emulebb-build-tests.deterministic-server-source-diagnostics.v0"
+    )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected schema"):
@@ -2717,7 +2772,9 @@ def test_build_transfer_registration_rejects_legacy_server_source_segment(
         monkeypatch=monkeypatch,
     )
     segment = Path(evidence["captures"]["rust"]["selectedSegments"][0])
-    rows = [json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()]
+    rows = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
     rows[0]["schema"] = "diag_event_v1"
     _write_server_source_segment(segment, rows)
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -2798,12 +2855,11 @@ def test_build_transfer_registration_accepts_exact_server_udp_source_version(
         "transfer.block.uncompressed",
     ]
     reasons = {
-        row["coverageId"]: row["reason"]
-        for row in registration["coverageEvidence"]
+        row["coverageId"]: row["reason"] for row in registration["coverageEvidence"]
     }
-    assert request_opcode_name in reasons[
-        f"server.source.udp-v{source_request_version}"
-    ]
+    assert (
+        request_opcode_name in reasons[f"server.source.udp-v{source_request_version}"]
+    )
     assert "UDP HighID source" in reasons["server.reply.sources"]
 
 
@@ -2916,7 +2972,9 @@ def test_build_transfer_registration_rejects_legacy_udp_source_v1_segment(
         source_request_version=1,
     )
     segment = Path(evidence["captures"]["rust"]["selectedSegments"][0])
-    rows = [json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()]
+    rows = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
     rows[0]["schema"] = "diag_event_v1"
     _write_server_source_segment(segment, rows)
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -3247,7 +3305,9 @@ def test_build_transfer_registration_rejects_legacy_udp_metadata_schema(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     evidence = attach_server_udp_metadata(report, run_directory=report_path.parent)
-    evidence["schema"] = "emulebb-build-tests.deterministic-server-udp-metadata-diagnostics.v0"
+    evidence["schema"] = (
+        "emulebb-build-tests.deterministic-server-udp-metadata-diagnostics.v0"
+    )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected schema"):
@@ -3292,9 +3352,13 @@ def test_build_transfer_registration_rejects_udp_topology_drift(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_mutated_delivered_file(tmp_path: Path) -> None:
+def test_build_transfer_registration_rejects_mutated_delivered_file(
+    tmp_path: Path,
+) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
-    delivered = Path(report["checks"]["client1_transfer_completed_file"]["deliveredPath"])
+    delivered = Path(
+        report["checks"]["client1_transfer_completed_file"]["deliveredPath"]
+    )
     delivered.write_bytes(b"mutated transfer fixture")
 
     with pytest.raises(ValueError, match="delivered file bytes"):

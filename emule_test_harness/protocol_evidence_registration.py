@@ -176,7 +176,9 @@ def _path_within(value: Any, root: Path, field: str) -> Path:
         raise ValueError(f"{field} must be a non-empty path")
     path = Path(value).resolve()
     if not path.is_relative_to(root) or not path.is_file():
-        raise ValueError(f"{field} must resolve to a file under the immutable run directory")
+        raise ValueError(
+            f"{field} must resolve to a file under the immutable run directory"
+        )
     return path
 
 
@@ -185,12 +187,18 @@ def _directory_within(value: Any, root: Path, field: str) -> Path:
         raise ValueError(f"{field} must be a non-empty path")
     path = Path(value).resolve()
     if not path.is_relative_to(root) or not path.is_dir():
-        raise ValueError(f"{field} must resolve to a directory under the immutable run directory")
+        raise ValueError(
+            f"{field} must resolve to a directory under the immutable run directory"
+        )
     return path
 
 
 def _profile_by_client_key(profiles: dict[str, Any], client_key: str) -> dict[str, Any]:
-    matches = [row for row in profiles.values() if isinstance(row, dict) and row.get("client_key") == client_key]
+    matches = [
+        row
+        for row in profiles.values()
+        if isinstance(row, dict) and row.get("client_key") == client_key
+    ]
     if len(matches) != 1:
         raise ValueError(f"profiles must contain exactly one {client_key} subject")
     return matches[0]
@@ -199,18 +207,29 @@ def _profile_by_client_key(profiles: dict[str, Any], client_key: str) -> dict[st
 def _exact_wire_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
     wire_checks = _object(diagnostics.get("wireChecks"), "diagnostics.wireChecks")
     check = _object(wire_checks.get(name), f"diagnostics.wireChecks.{name}")
-    matched = _positive_int(check.get("matchedFrameCount"), f"diagnostics.wireChecks.{name}.matchedFrameCount")
+    matched = _positive_int(
+        check.get("matchedFrameCount"),
+        f"diagnostics.wireChecks.{name}.matchedFrameCount",
+    )
     if check.get("ok") is not True:
         raise ValueError(f"diagnostics.wireChecks.{name} is not green")
-    if check.get("leftFrameCount") != matched or check.get("rightFrameCount") != matched:
+    if (
+        check.get("leftFrameCount") != matched
+        or check.get("rightFrameCount") != matched
+    ):
         raise ValueError(f"diagnostics.wireChecks.{name} is not an exact frame match")
-    if check.get("unmatchedLeftFrameCount") != 0 or check.get("unmatchedRightFrameCount") != 0:
+    if (
+        check.get("unmatchedLeftFrameCount") != 0
+        or check.get("unmatchedRightFrameCount") != 0
+    ):
         raise ValueError(f"diagnostics.wireChecks.{name} contains unmatched frames")
     return check
 
 
 def _exact_startup_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
-    startup_checks = _object(diagnostics.get("startupChecks"), "diagnostics.startupChecks")
+    startup_checks = _object(
+        diagnostics.get("startupChecks"), "diagnostics.startupChecks"
+    )
     check = _object(startup_checks.get(name), f"diagnostics.startupChecks.{name}")
     matched = _positive_int(
         check.get("matchedFrameCount"),
@@ -218,15 +237,25 @@ def _exact_startup_check(diagnostics: dict[str, Any], name: str) -> dict[str, An
     )
     if check.get("ok") is not True:
         raise ValueError(f"diagnostics.startupChecks.{name} is not green")
-    if check.get("leftFrameCount") != matched or check.get("rightFrameCount") != matched:
-        raise ValueError(f"diagnostics.startupChecks.{name} is not an exact frame match")
-    if check.get("unmatchedLeftFrameCount") != 0 or check.get("unmatchedRightFrameCount") != 0:
+    if (
+        check.get("leftFrameCount") != matched
+        or check.get("rightFrameCount") != matched
+    ):
+        raise ValueError(
+            f"diagnostics.startupChecks.{name} is not an exact frame match"
+        )
+    if (
+        check.get("unmatchedLeftFrameCount") != 0
+        or check.get("unmatchedRightFrameCount") != 0
+    ):
         raise ValueError(f"diagnostics.startupChecks.{name} contains unmatched frames")
     return check
 
 
 def _green_startup_check(diagnostics: dict[str, Any], name: str) -> dict[str, Any]:
-    startup_checks = _object(diagnostics.get("startupChecks"), "diagnostics.startupChecks")
+    startup_checks = _object(
+        diagnostics.get("startupChecks"), "diagnostics.startupChecks"
+    )
     check = _object(startup_checks.get(name), f"diagnostics.startupChecks.{name}")
     if check.get("ok") is not True:
         raise ValueError(f"diagnostics.startupChecks.{name} is not green")
@@ -247,15 +276,23 @@ def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
         manifest.get("checks"),
         "diagnostics.startupChecks.persistedManifest.checks",
     )
-    if not manifest_checks or any(value is not True for value in manifest_checks.values()):
+    if not manifest_checks or any(
+        value is not True for value in manifest_checks.values()
+    ):
         raise ValueError("diagnostics startup manifest checks are not all green")
     _positive_int(manifest.get("md4HashsetCount"), "persisted MD4 hashset count")
     _positive_int(manifest.get("aichHashsetCount"), "persisted AICH hashset count")
     _exact_wire_check(diagnostics, "requestFrames")
     payload = _exact_wire_check(diagnostics, "payloadFrames")
     opcodes = payload.get("opcodes")
-    if not isinstance(opcodes, list) or not opcodes or not all(isinstance(value, str) for value in opcodes):
-        raise ValueError("diagnostics.wireChecks.payloadFrames.opcodes must be a non-empty string list")
+    if (
+        not isinstance(opcodes, list)
+        or not opcodes
+        or not all(isinstance(value, str) for value in opcodes)
+    ):
+        raise ValueError(
+            "diagnostics.wireChecks.payloadFrames.opcodes must be a non-empty string list"
+        )
     observed = set(opcodes)
     coverage_ids = [
         "peer.startup.aich",
@@ -267,7 +304,10 @@ def _derived_transfer_coverage_ids(diagnostics: dict[str, Any]) -> list[str]:
             diagnostics.get("metadataRecovery"),
             "diagnostics.metadataRecovery",
         )
-        if metadata_recovery.get("ok") is not True or metadata_recovery.get("sourceMatch") is not True:
+        if (
+            metadata_recovery.get("ok") is not True
+            or metadata_recovery.get("sourceMatch") is not True
+        ):
             raise ValueError("diagnostics metadata recovery is not green")
         coverage_ids.append("peer.startup.metadata-recovery")
     if observed.intersection(transfer_diagnostic_evidence.UNCOMPRESSED_PAYLOAD_OPCODES):
@@ -300,7 +340,9 @@ def _derived_server_search_coverage_ids(
     expected_ids = list(
         server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[variant]
     )
-    claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
+    claims = _object(
+        search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims"
+    )
     if search.get("observedCoverageIds") != expected_ids:
         raise ValueError("server search diagnostic observations are not exact")
     if claims.get("eligibleCoverageIds") != expected_ids:
@@ -310,7 +352,9 @@ def _derived_server_search_coverage_ids(
 
     checks = _object(report.get("checks"), "checks")
     if checks.get("client_server_search_diagnostics") != search:
-        raise ValueError("server search diagnostics do not match the pre-transfer snapshot")
+        raise ValueError(
+            "server search diagnostics do not match the pre-transfer snapshot"
+        )
 
     fixture = _object(report.get("server_search_fixture"), "server_search_fixture")
     fixture_hash = _lower_hex(
@@ -338,13 +382,16 @@ def _derived_server_search_coverage_ids(
         "size": fixture_size,
     }
     if search.get("expectedFile") != expected_file:
-        raise ValueError("server search expected file does not match server_search_fixture")
+        raise ValueError(
+            "server search expected file does not match server_search_fixture"
+        )
     transfer_fixture = _object(report.get("fixture"), "fixture")
-    if (
-        fixture_hash == str(diagnostics.get("fileHash") or "").casefold()
-        or fixture_name == transfer_fixture.get("name")
-    ):
-        raise ValueError("server search fixture is not isolated from the MFC transfer fixture")
+    if fixture_hash == str(
+        diagnostics.get("fileHash") or ""
+    ).casefold() or fixture_name == transfer_fixture.get("name"):
+        raise ValueError(
+            "server search fixture is not isolated from the MFC transfer fixture"
+        )
 
     def require_fixture_row(value: Any, field: str) -> dict[str, Any]:
         row = _object(value, field)
@@ -364,38 +411,56 @@ def _derived_server_search_coverage_ids(
         fixture.get("publication"),
         "server_search_fixture.publication",
     )
-    if publication.get("indexed") is not True or publication.get("requested_size") != fixture_size:
-        raise ValueError("server_search_fixture publication is not an exact indexed observation")
+    if (
+        publication.get("indexed") is not True
+        or publication.get("requested_size") != fixture_size
+    ):
+        raise ValueError(
+            "server_search_fixture publication is not an exact indexed observation"
+        )
     publication_result = require_fixture_row(
         publication.get("search_result"),
         "server_search_fixture.publication.search_result",
     )
     publisher = _object(fixture.get("publisher"), "server_search_fixture.publisher")
     if not isinstance(publisher.get("nickname"), str) or not publisher["nickname"]:
-        raise ValueError("server_search_fixture.publisher.nickname must be a non-empty string")
+        raise ValueError(
+            "server_search_fixture.publisher.nickname must be a non-empty string"
+        )
     publisher_port = _positive_int(
         publisher.get("tcpPort"),
         "server_search_fixture.publisher.tcpPort",
     )
-    publisher_login = _object(publisher.get("login"), "server_search_fixture.publisher.login")
+    publisher_login = _object(
+        publisher.get("login"), "server_search_fixture.publisher.login"
+    )
     publisher_id = _positive_int(
         publisher_login.get("assigned_id"),
         "server_search_fixture.publisher.login.assigned_id",
     )
-    expected_id_kind = "low-id" if publisher_id < ed2k_wire.LOW_ID_CEILING else "high-id"
+    expected_id_kind = (
+        "low-id" if publisher_id < ed2k_wire.LOW_ID_CEILING else "high-id"
+    )
     if publisher_login.get("id_kind") != expected_id_kind:
         raise ValueError("server search publisher login ID class is inconsistent")
     if (
         publication_result.get("result_source_id") != publisher_id
         or publication_result.get("result_source_port") != publisher_port
     ):
-        raise ValueError("server search publication is not joined to the neutral publisher")
+        raise ValueError(
+            "server search publication is not joined to the neutral publisher"
+        )
     publication_source = _object(
         publication.get("search_source"),
         "server_search_fixture.publication.search_source",
     )
-    if publication_source.get("id") != publisher_id or publication_source.get("port") != publisher_port:
-        raise ValueError("server search publication source reference is not the neutral publisher")
+    if (
+        publication_source.get("id") != publisher_id
+        or publication_source.get("port") != publisher_port
+    ):
+        raise ValueError(
+            "server search publication source reference is not the neutral publisher"
+        )
     if publication.get("hash") is None:
         raise ValueError("server_search_fixture publication has no hash")
 
@@ -403,7 +468,9 @@ def _derived_server_search_coverage_ids(
     ports = _object(network.get("ports"), "network.ports")
     server_port = _positive_int(ports.get("ed2k_tcp"), "network.ports.ed2k_tcp")
     if ports.get("search_publisher_tcp") != publisher_port:
-        raise ValueError("server search publisher port does not match network provenance")
+        raise ValueError(
+            "server search publisher port does not match network provenance"
+        )
     server_address = network.get("ed2k_server_address")
     if not isinstance(server_address, str) or not server_address:
         raise ValueError("network.ed2k_server_address must be a non-empty string")
@@ -463,7 +530,9 @@ def _derived_server_search_coverage_ids(
         )
         items = final_search.get("items")
         if not isinstance(items, list) or len(items) != 1 or items[0] != result:
-            raise ValueError(f"{client} driven server search does not contain one exact result")
+            raise ValueError(
+                f"{client} driven server search does not contain one exact result"
+            )
         require_fixture_row(
             items[0],
             f"checks.client_server_searches.{client}.search.items[0]",
@@ -493,7 +562,9 @@ def _derived_server_search_coverage_ids(
             and "resolvedMethod" not in created
             and "resolvedMethod" not in final_search
         )
-        if not common_rest_exact or not (rust_method_exact if client == "rust" else mfc_method_exact):
+        if not common_rest_exact or not (
+            rust_method_exact if client == "rust" else mfc_method_exact
+        ):
             raise ValueError(f"{client} driven server search is not exact")
 
         client_evidence = _object(
@@ -528,7 +599,9 @@ def _derived_server_search_coverage_ids(
             or rest.get("exactResultCount") != 1
             or rest_result != result
         ):
-            raise ValueError(f"{client} REST search evidence is not joined to the driven search")
+            raise ValueError(
+                f"{client} REST search evidence is not joined to the driven search"
+            )
 
         wire = _object(
             client_evidence.get("wire"),
@@ -564,7 +637,9 @@ def _derived_server_search_coverage_ids(
             or request.get("payloadHex") != expected_payload_hex
             or request.get("transportMode") != "obfuscated"
         ):
-            raise ValueError(f"{client} server search request is not singular and exact")
+            raise ValueError(
+                f"{client} server search request is not singular and exact"
+            )
         exact_row = require_fixture_row(
             reply.get("exactRow"),
             f"diagnostics.serverSearch.clients.{client}.wire.reply.exactRow",
@@ -573,7 +648,9 @@ def _derived_server_search_coverage_ids(
             exact_row.get("result_source_id") != publisher_id
             or exact_row.get("result_source_port") != publisher_port
         ):
-            raise ValueError(f"{client} server search reply is not sourced by the neutral publisher")
+            raise ValueError(
+                f"{client} server search reply is not sourced by the neutral publisher"
+            )
         if (
             reply.get("ok") is not True
             or reply.get("endpointResponseCount") != 1
@@ -684,14 +761,18 @@ def _derived_server_search_coverage_ids(
             client_evidence.get("wireRestEqual") is not True
             or comparable_wire_rest_row != comparable_rest_rows[client]
         ):
-            raise ValueError(f"{client} wire result is not joined to its applied REST result")
+            raise ValueError(
+                f"{client} wire result is not joined to its applied REST result"
+            )
         request_payloads[client] = request["payloadHex"]
         transport_modes[client] = (
             request.get("transportMode"),
             reply.get("transportMode"),
         )
 
-    comparison = _object(search.get("comparison"), "diagnostics.serverSearch.comparison")
+    comparison = _object(
+        search.get("comparison"), "diagnostics.serverSearch.comparison"
+    )
     comparison_fields = {
         "ok",
         "requestPayloadEqual",
@@ -701,7 +782,9 @@ def _derived_server_search_coverage_ids(
         "rustWireRestEqual",
         "mfcWireRestEqual",
     }
-    if set(comparison) != comparison_fields or any(comparison.get(field) is not True for field in comparison_fields):
+    if set(comparison) != comparison_fields or any(
+        comparison.get(field) is not True for field in comparison_fields
+    ):
         raise ValueError("bilateral server search comparison is not exact")
     if (
         request_payloads["rust"] != request_payloads["mfc"]
@@ -787,7 +870,9 @@ def _load_server_source_capture(
         process_id != final_process_id
         or diagnostics_dir != final_diagnostics_dir
         or any(not path.is_relative_to(diagnostics_dir) for path in segments)
-        or any(not path.is_relative_to(final_diagnostics_dir) for path in final_segments)
+        or any(
+            not path.is_relative_to(final_diagnostics_dir) for path in final_segments
+        )
         or not set(segments).issubset(final_segments)
     ):
         raise ValueError(f"{field} capture does not match the final process selection")
@@ -868,9 +953,13 @@ def _derived_server_source_coverage_ids(
         ed2k_protocol_cases.PROTOCOL_CASE_MAP[case_name]
     )
     if protocol_case != canonical_case:
-        raise ValueError("server source protocol case is not the exact canonical surface")
+        raise ValueError(
+            "server source protocol case is not the exact canonical surface"
+        )
     if source.get("transportMode") != expected_transport_mode:
-        raise ValueError("server source diagnostics do not match the selected server transport")
+        raise ValueError(
+            "server source diagnostics do not match the selected server transport"
+        )
     expected_publisher_server_flags = (
         docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
         if expected_transport_mode == "obfuscated"
@@ -908,9 +997,13 @@ def _derived_server_source_coverage_ids(
         "server source publisher TCP port",
     )
     try:
-        publisher_host = str(ipaddress.IPv4Address(str(publisher_client.get("ip") or "")))
+        publisher_host = str(
+            ipaddress.IPv4Address(str(publisher_client.get("ip") or ""))
+        )
     except ipaddress.AddressValueError as exc:
-        raise ValueError("server source publisher has no canonical IPv4 identity") from exc
+        raise ValueError(
+            "server source publisher has no canonical IPv4 identity"
+        ) from exc
     encoded_publisher_id = int.from_bytes(
         ipaddress.IPv4Address(publisher_host).packed,
         "little",
@@ -971,9 +1064,7 @@ def _derived_server_source_coverage_ids(
         and row.get("opcode") == ed2k_wire.OP_LOGINREQUEST
     ]
     exact_login_frames = [
-        row
-        for row in login_frames
-        if row.get("payloadHex") == login_payload
+        row for row in login_frames if row.get("payloadHex") == login_payload
     ]
     offer_frames = [
         row
@@ -984,9 +1075,7 @@ def _derived_server_source_coverage_ids(
         and row.get("opcode") == ed2k_wire.OP_OFFERFILES
     ]
     exact_offer_frames = [
-        row
-        for row in offer_frames
-        if row.get("payloadHex") == offer_payload
+        row for row in offer_frames if row.get("payloadHex") == offer_payload
     ]
     runtime_network = _object(report.get("network"), "network")
     runtime_ports = _object(runtime_network.get("ports"), "network.ports")
@@ -1085,7 +1174,9 @@ def _derived_server_source_coverage_ids(
         or publication_result.get("result_source_id") != publisher_id
         or publication_result.get("result_source_port") != publisher_port
     ):
-        raise ValueError("server source publication is not joined to the exact HighID publisher")
+        raise ValueError(
+            "server source publication is not joined to the exact HighID publisher"
+        )
 
     network = _object(report.get("network"), "network")
     ports = _object(network.get("ports"), "network.ports")
@@ -1120,13 +1211,17 @@ def _derived_server_source_coverage_ids(
         "name": SERVER_SOURCE_FILE_NAME,
         "sizeBytes": SERVER_SOURCE_FILE_SIZE,
     }:
-        raise ValueError("server source stimulus is not the exact source-free eD2K link")
+        raise ValueError(
+            "server source stimulus is not the exact source-free eD2K link"
+        )
     transfer_rows = _object(
         checks.get("client_server_source_transfers"),
         "checks.client_server_source_transfers",
     )
     if set(transfer_rows) != {"rust", "mfc"}:
-        raise ValueError("server source transfer rows must contain exactly rust and mfc")
+        raise ValueError(
+            "server source transfer rows must contain exactly rust and mfc"
+        )
 
     captures = _object(source.get("captures"), "diagnostics.serverSource.captures")
     final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
@@ -1145,11 +1240,12 @@ def _derived_server_source_coverage_ids(
         checks.get("mfc_diagnostics_shutdown"),
         "checks.mfc_diagnostics_shutdown",
     )
-    if (
-        mfc_shutdown.get("ok") is not True
-        or mfc_shutdown.get("processId") != captures["mfc"].get("processId")
-    ):
-        raise ValueError("server source MFC capture is not joined to the stopped oracle process")
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
+        raise ValueError(
+            "server source MFC capture is not joined to the stopped oracle process"
+        )
 
     rebuilt = server_source_diagnostic_evidence.build_server_source_diagnostic_evidence(
         expected_file_hash=SERVER_SOURCE_FILE_HASH,
@@ -1328,10 +1424,7 @@ def _derived_server_udp_source_version_coverage_ids(
         raise ValueError(f"{context} stimulus is not the exact source-free link")
 
     transcript_path = _path_within(
-        str(
-            run_directory
-            / SERVER_UDP_SOURCE_TRANSCRIPTS[source_request_version]
-        ),
+        str(run_directory / SERVER_UDP_SOURCE_TRANSCRIPTS[source_request_version]),
         run_directory,
         f"{context} transcript",
     )
@@ -1344,9 +1437,7 @@ def _derived_server_udp_source_version_coverage_ids(
         target_key,
     )
     if persisted_transcript != target:
-        raise ValueError(
-            f"{context} report does not match its immutable transcript"
-        )
+        raise ValueError(f"{context} report does not match its immutable transcript")
     target_source = _object(target.get("source"), f"{target_key}.source")
     target_events = target.get("events")
     expected_target_keys = {
@@ -1363,9 +1454,7 @@ def _derived_server_udp_source_version_coverage_ids(
     if source_request_version == 2:
         expected_target_keys.add("fileSize")
         expected_transcript_schema = scripted_ed2k_udp_source.V2_TRANSCRIPT_SCHEMA
-        expected_udp_flags |= (
-            scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES2
-        )
+        expected_udp_flags |= scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES2
     if (
         set(target) != expected_target_keys
         or target.get("schema") != expected_transcript_schema
@@ -1402,13 +1491,17 @@ def _derived_server_udp_source_version_coverage_ids(
         checks.get(f"server_udp_source_v{source_request_version}_capabilities"),
         f"checks.server_udp_source_v{source_request_version}_capabilities",
     )
-    if capabilities != {
-        "ok": True,
-        "expectedClients": 2,
-        "distinctClientCount": 2,
-        "peers": status_peers,
-        "udpFlags": expected_udp_flags,
-    } or len(status_peers) != 2:
+    if (
+        capabilities
+        != {
+            "ok": True,
+            "expectedClients": 2,
+            "distinctClientCount": 2,
+            "peers": status_peers,
+            "udpFlags": expected_udp_flags,
+        }
+        or len(status_peers) != 2
+    ):
         raise ValueError(f"{context} capability receipt is not bilateral")
 
     transfer_rows = _object(
@@ -1438,10 +1531,9 @@ def _derived_server_udp_source_version_coverage_ids(
         checks.get("mfc_diagnostics_shutdown"),
         "checks.mfc_diagnostics_shutdown",
     )
-    if (
-        mfc_shutdown.get("ok") is not True
-        or mfc_shutdown.get("processId") != captures["mfc"].get("processId")
-    ):
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
         raise ValueError(
             f"{context} capture is not joined to the stopped oracle process"
         )
@@ -1466,8 +1558,7 @@ def _derived_server_udp_source_version_coverage_ids(
     if rebuilt != retained_without_capture:
         difference = _first_difference(rebuilt, retained_without_capture)
         raise ValueError(
-            f"{context} receipt does not match its immutable evidence at "
-            f"{difference}"
+            f"{context} receipt does not match its immutable evidence at {difference}"
         )
     return expected_ids
 
@@ -1524,19 +1615,31 @@ def _derived_server_tcp_metadata_coverage_ids(
 
     checks = _object(report.get("checks"), "checks")
     if checks.get("client_server_tcp_metadata_diagnostics") != metadata:
-        raise ValueError("server TCP metadata diagnostics do not match the pre-transfer snapshot")
+        raise ValueError(
+            "server TCP metadata diagnostics do not match the pre-transfer snapshot"
+        )
 
     endpoint = metadata.get("serverEndpoint")
     if not isinstance(endpoint, str) or endpoint.count(":") != 1:
-        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port")
+        raise ValueError(
+            "server TCP metadata endpoint must be canonical IPv4 host:port"
+        )
     host, port_text = endpoint.rsplit(":", 1)
     try:
         canonical_host = str(ipaddress.IPv4Address(host))
         endpoint_port = int(port_text)
     except (ipaddress.AddressValueError, ValueError) as exc:
-        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port") from exc
-    if canonical_host != host or not 1 <= endpoint_port <= 65535 or str(endpoint_port) != port_text:
-        raise ValueError("server TCP metadata endpoint must be canonical IPv4 host:port")
+        raise ValueError(
+            "server TCP metadata endpoint must be canonical IPv4 host:port"
+        ) from exc
+    if (
+        canonical_host != host
+        or not 1 <= endpoint_port <= 65535
+        or str(endpoint_port) != port_text
+    ):
+        raise ValueError(
+            "server TCP metadata endpoint must be canonical IPv4 host:port"
+        )
     if metadata.get("seedName") != SERVER_METADATA_SEED_NAME:
         raise ValueError("server TCP metadata seed name is not canonical")
     expected_ident = {
@@ -1548,13 +1651,17 @@ def _derived_server_tcp_metadata_coverage_ids(
 
     clients = _object(metadata.get("clients"), "diagnostics.serverTcpMetadata.clients")
     if set(clients) != {"rust", "mfc"}:
-        raise ValueError("server TCP metadata clients must contain exactly rust and mfc")
+        raise ValueError(
+            "server TCP metadata clients must contain exactly rust and mfc"
+        )
     raw_rest = _object(
         checks.get("client_server_tcp_metadata_rest"),
         "checks.client_server_tcp_metadata_rest",
     )
     if set(raw_rest) != {"rust", "mfc"}:
-        raise ValueError("server TCP metadata REST snapshots must contain exactly rust and mfc")
+        raise ValueError(
+            "server TCP metadata REST snapshots must contain exactly rust and mfc"
+        )
 
     ident_rows: dict[str, dict[str, Any]] = {}
     transport_rows: dict[str, list[str]] = {}
@@ -1581,7 +1688,12 @@ def _derived_server_tcp_metadata_coverage_ids(
             raise ValueError(f"{client} server TCP metadata wire row is not exact")
         _positive_int(wire.get("traceId"), f"{prefix}.wire.traceId")
         packet_counts = _object(wire.get("packetCounts"), f"{prefix}.wire.packetCounts")
-        if packet_counts != {"idChange": 1, "getServerList": 1, "status": 1, "ident": 1}:
+        if packet_counts != {
+            "idChange": 1,
+            "getServerList": 1,
+            "status": 1,
+            "ident": 1,
+        }:
             raise ValueError(f"{client} server TCP metadata packets are not singular")
         sequences = _object(wire.get("sequences"), f"{prefix}.wire.sequences")
         if set(sequences) != {"idChange", "request", "status", "ident"}:
@@ -1602,14 +1714,18 @@ def _derived_server_tcp_metadata_coverage_ids(
             id_change_sequence < request_sequence < ident_sequence
             and id_change_sequence < status_sequence
         ):
-            raise ValueError(f"{client} server TCP metadata packets are not causally ordered")
+            raise ValueError(
+                f"{client} server TCP metadata packets are not causally ordered"
+            )
         expected_request_outcome = "attempted" if client == "rust" else "send_succeeded"
         if (
             wire.get("requestPayloadHex") != ""
             or wire.get("requestOutcome") != expected_request_outcome
             or wire.get("decodeErrors") != []
         ):
-            raise ValueError(f"{client} server TCP metadata request or decode result is not exact")
+            raise ValueError(
+                f"{client} server TCP metadata request or decode result is not exact"
+            )
         transport_modes = wire.get("transportModes")
         if transport_modes != ["obfuscated", "obfuscated", "obfuscated", "obfuscated"]:
             raise ValueError(f"{client} server TCP metadata transport is not exact")
@@ -1618,8 +1734,12 @@ def _derived_server_tcp_metadata_coverage_ids(
         status = _object(wire.get("status"), f"{prefix}.wire.status")
         if set(status) != {"users", "files"}:
             raise ValueError(f"{client} server status decode is malformed")
-        status_users = _nonnegative_int(status.get("users"), f"{prefix}.wire.status.users")
-        status_files = _nonnegative_int(status.get("files"), f"{prefix}.wire.status.files")
+        status_users = _nonnegative_int(
+            status.get("users"), f"{prefix}.wire.status.users"
+        )
+        status_files = _nonnegative_int(
+            status.get("files"), f"{prefix}.wire.status.files"
+        )
 
         ident = _object(wire.get("ident"), f"{prefix}.wire.ident")
         if set(ident) != {
@@ -1632,30 +1752,46 @@ def _derived_server_tcp_metadata_coverage_ids(
         }:
             raise ValueError(f"{client} server ident decode is malformed")
         server_hash = ident.get("server_hash")
-        if not isinstance(server_hash, str) or re.fullmatch(r"[0-9A-F]{32}", server_hash) is None:
+        if (
+            not isinstance(server_hash, str)
+            or re.fullmatch(r"[0-9A-F]{32}", server_hash) is None
+        ):
             raise ValueError(f"{client} server ident hash is malformed")
         advertised_ip = ident.get("advertised_ip")
         try:
             canonical_advertised_ip = str(ipaddress.IPv4Address(advertised_ip))
         except ipaddress.AddressValueError as exc:
             raise ValueError(f"{client} server ident address is malformed") from exc
-        if canonical_advertised_ip != advertised_ip or ident.get("advertised_port") != endpoint_port:
+        if (
+            canonical_advertised_ip != advertised_ip
+            or ident.get("advertised_port") != endpoint_port
+        ):
             raise ValueError(f"{client} server ident endpoint is malformed")
-        if ident.get("name") != SERVER_IDENT_NAME or ident.get("description") != SERVER_IDENT_DESCRIPTION:
-            raise ValueError(f"{client} server ident text does not match the canonical server")
+        if (
+            ident.get("name") != SERVER_IDENT_NAME
+            or ident.get("description") != SERVER_IDENT_DESCRIPTION
+        ):
+            raise ValueError(
+                f"{client} server ident text does not match the canonical server"
+            )
         tags = ident.get("tags")
         if not isinstance(tags, list) or not all(
             isinstance(tag, dict) and set(tag) == {"name", "value"} for tag in tags
         ):
             raise ValueError(f"{client} server ident tags are malformed")
-        if [tag for tag in tags if tag == {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}] != [
-            {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}
-        ] or [
+        if [
             tag
             for tag in tags
-            if tag == {"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION}
+            if tag == {"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}
+        ] != [{"name": ed2k_wire.ST_SERVERNAME, "value": SERVER_IDENT_NAME}] or [
+            tag
+            for tag in tags
+            if tag
+            == {"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION}
         ] != [{"name": ed2k_wire.ST_DESCRIPTION, "value": SERVER_IDENT_DESCRIPTION}]:
-            raise ValueError(f"{client} server ident tags do not contain the canonical text exactly once")
+            raise ValueError(
+                f"{client} server ident tags do not contain the canonical text exactly once"
+            )
         ident_rows[client] = ident
 
         applied = _object(row.get("applied"), f"{prefix}.applied")
@@ -1674,7 +1810,9 @@ def _derived_server_tcp_metadata_coverage_ids(
             or applied_status.get("users") != status_users
             or applied_status.get("files") != status_files
         ):
-            raise ValueError(f"{client} server status is not joined to its post-apply event")
+            raise ValueError(
+                f"{client} server status is not joined to its post-apply event"
+            )
         applied_ident = _object(applied.get("ident"), f"{prefix}.applied.ident")
         if set(applied_ident) != {"ok", "count", "sequence", "name", "description"}:
             raise ValueError(f"{client} applied server ident row is malformed")
@@ -1688,7 +1826,9 @@ def _derived_server_tcp_metadata_coverage_ids(
             or applied_ident.get("name") != ident.get("name")
             or applied_ident.get("description") != ident.get("description")
         ):
-            raise ValueError(f"{client} server ident is not joined to its post-apply event")
+            raise ValueError(
+                f"{client} server ident is not joined to its post-apply event"
+            )
 
         rest = _object(row.get("rest"), f"{prefix}.rest")
         if set(rest) != {"ok", "seedNameChanged", "connection", "server"}:
@@ -1713,8 +1853,12 @@ def _derived_server_tcp_metadata_coverage_ids(
             or connection != expected_connection
             or rest.get("server") != expected_server
         ):
-            raise ValueError(f"{client} REST state is not joined to its decoded server metadata")
-        raw_snapshot = _object(raw_rest.get(client), f"checks.client_server_tcp_metadata_rest.{client}")
+            raise ValueError(
+                f"{client} REST state is not joined to its decoded server metadata"
+            )
+        raw_snapshot = _object(
+            raw_rest.get(client), f"checks.client_server_tcp_metadata_rest.{client}"
+        )
         if set(raw_snapshot) != {"connectionStatus", "serverEntity"}:
             raise ValueError(f"{client} raw REST snapshot has an unexpected shape")
         raw_status = _object(
@@ -1725,23 +1869,41 @@ def _derived_server_tcp_metadata_coverage_ids(
             raw_status.get("currentServer"),
             f"checks.client_server_tcp_metadata_rest.{client}.connectionStatus.currentServer",
         )
-        if raw_status.get("connected") is not True or raw_current.get("current") is not True:
-            raise ValueError(f"{client} raw REST snapshot is not connected to the current server")
+        if (
+            raw_status.get("connected") is not True
+            or raw_current.get("current") is not True
+        ):
+            raise ValueError(
+                f"{client} raw REST snapshot is not connected to the current server"
+            )
         if any(
             raw_current.get(field) != value
             for field, value in expected_connection.items()
             if field != "connected"
         ):
-            raise ValueError(f"{client} raw REST connection does not match the diagnostic endpoint")
+            raise ValueError(
+                f"{client} raw REST connection does not match the diagnostic endpoint"
+            )
         raw_entity = _object(
             raw_snapshot.get("serverEntity"),
             f"checks.client_server_tcp_metadata_rest.{client}.serverEntity",
         )
-        if any(raw_entity.get(field) != value for field, value in expected_server.items()):
-            raise ValueError(f"{client} raw REST server entity does not match the diagnostic state")
+        if any(
+            raw_entity.get(field) != value for field, value in expected_server.items()
+        ):
+            raise ValueError(
+                f"{client} raw REST server entity does not match the diagnostic state"
+            )
 
-    comparison = _object(metadata.get("comparison"), "diagnostics.serverTcpMetadata.comparison")
-    comparison_fields = {"ok", "identEqual", "identMatchesExpected", "transportModeEqual"}
+    comparison = _object(
+        metadata.get("comparison"), "diagnostics.serverTcpMetadata.comparison"
+    )
+    comparison_fields = {
+        "ok",
+        "identEqual",
+        "identMatchesExpected",
+        "transportModeEqual",
+    }
     if set(comparison) != comparison_fields or any(
         comparison.get(field) is not True for field in comparison_fields
     ):
@@ -1752,22 +1914,34 @@ def _derived_server_tcp_metadata_coverage_ids(
         or ident_rows["rust"].get("description") != SERVER_IDENT_DESCRIPTION
         or transport_rows["rust"] != transport_rows["mfc"]
     ):
-        raise ValueError("bilateral server TCP metadata evidence does not compare exactly")
+        raise ValueError(
+            "bilateral server TCP metadata evidence does not compare exactly"
+        )
 
-    captures = _object(metadata.get("captures"), "diagnostics.serverTcpMetadata.captures")
+    captures = _object(
+        metadata.get("captures"), "diagnostics.serverTcpMetadata.captures"
+    )
     if set(captures) != {"rust", "mfc"}:
-        raise ValueError("server TCP metadata captures must contain exactly rust and mfc")
+        raise ValueError(
+            "server TCP metadata captures must contain exactly rust and mfc"
+        )
     for client in ("rust", "mfc"):
         capture = _object(
             captures.get(client),
             f"diagnostics.serverTcpMetadata.captures.{client}",
         )
-        _positive_int(capture.get("processId"), f"server TCP metadata {client} process ID")
+        _positive_int(
+            capture.get("processId"), f"server TCP metadata {client} process ID"
+        )
         segments = capture.get("selectedSegments")
-        if not isinstance(segments, list) or not segments or not all(
-            isinstance(value, str) and value for value in segments
+        if (
+            not isinstance(segments, list)
+            or not segments
+            or not all(isinstance(value, str) and value for value in segments)
         ):
-            raise ValueError(f"server TCP metadata {client} capture has no selected segments")
+            raise ValueError(
+                f"server TCP metadata {client} capture has no selected segments"
+            )
     return expected_ids
 
 
@@ -1782,7 +1956,9 @@ def _load_udp_metadata_capture(
         f"diagnostics.serverUdpMetadata.captures.{client}",
     )
     if set(capture) != {"diagnosticsDir", "processId", "selectedSegments"}:
-        raise ValueError(f"server UDP metadata {client} capture has an unexpected shape")
+        raise ValueError(
+            f"server UDP metadata {client} capture has an unexpected shape"
+        )
     process_id = _positive_int(
         capture.get("processId"),
         f"server UDP metadata {client} process ID",
@@ -1794,7 +1970,9 @@ def _load_udp_metadata_capture(
     )
     segment_values = capture.get("selectedSegments")
     if not isinstance(segment_values, list) or not segment_values:
-        raise ValueError(f"server UDP metadata {client} capture has no selected segments")
+        raise ValueError(
+            f"server UDP metadata {client} capture has no selected segments"
+        )
     segments = [
         _path_within(
             value,
@@ -1806,16 +1984,24 @@ def _load_udp_metadata_capture(
     if len(segments) != len(set(segments)) or any(
         not path.is_relative_to(diagnostics_dir) for path in segments
     ):
-        raise ValueError(f"server UDP metadata {client} selected segments are not exact")
+        raise ValueError(
+            f"server UDP metadata {client} selected segments are not exact"
+        )
     identities = [
         diag_event_runs.diag_segment_identity(path, client=client) for path in segments
     ]
     if any(identity is None for identity in identities):
-        raise ValueError(f"server UDP metadata {client} selected segment is not current-schema")
+        raise ValueError(
+            f"server UDP metadata {client} selected segment is not current-schema"
+        )
     typed_identities = [identity for identity in identities if identity is not None]
     run_ids = {identity[1] for identity in typed_identities}
-    if len(run_ids) != 1 or any(identity[0] != process_id for identity in typed_identities):
-        raise ValueError(f"server UDP metadata {client} selected segments mix run identity")
+    if len(run_ids) != 1 or any(
+        identity[0] != process_id for identity in typed_identities
+    ):
+        raise ValueError(
+            f"server UDP metadata {client} selected segments mix run identity"
+        )
     run_id = next(iter(run_ids))
     snapshot = diag_event_runs.load_exact_diag_run_snapshot(
         segments,
@@ -1859,13 +2045,17 @@ def _derived_server_udp_metadata_coverage_ids(
 
     checks = _object(report.get("checks"), "checks")
     if checks.get("client_server_udp_metadata_diagnostics") != metadata:
-        raise ValueError("server UDP metadata diagnostics do not match the retained snapshot")
+        raise ValueError(
+            "server UDP metadata diagnostics do not match the retained snapshot"
+        )
     raw_rest = _object(
         checks.get("client_server_udp_metadata_rest"),
         "checks.client_server_udp_metadata_rest",
     )
     if set(raw_rest) != {"rust", "mfc"}:
-        raise ValueError("server UDP metadata REST snapshots must contain exactly rust and mfc")
+        raise ValueError(
+            "server UDP metadata REST snapshots must contain exactly rust and mfc"
+        )
 
     anchor_endpoint = metadata.get("anchorServerEndpoint")
     target_endpoint = metadata.get("targetServerEndpoint")
@@ -1891,12 +2081,18 @@ def _derived_server_udp_metadata_coverage_ids(
         or target_udp_port != target_port + 4
         or anchor_port == target_port
     ):
-        raise ValueError("server UDP metadata endpoints do not match the managed topology")
+        raise ValueError(
+            "server UDP metadata endpoints do not match the managed topology"
+        )
     protocol_case = _object(report.get("protocol_case"), "protocol_case")
     if protocol_case.get("name") != "plain-server-plain-clients":
-        raise ValueError("server UDP metadata scenario requires the canonical plaintext case")
+        raise ValueError(
+            "server UDP metadata scenario requires the canonical plaintext case"
+        )
 
-    expected = _object(metadata.get("expected"), "diagnostics.serverUdpMetadata.expected")
+    expected = _object(
+        metadata.get("expected"), "diagnostics.serverUdpMetadata.expected"
+    )
     canonical_expected = {
         "seedName": SERVER_UDP_METADATA_SEED_NAME,
         "seedDescription": SERVER_UDP_METADATA_SEED_DESCRIPTION,
@@ -1931,11 +2127,17 @@ def _derived_server_udp_metadata_coverage_ids(
         or not isinstance(endpoints, list)
         or len(endpoints) != 1
     ):
-        raise ValueError("server UDP metadata target is not the singular canonical fixture")
+        raise ValueError(
+            "server UDP metadata target is not the singular canonical fixture"
+        )
 
-    captures = _object(metadata.get("captures"), "diagnostics.serverUdpMetadata.captures")
+    captures = _object(
+        metadata.get("captures"), "diagnostics.serverUdpMetadata.captures"
+    )
     if set(captures) != {"rust", "mfc"}:
-        raise ValueError("server UDP metadata captures must contain exactly rust and mfc")
+        raise ValueError(
+            "server UDP metadata captures must contain exactly rust and mfc"
+        )
     records = {
         client: _load_udp_metadata_capture(
             captures.get(client),
@@ -1962,7 +2164,9 @@ def _derived_server_udp_metadata_coverage_ids(
         key: value for key, value in metadata.items() if key != "captures"
     }
     if rebuilt != retained_without_capture:
-        raise ValueError("server UDP metadata receipt does not match its immutable captures")
+        raise ValueError(
+            "server UDP metadata receipt does not match its immutable captures"
+        )
     return expected_ids
 
 
@@ -1972,19 +2176,27 @@ def _derived_server_login_coverage_ids(
     login_value = diagnostics.get("serverLogin")
     if login_value is None:
         if report.get("transfer_scenario") == SERVER_LOGIN_SCENARIO:
-            raise ValueError("server login scenario has no bilateral diagnostic evidence")
+            raise ValueError(
+                "server login scenario has no bilateral diagnostic evidence"
+            )
         return []
     if report.get("transfer_scenario") != SERVER_LOGIN_SCENARIO:
-        raise ValueError("server login evidence requires the server-login-request scenario")
+        raise ValueError(
+            "server login evidence requires the server-login-request scenario"
+        )
     login = _object(login_value, "diagnostics.serverLogin")
     server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(login)
     protocol_case = _object(report.get("protocol_case"), "protocol_case")
     case_name = protocol_case.get("name")
     case_authority = (
-        SERVER_LOGIN_CASE_AUTHORITY.get(case_name) if isinstance(case_name, str) else None
+        SERVER_LOGIN_CASE_AUTHORITY.get(case_name)
+        if isinstance(case_name, str)
+        else None
     )
     if case_authority is None:
-        raise ValueError("server login evidence requires one canonical transport protocol case")
+        raise ValueError(
+            "server login evidence requires one canonical transport protocol case"
+        )
     expected_transport_plan = list(case_authority["transportPlan"])
     expected_case_flags = dict(
         zip(
@@ -1998,15 +2210,26 @@ def _derived_server_login_coverage_ids(
             strict=True,
         )
     )
-    if any(protocol_case.get(name) is not value for name, value in expected_case_flags.items()):
-        raise ValueError("server login protocol case flags do not match its named transport case")
+    if any(
+        protocol_case.get(name) is not value
+        for name, value in expected_case_flags.items()
+    ):
+        raise ValueError(
+            "server login protocol case flags do not match its named transport case"
+        )
     metadata_mode = case_authority["rustServerMetadataMode"]
     if protocol_case.get("rust_server_metadata_mode") != metadata_mode:
-        raise ValueError("server login Rust metadata mode does not match its named transport case")
+        raise ValueError(
+            "server login Rust metadata mode does not match its named transport case"
+        )
     if login.get("expectedTransportPlan") != expected_transport_plan:
-        raise ValueError("server login expected transport plan does not match the protocol case")
+        raise ValueError(
+            "server login expected transport plan does not match the protocol case"
+        )
 
-    claims = _object(login.get("coverageClaims"), "diagnostics.serverLogin.coverageClaims")
+    claims = _object(
+        login.get("coverageClaims"), "diagnostics.serverLogin.coverageClaims"
+    )
     expected_ids = sorted(
         [
             "server.login.request",
@@ -2015,11 +2238,15 @@ def _derived_server_login_coverage_ids(
     )
     if claims.get("eligibleCoverageIds") != expected_ids:
         raise ValueError("server login diagnostic claims are not exact")
-    if claims.get("evidenceLayers") != list(server_login_diagnostic_evidence.EVIDENCE_LAYERS):
+    if claims.get("evidenceLayers") != list(
+        server_login_diagnostic_evidence.EVIDENCE_LAYERS
+    ):
         raise ValueError("server login diagnostic evidence layers are not canonical")
 
     checks = _object(report.get("checks"), "checks")
-    rust_server_entry = _object(checks.get("rust_server_entry"), "checks.rust_server_entry")
+    rust_server_entry = _object(
+        checks.get("rust_server_entry"), "checks.rust_server_entry"
+    )
     capability_fields = {
         "udpFlags",
         "udpKey",
@@ -2027,12 +2254,16 @@ def _derived_server_login_coverage_ids(
         "obfuscationPortTcp",
         "obfuscationPortUdp",
     }
-    if metadata_mode == "endpoint-only" and capability_fields.intersection(rust_server_entry):
+    if metadata_mode == "endpoint-only" and capability_fields.intersection(
+        rust_server_entry
+    ):
         raise ValueError("server fallback Rust entry is not endpoint-only")
     if metadata_mode == "known" and not capability_fields.issubset(rust_server_entry):
         raise ValueError("server login Rust entry lacks required capability metadata")
     if checks.get("client_server_login_diagnostics") != login:
-        raise ValueError("server login diagnostics do not match the pre-transfer snapshot")
+        raise ValueError(
+            "server login diagnostics do not match the pre-transfer snapshot"
+        )
     clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
     for client in ("rust", "mfc"):
         row = _object(clients.get(client), f"diagnostics.serverLogin.clients.{client}")
@@ -2082,7 +2313,8 @@ def _derived_server_login_coverage_ids(
             or not isinstance(attempt_trace_ids, list)
             or len(attempt_trace_ids) != len(expected_transport_plan)
             or not all(
-                isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in attempt_trace_ids
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in attempt_trace_ids
             )
             or len(set(attempt_trace_ids)) != len(attempt_trace_ids)
             or row.get("attemptPlanExact") is not True
@@ -2126,7 +2358,9 @@ def _derived_server_login_coverage_ids(
             attempt_start_sequences != [final_attempt_sequence]
             or attempt_trace_ids != [final_trace_id]
         ):
-            raise ValueError(f"{client} singular server attempt is not joined to the final trace")
+            raise ValueError(
+                f"{client} singular server attempt is not joined to the final trace"
+            )
         decoded_login = _object(
             row.get("decodedLogin"),
             f"diagnostics.serverLogin.clients.{client}.decodedLogin",
@@ -2151,9 +2385,14 @@ def _derived_server_login_coverage_ids(
             or row.get("fallbackCausal") is not True
             or decoded_login.get("client_id") != 0
             or decoded_id.get("id_kind") != "low-id"
-            or not final_attempt_sequence < login_sequence < id_change_sequence < accepted_sequence
+            or not final_attempt_sequence
+            < login_sequence
+            < id_change_sequence
+            < accepted_sequence
         ):
-            raise ValueError(f"{client} server login evidence is not singular and causal")
+            raise ValueError(
+                f"{client} server login evidence is not singular and causal"
+            )
         final_transport_mode = expected_transport_plan[-1]
         if client == "rust":
             if (
@@ -2174,7 +2413,9 @@ def _derived_server_login_coverage_ids(
                 or send_outcome_trace_id != final_trace_id
                 or row.get("sendOutcomeTransportMode") != final_transport_mode
             ):
-                raise ValueError("Rust server-login send outcome is not joined to the final attempt")
+                raise ValueError(
+                    "Rust server-login send outcome is not joined to the final attempt"
+                )
         elif (
             row.get("sendOutcomeRequired") is not False
             or row.get("sendOutcomeObserved") is not False
@@ -2187,14 +2428,18 @@ def _derived_server_login_coverage_ids(
                 )
             )
         ):
-            raise ValueError("MFC server login contains an unexpected separate send outcome")
+            raise ValueError(
+                "MFC server login contains an unexpected separate send outcome"
+            )
         if row.get("transportObservation") != {
             "attempts": expected_transport_plan,
             "login": final_transport_mode,
             "idChange": final_transport_mode,
             "accepted": final_transport_mode,
         }:
-            raise ValueError(f"{client} server login transport observations are not exact")
+            raise ValueError(
+                f"{client} server login transport observations are not exact"
+            )
         if len(expected_transport_plan) == 2:
             failed_attempt_sequence = _positive_int(
                 row.get("failedAttemptStartSequence"),
@@ -2244,14 +2489,16 @@ def _derived_server_login_coverage_ids(
                 )
             else:
                 failed_login_exact = all(
-                    row.get(field) is expected for field, expected in failed_login_fields.items()
+                    row.get(field) is expected
+                    for field, expected in failed_login_fields.items()
                 )
             if (
                 connection_failure_count != 1
                 or fallback_count != 1
                 or failed_attempt_login_count != expected_failed_login_count
                 or not failed_login_exact
-                or attempt_start_sequences != [failed_attempt_sequence, final_attempt_sequence]
+                or attempt_start_sequences
+                != [failed_attempt_sequence, final_attempt_sequence]
                 or attempt_trace_ids != [failed_attempt_trace_id, final_trace_id]
                 or not failed_attempt_sequence
                 < failure_sequence
@@ -2271,7 +2518,9 @@ def _derived_server_login_coverage_ids(
                 or not isinstance(row.get("fallbackError"), str)
                 or not row["fallbackError"]
             ):
-                raise ValueError(f"{client} server fallback evidence is not exact and causal")
+                raise ValueError(
+                    f"{client} server fallback evidence is not exact and causal"
+                )
         elif (
             connection_failure_count != 0
             or fallback_count != 0
@@ -2300,7 +2549,9 @@ def _derived_server_login_coverage_ids(
                 }.items()
             )
         ):
-            raise ValueError(f"{client} singular server transport contains fallback evidence")
+            raise ValueError(
+                f"{client} singular server transport contains fallback evidence"
+            )
     if clients["rust"].get("extensionTags") != {"offerfiles_v": 1}:
         raise ValueError("Rust server login has unexpected extension tags")
     if clients["mfc"].get("extensionTags") != {}:
@@ -2339,7 +2590,9 @@ def _derived_server_login_coverage_ids(
         },
     }
     if login.get("expectedClients") != expected_clients:
-        raise ValueError("server login expected clients do not match profile provenance")
+        raise ValueError(
+            "server login expected clients do not match profile provenance"
+        )
     expected_endpoint = (
         f"{network.get('ed2k_server_address')}:{ports.get('ed2k_tcp')}".casefold()
     )
@@ -2348,11 +2601,15 @@ def _derived_server_login_coverage_ids(
 
     captures = _object(login.get("captures"), "diagnostics.serverLogin.captures")
     for client in ("rust", "mfc"):
-        capture = _object(captures.get(client), f"diagnostics.serverLogin.captures.{client}")
+        capture = _object(
+            captures.get(client), f"diagnostics.serverLogin.captures.{client}"
+        )
         _positive_int(capture.get("processId"), f"server login {client} process ID")
         segments = capture.get("selectedSegments")
-        if not isinstance(segments, list) or not segments or not all(
-            isinstance(value, str) and value for value in segments
+        if (
+            not isinstance(segments, list)
+            or not segments
+            or not all(isinstance(value, str) and value for value in segments)
         ):
             raise ValueError(f"server login {client} capture has no selected segments")
     return expected_ids
@@ -2396,12 +2653,18 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             metadata.get("clients"),
             "diagnostics.serverTcpMetadata.clients",
         )
-        rust = _object(clients.get("rust"), "diagnostics.serverTcpMetadata.clients.rust")
+        rust = _object(
+            clients.get("rust"), "diagnostics.serverTcpMetadata.clients.rust"
+        )
         mfc = _object(clients.get("mfc"), "diagnostics.serverTcpMetadata.clients.mfc")
         rust_wire = _object(rust.get("wire"), "Rust server TCP metadata wire evidence")
         mfc_wire = _object(mfc.get("wire"), "MFC server TCP metadata wire evidence")
-        rust_sequences = _object(rust_wire.get("sequences"), "Rust server TCP metadata sequences")
-        mfc_sequences = _object(mfc_wire.get("sequences"), "MFC server TCP metadata sequences")
+        rust_sequences = _object(
+            rust_wire.get("sequences"), "Rust server TCP metadata sequences"
+        )
+        mfc_sequences = _object(
+            mfc_wire.get("sequences"), "MFC server TCP metadata sequences"
+        )
         if coverage_id == "server.reply.tcp-ident":
             return (
                 "Rust and MFC each decoded and post-applied the same exact server ident, then "
@@ -2418,7 +2681,9 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             diagnostics.get("serverUdpMetadata"),
             "diagnostics.serverUdpMetadata",
         )
-        clients = _object(metadata.get("clients"), "diagnostics.serverUdpMetadata.clients")
+        clients = _object(
+            metadata.get("clients"), "diagnostics.serverUdpMetadata.clients"
+        )
         wires = {
             client: _object(
                 _object(clients.get(client), f"UDP metadata {client}").get("wire"),
@@ -2433,9 +2698,9 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
         if coverage_id == "server.reply.udp-description":
             transports = {
                 client: _object(
-                    _object(wire.get("transports"), f"UDP metadata {client} transports").get(
-                        "description"
-                    ),
+                    _object(
+                        wire.get("transports"), f"UDP metadata {client} transports"
+                    ).get("description"),
                     f"UDP metadata {client} description transport",
                 ).get("transportMode")
                 for client, wire in wires.items()
@@ -2526,7 +2791,10 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             )
             for client in ("rust", "mfc")
         }
-        if coverage_id in server_source_diagnostic_evidence.SOURCE_COVERAGE_BY_TRANSPORT.values():
+        if (
+            coverage_id
+            in server_source_diagnostic_evidence.SOURCE_COVERAGE_BY_TRANSPORT.values()
+        ):
             requests = {
                 client: _object(wire.get("request"), f"server source {client} request")
                 for client, wire in wires.items()
@@ -2559,7 +2827,9 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
         clients = _object(search.get("clients"), "diagnostics.serverSearch.clients")
         rust = _object(clients.get("rust"), "diagnostics.serverSearch.clients.rust")
         mfc = _object(clients.get("mfc"), "diagnostics.serverSearch.clients.mfc")
-        rust_wire = _object(rust.get("wire"), "diagnostics.serverSearch.clients.rust.wire")
+        rust_wire = _object(
+            rust.get("wire"), "diagnostics.serverSearch.clients.rust.wire"
+        )
         mfc_wire = _object(mfc.get("wire"), "diagnostics.serverSearch.clients.mfc.wire")
         rust_request = _object(
             rust_wire.get("request"),
@@ -2608,38 +2878,63 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             "from a causally ordered hash-only startup."
         )
     if coverage_id == "queue.admission":
-        mfc = _object(_object(diagnostics.get("clients"), "diagnostics.clients").get("mfc"), "diagnostics.clients.mfc")
+        mfc = _object(
+            _object(diagnostics.get("clients"), "diagnostics.clients").get("mfc"),
+            "diagnostics.clients.mfc",
+        )
         checks = _object(mfc.get("checks"), "diagnostics.clients.mfc.checks")
-        admissions = _object(checks.get("uploadRequestServed"), "diagnostics.clients.mfc.checks.uploadRequestServed")
-        count = _positive_int(admissions.get("matchingRecordCount"), "upload request admission count")
+        admissions = _object(
+            checks.get("uploadRequestServed"),
+            "diagnostics.clients.mfc.checks.uploadRequestServed",
+        )
+        count = _positive_int(
+            admissions.get("matchingRecordCount"), "upload request admission count"
+        )
         return f"MFC recorded {count} exact-hash upload admissions in the causally ordered completed transfer."
     payload = _exact_wire_check(diagnostics, "payloadFrames")
-    count = _positive_int(payload.get("matchedFrameCount"), "matched payload frame count")
+    count = _positive_int(
+        payload.get("matchedFrameCount"), "matched payload frame count"
+    )
     variant = "uncompressed" if coverage_id.endswith("uncompressed") else "compressed"
     return f"All {count} {variant} payload frames matched exactly before manifest-backed completion."
 
 
-def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict[str, Any]:
+def build_transfer_registration(
+    report_path: Path, *, output_root: Path
+) -> dict[str, Any]:
     """Validates one immutable Rust-from-MFC report and builds catalog rows."""
 
     resolved_output = output_root.resolve()
     resolved_report = report_path.resolve()
-    if not resolved_report.is_relative_to(resolved_output) or not resolved_report.is_file():
-        raise ValueError("report must be an existing file under EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    if (
+        not resolved_report.is_relative_to(resolved_output)
+        or not resolved_report.is_file()
+    ):
+        raise ValueError(
+            "report must be an existing file under EMULEBB_WORKSPACE_OUTPUT_ROOT"
+        )
     relative_report = resolved_report.relative_to(resolved_output)
     if "latest" in relative_report.parts:
-        raise ValueError("report must use an immutable timestamped run path, not latest")
+        raise ValueError(
+            "report must use an immutable timestamped run path, not latest"
+        )
     run_directory = resolved_report.parent
     stamp_match = RUN_DIRECTORY_PATTERN.match(run_directory.name)
     if stamp_match is None:
-        raise ValueError("report parent must be a timestamped deterministic transfer run directory")
+        raise ValueError(
+            "report parent must be a timestamped deterministic transfer run directory"
+        )
 
     report = json.loads(resolved_report.read_text(encoding="utf-8"))
     if not isinstance(report, dict):
         raise ValueError("report must be a JSON object")
     if report.get("suite") != TRANSFER_SUITE or report.get("status") != "passed":
-        raise ValueError("report must be a passed deterministic-two-client-transfer receipt")
-    runner_revision = _lower_hex(report.get("runner_revision"), GIT_REVISION_PATTERN, "runner_revision")
+        raise ValueError(
+            "report must be a passed deterministic-two-client-transfer receipt"
+        )
+    runner_revision = _lower_hex(
+        report.get("runner_revision"), GIT_REVISION_PATTERN, "runner_revision"
+    )
 
     diagnostics = _object(report.get("diagnostics"), "diagnostics")
     transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(diagnostics)
@@ -2669,50 +2964,82 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
         ]
     )
     if claim_ids != expected_ids:
-        raise ValueError("diagnostic coverage claims do not match the decisive wire evidence")
+        raise ValueError(
+            "diagnostic coverage claims do not match the decisive wire evidence"
+        )
     expected_layers = list(transfer_diagnostic_evidence.EVIDENCE_LAYERS)
     if claims.get("evidenceLayers") != expected_layers:
-        raise ValueError("diagnostic coverage claims do not declare the canonical evidence layers")
+        raise ValueError(
+            "diagnostic coverage claims do not declare the canonical evidence layers"
+        )
 
     fixture = _object(report.get("fixture"), "fixture")
     fixture_size = _positive_int(fixture.get("size"), "fixture.size")
     fixture_sha256 = _lower_hex(fixture.get("sha256"), SHA256_PATTERN, "fixture.sha256")
     fixture_path = _path_within(fixture.get("path"), run_directory, "fixture.path")
-    if fixture_path.stat().st_size != fixture_size or _file_sha256(fixture_path) != fixture_sha256:
+    if (
+        fixture_path.stat().st_size != fixture_size
+        or _file_sha256(fixture_path) != fixture_sha256
+    ):
         raise ValueError("fixture bytes do not match the receipt")
 
     if "peer.startup.metadata-recovery" in expected_ids:
         if report.get("transfer_scenario") != "hash-only-metadata-recovery":
-            raise ValueError("metadata recovery evidence requires the hash-only transfer scenario")
+            raise ValueError(
+                "metadata recovery evidence requires the hash-only transfer scenario"
+            )
         stimulus = _object(
             _object(report.get("checks"), "checks").get("client1_transfer_stimulus"),
             "checks.client1_transfer_stimulus",
         )
         if stimulus.get("mode") != "hash-only-direct-source-link-with-profile-identity":
-            raise ValueError("metadata recovery evidence requires an identity-bearing hash-only stimulus")
-        input_metadata = _object(stimulus.get("inputMetadata"), "stimulus.inputMetadata")
-        authority_metadata = _object(stimulus.get("authorityMetadata"), "stimulus.authorityMetadata")
+            raise ValueError(
+                "metadata recovery evidence requires an identity-bearing hash-only stimulus"
+            )
+        input_metadata = _object(
+            stimulus.get("inputMetadata"), "stimulus.inputMetadata"
+        )
+        authority_metadata = _object(
+            stimulus.get("authorityMetadata"), "stimulus.authorityMetadata"
+        )
         if (
             input_metadata.get("name") != diagnostics.get("fileHash")
             or input_metadata.get("size") != 0
-            or str(input_metadata.get("hash") or "").lower() != diagnostics.get("fileHash")
+            or str(input_metadata.get("hash") or "").lower()
+            != diagnostics.get("fileHash")
         ):
-            raise ValueError("metadata recovery stimulus contains source filename or size metadata")
+            raise ValueError(
+                "metadata recovery stimulus contains source filename or size metadata"
+            )
         if (
             authority_metadata.get("name") != fixture.get("name")
             or authority_metadata.get("size") != fixture_size
-            or str(authority_metadata.get("hash") or "").lower() != diagnostics.get("fileHash")
+            or str(authority_metadata.get("hash") or "").lower()
+            != diagnostics.get("fileHash")
         ):
-            raise ValueError("metadata recovery authority metadata does not match the fixture")
+            raise ValueError(
+                "metadata recovery authority metadata does not match the fixture"
+            )
 
     checks = _object(report.get("checks"), "checks")
-    completed = _object(checks.get("client1_transfer_completed_file"), "checks.client1_transfer_completed_file")
-    if completed.get("state") != "completed" or completed.get("completedBytes") != fixture_size:
+    completed = _object(
+        checks.get("client1_transfer_completed_file"),
+        "checks.client1_transfer_completed_file",
+    )
+    if (
+        completed.get("state") != "completed"
+        or completed.get("completedBytes") != fixture_size
+    ):
         raise ValueError("completed transfer does not contain the full fixture")
     if str(completed.get("hash") or "").lower() != diagnostics.get("fileHash"):
         raise ValueError("completed transfer hash does not match diagnostics")
-    delivered_path = _path_within(completed.get("deliveredPath"), run_directory, "completed deliveredPath")
-    if delivered_path.stat().st_size != fixture_size or _file_sha256(delivered_path) != fixture_sha256:
+    delivered_path = _path_within(
+        completed.get("deliveredPath"), run_directory, "completed deliveredPath"
+    )
+    if (
+        delivered_path.stat().st_size != fixture_size
+        or _file_sha256(delivered_path) != fixture_sha256
+    ):
         raise ValueError("delivered file bytes do not match the fixture")
 
     profiles = _object(report.get("profiles"), "profiles")
@@ -2722,7 +3049,9 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
     subjects = [
         {
             "authorityId": "mfc-oracle",
-            "executableSha256": _lower_hex(mfc.get("app_sha256"), SHA256_PATTERN, "MFC executable SHA-256"),
+            "executableSha256": _lower_hex(
+                mfc.get("app_sha256"), SHA256_PATTERN, "MFC executable SHA-256"
+            ),
             "sourceRevision": _lower_hex(
                 mfc_availability.get("source_revision"),
                 GIT_REVISION_PATTERN,
@@ -2731,8 +3060,14 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
         },
         {
             "authorityId": "rust-product",
-            "executableSha256": _lower_hex(rust.get("app_sha256"), SHA256_PATTERN, "Rust executable SHA-256"),
-            "sourceRevision": _lower_hex(rust.get("source_revision"), GIT_REVISION_PATTERN, "Rust source revision"),
+            "executableSha256": _lower_hex(
+                rust.get("app_sha256"), SHA256_PATTERN, "Rust executable SHA-256"
+            ),
+            "sourceRevision": _lower_hex(
+                rust.get("source_revision"),
+                GIT_REVISION_PATTERN,
+                "Rust source revision",
+            ),
         },
     ]
     stamp = stamp_match.group("stamp").lower()
@@ -2764,7 +3099,9 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
 def run_transfer_registration_cli(argv: list[str] | None = None) -> int:
     """Validates a local receipt and prints deterministic catalog registration JSON."""
 
-    parser = argparse.ArgumentParser(description="Build protocol catalog rows from one Rust-from-MFC transfer receipt.")
+    parser = argparse.ArgumentParser(
+        description="Build protocol catalog rows from one Rust-from-MFC transfer receipt."
+    )
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--output-root", type=Path)
     args = parser.parse_args(argv)
