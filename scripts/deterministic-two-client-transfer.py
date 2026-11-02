@@ -49,6 +49,7 @@ from emule_test_harness import server_udp_source_diagnostic_evidence  # noqa: E4
 from emule_test_harness import scripted_ed2k_udp_source  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
+from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
@@ -86,6 +87,9 @@ SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
 DIRECT_CALLBACK = "direct-callback"
 RELAYED_REASK = "relayed-reask"
+RELAYED_REASK_HIGH_ID_NETWORK = "192.0.2.0/24"
+RELAYED_REASK_HIGH_ID_FIRST_OCTET4 = 241
+RELAYED_REASK_HIGH_ID_LAST_OCTET4 = 250
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_ADVANCED_SEARCH = "server-advanced-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
@@ -1569,6 +1573,66 @@ def wait_for_exported_link(path: Path, timeout_seconds: float) -> str:
     )
 
 
+def wait_for_mfc_mutation_ready(
+    base_url: str, api_key: str, timeout_seconds: float
+) -> dict[str, object]:
+    """Waits until the MFC oracle has completed startup and accepts mutations."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        try:
+            result = rest_smoke.http_request(
+                base_url,
+                "/api/v1/app",
+                api_key=api_key,
+                request_timeout_seconds=10.0,
+            )
+        except (OSError, urllib.error.URLError) as exc:
+            observations.append(
+                {
+                    "errorType": type(exc).__name__,
+                    "errorMessage": str(exc) or repr(exc),
+                }
+            )
+            return None
+
+        response = rest_smoke.compact_http_result(result)
+        payload = result.get("json")
+        lifecycle = payload.get("lifecycle") if isinstance(payload, dict) else None
+        observation: dict[str, object] = {"response": response}
+        if isinstance(lifecycle, dict):
+            observation["lifecycle"] = lifecycle
+        observations.append(observation)
+
+        if (
+            int(result.get("status", 0)) != 200
+            or not isinstance(lifecycle, dict)
+            or lifecycle.get("state") != "running"
+            or lifecycle.get("startupComplete") is not True
+            or lifecycle.get("acceptingMutations") is not True
+        ):
+            return None
+        return {
+            "response": response,
+            "lifecycle": lifecycle,
+            "observations": observations[-20:],
+        }
+
+    try:
+        return live_common.wait_for(
+            resolve,
+            timeout_seconds,
+            1.0,
+            "MFC oracle mutation readiness",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Timed out waiting for the MFC oracle to accept mutations. "
+            f"Observations: {observations[-20:]!r}"
+        ) from exc
+
+
 def add_emule_shared_file(
     base_url: str, api_key: str, file_path: Path
 ) -> dict[str, object]:
@@ -1984,6 +2048,20 @@ def resolve_managed_server_p2p_bind_address(
         ed2k_server.resolve_route_bind_ip(server_address, server_port),
         option_name="managed ED2K server route",
     )
+
+
+def provision_relayed_reask_high_id_address() -> tuple[LanIpPool, str, str]:
+    """Provisions one TEST-NET address on the Windows side of the WSL route."""
+
+    _, windows_route_address = ed2k_server.resolve_managed_server_windows_route()
+    pool = LanIpPool(
+        windows_route_address,
+        prefix_length=32,
+        candidate_network=RELAYED_REASK_HIGH_ID_NETWORK,
+        first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4,
+        last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
+    )
+    return pool, pool.acquire(1)[0], windows_route_address
 
 
 def configure_client_profile(
@@ -3037,12 +3115,15 @@ def main(argv: list[str] | None = None) -> int:
     server_login_evidence: dict[str, object] | None = None
     direct_callback_evidence: dict[str, object] | None = None
     relayed_reask_evidence: dict[str, object] | None = None
+    relayed_reask_diagnostic_candidate: dict[str, object] | None = None
     server_callback_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
     server_tcp_metadata_evidence: dict[str, object] | None = None
     server_udp_metadata_evidence: dict[str, object] | None = None
     server_udp_source_evidence: dict[str, object] | None = None
+    relayed_reask_high_id_pool: LanIpPool | None = None
+    relayed_reask_high_id_address: str | None = None
     current_phase = "initializing"
 
     try:
@@ -3050,6 +3131,19 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
+        if args.transfer_scenario == RELAYED_REASK:
+            if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
+                raise ValueError(
+                    "relayed-reask owns its deterministic HighID address; "
+                    "do not pass a P2P bind override"
+                )
+            current_phase = "provision_relayed_reask_high_id_address"
+            (
+                relayed_reask_high_id_pool,
+                relayed_reask_high_id_address,
+                windows_route_address,
+            ) = provision_relayed_reask_high_id_address()
+            p2p_address = relayed_reask_high_id_address
         server_connect_address = resolve_ed2k_server_connect_address(
             args.ed2k_server_connect_address
         )
@@ -3069,6 +3163,14 @@ def main(argv: list[str] | None = None) -> int:
             "ed2k_server_connect_address": server_connect_address,
             "ports": ports,
         }
+        if relayed_reask_high_id_address is not None:
+            report["network"]["high_id_authority"] = {
+                "mode": "upstream-server-identity-probe",
+                "address": relayed_reask_high_id_address,
+                "interfaceAddress": windows_route_address,
+                "candidateNetwork": RELAYED_REASK_HIGH_ID_NETWORK,
+                "ephemeral": True,
+            }
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
@@ -3092,17 +3194,20 @@ def main(argv: list[str] | None = None) -> int:
             server_udp=(
                 protocol_case.server_udp if protocol_case is not None else True
             ),
+            advertised_address_override=relayed_reask_high_id_address,
+            hairpin_lan_clients=relayed_reask_high_id_address is not None,
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
-        p2p_address = resolve_managed_server_p2p_bind_address(
-            current_address=p2p_address,
-            server_address=server_address,
-            server_port=ports["ed2k_tcp"],
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
-            p2p_bind_interface_address=args.p2p_bind_interface_address,
-        )
+        if relayed_reask_high_id_address is None:
+            p2p_address = resolve_managed_server_p2p_bind_address(
+                current_address=p2p_address,
+                server_address=server_address,
+                server_port=ports["ed2k_tcp"],
+                p2p_bind_interface_name=args.p2p_bind_interface_name,
+                p2p_bind_interface_address=args.p2p_bind_interface_address,
+            )
         server_control = ed2k_server.ed2k_server_control(admin_base_url, args.api_key)
         file_observer = ed2k_file_observer.Ed2kFileObserver(
             server_address,
@@ -3528,6 +3633,7 @@ def main(argv: list[str] | None = None) -> int:
                 if protocol_case is not None
                 else True
             ),
+            enable_udp_reask=(args.transfer_scenario == RELAYED_REASK),
             local_only_discovery=True,
             local_kad_seed=rust_isolated_kad_seed,
             add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
@@ -3908,6 +4014,11 @@ def main(argv: list[str] | None = None) -> int:
                 rest_smoke.wait_for_rest_ready(
                     client2_base_url, args.api_key, args.rest_ready_timeout_seconds
                 )
+            )
+            report["checks"]["client2_mutation_ready"] = wait_for_mfc_mutation_ready(
+                client2_base_url,
+                args.api_key,
+                args.rest_ready_timeout_seconds,
             )
             report["checks"]["client2_shared_file_add"] = add_emule_shared_file(
                 client2_base_url,
@@ -4496,7 +4607,8 @@ def main(argv: list[str] | None = None) -> int:
             current_phase = "collect_relayed_reask_diagnostics"
 
             def resolve_relayed_reask_evidence() -> dict[str, object] | None:
-                candidate = collect_relayed_reask_diagnostics(
+                nonlocal relayed_reask_diagnostic_candidate
+                relayed_reask_diagnostic_candidate = collect_relayed_reask_diagnostics(
                     source_host=p2p_address,
                     source_tcp_port=ports["relayed_reask_source_tcp"],
                     source_udp_port=ports["relayed_reask_source_udp"],
@@ -4513,7 +4625,14 @@ def main(argv: list[str] | None = None) -> int:
                     mfc_diagnostics_dir=Path(client2["log_dir"]),
                     mfc_process_id=client2_process_id,
                 )
-                return candidate if candidate.get("ok") is True else None
+                report["checks"]["client_relayed_reask_diagnostics_candidate"] = (
+                    relayed_reask_diagnostic_candidate
+                )
+                return (
+                    relayed_reask_diagnostic_candidate
+                    if relayed_reask_diagnostic_candidate.get("ok") is True
+                    else None
+                )
 
             relayed_reask_evidence = live_common.wait_for(
                 resolve_relayed_reask_evidence,
@@ -4524,6 +4643,7 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["client_relayed_reask_diagnostics"] = (
                 relayed_reask_evidence
             )
+            report["checks"].pop("client_relayed_reask_diagnostics_candidate", None)
             relayed_reask_diagnostic_evidence.require_relayed_reask_diagnostic_evidence(
                 relayed_reask_evidence
             )
@@ -4914,6 +5034,9 @@ def main(argv: list[str] | None = None) -> int:
         if relayed_reask_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["relayedReask"] = relayed_reask_evidence
+        elif relayed_reask_diagnostic_candidate is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["relayedReaskCandidate"] = relayed_reask_diagnostic_candidate
         if server_callback_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverCallback"] = server_callback_evidence
@@ -5060,6 +5183,12 @@ def main(argv: list[str] | None = None) -> int:
                 }
         ed2k_server.stop_process(metadata_server_process)
         ed2k_server.stop_process(server_process)
+        if relayed_reask_high_id_pool is not None:
+            relayed_reask_high_id_pool.release()
+            close_results["relayed_reask_high_id_address"] = {
+                "ok": True,
+                "address": relayed_reask_high_id_address,
+            }
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = (

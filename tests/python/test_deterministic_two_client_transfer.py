@@ -1533,6 +1533,43 @@ def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bin
     )
 
 
+def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
+    monkeypatch,
+) -> None:
+    module = load_suite_module()
+    constructed: list[dict[str, object]] = []
+
+    class FakePool:
+        def __init__(self, address: str, **kwargs) -> None:
+            constructed.append({"address": address, **kwargs})
+
+        def acquire(self, count: int) -> list[str]:
+            assert count == 1
+            return ["192.0.2.241"]
+
+    monkeypatch.setattr(
+        module.ed2k_server,
+        "resolve_managed_server_windows_route",
+        lambda: ("172.20.32.2", "172.20.16.1"),
+    )
+    monkeypatch.setattr(module, "LanIpPool", FakePool)
+
+    pool, address, route = module.provision_relayed_reask_high_id_address()
+
+    assert isinstance(pool, FakePool)
+    assert address == "192.0.2.241"
+    assert route == "172.20.16.1"
+    assert constructed == [
+        {
+            "address": "172.20.16.1",
+            "prefix_length": 32,
+            "candidate_network": "192.0.2.0/24",
+            "first_octet4": 241,
+            "last_octet4": 250,
+        }
+    ]
+
+
 def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
@@ -1893,6 +1930,97 @@ def test_parse_exported_ed2k_file_link() -> None:
         "size": 123,
         "hash": "0123456789abcdef0123456789abcdef",
     }
+
+
+def test_wait_for_mfc_mutation_ready_records_startup_transition(monkeypatch) -> None:
+    module = load_suite_module()
+    responses = iter(
+        (
+            {
+                "status": 200,
+                "json": {
+                    "lifecycle": {
+                        "state": "starting",
+                        "startupComplete": False,
+                        "acceptingMutations": False,
+                    }
+                },
+            },
+            {
+                "status": 200,
+                "json": {
+                    "lifecycle": {
+                        "state": "running",
+                        "startupComplete": True,
+                        "acceptingMutations": True,
+                    }
+                },
+            },
+        )
+    )
+
+    monkeypatch.setattr(
+        module.rest_smoke, "http_request", lambda *_args, **_kwargs: next(responses)
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        module.live_common,
+        "wait_for",
+        lambda resolve, *_args: resolve() or resolve(),
+    )
+
+    result = module.wait_for_mfc_mutation_ready(
+        "http://127.0.0.1:4711", "secret", 1.0
+    )
+
+    assert result["lifecycle"]["state"] == "running"
+    assert [row["lifecycle"]["state"] for row in result["observations"]] == [
+        "starting",
+        "running",
+    ]
+
+
+def test_wait_for_mfc_mutation_ready_rejects_incomplete_lifecycle(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": {
+                "lifecycle": {
+                    "state": "running",
+                    "startupComplete": True,
+                    "acceptingMutations": False,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        module.live_common,
+        "wait_for",
+        lambda resolve, *_args: (
+            resolve(),
+            (_ for _ in ()).throw(RuntimeError("timeout")),
+        )[1],
+    )
+
+    with pytest.raises(RuntimeError, match="accept mutations") as exc_info:
+        module.wait_for_mfc_mutation_ready(
+            "http://127.0.0.1:4711", "secret", 1.0
+        )
+
+    assert "'acceptingMutations': False" in str(exc_info.value)
 
 
 def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -> None:
