@@ -159,7 +159,7 @@ def canonical_records(
                     "send",
                     ed2k_wire.OP_LOGINREQUEST,
                     login_payload(client=client, nickname=nickname, tcp_port=tcp_port),
-                    outcome="send_succeeded",
+                    outcome="attempted",
                     transport_mode="obfuscated",
                     trace_id=failed_trace_id,
                 )
@@ -214,7 +214,7 @@ def canonical_records(
             "send",
             ed2k_wire.OP_LOGINREQUEST,
             login_payload(client=client, nickname=nickname, tcp_port=tcp_port),
-            outcome="attempted" if client == "rust" else "send_succeeded",
+            outcome="attempted",
             transport_mode=transport_plan[-1],
             trace_id=final_trace_id,
             send_attempt_id=11 if client == "rust" else None,
@@ -308,6 +308,15 @@ def test_bilateral_plaintext_stock_core_login_and_connection_are_claimable() -> 
     assert report["ok"] is True
     assert report["clients"]["rust"]["extensionTags"] == {"offerfiles_v": 1}
     assert report["clients"]["mfc"]["extensionTags"] == {}
+    for client in ("rust", "mfc"):
+        row = report["clients"][client]
+        assert row["loginPacketOutcome"] == "attempted"
+        assert row["sendAttemptRecorded"] is True
+        assert row["deliveryProven"] is True
+    assert report["clients"]["rust"]["sendOutcomeRequired"] is True
+    assert report["clients"]["rust"]["sendOutcomeObserved"] is True
+    assert report["clients"]["mfc"]["sendOutcomeRequired"] is False
+    assert report["clients"]["mfc"]["sendOutcomeObserved"] is False
     assert report["clients"]["rust"]["transportObservation"]["login"] == "plaintext"
     assert report["clients"]["mfc"]["transportObservation"]["login"] == "plaintext"
     assert report["comparison"] == {
@@ -468,7 +477,7 @@ def test_rust_login_requires_linked_send_success() -> None:
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["sendSucceeded"] is False
+    assert report["clients"]["rust"]["deliveryProven"] is False
 
 
 def test_rust_send_outcome_must_join_final_trace() -> None:
@@ -479,7 +488,7 @@ def test_rust_send_outcome_must_join_final_trace() -> None:
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["sendSucceeded"] is False
+    assert report["clients"]["rust"]["deliveryProven"] is False
 
 
 def test_rust_send_outcome_must_follow_login() -> None:
@@ -490,7 +499,7 @@ def test_rust_send_outcome_must_follow_login() -> None:
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["sendSucceeded"] is False
+    assert report["clients"]["rust"]["deliveryProven"] is False
 
 
 def test_rust_send_outcome_must_precede_id_change() -> None:
@@ -501,7 +510,7 @@ def test_rust_send_outcome_must_precede_id_change() -> None:
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["sendSucceeded"] is False
+    assert report["clients"]["rust"]["deliveryProven"] is False
 
 
 def test_rust_login_requires_exactly_one_send_outcome() -> None:
@@ -515,7 +524,7 @@ def test_rust_login_requires_exactly_one_send_outcome() -> None:
     report = build(rust_records=rust_records)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["sendSucceeded"] is False
+    assert report["clients"]["rust"]["deliveryProven"] is False
 
 
 def test_login_acceptance_must_follow_id_change() -> None:
@@ -667,7 +676,7 @@ def test_mfc_fallback_requires_failed_attempt_login() -> None:
     assert report["clients"]["mfc"]["failedAttemptLoginPacketCount"] == 0
 
 
-def test_mfc_failed_attempt_login_must_succeed_on_socket() -> None:
+def test_mfc_failed_attempt_login_must_be_recorded_as_an_attempt() -> None:
     mfc_records = canonical_records("mfc", ("obfuscated", "plaintext"))
     mfc_records[1]["body"]["outcome"] = "send_failed"
 

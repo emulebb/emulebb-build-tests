@@ -2142,7 +2142,9 @@ def _derived_server_login_coverage_ids(
             or row.get("loginAcceptedState") != "connected"
             or final_login_packet_count != 1
             or login_packet_count != 1 + failed_attempt_login_count
-            or row.get("sendSucceeded") is not True
+            or row.get("loginPacketOutcome") != "attempted"
+            or row.get("sendAttemptRecorded") is not True
+            or row.get("deliveryProven") is not True
             or row.get("semanticShape") is not True
             or row.get("transportPlanExact") is not True
             or row.get("traceCorrelation") is not True
@@ -2154,6 +2156,11 @@ def _derived_server_login_coverage_ids(
             raise ValueError(f"{client} server login evidence is not singular and causal")
         final_transport_mode = expected_transport_plan[-1]
         if client == "rust":
+            if (
+                row.get("sendOutcomeRequired") is not True
+                or row.get("sendOutcomeObserved") is not True
+            ):
+                raise ValueError("Rust server-login send outcome is not recorded")
             send_outcome_sequence = _positive_int(
                 row.get("sendOutcomeSequence"),
                 "diagnostics.serverLogin.clients.rust.sendOutcomeSequence",
@@ -2168,12 +2175,16 @@ def _derived_server_login_coverage_ids(
                 or row.get("sendOutcomeTransportMode") != final_transport_mode
             ):
                 raise ValueError("Rust server-login send outcome is not joined to the final attempt")
-        elif any(
-            row.get(field) is not None
-            for field in (
-                "sendOutcomeSequence",
-                "sendOutcomeTraceId",
-                "sendOutcomeTransportMode",
+        elif (
+            row.get("sendOutcomeRequired") is not False
+            or row.get("sendOutcomeObserved") is not False
+            or any(
+                row.get(field) is not None
+                for field in (
+                    "sendOutcomeSequence",
+                    "sendOutcomeTraceId",
+                    "sendOutcomeTransportMode",
+                )
             )
         ):
             raise ValueError("MFC server login contains an unexpected separate send outcome")
@@ -2229,7 +2240,7 @@ def _derived_server_login_coverage_ids(
                     failed_attempt_sequence < failed_login_sequence < failure_sequence
                     and failed_login_trace_id == failed_attempt_trace_id
                     and row.get("failedAttemptLoginTransportMode") == "obfuscated"
-                    and row.get("failedAttemptLoginOutcome") == "send_succeeded"
+                    and row.get("failedAttemptLoginOutcome") == "attempted"
                 )
             else:
                 failed_login_exact = all(

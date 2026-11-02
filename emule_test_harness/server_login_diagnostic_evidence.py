@@ -284,15 +284,11 @@ def _client_evidence(
     login_sequence = _sequence(login)
     id_change_sequence = _sequence(id_change)
     accepted_sequence = _sequence(accepted)
-    send_succeeded = bool(
-        login is not None
-        and (
-            _body(login).get("outcome") == "send_succeeded"
-            or client == "rust"
-            and send_outcome is not None
-            and _sequence(send_outcome) < id_change_sequence
-        )
+    send_attempt_recorded = bool(
+        login is not None and _body(login).get("outcome") == "attempted"
     )
+    send_outcome_required = client == "rust"
+    send_outcome_observed = send_outcome is not None
     lifecycle_ok = bool(
         final_attempt is not None
         and login is not None
@@ -313,6 +309,15 @@ def _client_evidence(
         else None
     )
     trace_correlation = final_trace_id is not None
+    delivery_proven = bool(
+        lifecycle_ok
+        and trace_correlation
+        and (
+            not send_outcome_required
+            or send_outcome_observed
+            and _sequence(send_outcome) < id_change_sequence
+        )
+    )
 
     connection_failures = [
         record
@@ -361,7 +366,7 @@ def _client_evidence(
             failed_attempt_login is None
             or failed_attempt_login_trace_id == failed_attempt_trace_id
             and failed_attempt_login_body.get("transportMode") == "obfuscated"
-            and failed_attempt_login_body.get("outcome") == "send_succeeded"
+            and failed_attempt_login_body.get("outcome") == "attempted"
             and failed_attempt_sequence
             < failed_attempt_login_sequence
             < connection_failure_sequence
@@ -423,7 +428,8 @@ def _client_evidence(
         len(final_login_packets) == 1
         and failed_attempt_logins_exact
         and semantic_shape
-        and send_succeeded
+        and send_attempt_recorded
+        and delivery_proven
         and len(id_change_packets) == 1
         and len(accepted_records) == 1
         and accepted_shape
@@ -442,7 +448,11 @@ def _client_evidence(
         "loginPacketCount": len(login_packets),
         "finalLoginPacketCount": len(final_login_packets),
         "failedAttemptLoginPacketCount": len(failed_attempt_login_packets),
-        "sendSucceeded": send_succeeded,
+        "loginPacketOutcome": _body(login).get("outcome") if login is not None else None,
+        "sendAttemptRecorded": send_attempt_recorded,
+        "sendOutcomeRequired": send_outcome_required,
+        "sendOutcomeObserved": send_outcome_observed,
+        "deliveryProven": delivery_proven,
         "sendOutcomeSequence": _sequence(send_outcome) or None,
         "sendOutcomeTraceId": _trace_id(send_outcome),
         "sendOutcomeTransportMode": (

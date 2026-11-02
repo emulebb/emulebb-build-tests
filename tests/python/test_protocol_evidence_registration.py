@@ -73,7 +73,11 @@ def bilateral_login_evidence(
             "loginPacketCount": 1 + failed_attempt_login_count,
             "finalLoginPacketCount": 1,
             "failedAttemptLoginPacketCount": failed_attempt_login_count,
-            "sendSucceeded": True,
+            "loginPacketOutcome": "attempted",
+            "sendAttemptRecorded": True,
+            "sendOutcomeRequired": client == "rust",
+            "sendOutcomeObserved": client == "rust",
+            "deliveryProven": True,
             "sendOutcomeSequence": (7 if fallback else 3) if client == "rust" else None,
             "sendOutcomeTraceId": 2 if client == "rust" else None,
             "sendOutcomeTransportMode": final_transport_mode if client == "rust" else None,
@@ -107,7 +111,7 @@ def bilateral_login_evidence(
                 "obfuscated" if fallback and client == "mfc" else None
             ),
             "failedAttemptLoginOutcome": (
-                "send_succeeded" if fallback and client == "mfc" else None
+                "attempted" if fallback and client == "mfc" else None
             ),
             "transportFallbackPhase": "connection" if fallback else None,
             "transportFallbackOutcome": "retrying" if fallback else None,
