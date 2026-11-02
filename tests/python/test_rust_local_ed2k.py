@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from emule_test_harness import rust_local_ed2k
+from emule_test_harness import ed2k_wire, rust_local_ed2k
 
 
 def test_ed2k_link_with_source_appends_plain_source_hint() -> None:
@@ -179,6 +179,7 @@ def test_single_server_search_issues_only_one_exact_request(monkeypatch) -> None
         "http://192.0.2.10:4711",
         "key",
         query="deterministicparitysearch",
+        criteria=ed2k_wire.ServerSearchCriteria(),
         expected_hash=expected_hash,
         expected_name="fixture.bin",
         expected_size=4096,
@@ -186,6 +187,7 @@ def test_single_server_search_issues_only_one_exact_request(monkeypatch) -> None
     )
 
     assert result["searchId"] == "search-1"
+    assert result["request"] == calls[0][2]
     assert result["result"]["hash"] == expected_hash.upper()
     assert [call[0] for call in calls].count("POST") == 1
     assert calls[0][2] == {
@@ -193,6 +195,54 @@ def test_single_server_search_issues_only_one_exact_request(monkeypatch) -> None
         "method": "server",
         "type": "",
     }
+
+
+def test_single_server_search_sends_exact_size_criteria(monkeypatch) -> None:
+    expected_hash = "00112233445566778899aabbccddeeff"
+    result = {
+        "hash": expected_hash,
+        "displayName": "fixture.bin",
+        "sizeBytes": 4096,
+    }
+    calls: list[object] = []
+    responses = iter(
+        [
+            {"id": "search-1", "status": "running", "items": []},
+            {"id": "search-1", "status": "complete", "items": [result]},
+        ]
+    )
+
+    def request(_base_url, method, _path, _api_key, payload=None):
+        if method == "POST":
+            calls.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+
+    observed = rust_local_ed2k.run_single_server_search(
+        "http://192.0.2.10:4711",
+        "key",
+        query="deterministicparitysearch",
+        criteria=ed2k_wire.ServerSearchCriteria(
+            min_size_bytes=4096,
+            max_size_bytes=4096,
+        ),
+        expected_hash=expected_hash,
+        expected_name="fixture.bin",
+        expected_size=4096,
+        timeout_seconds=1.0,
+    )
+
+    assert calls == [
+        {
+            "query": "deterministicparitysearch",
+            "method": "server",
+            "type": "",
+            "minSizeBytes": 4096,
+            "maxSizeBytes": 4096,
+        }
+    ]
+    assert observed["request"] == calls[0]
 
 
 def test_single_server_search_does_not_retry_empty_terminal_search(monkeypatch) -> None:
@@ -218,6 +268,7 @@ def test_single_server_search_does_not_retry_empty_terminal_search(monkeypatch) 
             "http://192.0.2.10:4711",
             "key",
             query="deterministicparitysearch",
+            criteria=ed2k_wire.ServerSearchCriteria(),
             expected_hash="00112233445566778899aabbccddeeff",
             expected_name="fixture.bin",
             expected_size=4096,
@@ -257,6 +308,7 @@ def test_single_server_search_waits_for_terminal_state_after_exact_result(monkey
         "http://192.0.2.10:4711",
         "key",
         query="deterministicparitysearch",
+        criteria=ed2k_wire.ServerSearchCriteria(),
         expected_hash=expected_hash,
         expected_name="fixture.bin",
         expected_size=4096,
@@ -275,6 +327,7 @@ def test_single_server_search_preserves_missing_creation_id(monkeypatch) -> None
             "http://192.0.2.10:4711",
             "key",
             query="deterministicparitysearch",
+            criteria=ed2k_wire.ServerSearchCriteria(),
             expected_hash="00112233445566778899aabbccddeeff",
             expected_name="fixture.bin",
             expected_size=4096,
@@ -302,6 +355,7 @@ def test_single_server_search_preserves_get_failure_after_creation(monkeypatch) 
             "http://192.0.2.10:4711",
             "key",
             query="deterministicparitysearch",
+            criteria=ed2k_wire.ServerSearchCriteria(),
             expected_hash="00112233445566778899aabbccddeeff",
             expected_name="fixture.bin",
             expected_size=4096,

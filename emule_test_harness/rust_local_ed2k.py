@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import rust_client
+from . import ed2k_wire, rust_client
 
 
 class ServerSearchFailure(RuntimeError):
@@ -283,6 +283,7 @@ def run_single_server_search(
     api_key: str,
     *,
     query: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
     expected_hash: str,
     expected_name: str,
     expected_size: int,
@@ -290,18 +291,28 @@ def run_single_server_search(
 ) -> dict[str, object]:
     """Runs exactly one server search and requires one exact result row."""
 
+    search_request: dict[str, object] = {
+        "query": query,
+        "method": "server",
+        "type": "",
+    }
+    if criteria.min_size_bytes is not None:
+        search_request["minSizeBytes"] = criteria.min_size_bytes
+    if criteria.max_size_bytes is not None:
+        search_request["maxSizeBytes"] = criteria.max_size_bytes
     try:
         created = request_json(
             base_url,
             "POST",
             "/api/v1/searches",
             api_key,
-            {"query": query, "method": "server", "type": ""},
+            search_request,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the failed REST stimulus
         raise ServerSearchFailure(
             f"Deterministic server search creation failed: {exc}",
             {
+                "request": search_request,
                 "searchId": None,
                 "created": {},
                 "search": {},
@@ -314,6 +325,7 @@ def run_single_server_search(
         raise ServerSearchFailure(
             "Deterministic server search creation returned no search ID.",
             {
+                "request": search_request,
                 "searchId": None,
                 "created": created,
                 "search": {},
@@ -333,6 +345,7 @@ def run_single_server_search(
         return ServerSearchFailure(
             message,
             {
+                "request": search_request,
                 "searchId": search_id,
                 "created": created,
                 "search": search,
@@ -381,6 +394,7 @@ def run_single_server_search(
         status = str(search.get("status") or "").casefold()
         if len(matches) == 1 and status in {"complete", "completed"}:
             return {
+                "request": search_request,
                 "searchId": search_id,
                 "created": created,
                 "search": search,
