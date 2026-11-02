@@ -82,7 +82,9 @@ def write_rust_profile(
     kad_bootstrap_min_routing_contacts: int = 10,
     enable_udp_reask: bool = False,
     publish_emule_rust_identity: bool = False,
-    upload_active_slots: int | None = None,
+    upload_limit_kibps: int | None = None,
+    base_upload_slots: int | None = None,
+    upload_slot_elastic_percent: int | None = None,
     nat_enabled: bool | None = False,
     nat_require_initial_mapping: bool | None = None,
     nat_backend_order: list[str] | None = None,
@@ -127,6 +129,20 @@ def write_rust_profile(
         if max_connections < 1:
             raise ValueError("Rust profile max_connections must be at least 1.")
         core_settings["maxConnections"] = max_connections
+    if upload_limit_kibps is not None:
+        if upload_limit_kibps < 1:
+            raise ValueError("Rust profile upload_limit_kibps must be at least 1.")
+        core_settings["uploadLimitKiBps"] = upload_limit_kibps
+    if base_upload_slots is not None:
+        if not 1 <= base_upload_slots <= 64:
+            raise ValueError("Rust profile base_upload_slots must be in the range 1..64.")
+        core_settings["baseUploadSlots"] = base_upload_slots
+    if upload_slot_elastic_percent is not None:
+        if not 0 <= upload_slot_elastic_percent <= 100:
+            raise ValueError(
+                "Rust profile upload_slot_elastic_percent must be in the range 0..100."
+            )
+        core_settings["uploadSlotElasticPercent"] = upload_slot_elastic_percent
     if network_kademlia is not None:
         core_settings["networkKademlia"] = network_kademlia
     if local_only_discovery and local_kad_seed is None:
@@ -193,10 +209,6 @@ def write_rust_profile(
         )
     if add_servers_from_server is not None:
         ed2k_settings["addServersFromServer"] = add_servers_from_server
-    # Optional upload-queue policy override. activeSlots=0 forces every
-    # requester into the waiting queue (used to make a peer UDP-reask us).
-    if upload_active_slots is not None:
-        ed2k_settings["uploadQueue"] = {"activeSlots": upload_active_slots}
     if ed2k_settings:
         rust_metadata.replace_settings_section(metadata_path, "ed2k", ed2k_settings)
 

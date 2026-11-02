@@ -244,6 +244,13 @@
   },
   "coverageEvidence": [
     {
+      "coverageId": "client-udp.v4",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC emitted byte-identical direct V4 reasks and ACKs, then applied the same queue-rank and complete-source state through causally ordered bilateral diagnostics.",
+      "receiptIds": ["rust-mfc-client-udp-v4-20261102t123752z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "lowid.buddy-callback",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each accepted the same FINDBUDDY identity, attached the matching held buddy socket, received byte-identical KADEMLIA_CALLBACK_REQ traffic, and emitted byte-identical OP_CALLBACK relays at diagnostic sequences 27/29.",
@@ -1403,6 +1410,28 @@
   ],
   "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
   "evidenceReceipts": [
+    {
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261102T123752Z-emulebb-main-release-16288/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "0cec92b67d903bfca9aa5e94ef8bb7161613a84217f4dca9fa0a55eeff26f290",
+      "coverageIds": ["client-udp.v4"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-client-udp-v4-20261102t123752z",
+      "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
+      "runnerRevision": "027cd63bdf543d3b28d59994624bc25ffe04ea8e",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "90e441b7f38c8558c4830d277f029ddeb5216b3590304f4c7f5e4880148194c3",
+          "sourceRevision": "64b531b67a4e7bfc8b567d00edaf7a60e49a250d"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "8ced5390b7739cf0b6649d5306f15fa05873d572a8ff4f700b7a86d6c5e25b34",
+          "sourceRevision": "938bce6cf18971e900cbb78a2c92f2dc585e1a3f"
+        }
+      ]
+    },
     {
       "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T183823Z-emulebb-main-release-15004/deterministic-two-client-transfer-result.json",
       "artifactSha256": "4d26bd2319ec9eafaee3d84c2800e609a1f6765a2fc05b0139ac9ee5db8ab91a",

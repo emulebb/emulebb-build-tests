@@ -12,10 +12,16 @@ from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "emulebb-rust-reask-cross-client.py"
+FILE_HASH = "44556677889900112233aabbccddeeff"
+SOURCE_TCP_ENDPOINT = "127.0.0.10:4662"
+SOURCE_UDP_ENDPOINT = "127.0.0.10:4672"
+SOURCE_USER_HASH = "11223344556677889900aabbccddeeff"
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("emulebb_rust_reask_cross_client_test", SCRIPT)
+    spec = importlib.util.spec_from_file_location(
+        "emulebb_rust_reask_cross_client_test", SCRIPT
+    )
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -62,17 +68,329 @@ def _write_mfc_run(log_dir: Path) -> None:
     )
 
 
-def test_capacity_oracle_reads_all_health_validated_segments(tmp_path: Path) -> None:
+def _registration_record() -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "family": "sched",
+        "event": "udp_reask_source_registered",
+        "keys": {
+            "fileHash": FILE_HASH,
+            "peer": SOURCE_TCP_ENDPOINT,
+            "peerHash": SOURCE_USER_HASH,
+        },
+        "body": {
+            "outcome": "accepted",
+            "sourceUdpEndpoint": SOURCE_UDP_ENDPOINT,
+            "sourceUdpVersion": 4,
+            "lowId": False,
+            "buddyEndpoint": None,
+            "buddyId": None,
+        },
+    }
+
+
+def _applied_record() -> dict[str, object]:
+    return {
+        "schema": "diag_event_v2",
+        "family": "sched",
+        "event": "udp_reask_reply_applied",
+        "keys": {
+            "fileHash": FILE_HASH,
+            "peer": SOURCE_TCP_ENDPOINT,
+            "peerHash": SOURCE_USER_HASH,
+        },
+        "body": {
+            "outcome": "applied",
+            "sourceUdpVersion": 4,
+            "requestPendingAfter": False,
+        },
+    }
+
+
+def test_capacity_precondition_reads_health_validated_segments(tmp_path: Path) -> None:
     module = _load_module()
     _write_mfc_run(tmp_path)
 
-    assert module.max_waiting_sessions(tmp_path) == 3
+    assert (
+        module.wait_for_upload_capacity(tmp_path, active_slots=2, timeout=0.1)[
+            "waitingSessions"
+        ]
+        == 3
+    )
 
 
-def test_capacity_oracle_rejects_missing_writer_health(tmp_path: Path) -> None:
+def test_capacity_records_reject_missing_writer_health(tmp_path: Path) -> None:
     module = _load_module()
     _write_mfc_run(tmp_path)
     (tmp_path / "emulebb-mfc-diag-health.json").unlink()
 
     with pytest.raises(ValueError, match="missing MFC diagnostic writer health"):
-        module.max_waiting_sessions(tmp_path)
+        module._mfc_capacity_snapshots(tmp_path)
+
+
+def test_rust_capacity_requires_one_exact_opened_production_slot(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "current_diag_records",
+        lambda *_args, **_kwargs: [
+            {
+                "schema": "diag_event_v2",
+                "family": "sched",
+                "event": "capacity_snapshot",
+                "seq": 1,
+                "body": {
+                    "baseSlots": 1,
+                    "elasticSlots": 0,
+                    "effectiveSlotCap": 1,
+                    "activeSlots": 1,
+                    "waitingSessions": 0,
+                },
+            },
+            {
+                "schema": "diag_event_v2",
+                "family": "sched",
+                "event": "upload_slot_opened",
+                "seq": 2,
+                "keys": {
+                    "fileHash": FILE_HASH,
+                    "peer": SOURCE_TCP_ENDPOINT,
+                },
+                "body": {"outcome": "opened"},
+            },
+        ],
+    )
+
+    assert module.wait_for_rust_occupied_upload_slot(
+        Path("unused"),
+        file_hash=FILE_HASH,
+        peer_endpoint=SOURCE_TCP_ENDPOINT,
+        timeout=0.1,
+    )["slotOpenedSequence"] == 2
+
+
+def test_server_publication_uses_exact_named_client(monkeypatch) -> None:
+    module = _load_module()
+
+    class FakeControl:
+        def wait_for_client_shared_files(self, nickname, minimum, timeout):
+            assert (nickname, minimum, timeout) == ("rust-responder", 1, 1.0)
+            return {
+                "client_name": nickname,
+                "ip": "192.0.2.241",
+                "high_id": True,
+                "shared_files": 1,
+            }
+
+    monkeypatch.setattr(
+        module.ed2k_harness,
+        "ed2k_server_control",
+        lambda base_url, secret: FakeControl(),
+    )
+
+    assert module.wait_for_server_client_publication(
+        "http://server.test",
+        "secret",
+        "rust-responder",
+        1.0,
+    ) == {
+        "clientName": "rust-responder",
+        "address": "192.0.2.241",
+        "highId": True,
+        "sharedFiles": 1,
+    }
+
+
+def test_server_publication_rejects_fragment_match(monkeypatch) -> None:
+    module = _load_module()
+
+    class FakeControl:
+        def wait_for_client_shared_files(self, *_args):
+            return {"client_name": "rust-responder-other", "shared_files": 1}
+
+    monkeypatch.setattr(
+        module.ed2k_harness,
+        "ed2k_server_control",
+        lambda base_url, secret: FakeControl(),
+    )
+
+    with pytest.raises(RuntimeError, match="expected 'rust-responder'"):
+        module.wait_for_server_client_publication(
+            "http://server.test",
+            "secret",
+            "rust-responder",
+            1.0,
+        )
+
+
+def test_server_client_precondition_rejects_low_id() -> None:
+    module = _load_module()
+
+    with pytest.raises(RuntimeError, match="observed 'rust-requester' as LowID"):
+        module.require_server_high_id_client(
+            {
+                "client_name": "rust-requester",
+                "ip": "172.17.128.213",
+                "high_id": False,
+                "shared_files": 0,
+            },
+            nickname="rust-requester",
+        )
+
+
+def test_exact_direct_v4_registration_builds_control_identity() -> None:
+    module = _load_module()
+
+    identity = module.find_udp_reask_registration(
+        [_registration_record()],
+        file_hash=FILE_HASH.upper(),
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+    )
+
+    assert identity == {
+        "fileHash": FILE_HASH,
+        "sourceTcpEndpoint": SOURCE_TCP_ENDPOINT,
+        "sourceUdpEndpoint": SOURCE_UDP_ENDPOINT,
+        "sourceUserHash": SOURCE_USER_HASH,
+        "sourceUdpVersion": 4,
+    }
+    assert module.queued_source_reask_request(
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_user_hash=SOURCE_USER_HASH,
+    ) == {
+        "fileHash": FILE_HASH,
+        "sourceIp": "127.0.0.10",
+        "sourceTcpPort": 4662,
+        "sourceUdpPort": 4672,
+        "sourceUserHash": SOURCE_USER_HASH,
+        "sourceUdpVersion": 4,
+    }
+
+
+def test_registration_rejects_duplicate_exact_identity() -> None:
+    module = _load_module()
+
+    with pytest.raises(RuntimeError, match="multiple exact direct V4"):
+        module.find_udp_reask_registration(
+            [_registration_record(), _registration_record()],
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        )
+
+
+def test_mfc_queue_identity_requires_exact_onqueue_highid_source() -> None:
+    module = _load_module()
+    rows = {
+        "data": {
+            "items": [
+                {
+                    "address": "127.0.0.11",
+                    "port": 4662,
+                    "userHash": "ffeeddccbbaa00998877665544332211",
+                    "downloadState": "onqueue",
+                    "tcpConnected": False,
+                    "lowId": False,
+                    "queueRank": 1,
+                },
+                {
+                    "address": "127.0.0.10",
+                    "port": 4662,
+                    "userHash": SOURCE_USER_HASH,
+                    "downloadState": "onqueue",
+                    "tcpConnected": False,
+                    "lowId": False,
+                    "queueRank": 1,
+                },
+            ]
+        }
+    }
+
+    assert module.find_mfc_queued_source(
+        rows, source_ip="127.0.0.10", source_tcp_port=4662
+    ) == {
+        "sourceIp": "127.0.0.10",
+        "sourceTcpPort": 4662,
+        "sourceUserHash": SOURCE_USER_HASH,
+        "queueRank": 1,
+    }
+
+    rows["data"]["items"][1]["downloadState"] = "connected"
+    assert (
+        module.find_mfc_queued_source(
+            rows, source_ip="127.0.0.10", source_tcp_port=4662
+        )
+        is None
+    )
+
+    rows["data"]["items"][1]["downloadState"] = "onqueue"
+    rows["data"]["items"][1]["tcpConnected"] = True
+    assert (
+        module.find_mfc_queued_source(
+            rows, source_ip="127.0.0.10", source_tcp_port=4662
+        )
+        is None
+    )
+
+
+def test_control_receipt_unwraps_only_the_api_data_envelope() -> None:
+    module = _load_module()
+    request = module.queued_source_reask_request(
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_user_hash=SOURCE_USER_HASH,
+    )
+    response_payload = {
+        "accepted": True,
+        "fileHash": FILE_HASH,
+        "sourceEndpoint": SOURCE_UDP_ENDPOINT,
+        "sourceTcpPort": 4662,
+        "sourceUserHash": SOURCE_USER_HASH,
+        "sourceUdpVersion": 4,
+        "state": "queued-source-reask-pending",
+    }
+
+    assert module.queued_source_reask_receipt(
+        request,
+        {"status": 200, "raw_json": {"data": response_payload, "meta": {}}},
+    ) == {
+        "request": request,
+        "response": {"status": 200, "json": response_payload},
+    }
+
+
+def test_exact_v4_application_is_required_once() -> None:
+    module = _load_module()
+
+    assert (
+        module.find_udp_reask_applied(
+            [_applied_record()],
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+        )
+        == _applied_record()
+    )
+
+    with pytest.raises(RuntimeError, match="multiple exact V4"):
+        module.find_udp_reask_applied(
+            [_applied_record(), _applied_record()],
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+        )
+
+
+def test_runner_loads_the_accepted_stock_client_udp_record() -> None:
+    module = _load_module()
+
+    record = module.load_stock_client_udp_record()
+
+    assert record["recordId"] == "stock.client-udp.corpus"
+    assert record["payloadDigest"] == (
+        "sha256:89468db8e028268f21598216f5949ae11c2b1c3e1370b151d3d7136e8fda812b"
+    )
