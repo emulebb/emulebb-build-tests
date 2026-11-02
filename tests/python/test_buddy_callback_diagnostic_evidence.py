@@ -17,6 +17,7 @@ BUDDY_UDP_PORT = 35102
 REQUESTER_TCP_PORT = 35103
 BUDDY_CLIENT_ID = 7
 BUDDY_ID = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+DIAGNOSTIC_BUDDY_ID = bytes.fromhex("3322110077665544BBAA9988FFEEDDCC")
 BUDDY_HASH = bytes.fromhex("1032547698BADCFE1032547698BADCFE")
 REQUESTER_HASH = bytes.fromhex("21436587A9CBED0F21436587A9CBED0F")
 FILE_HASH = bytes.fromhex("32547698BADCFE1032547698BADCFE10")
@@ -267,7 +268,7 @@ def _records(client: str, requester_udp_port: int) -> list[dict[str, object]]:
                 "action": "accept",
                 "outcome": "accepted",
                 "reason": "eligible",
-                "buddyId": BUDDY_ID.hex().lower(),
+                "buddyId": DIAGNOSTIC_BUDDY_ID.hex().lower(),
                 "clientHash": BUDDY_HASH.hex().lower(),
                 "tcpFirewalled": False,
                 "udpVerified": True,
@@ -286,7 +287,7 @@ def _records(client: str, requester_udp_port: int) -> list[dict[str, object]]:
                 "milestone": "buddy_socket_attached",
                 "action": "attach",
                 "outcome": "attached",
-                "buddyId": BUDDY_ID.hex(),
+                "buddyId": DIAGNOSTIC_BUDDY_ID.hex(),
                 "clientHash": BUDDY_HASH.hex(),
                 "advertisedTcpPort": BUDDY_TCP_PORT,
             },
@@ -321,7 +322,7 @@ def _records(client: str, requester_udp_port: int) -> list[dict[str, object]]:
                 "action": "relay",
                 "outcome": "relayed",
                 "reason": "eligible",
-                "buddyId": BUDDY_ID.hex(),
+                "buddyId": DIAGNOSTIC_BUDDY_ID.hex(),
                 "fileHash": FILE_HASH.hex(),
                 "requesterIp": HOST,
                 "requesterUdpPort": requester_udp_port,
@@ -387,6 +388,20 @@ def test_buddy_socket_readiness_requires_one_exact_ready_event() -> None:
 
     assert receipt is not None
     assert receipt["sequence"] == 5
+
+    wire_order_records = copy.deepcopy(records)
+    wire_order_records[4]["body"]["buddyId"] = BUDDY_ID.hex()
+    assert (
+        evidence.buddy_socket_readiness(
+            wire_order_records,
+            client="mfc",
+            buddy_host=HOST,
+            buddy_user_hash=BUDDY_HASH,
+            buddy_id=BUDDY_ID,
+            buddy_tcp_port=BUDDY_TCP_PORT,
+        )
+        is None
+    )
     assert (
         evidence.buddy_socket_readiness(
             [*records, copy.deepcopy(records[4])],

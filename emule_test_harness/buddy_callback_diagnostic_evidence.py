@@ -61,6 +61,14 @@ def _same_hex(value: object, expected: bytes | str) -> bool:
     return isinstance(value, str) and value.casefold() == expected_hex.casefold()
 
 
+def _kad_node_id_diagnostic_bytes(wire_bytes: bytes) -> bytes:
+    """Converts a raw Kad node ID to stock ``CUInt128`` display order."""
+
+    if len(wire_bytes) != 16:
+        raise ValueError("Kad node ID must contain exactly 16 bytes")
+    return b"".join(wire_bytes[offset : offset + 4][::-1] for offset in range(0, 16, 4))
+
+
 def _timestamp(value: object) -> float | None:
     return (
         float(value)
@@ -470,7 +478,7 @@ def _buddy_request_event(
         and body.get("action") == "accept"
         and body.get("outcome") == "accepted"
         and body.get("reason") == "eligible"
-        and _same_hex(body.get("buddyId"), buddy_id)
+        and _same_hex(body.get("buddyId"), _kad_node_id_diagnostic_bytes(buddy_id))
         and _same_hex(body.get("clientHash"), buddy_user_hash)
         and body.get("tcpFirewalled") is False
         and body.get("udpVerified") is True
@@ -499,7 +507,7 @@ def _buddy_socket_event(
         and body.get("milestone") == "buddy_socket_attached"
         and body.get("action") == "attach"
         and body.get("outcome") == "attached"
-        and _same_hex(body.get("buddyId"), buddy_id)
+        and _same_hex(body.get("buddyId"), _kad_node_id_diagnostic_bytes(buddy_id))
         and _same_hex(body.get("clientHash"), buddy_user_hash)
         and body.get("advertisedTcpPort") == buddy_tcp_port
     )
@@ -561,7 +569,7 @@ def _callback_event(
         and body.get("action") == "relay"
         and body.get("outcome") == "relayed"
         and body.get("reason") == "eligible"
-        and _same_hex(body.get("buddyId"), buddy_id)
+        and _same_hex(body.get("buddyId"), _kad_node_id_diagnostic_bytes(buddy_id))
         and _same_hex(body.get("fileHash"), file_hash)
         and body.get("requesterIp") == requester_host
         and body.get("requesterUdpPort") == requester_udp_port
