@@ -38,6 +38,8 @@ PLAIN_SERVER_FLAGS = 0x0119
 OBFUSCATED_SOURCE_SERVER_FLAGS = PLAIN_SERVER_FLAGS | ed2k_wire.SRVCAP_SUPPORTCRYPT
 DEFAULT_NICKNAME = "emulebb-harness-source-publisher"
 RECEIPT_SCHEMA = "emulebb.docker-ed2k-source-publisher/1"
+CALLBACK_COMMAND_SCHEMA = "emulebb.docker-ed2k-source-publisher.callback-command/1"
+CALLBACK_RESULT_SCHEMA = "emulebb.docker-ed2k-source-publisher.callback-result/1"
 
 OP_HELLO = 0x01
 OP_HELLOANSWER = 0x4C
@@ -212,6 +214,56 @@ class DockerEd2kSourcePublisherHandle:
         if errors:
             raise DockerEd2kSourcePublisherError("; ".join(errors))
         self._cleaned = True
+
+    def request_callback(
+        self,
+        *,
+        target_client_id: int,
+        target_label: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Issues one callback command through the already authenticated HighID peer."""
+
+        payload = ed2k_wire.encode_callback_request(target_client_id)
+        if not target_label:
+            raise ValueError("target_label must be non-empty")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        command_id = uuid.uuid4().hex
+        control_dir = self.receipt_path.parent / "callback-control"
+        request_path = control_dir / f"{command_id}.request.json"
+        result_path = control_dir / f"{command_id}.result.json"
+        write_json_atomic(
+            request_path,
+            {
+                "schema": CALLBACK_COMMAND_SCHEMA,
+                "commandId": command_id,
+                "runId": self.run_id,
+                "targetClientId": target_client_id,
+                "targetLabel": target_label,
+                "timeoutSeconds": timeout_seconds,
+                "requestPayloadHex": payload.hex().upper(),
+            },
+        )
+        result = _wait_for_receipt(result_path, timeout_seconds + 2.0)
+        expected = {
+            "schema": CALLBACK_RESULT_SCHEMA,
+            "status": "completed",
+            "commandId": command_id,
+            "runId": self.run_id,
+            "targetClientId": target_client_id,
+            "targetLabel": target_label,
+        }
+        for key, value in expected.items():
+            if result.get(key) != value:
+                raise DockerEd2kSourcePublisherError(
+                    f"Docker callback result field {key!r} is not {value!r}: {result!r}"
+                )
+        if result.get("requestPayloadHex") != payload.hex().upper():
+            raise DockerEd2kSourcePublisherError(
+                f"Docker callback result changed the request payload: {result!r}"
+            )
+        return result
 
     def __enter__(self) -> "DockerEd2kSourcePublisherHandle":
         return self
@@ -529,14 +581,14 @@ def encode_hello_answer(
     return ed2k_wire.encode_frame(OP_HELLOANSWER, payload)
 
 
-def answer_identity_probe(
+def _answer_identity_probe(
     stream: socket.socket,
     *,
     user_hash: bytes,
     client_id: int,
     tcp_port: int,
-) -> bool:
-    """Answers one complete plain OP_HELLO and rejects unrelated traffic."""
+) -> dict[str, object] | None:
+    """Answers one complete plain OP_HELLO and returns its peer identity."""
 
     header = _recv_exact(stream, 6)
     declared = int.from_bytes(header[1:5], "little")
@@ -551,7 +603,10 @@ def answer_identity_probe(
         or len(frame.payload) < 17
         or frame.payload[0] != 16
     ):
-        return False
+        return None
+    peer_user_hash = frame.payload[1:17]
+    peer_client_id = int.from_bytes(frame.payload[17:21], "little")
+    peer_tcp_port = int.from_bytes(frame.payload[21:23], "little")
     stream.sendall(
         encode_hello_answer(
             user_hash=user_hash,
@@ -559,7 +614,33 @@ def answer_identity_probe(
             tcp_port=tcp_port,
         )
     )
-    return True
+    return {
+        "userHash": peer_user_hash.hex().upper(),
+        "clientId": peer_client_id,
+        "tcpPort": peer_tcp_port,
+        "payloadLength": len(frame.payload),
+        "payloadHex": frame.payload.hex().upper(),
+    }
+
+
+def answer_identity_probe(
+    stream: socket.socket,
+    *,
+    user_hash: bytes,
+    client_id: int,
+    tcp_port: int,
+) -> bool:
+    """Answers one complete plain OP_HELLO and rejects unrelated traffic."""
+
+    return (
+        _answer_identity_probe(
+            stream,
+            user_hash=user_hash,
+            client_id=client_id,
+            tcp_port=tcp_port,
+        )
+        is not None
+    )
 
 
 class PlainEd2kIdentityProbeListener:
@@ -569,6 +650,8 @@ class PlainEd2kIdentityProbeListener:
         self.tcp_port = _validate_port(tcp_port, "tcp_port")
         self.user_hash = _parse_hash(user_hash, "user_hash")
         self.probe_answers = 0
+        self._observations: list[dict[str, object]] = []
+        self._observation_condition = threading.Condition()
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
@@ -599,26 +682,58 @@ class PlainEd2kIdentityProbeListener:
             return
         while not self._stop.is_set():
             try:
-                stream, _peer = listener.accept()
+                stream, peer = listener.accept()
             except socket.timeout:
                 continue
             except OSError:
                 break
             try:
                 stream.settimeout(2.0)
-                if answer_identity_probe(
+                observation = _answer_identity_probe(
                     stream,
                     user_hash=self.user_hash,
                     client_id=PUBLISHER_HIGH_ID,
                     tcp_port=self.tcp_port,
-                ):
+                )
+                if observation is not None:
                     self.probe_answers += 1
+                    observation = {
+                        **observation,
+                        "peerHost": str(peer[0]),
+                        "peerPort": int(peer[1]),
+                        "observedAt": time.time(),
+                    }
+                    with self._observation_condition:
+                        self._observations.append(observation)
+                        self._observation_condition.notify_all()
             except (OSError, TimeoutError, ed2k_wire.Ed2kWireError):
                 # A normal HighID decision first performs a bare connect and
                 # closes it without sending bytes.  That is expected traffic.
                 pass
             finally:
                 stream.close()
+
+    def observation_count(self) -> int:
+        """Returns the number of complete peer HELLO observations."""
+
+        with self._observation_condition:
+            return len(self._observations)
+
+    def wait_for_observation_after(
+        self,
+        start_index: int,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        """Waits for the first complete peer HELLO after one callback request."""
+
+        deadline = time.monotonic() + timeout_seconds
+        with self._observation_condition:
+            while len(self._observations) <= start_index:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for callback peer HELLO.")
+                self._observation_condition.wait(remaining)
+            return dict(self._observations[start_index])
 
     def close(self) -> None:
         self._stop.set()
@@ -690,6 +805,101 @@ def _restore_stop_handlers(previous: dict[int, Any]) -> None:
         signal.signal(signum, handler)
 
 
+def _execute_callback_command(
+    command: dict[str, Any],
+    *,
+    config: ChildConfiguration,
+    client: ed2k_wire.Ed2kWireClient,
+    listener: PlainEd2kIdentityProbeListener,
+) -> dict[str, Any]:
+    """Executes one immutable parent command and returns causal callback evidence."""
+
+    if command.get("schema") != CALLBACK_COMMAND_SCHEMA:
+        raise DockerEd2kSourcePublisherError("Docker callback command schema is invalid")
+    command_id = command.get("commandId")
+    target_label = command.get("targetLabel")
+    target_client_id = command.get("targetClientId")
+    timeout_seconds = command.get("timeoutSeconds")
+    if not isinstance(command_id, str) or not command_id:
+        raise DockerEd2kSourcePublisherError("Docker callback command has no commandId")
+    if command.get("runId") != config.run_id:
+        raise DockerEd2kSourcePublisherError("Docker callback command runId does not match")
+    if not isinstance(target_label, str) or not target_label:
+        raise DockerEd2kSourcePublisherError("Docker callback command has no targetLabel")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        raise DockerEd2kSourcePublisherError("Docker callback command timeout is invalid")
+    try:
+        request_payload = ed2k_wire.encode_callback_request(target_client_id)
+    except (TypeError, ValueError) as exc:
+        raise DockerEd2kSourcePublisherError("Docker callback command targetClientId is invalid") from exc
+    if command.get("requestPayloadHex") != request_payload.hex().upper():
+        raise DockerEd2kSourcePublisherError("Docker callback command request payload does not match")
+
+    observation_index = listener.observation_count()
+    transcript_index = len(client.transcript)
+    client.send(ed2k_wire.OP_CALLBACKREQUEST, request_payload)
+    callback_connection = listener.wait_for_observation_after(
+        observation_index,
+        float(timeout_seconds),
+    )
+    transcript_delta = list(client.transcript[transcript_index:])
+    if len(transcript_delta) != 1:
+        raise DockerEd2kSourcePublisherError(
+            f"Docker callback command produced {len(transcript_delta)} wire records"
+        )
+    return {
+        "schema": CALLBACK_RESULT_SCHEMA,
+        "status": "completed",
+        "commandId": command_id,
+        "runId": config.run_id,
+        "targetClientId": target_client_id,
+        "targetLabel": target_label,
+        "requestOpcode": ed2k_wire.OP_CALLBACKREQUEST,
+        "requestPayloadHex": request_payload.hex().upper(),
+        "requestTranscript": transcript_delta[0],
+        "callbackConnection": callback_connection,
+    }
+
+
+def _process_callback_commands(
+    config: ChildConfiguration,
+    *,
+    client: ed2k_wire.Ed2kWireClient,
+    listener: PlainEd2kIdentityProbeListener,
+) -> None:
+    """Processes every new command exactly once, retaining request and result files."""
+
+    control_dir = config.receipt_path.parent / "callback-control"
+    control_dir.mkdir(parents=True, exist_ok=True)
+    for request_path in sorted(control_dir.glob("*.request.json")):
+        result_path = request_path.with_name(
+            request_path.name.removesuffix(".request.json") + ".result.json"
+        )
+        if result_path.exists():
+            continue
+        try:
+            command = json.loads(request_path.read_text(encoding="utf-8"))
+            if not isinstance(command, dict):
+                raise DockerEd2kSourcePublisherError(
+                    "Docker callback command must be a JSON object"
+                )
+            result = _execute_callback_command(
+                command,
+                config=config,
+                client=client,
+                listener=listener,
+            )
+        except Exception as exc:
+            result = {
+                "schema": CALLBACK_RESULT_SCHEMA,
+                "status": "failed",
+                "commandId": request_path.name.removesuffix(".request.json"),
+                "runId": config.run_id,
+                "failure": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        write_json_atomic(result_path, result)
+
+
 def run_child(
     config: ChildConfiguration,
     *,
@@ -753,8 +963,8 @@ def run_child(
             "transcript": list(client.transcript),
         }
         write_json_atomic(config.receipt_path, receipt)
-        while not event.wait(1.0):
-            pass
+        while not event.wait(0.05):
+            _process_callback_commands(config, client=client, listener=listener)
         return receipt
     finally:
         client.close()

@@ -133,6 +133,34 @@ def test_identity_probe_answers_plain_hello_with_exact_publisher_hash() -> None:
 
 
 @pytest.mark.unit
+def test_identity_probe_details_preserve_callback_peer_hello() -> None:
+    probe_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    hello_payload = (
+        b"\x10"
+        + probe_hash
+        + (7).to_bytes(4, "little")
+        + (4661).to_bytes(2, "little")
+        + (0).to_bytes(4, "little")
+    )
+    stream = FakeStream(ed2k_wire.encode_frame(publisher.OP_HELLO, hello_payload))
+
+    observation = publisher._answer_identity_probe(
+        stream,  # type: ignore[arg-type]
+        user_hash=USER_HASH,
+        client_id=publisher.PUBLISHER_HIGH_ID,
+        tcp_port=PUBLISHER_PORT,
+    )
+
+    assert observation == {
+        "userHash": probe_hash.hex().upper(),
+        "clientId": 7,
+        "tcpPort": 4661,
+        "payloadLength": len(hello_payload),
+        "payloadHex": hello_payload.hex().upper(),
+    }
+
+
+@pytest.mark.unit
 def test_identity_probe_does_not_answer_unrelated_frame() -> None:
     stream = FakeStream(ed2k_wire.encode_frame(ed2k_wire.OP_SERVERSTATUS, b"\x00" * 8))
 
@@ -243,6 +271,144 @@ def test_child_listens_before_login_offers_file_and_publishes_receipt(
     assert receipt["publisher"]["serverFlags"] == publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.unit
+def test_callback_command_joins_exact_request_to_new_peer_hello(tmp_path: Path) -> None:
+    events: list[object] = []
+
+    class FakeClient:
+        transcript: list[dict[str, object]] = []
+
+        def send(self, opcode: int, payload: bytes) -> None:
+            events.append(("send", opcode, payload))
+            self.transcript.append(
+                ed2k_wire.Ed2kFrame(
+                    ed2k_wire.PROTO_EDONKEY,
+                    opcode,
+                    payload,
+                ).evidence("send")
+            )
+
+    class FakeListener:
+        def observation_count(self) -> int:
+            return 2
+
+        def wait_for_observation_after(
+            self, start_index: int, timeout_seconds: float
+        ) -> dict[str, object]:
+            events.append(("wait", start_index, timeout_seconds))
+            return {
+                "userHash": "AB" * 16,
+                "clientId": 0,
+                "tcpPort": 4662,
+                "peerHost": "198.18.240.1",
+                "peerPort": 50000,
+            }
+
+    config = publisher.ChildConfiguration(
+        run_id=RUN_ID,
+        server_host=SERVER_HOST,
+        server_port=SERVER_PORT,
+        publisher_port=PUBLISHER_PORT,
+        server_flags=publisher.PLAIN_SERVER_FLAGS,
+        user_hash=USER_HASH,
+        nickname=publisher.DEFAULT_NICKNAME,
+        file_hash=FILE_HASH,
+        file_name=FILE_NAME,
+        file_size=FILE_SIZE,
+        receipt_path=tmp_path / "ready.json",
+        timeout_seconds=3.0,
+    )
+    payload = ed2k_wire.encode_callback_request(7)
+    result = publisher._execute_callback_command(
+        {
+            "schema": publisher.CALLBACK_COMMAND_SCHEMA,
+            "commandId": "callback-rust",
+            "runId": RUN_ID,
+            "targetClientId": 7,
+            "targetLabel": "rust",
+            "timeoutSeconds": 4.0,
+            "requestPayloadHex": payload.hex().upper(),
+        },
+        config=config,
+        client=FakeClient(),  # type: ignore[arg-type]
+        listener=FakeListener(),  # type: ignore[arg-type]
+    )
+
+    assert events == [
+        ("send", ed2k_wire.OP_CALLBACKREQUEST, payload),
+        ("wait", 2, 4.0),
+    ]
+    assert result["schema"] == publisher.CALLBACK_RESULT_SCHEMA
+    assert result["status"] == "completed"
+    assert result["targetClientId"] == 7
+    assert result["requestPayloadHex"] == "07000000"
+    assert result["requestTranscript"]["opcode"] == ed2k_wire.OP_CALLBACKREQUEST
+    assert result["callbackConnection"]["userHash"] == "AB" * 16
+
+
+@pytest.mark.unit
+def test_parent_callback_command_is_atomic_and_validates_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    written: list[tuple[Path, dict[str, object]]] = []
+    command_id = "0123456789abcdef0123456789abcdef"
+    monkeypatch.setattr(
+        publisher.uuid,
+        "uuid4",
+        lambda: type("FixedUuid", (), {"hex": command_id})(),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "write_json_atomic",
+        lambda path, value: written.append((path, value)),
+    )
+
+    def fake_wait(path: Path, timeout_seconds: float) -> dict[str, object]:
+        assert path.name == f"{command_id}.result.json"
+        assert timeout_seconds == 6.0
+        return {
+            "schema": publisher.CALLBACK_RESULT_SCHEMA,
+            "status": "completed",
+            "commandId": command_id,
+            "runId": RUN_ID,
+            "targetClientId": 9,
+            "targetLabel": "mfc",
+            "requestPayloadHex": "09000000",
+        }
+
+    monkeypatch.setattr(publisher, "_wait_for_receipt", fake_wait)
+    handle = publisher.DockerEd2kSourcePublisherHandle(
+        run_id=RUN_ID,
+        container_name="publisher-container",
+        network_name="publisher-network",
+        receipt_path=tmp_path / "ready.json",
+        receipt=ready_receipt(),
+    )
+
+    result = handle.request_callback(
+        target_client_id=9,
+        target_label="mfc",
+        timeout_seconds=4.0,
+    )
+
+    assert result["status"] == "completed"
+    assert written == [
+        (
+            tmp_path / "callback-control" / f"{command_id}.request.json",
+            {
+                "schema": publisher.CALLBACK_COMMAND_SCHEMA,
+                "commandId": command_id,
+                "runId": RUN_ID,
+                "targetClientId": 9,
+                "targetLabel": "mfc",
+                "timeoutSeconds": 4.0,
+                "requestPayloadHex": "09000000",
+            },
+        )
+    ]
 
 
 @pytest.mark.unit
