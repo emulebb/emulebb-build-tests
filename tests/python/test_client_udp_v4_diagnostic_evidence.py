@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from emule_test_harness import client_udp_v4_diagnostic_evidence as evidence
+from emule_test_harness import protocol_evidence_registration as registration
 
 
 FILE_HASH = bytes.fromhex("44556677889900112233AABBCCDDEEFF")
@@ -17,9 +20,7 @@ REQUEST_RAW = (
     + bytes.fromhex("010000")
     + bytes.fromhex("0100")
 )
-ACK_RAW = bytes(
-    (evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0)
-)
+ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0))
 STOCK_RECORD = {
     "coverageIds": [
         "client-udp.v1",
@@ -329,6 +330,133 @@ def passing_report(
     )
 
 
+def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+    output_root = tmp_path / "output"
+    run_dir = (
+        output_root
+        / "artifacts"
+        / "emulebb-rust-reask-cross-client"
+        / "20261102T123752Z-emulebb-main-release-100"
+    )
+    fixture_path = run_dir / "fixture" / "client-udp-v4.bin"
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_bytes(b"fixture")
+    diagnostics = passing_report()
+    rust = diagnostics["clients"]["rust"]
+    mfc = diagnostics["clients"]["mfc"]
+    report = {
+        "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
+        "suite": "emulebb-rust-reask-cross-client",
+        "coverageId": "client-udp.v4",
+        "status": "passed",
+        "currentPhase": "complete",
+        "network": {"publicTraffic": False, "transportMode": "plaintext"},
+        "fixture": {
+            "path": str(fixture_path),
+            "sizeBytes": fixture_path.stat().st_size,
+            "partCount": 1,
+        },
+        "builds": {
+            "runnerRevision": "1" * 40,
+            "mfcDiagnostics": {
+                "sha256": "2" * 64,
+                "sourceRevision": "3" * 40,
+            },
+            "rustDiagnostics": {
+                "sha256": "4" * 64,
+                "sourceRevision": "5" * 40,
+            },
+        },
+        "checks": {
+            "rustRequesterMfcResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": {
+                    "request": rust["control"]["request"],
+                    "response": rust["control"]["response"],
+                },
+                "applicationSequence": rust["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "capacity": {
+                    "baseSlots": 2,
+                    "elasticSlots": 0,
+                    "effectiveSlotCap": 2,
+                    "activeSlots": 2,
+                },
+                "publication": {
+                    "clientName": "mfc-responder",
+                    "address": "192.0.2.1",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "rustHighIdClients": [
+                    {
+                        "clientName": f"rust-{index}",
+                        "address": f"192.0.2.{index + 2}",
+                        "highId": True,
+                        "sharedFiles": 0,
+                    }
+                    for index in range(3)
+                ],
+                "registration": {
+                    "fileHash": FILE_HASH.hex(),
+                    "sourceTcpEndpoint": rust["sourceTcpEndpoint"],
+                    "sourceUdpEndpoint": rust["sourceUdpEndpoint"],
+                    "sourceUserHash": rust["sourceUserHash"],
+                    "sourceUdpVersion": 4,
+                },
+            },
+            "mfcRequesterRustResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": {
+                    "request": mfc["control"]["request"],
+                    "response": mfc["control"]["response"],
+                },
+                "applicationSequence": mfc["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "publication": {
+                    "clientName": "rust-responder",
+                    "address": "192.0.2.10",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "occupierHighIdClient": {
+                    "clientName": "rust-occupier",
+                    "address": "192.0.2.11",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "mfcHighIdClient": {
+                    "clientName": "mfc-requester",
+                    "address": "192.0.2.12",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "occupiedSlot": {
+                    "fileHash": FILE_HASH.hex(),
+                    "slotOpenedSequence": 10,
+                    "policy": {
+                        "baseSlots": 1,
+                        "elasticSlots": 0,
+                        "effectiveSlotCap": 1,
+                    },
+                },
+                "queueSource": {
+                    "queueRank": QUEUE_RANK,
+                    "sourceIp": "127.0.0.30",
+                    "sourceTcpPort": 4862,
+                    "sourceUserHash": mfc["sourceUserHash"],
+                },
+            },
+        },
+        "evidence": diagnostics,
+    }
+    report_path = run_dir / "emulebb-rust-reask-cross-client-result.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return output_root, report_path, report
+
+
 @pytest.mark.unit
 def test_bilateral_client_udp_v4_is_claimable() -> None:
     report = passing_report()
@@ -338,9 +466,79 @@ def test_bilateral_client_udp_v4_is_claimable() -> None:
     assert report["stockAuthority"]["ok"] is True
     assert report["comparison"]["requestBytesEqual"] is True
     assert report["comparison"]["ackBytesEqual"] is True
-    assert report["clients"]["rust"]["wire"]["request"]["partStatus"][
-        "partStatusBits"
-    ] == "0"
+    assert (
+        report["clients"]["rust"]["wire"]["request"]["partStatus"]["partStatusBits"]
+        == "0"
+    )
+
+
+@pytest.mark.unit
+def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_campaign_report(tmp_path)
+
+    result = registration.build_client_udp_v4_registration(
+        report_path,
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["coverageIds"] == ["client-udp.v4"]
+    assert receipt["runnerPath"] == "scripts/emulebb-rust-reask-cross-client.py"
+    assert [subject["authorityId"] for subject in receipt["subjects"]] == [
+        "mfc-oracle",
+        "rust-product",
+    ]
+    assert result["coverageEvidence"][0]["verdict"] == "parity"
+
+
+@pytest.mark.unit
+def test_client_udp_v4_registration_rejects_tampered_causal_order(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    sequences = report["evidence"]["clients"]["rust"]["diagnostics"][
+        "requesterSequences"
+    ]
+    sequences["ackIn"] = sequences["requestTerminal"]
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requester sequence is not causal"):
+        registration.build_client_udp_v4_registration(
+            report_path,
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_v4_registration_rejects_tampered_wire_bytes(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    report["evidence"]["clients"]["mfc"]["wire"]["request"]["rawHex"] = "c590"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"evidence\.clients\.mfc\.wire differs"):
+        registration.build_client_udp_v4_registration(
+            report_path,
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_v4_registration_requires_source_provenance(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    report["builds"]["mfcDiagnostics"].pop("sourceRevision")
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sourceRevision is malformed"):
+        registration.build_client_udp_v4_registration(
+            report_path,
+            output_root=output_root,
+        )
 
 
 @pytest.mark.unit
@@ -356,9 +554,7 @@ def test_request_terminal_must_join_the_exact_attempt() -> None:
     report = passing_report(rust_transition=wrong)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["diagnostics"]["counts"][
-        "requestTerminal"
-    ] == 0
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["requestTerminal"] == 0
 
 
 @pytest.mark.unit
