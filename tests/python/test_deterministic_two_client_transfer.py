@@ -555,8 +555,12 @@ def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
-def test_server_udp_source_v1_uses_one_canonical_plaintext_oracle_case() -> None:
+@pytest.mark.parametrize("scenario_constant", ["SERVER_UDP_SOURCE_V1", "SERVER_UDP_SOURCE_V2"])
+def test_server_udp_source_uses_one_canonical_plaintext_oracle_case(
+    scenario_constant: str,
+) -> None:
     module = load_suite_module()
+    scenario = getattr(module, scenario_constant)
     wrong_client = module.parse_args(
         [
             "--lan-bind-addr",
@@ -564,7 +568,7 @@ def test_server_udp_source_v1_uses_one_canonical_plaintext_oracle_case() -> None
             "--client2-identity",
             "stock_emule",
             "--transfer-scenario",
-            module.SERVER_UDP_SOURCE_V1,
+            scenario,
         ]
     )
     wrong_case = module.parse_args(
@@ -574,7 +578,7 @@ def test_server_udp_source_v1_uses_one_canonical_plaintext_oracle_case() -> None
             "--protocol-case",
             "obfuscated-required",
             "--transfer-scenario",
-            module.SERVER_UDP_SOURCE_V1,
+            scenario,
         ]
     )
     canonical = module.parse_args(
@@ -584,7 +588,7 @@ def test_server_udp_source_v1_uses_one_canonical_plaintext_oracle_case() -> None
             "--protocol-case",
             "plain-server-plain-clients",
             "--transfer-scenario",
-            module.SERVER_UDP_SOURCE_V1,
+            scenario,
         ]
     )
 
@@ -1373,20 +1377,20 @@ def test_server_udp_metadata_uses_two_servers_and_causal_bilateral_gate() -> Non
     assert "ed2k_server.stop_process(metadata_server_process)" in script_text
 
 
-def test_server_udp_source_v1_uses_scripted_target_and_causal_bilateral_gate() -> None:
+def test_server_udp_source_variants_use_one_scripted_causal_bilateral_path() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert (
-        "include_udp_source_target=args.transfer_scenario == SERVER_UDP_SOURCE_V1"
+        "include_udp_source_target=udp_source_request_version is not None"
         in script_text
     )
     assert "scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer(" in script_text
     assert "udp_source_fixture.wait_for_status_clients(" in script_text
-    assert '"udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES' in script_text
+    assert '"udpFlags": udp_source_fixture.udp_flags' in script_text
     assert '"priority": SERVER_PRIORITY_LOW' in script_text
     assert '"mode": "source-free-ed2k-link"' in script_text
-    assert "collect_server_udp_source_v1_diagnostics(" in script_text
+    assert "collect_server_udp_source_diagnostics(" in script_text
     assert (
         "server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence("
         in script_text
