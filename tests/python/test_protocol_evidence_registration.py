@@ -1157,7 +1157,7 @@ def _server_udp_source_v1_transcript() -> dict[str, object]:
             ]
         )
     return {
-        "schema": scripted_ed2k_udp_source.TRANSCRIPT_SCHEMA,
+        "schema": scripted_ed2k_udp_source.V1_TRANSCRIPT_SCHEMA,
         "serverEndpoint": (
             f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_PORT}"
         ),

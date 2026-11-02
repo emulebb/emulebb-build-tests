@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from emule_test_harness import ed2k_wire
-from emule_test_harness.scripted_ed2k_udp_source import TRANSCRIPT_SCHEMA
+from emule_test_harness.scripted_ed2k_udp_source import V1_TRANSCRIPT_SCHEMA
 from emule_test_harness.server_udp_source_v1_diagnostic_evidence import (
     build_server_udp_source_v1_diagnostic_evidence,
     require_server_udp_source_v1_diagnostic_evidence,
@@ -185,7 +185,7 @@ def _transcript() -> dict[str, object]:
             ]
         )
     return {
-        "schema": TRANSCRIPT_SCHEMA,
+        "schema": V1_TRANSCRIPT_SCHEMA,
         "serverEndpoint": SERVER_ENDPOINT,
         "udpEndpoint": UDP_ENDPOINT,
         "udpFlags": 1,

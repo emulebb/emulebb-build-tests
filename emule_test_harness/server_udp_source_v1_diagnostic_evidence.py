@@ -6,7 +6,7 @@ import ipaddress
 from typing import Any, Iterable
 
 from emule_test_harness import ed2k_wire
-from emule_test_harness.scripted_ed2k_udp_source import TRANSCRIPT_SCHEMA
+from emule_test_harness.scripted_ed2k_udp_source import V1_TRANSCRIPT_SCHEMA
 
 
 SCHEMA = "emulebb-build-tests.deterministic-server-udp-source-v1-diagnostics.v1"
@@ -444,7 +444,7 @@ def _transcript_evidence(
         for request in status_requests
     )
     ok = bool(
-        value.get("schema") == TRANSCRIPT_SCHEMA
+        value.get("schema") == V1_TRANSCRIPT_SCHEMA
         and str(value.get("serverEndpoint") or "").casefold()
         == target_server_endpoint.casefold()
         and str(value.get("udpEndpoint") or "").casefold() == target_udp_endpoint.casefold()

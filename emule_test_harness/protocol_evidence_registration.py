@@ -1293,7 +1293,7 @@ def _derived_server_udp_source_v1_coverage_ids(
             "source",
             "events",
         }
-        or target.get("schema") != scripted_ed2k_udp_source.TRANSCRIPT_SCHEMA
+        or target.get("schema") != scripted_ed2k_udp_source.V1_TRANSCRIPT_SCHEMA
         or target.get("serverEndpoint") != f"{target_host}:{target_port}"
         or target.get("udpEndpoint") != f"{udp_host}:{udp_port}"
         or target.get("udpFlags")

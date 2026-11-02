@@ -2479,6 +2479,7 @@ def main(argv: list[str] | None = None) -> int:
                 bind_host=p2p_address,
                 server_tcp_port=ports["udp_source_target_tcp"],
                 file_hash=SERVER_SOURCE_FILE_HASH,
+                source_request_version=1,
                 source_host=docker_ed2k_source_publisher.PUBLISHER_IP,
                 source_tcp_port=ports["udp_source_peer_tcp"],
                 transcript_path=(
