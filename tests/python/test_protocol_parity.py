@@ -52,7 +52,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 3,
-        "coveredIdCount": 20,
+        "coveredIdCount": 21,
         "groupVerdictCounts": {
             "parity": 3,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 20,
+            "parity": 21,
             "divergence": 0,
-            "evidence-incomplete": 80,
+            "evidence-incomplete": 79,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -109,6 +109,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.tcp-obfuscated",
         "server.source.tcp-plain",
         "server.source.udp-v1",
+        "server.source.udp-v2",
         "transfer.block.compressed",
         "transfer.block.uncompressed",
     ]
@@ -210,6 +211,14 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "queue.admission",
         "server.reply.sources",
         "server.source.udp-v1",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][14]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v2",
         "transfer.block.uncompressed",
     ]
 

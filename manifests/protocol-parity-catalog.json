@@ -259,7 +259,8 @@
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
         "rust-mfc-transfer-20261102t002608z",
-        "rust-mfc-transfer-20261102t005817z"
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
       ],
       "verdict": "parity"
     },
@@ -286,7 +287,8 @@
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
         "rust-mfc-transfer-20261102t002608z",
-        "rust-mfc-transfer-20261102t005817z"
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
       ],
       "verdict": "parity"
     },
@@ -308,7 +310,8 @@
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
         "rust-mfc-transfer-20261102t002608z",
-        "rust-mfc-transfer-20261102t005817z"
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
       ],
       "verdict": "parity"
     },
@@ -355,11 +358,12 @@
     {
       "coverageId": "server.reply.sources",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
-      "reason": "Rust and MFC each decoded the same singular HighID source and applied the exact 0-to-1 source-state transition in plaintext TCP, obfuscated TCP, and plaintext UDP v1 campaigns.",
+      "reason": "Rust and MFC each decoded the same singular HighID source and applied the exact 0-to-1 source-state transition in plaintext TCP, obfuscated TCP, and plaintext UDP v1/v2 campaigns.",
       "receiptIds": [
         "rust-mfc-transfer-20261101t235531z",
         "rust-mfc-transfer-20261102t002608z",
-        "rust-mfc-transfer-20261102t005817z"
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
       ],
       "verdict": "parity"
     },
@@ -420,6 +424,13 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "server.source.udp-v2",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical plaintext UDP v2 OP_GLOBGETSOURCES2 request, with no v1 request, at sequences 30/23.",
+      "receiptIds": ["rust-mfc-transfer-20261102t011511z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "transfer.block.compressed",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "All 58 compressed payload frames matched exactly before manifest-backed completion.",
@@ -443,7 +454,8 @@
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
         "rust-mfc-transfer-20261102t002608z",
-        "rust-mfc-transfer-20261102t005817z"
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
       ],
       "verdict": "parity"
     }
@@ -1701,6 +1713,35 @@
       "receiptId": "rust-mfc-transfer-20261102t005817z",
       "runnerPath": "scripts/deterministic-two-client-transfer.py",
       "runnerRevision": "0739a3638f8a072d97ac1dd7cb36e4e1ef121307",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T011511Z-emulebb-main-release-500/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "6e4fe12abaeb4e02d255e429d3ca18bf27c6a08d2107ab9ee81506fc3e49186a",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v2",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t011511z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "a240a463e71440fc92e84685542fdad582ea07cc",
       "subjects": [
         {
           "authorityId": "mfc-oracle",
