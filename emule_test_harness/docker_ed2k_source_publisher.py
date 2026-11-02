@@ -34,6 +34,7 @@ DOCKER_PLATFORM = "linux/amd64"
 BENCHMARK_SUBNET = "198.18.240.0/28"
 PUBLISHER_IP = "198.18.240.2"
 PUBLISHER_HIGH_ID = int.from_bytes(ipaddress.IPv4Address(PUBLISHER_IP).packed, "little")
+WINDOWS_HOST_ROUTE_NETMASK = "255.255.255.255"
 PLAIN_SERVER_FLAGS = 0x0119
 OBFUSCATED_SOURCE_SERVER_FLAGS = PLAIN_SERVER_FLAGS | ed2k_wire.SRVCAP_SUPPORTCRYPT
 DEFAULT_NICKNAME = "emulebb-harness-source-publisher"
@@ -166,8 +167,59 @@ def _resource_absent(completed: subprocess.CompletedProcess[str]) -> bool:
     return (
         "no such container" in detail
         or "no such network" in detail
+        or "route specified was not found" in detail
+        or "element not found" in detail
         or "not found" in detail
     )
+
+
+def _add_windows_host_route(gateway: str) -> None:
+    """Routes the fixture's exact HighID address through the managed WSL host."""
+
+    try:
+        gateway_ip = ipaddress.ip_address(gateway)
+    except ValueError as exc:
+        raise DockerEd2kSourcePublisherError(
+            f"Docker publisher route gateway is not an IP address: {gateway!r}"
+        ) from exc
+    if not isinstance(gateway_ip, ipaddress.IPv4Address) or gateway_ip.is_unspecified:
+        raise DockerEd2kSourcePublisherError(
+            f"Docker publisher route gateway must be a concrete IPv4 address: {gateway!r}"
+        )
+    completed = _run(
+        (
+            "route.exe",
+            "ADD",
+            PUBLISHER_IP,
+            "MASK",
+            WINDOWS_HOST_ROUTE_NETMASK,
+            str(gateway_ip),
+            "METRIC",
+            "1",
+        )
+    )
+    if completed.returncode != 0:
+        raise DockerEd2kSourcePublisherError(
+            _command_failure("Docker publisher Windows callback route creation", completed)
+        )
+
+
+def _remove_windows_host_route(gateway: str) -> str | None:
+    """Removes the exact callback route owned by this fixture, if still present."""
+
+    completed = _run(
+        (
+            "route.exe",
+            "DELETE",
+            PUBLISHER_IP,
+            "MASK",
+            WINDOWS_HOST_ROUTE_NETMASK,
+            gateway,
+        )
+    )
+    if completed.returncode == 0 or _resource_absent(completed):
+        return None
+    return _command_failure("Docker publisher Windows callback route removal", completed)
 
 
 def _remove_resources(
@@ -199,6 +251,8 @@ class DockerEd2kSourcePublisherHandle:
     receipt_path: Path
     receipt: dict[str, Any]
     wsl_distribution: str | None = None
+    windows_route_gateway: str | None = None
+    windows_route: dict[str, object] | None = None
     _cleaned: bool = field(default=False, init=False, repr=False)
 
     def cleanup(self) -> None:
@@ -211,6 +265,10 @@ class DockerEd2kSourcePublisherHandle:
             self.container_name,
             self.network_name,
         )
+        if self.windows_route_gateway is not None:
+            route_error = _remove_windows_host_route(self.windows_route_gateway)
+            if route_error is not None:
+                errors.append(route_error)
         if errors:
             raise DockerEd2kSourcePublisherError("; ".join(errors))
         self._cleaned = True
@@ -372,6 +430,7 @@ def start_docker_ed2k_source_publisher(
     nickname: str = DEFAULT_NICKNAME,
     wsl_distribution: str | None = None,
     readiness_timeout_seconds: float = 20.0,
+    windows_routable: bool = False,
 ) -> DockerEd2kSourcePublisherHandle:
     """Starts one pinned publisher and returns ownership after a verified receipt."""
 
@@ -501,7 +560,23 @@ def start_docker_ed2k_source_publisher(
         )
     )
 
+    windows_route_gateway: str | None = None
+    windows_route: dict[str, object] | None = None
+
     try:
+        if windows_routable:
+            _add_windows_host_route(server_host)
+            windows_route_gateway = server_host
+            windows_route = {
+                "destination": f"{PUBLISHER_IP}/32",
+                "gateway": server_host,
+                "publishedTcpPort": publisher_port,
+            }
+            image_index = container_arguments.index(DOCKER_IMAGE)
+            container_arguments[image_index:image_index] = (
+                "--publish",
+                f"{publisher_port}:{publisher_port}/tcp",
+            )
         completed = _docker_result(
             wsl_distribution,
             container_arguments,
@@ -531,6 +606,10 @@ def start_docker_ed2k_source_publisher(
             container_name,
             network_name,
         )
+        if windows_route_gateway is not None:
+            route_error = _remove_windows_host_route(windows_route_gateway)
+            if route_error is not None:
+                cleanup_errors.append(route_error)
         if cleanup_errors:
             raise DockerEd2kSourcePublisherError(
                 f"Docker publisher startup failed ({exc}); cleanup also failed: "
@@ -545,6 +624,8 @@ def start_docker_ed2k_source_publisher(
         receipt_path=receipt_path,
         receipt=receipt,
         wsl_distribution=wsl_distribution,
+        windows_route_gateway=windows_route_gateway,
+        windows_route=windows_route,
     )
 
 

@@ -2663,6 +2663,7 @@ def main(argv: list[str] | None = None) -> int:
                         or None
                     ),
                     readiness_timeout_seconds=args.server_publish_timeout_seconds,
+                    windows_routable=True,
                 )
             )
             requester_login = dict(server_callback_requester.receipt["login"])
@@ -2694,6 +2695,7 @@ def main(argv: list[str] | None = None) -> int:
                 "client": requester_client,
                 "publication": requester_publication,
                 "runtime": server_callback_requester.receipt,
+                "windowsRoute": server_callback_requester.windows_route,
             }
 
         if udp_source_request_version is not None:

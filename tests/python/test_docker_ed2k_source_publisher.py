@@ -4,6 +4,7 @@ import json
 import subprocess
 import threading
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -544,6 +545,7 @@ def start_with_fake_docker(
     tmp_path: Path,
     *,
     receipt_id: int = publisher.PUBLISHER_HIGH_ID,
+    windows_routable: bool = False,
 ) -> tuple[publisher.DockerEd2kSourcePublisherHandle, FakeDockerRun]:
     repo = create_repo_fixture(tmp_path)
     run_dir = tmp_path / "run"
@@ -564,6 +566,7 @@ def start_with_fake_docker(
         repo_root=repo,
         wsl_distribution="Ubuntu-Test",
         readiness_timeout_seconds=3.0,
+        windows_routable=windows_routable,
     )
     return handle, fake
 
@@ -703,6 +706,84 @@ def test_missing_pinned_image_fails_before_network_without_pull(
         publisher.DOCKER_IMAGE,
     ]
     assert "pull" not in calls[0]
+
+
+@pytest.mark.unit
+def test_callback_fixture_owns_exact_windows_route_and_published_port(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    route_actions: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        publisher,
+        "_add_windows_host_route",
+        lambda gateway: route_actions.append(("add", gateway)),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_remove_windows_host_route",
+        lambda gateway: route_actions.append(("remove", gateway)),
+    )
+
+    handle, fake = start_with_fake_docker(
+        monkeypatch,
+        tmp_path,
+        windows_routable=True,
+    )
+
+    container = next(row[0] for row in fake.calls if "run" in row[0])
+    assert container[container.index("--publish") + 1] == (
+        f"{PUBLISHER_PORT}:{PUBLISHER_PORT}/tcp"
+    )
+    assert route_actions == [("add", SERVER_HOST)]
+    assert handle.windows_route == {
+        "destination": f"{publisher.PUBLISHER_IP}/32",
+        "gateway": SERVER_HOST,
+        "publishedTcpPort": PUBLISHER_PORT,
+    }
+
+    handle.cleanup()
+
+    assert route_actions == [("add", SERVER_HOST), ("remove", SERVER_HOST)]
+
+
+@pytest.mark.unit
+def test_windows_callback_route_uses_argument_vector_and_exact_host_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def succeed(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        return completed(list(command), stdout="OK")
+
+    monkeypatch.setattr(publisher, "_run", succeed)
+
+    publisher._add_windows_host_route(SERVER_HOST)
+    assert publisher._remove_windows_host_route(SERVER_HOST) is None
+
+    assert commands == [
+        [
+            "route.exe",
+            "ADD",
+            publisher.PUBLISHER_IP,
+            "MASK",
+            publisher.WINDOWS_HOST_ROUTE_NETMASK,
+            SERVER_HOST,
+            "METRIC",
+            "1",
+        ],
+        [
+            "route.exe",
+            "DELETE",
+            publisher.PUBLISHER_IP,
+            "MASK",
+            publisher.WINDOWS_HOST_ROUTE_NETMASK,
+            SERVER_HOST,
+        ],
+    ]
 
 
 @pytest.mark.unit
