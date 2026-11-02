@@ -3516,6 +3516,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if args.transfer_scenario == DIRECT_CALLBACK:
+            current_phase = "start_client1_isolated_kad_runtime"
+            report["checks"]["client1_direct_callback_kad_start"] = (
+                rust_local_ed2k.request_json(
+                    base_url,
+                    "POST",
+                    "/api/v1/kad/operations/start",
+                    args.api_key,
+                )
+            )
             current_phase = "wait_for_isolated_kad_runtimes"
             kad_running: dict[str, object] = {}
             for client, kad_base_url in (

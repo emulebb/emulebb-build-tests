@@ -1537,6 +1537,8 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
     assert '"directCallbackKadIsolation"' in script_text
     assert '"mfcBootstrapSeeds": []' in script_text
     assert 'Path(client2["config_dir"]) / "nodes.dat",\n                    [],' in script_text
+    assert '"client1_direct_callback_kad_start"' in script_text
+    assert '"/api/v1/kad/operations/start"' in script_text
     assert '"client_direct_callback_kad_running"' in script_text
     assert "direct_callback_probe.DirectCallbackProbe(" in script_text
     assert 'for client, udp_port in (' in script_text
