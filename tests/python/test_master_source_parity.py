@@ -2643,7 +2643,8 @@ def _check_server_socket_source__diagnostics_use_attempt_transport_before_handsh
         'IsServerCryptEnabledConnection() ? _T("obfuscated") : _T("plaintext")'
     )
 
-    assert source.count(attempt_transport) == 6
+    assert source.count(attempt_transport) == 7
+    assert "DiagEventLogEd2kServerCallbackApplied(" in source
     receive_block = source[source.index("bool CServerSocket::PacketReceived(") : source.index("void CServerSocket::SetConnectionState(")]
     state_block = source[source.index("void CServerSocket::LogConnectionStateTransition(") : source.index("void CServerSocket::SendPacket(")]
     send_block = source[source.index("void CServerSocket::SendPacket(") :]

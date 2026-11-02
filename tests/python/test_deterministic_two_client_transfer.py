@@ -151,6 +151,99 @@ def test_server_login_collection_returns_failed_snapshot_with_capture_provenance
     }
 
 
+def test_server_callback_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    callback_evidence = {
+        "schema": "emulebb-build-tests.deterministic-server-callback-diagnostics.v1",
+        "ok": True,
+    }
+
+    def load_capture(
+        _directory: Path, *, side: str, **_kwargs: object
+    ) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[], selected_segments=[segment])
+
+    monkeypatch.setattr(
+        module.converged_live_wire, "load_current_diag_capture", load_capture
+    )
+    monkeypatch.setattr(
+        module.server_callback_diagnostic_evidence,
+        "build_server_callback_diagnostic_evidence",
+        lambda **_kwargs: dict(callback_evidence),
+    )
+
+    result = module.collect_server_callback_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        requester_port=4662,
+        targets={"rust": {}, "mfc": {}},
+        requester_results={"rust": {}, "mfc": {}},
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
+def test_callback_targets_come_from_accepted_lowid_logins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(
+        module.server_login_diagnostic_evidence,
+        "require_server_login_diagnostic_evidence",
+        lambda _report: None,
+    )
+    login = {
+        "clients": {
+            "rust": {
+                "decodedLogin": {"user_hash": "11" * 16},
+                "decodedIdChange": {"assigned_id": 7, "id_kind": "low-id"},
+            },
+            "mfc": {
+                "decodedLogin": {"user_hash": "22" * 16},
+                "decodedIdChange": {"assigned_id": 9, "id_kind": "low-id"},
+            },
+        },
+        "expectedClients": {
+            "rust": {"tcpPort": 4662},
+            "mfc": {"tcpPort": 4663},
+        },
+    }
+
+    assert module.callback_targets_from_login_evidence(login) == {
+        "rust": {
+            "clientId": 7,
+            "idKind": "low-id",
+            "tcpPort": 4662,
+            "userHash": "11" * 16,
+        },
+        "mfc": {
+            "clientId": 9,
+            "idKind": "low-id",
+            "tcpPort": 4663,
+            "userHash": "22" * 16,
+        },
+    }
+
+
 def test_server_tcp_metadata_collection_preserves_capture_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -671,6 +764,47 @@ def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
+def test_server_callback_accepts_only_plaintext_mfc_oracle_lane() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
 def test_non_search_scenarios_keep_the_multi_part_fixture_default() -> None:
     module = load_suite_module()
     args = module.parse_args(
@@ -1026,6 +1160,23 @@ def test_choose_distinct_ports_adds_dedicated_source_publisher(monkeypatch) -> N
     assert len(ports) == len(set(ports.values()))
 
 
+def test_choose_distinct_ports_adds_dedicated_callback_requester(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_callback_requester=True,
+    )
+
+    assert ports["callback_requester_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
 def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch) -> None:
     module = load_suite_module()
     checks: list[tuple[int, bool]] = []
@@ -1353,6 +1504,26 @@ def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_ga
         "server_source_diagnostic_evidence.require_server_source_diagnostic_evidence("
         in script_text
     )
+
+
+def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_CALLBACK_REPLY in module.TRANSFER_SCENARIOS
+    assert (
+        "include_callback_requester=args.transfer_scenario == SERVER_CALLBACK_REPLY"
+        in script_text
+    )
+    assert "server_callback_requester.request_callback(" in script_text
+    assert 'for client in ("mfc", "rust"):' in script_text
+    assert "callback_targets_from_login_evidence(" in script_text
+    assert "collect_server_callback_diagnostics(" in script_text
+    assert (
+        "server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence("
+        in script_text
+    )
+    assert "server_callback_evidence=server_callback_evidence" in script_text
 
 
 def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:

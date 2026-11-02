@@ -35,6 +35,7 @@ from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
+from emule_test_harness import server_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
@@ -75,6 +76,7 @@ CLIENT01 = CLIENT_IDENTITIES["emulebb_rust"]
 FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
+SERVER_CALLBACK_REPLY = "server-callback-reply"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_ADVANCED_SEARCH = "server-advanced-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
@@ -112,6 +114,11 @@ SERVER_SOURCE_FILE_NAME = "deterministic-server-source.bin"
 SERVER_SOURCE_FILE_SIZE = 67_890
 SERVER_SOURCE_PUBLISHER_HASH = bytes.fromhex("32547698BADCFE1021436587A9CBED0F")
 SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
+SERVER_CALLBACK_REQUESTER_HASH = bytes.fromhex("426486A8CAEC0E20426486A8CAEC6E00")
+SERVER_CALLBACK_REQUESTER_NICK = "emulebb-harness-callback-requester"
+SERVER_CALLBACK_FILE_HASH = bytes.fromhex("33445566778899001122AABBCCDDEEFF")
+SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
+SERVER_CALLBACK_FILE_SIZE = 23_456
 SERVER_UDP_METADATA_FILE_HASH = bytes.fromhex("11223344556677889900AABBCCDDEEFF")
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
@@ -121,6 +128,7 @@ TRANSFER_SCENARIOS = (
     FULL_METADATA_LINK,
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
+    SERVER_CALLBACK_REPLY,
     SERVER_KEYWORD_SEARCH,
     SERVER_ADVANCED_SEARCH,
     SERVER_TCP_SOURCE,
@@ -206,6 +214,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             if args.transfer_scenario
             in {
                 SERVER_LOGIN_REQUEST,
+                SERVER_CALLBACK_REPLY,
                 *SERVER_SEARCH_VARIANTS,
                 SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
@@ -293,6 +302,13 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Server login proof requires a canonical plaintext, obfuscated, or fallback case."
             )
+    if args.transfer_scenario == SERVER_CALLBACK_REPLY:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("Server callback proof requires the MFC diagnostics oracle.")
+        if args.protocol_case != "plain-server-plain-clients":
+            raise ValueError(
+                "Server callback proof uses the single canonical plaintext case."
+            )
 
 
 def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
@@ -316,6 +332,7 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
+    server_callback_evidence: dict[str, object] | None,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
     server_source_evidence: dict[str, object] | None,
@@ -356,6 +373,14 @@ def collect_transfer_diagnostics(
         expected_source_user_hash=expected_source_user_hash,
     )
     extra_claims: set[str] = set()
+    if server_callback_evidence is not None:
+        server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
+            server_callback_evidence
+        )
+        evidence["serverCallback"] = server_callback_evidence
+        extra_claims.update(
+            server_callback_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
     if server_login_evidence is not None:
         server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
             server_login_evidence
@@ -450,6 +475,98 @@ def collect_server_login_diagnostics(
         expected_transport_plan=expected_transport_plan,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def callback_targets_from_login_evidence(
+    login_evidence: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Returns exact LowID callback targets from the accepted bilateral logins."""
+
+    server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
+        login_evidence
+    )
+    clients = login_evidence.get("clients")
+    expected_clients = login_evidence.get("expectedClients")
+    if not isinstance(clients, dict) or not isinstance(expected_clients, dict):
+        raise RuntimeError("Server-login evidence has no callback target identities.")
+    targets: dict[str, dict[str, object]] = {}
+    for client in ("rust", "mfc"):
+        row = clients.get(client)
+        expected = expected_clients.get(client)
+        if not isinstance(row, dict) or not isinstance(expected, dict):
+            raise RuntimeError(f"Server-login evidence has no {client} callback target.")
+        decoded_login = row.get("decodedLogin")
+        decoded_id = row.get("decodedIdChange")
+        if not isinstance(decoded_login, dict) or not isinstance(decoded_id, dict):
+            raise RuntimeError(f"Server-login evidence has no decoded {client} identity.")
+        target = {
+            "clientId": decoded_id.get("assigned_id"),
+            "idKind": decoded_id.get("id_kind"),
+            "tcpPort": expected.get("tcpPort"),
+            "userHash": str(decoded_login.get("user_hash") or "").upper(),
+        }
+        if (
+            target["idKind"] != "low-id"
+            or not isinstance(target["clientId"], int)
+            or not 0 < target["clientId"] < ed2k_wire.LOW_ID_CEILING
+            or not isinstance(target["tcpPort"], int)
+            or not 0 < target["tcpPort"] <= 0xFFFF
+            or len(target["userHash"]) != 32
+        ):
+            raise RuntimeError(f"Server-login {client} callback target is invalid: {target!r}")
+        targets[client] = target
+    return targets
+
+
+def collect_server_callback_diagnostics(
+    *,
+    server_endpoint: str,
+    requester_port: int,
+    targets: dict[str, object],
+    requester_results: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots the bilateral callback reply before later transfer traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = (
+        server_callback_diagnostic_evidence.build_server_callback_diagnostic_evidence(
+            server_endpoint=server_endpoint,
+            requester_host=docker_ed2k_source_publisher.PUBLISHER_IP,
+            requester_port=requester_port,
+            targets=targets,
+            requester_results=requester_results,
+            rust_records=rust_capture.records,
+            mfc_records=mfc_capture.records,
+        )
     )
     evidence["captures"] = {
         "rust": {
@@ -967,6 +1084,7 @@ def choose_distinct_ports(
     *,
     include_search_publisher: bool = False,
     include_source_publisher: bool = False,
+    include_callback_requester: bool = False,
     include_metadata_target: bool = False,
     include_udp_source_target: bool = False,
 ) -> dict[str, int]:
@@ -1009,6 +1127,7 @@ def choose_distinct_ports(
         "client2_ec",
         *(("search_publisher_tcp",) if include_search_publisher else ()),
         *(("source_publisher_tcp",) if include_source_publisher else ()),
+        *(("callback_requester_tcp",) if include_callback_requester else ()),
         *(("metadata_publisher_tcp",) if include_metadata_target else ()),
         *(("udp_source_peer_tcp",) if include_udp_source_target else ()),
     ):
@@ -2444,11 +2563,15 @@ def main(argv: list[str] | None = None) -> int:
     server_source_publisher: (
         docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
     ) = None
+    server_callback_requester: (
+        docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
+    ) = None
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     udp_source_fixture: scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer | None = None
     server_login_evidence: dict[str, object] | None = None
+    server_callback_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
     server_tcp_metadata_evidence: dict[str, object] | None = None
@@ -2466,6 +2589,7 @@ def main(argv: list[str] | None = None) -> int:
             args.lan_bind_addr,
             include_search_publisher=args.transfer_scenario in SERVER_SEARCH_VARIANTS,
             include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
+            include_callback_requester=args.transfer_scenario == SERVER_CALLBACK_REPLY,
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
             include_udp_source_target=udp_source_request_version is not None,
         )
@@ -2518,6 +2642,59 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["p2p_bind_interface_address"] = p2p_address
         report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
+
+        if args.transfer_scenario == SERVER_CALLBACK_REPLY:
+            current_phase = "start_server_callback_requester"
+            server_callback_requester = (
+                docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(
+                    server_host=server_address,
+                    server_port=ports["ed2k_tcp"],
+                    publisher_port=ports["callback_requester_tcp"],
+                    server_flags=docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+                    user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+                    file_hash=SERVER_CALLBACK_FILE_HASH,
+                    file_name=SERVER_CALLBACK_FILE_NAME,
+                    file_size=SERVER_CALLBACK_FILE_SIZE,
+                    run_dir=server_dir / "callback-requester",
+                    repo_root=REPO_ROOT,
+                    nickname=SERVER_CALLBACK_REQUESTER_NICK,
+                    wsl_distribution=(
+                        os.environ.get("EMULEBB_TEST_WSL_DISTRIBUTION", "").strip()
+                        or None
+                    ),
+                    readiness_timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            )
+            requester_login = dict(server_callback_requester.receipt["login"])
+            if (
+                requester_login.get("id_kind") != "high-id"
+                or requester_login.get("assigned_id")
+                != docker_ed2k_source_publisher.PUBLISHER_HIGH_ID
+            ):
+                raise RuntimeError(
+                    "Deterministic callback requester did not receive its exact HighID: "
+                    f"{requester_login!r}"
+                )
+            requester_client = server_control.wait_for_client(
+                SERVER_CALLBACK_REQUESTER_NICK,
+                args.server_publish_timeout_seconds,
+            )
+            requester_publication = file_observer.wait_for_file(
+                SERVER_CALLBACK_FILE_HASH.hex(),
+                SERVER_CALLBACK_FILE_SIZE,
+                args.server_publish_timeout_seconds,
+            )
+            report["server_callback_requester"] = {
+                "nickname": SERVER_CALLBACK_REQUESTER_NICK,
+                "ip": docker_ed2k_source_publisher.PUBLISHER_IP,
+                "tcpPort": ports["callback_requester_tcp"],
+                "userHash": SERVER_CALLBACK_REQUESTER_HASH.hex().upper(),
+                "serverFlags": docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+                "login": requester_login,
+                "client": requester_client,
+                "publication": requester_publication,
+                "runtime": server_callback_requester.receipt,
+            }
 
         if udp_source_request_version is not None:
             current_phase = f"start_udp_source_v{udp_source_request_version}_target"
@@ -2764,6 +2941,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
             else "deterministicserverlogin-fixture.bin"
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
+            else "deterministicservercallback-transfer.bin"
+            if args.transfer_scenario == SERVER_CALLBACK_REPLY
             else "deterministicserversearch-transfer.bin"
             if args.transfer_scenario in SERVER_SEARCH_VARIANTS
             else "deterministicserversource-transfer.bin"
@@ -3449,7 +3628,7 @@ def main(argv: list[str] | None = None) -> int:
                 server_udp_metadata_evidence
             )
 
-        if args.transfer_scenario == SERVER_LOGIN_REQUEST:
+        if args.transfer_scenario in {SERVER_LOGIN_REQUEST, SERVER_CALLBACK_REPLY}:
             if client2_process_id is None:
                 raise RuntimeError(
                     "Bilateral server-login diagnostics require the MFC process identity."
@@ -3474,6 +3653,48 @@ def main(argv: list[str] | None = None) -> int:
             )
             server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
                 server_login_evidence
+            )
+
+        if args.transfer_scenario == SERVER_CALLBACK_REPLY:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral server-callback diagnostics require the MFC process identity."
+                )
+            if server_callback_requester is None or server_login_evidence is None:
+                raise RuntimeError("Server callback requester or login evidence is unavailable.")
+            current_phase = "derive_server_callback_targets"
+            callback_targets = callback_targets_from_login_evidence(
+                server_login_evidence
+            )
+            callback_results: dict[str, object] = {}
+            report["checks"]["client_server_callback_targets"] = callback_targets
+            for client in ("mfc", "rust"):
+                current_phase = f"request_{client}_server_callback"
+                target_id = callback_targets[client]["clientId"]
+                if not isinstance(target_id, int):
+                    raise RuntimeError(f"{client} callback target has no numeric LowID.")
+                callback_results[client] = server_callback_requester.request_callback(
+                    target_client_id=target_id,
+                    target_label=client,
+                    timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            report["checks"]["client_server_callback_requests"] = callback_results
+            current_phase = "collect_server_callback_diagnostics"
+            server_callback_evidence = collect_server_callback_diagnostics(
+                server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
+                requester_port=ports["callback_requester_tcp"],
+                targets=callback_targets,
+                requester_results=callback_results,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_server_callback_diagnostics"] = (
+                server_callback_evidence
+            )
+            server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
+                server_callback_evidence
             )
 
         if args.transfer_scenario in SERVER_SEARCH_VARIANTS:
@@ -3731,6 +3952,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
+                server_callback_evidence=server_callback_evidence,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
                 server_source_evidence=server_source_evidence,
@@ -3788,6 +4010,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_login_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverLogin"] = server_login_evidence
+        if server_callback_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverCallback"] = server_callback_evidence
         if server_search_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverSearch"] = server_search_evidence
@@ -3844,6 +4069,16 @@ def main(argv: list[str] | None = None) -> int:
                 close_results["server_source_publisher"] = {"ok": True}
             except Exception as exc:
                 close_results["server_source_publisher"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if server_callback_requester is not None:
+            try:
+                server_callback_requester.cleanup()
+                close_results["server_callback_requester"] = {"ok": True}
+            except Exception as exc:
+                close_results["server_callback_requester"] = {
                     "ok": False,
                     "type": type(exc).__name__,
                     "message": str(exc),
