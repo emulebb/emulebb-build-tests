@@ -15,6 +15,8 @@ from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
+from emule_test_harness import server_udp_source_v1_diagnostic_evidence
+from emule_test_harness import scripted_ed2k_udp_source
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
 from emule_test_harness.protocol_evidence_registration import build_transfer_registration
 from emule_test_harness.transfer_diagnostic_evidence import EVIDENCE_LAYERS, SCHEMA
@@ -42,6 +44,9 @@ SERVER_SOURCE_PUBLISHER_ID = int.from_bytes(
     "little",
 )
 SERVER_SOURCE_PUBLISHER_PORT = 48_017
+SERVER_UDP_SOURCE_TARGET_HOST = "127.0.0.1"
+SERVER_UDP_SOURCE_TARGET_PORT = 4_761
+SERVER_UDP_SOURCE_TARGET_UDP_PORT = SERVER_UDP_SOURCE_TARGET_PORT + 4
 
 
 def bilateral_login_evidence(
@@ -963,6 +968,335 @@ def attach_server_source(
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
 
+    return evidence
+
+
+def _server_udp_source_v1_records(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+) -> list[dict[str, object]]:
+    target_endpoint = (
+        f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_UDP_PORT}"
+    )
+    request_payload = bytes.fromhex(SERVER_SOURCE_FILE_HASH)
+    reply_payload = ed2k_wire.encode_server_udp_source_v1_reply(
+        file_hash=request_payload,
+        sources=[(SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)],
+    )[2:]
+
+    def row(
+        sequence: int,
+        event: str,
+        *,
+        opcode: int,
+        trace_id: int,
+        direction: str,
+        outcome: str,
+        payload: bytes | None = None,
+        keys_extra: dict[str, object] | None = None,
+        body_extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        keys = {
+            "peer": target_endpoint,
+            "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+            "opcode": opcode,
+            "traceId": trace_id,
+        }
+        keys.update(keys_extra or {})
+        body: dict[str, object] = {
+            "flow": "server",
+            "phase": "udp" if event != "source_result_applied" else "source_search",
+            "direction": direction,
+            "outcome": outcome,
+            "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+            "opcode": opcode,
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "traceId": trace_id,
+        }
+        if payload is not None:
+            body.update(
+                {
+                    "payloadLen": len(payload),
+                    "payloadHex": payload.hex(),
+                    "payloadHexTruncated": False,
+                }
+            )
+        body.update(body_extra or {})
+        return {
+            "schema": DIAG_EVENT_SCHEMA,
+            "client": client,
+            "runId": run_id,
+            "processId": process_id,
+            "segmentId": 0,
+            "seq": sequence,
+            "streamSeq": sequence,
+            "family": "ed2k_server_udp",
+            "event": event,
+            "keys": keys,
+            "body": body,
+        }
+
+    records = [
+        row(
+            1,
+            "packet",
+            opcode=ed2k_wire.OP_GLOBGETSOURCES,
+            trace_id=31,
+            direction="send",
+            outcome="attempted",
+            payload=request_payload,
+        )
+    ]
+    next_sequence = 2
+    if client == "rust":
+        records.append(
+            row(
+                next_sequence,
+                "send_outcome",
+                opcode=ed2k_wire.OP_GLOBGETSOURCES,
+                trace_id=31,
+                direction="send",
+                outcome="send_succeeded",
+                body_extra={"deliveryKnown": True},
+            )
+        )
+        next_sequence += 1
+    records.extend(
+        [
+            row(
+                next_sequence,
+                "packet",
+                opcode=ed2k_wire.OP_GLOBFOUNDSOURCES,
+                trace_id=32,
+                direction="recv",
+                outcome="accepted",
+                payload=reply_payload,
+            ),
+            row(
+                next_sequence + 1,
+                "source_result_applied",
+                opcode=ed2k_wire.OP_GLOBFOUNDSOURCES,
+                trace_id=32,
+                direction="recv",
+                outcome="applied",
+                keys_extra={
+                    "fileHash": SERVER_SOURCE_FILE_HASH,
+                    "requestOpcode": ed2k_wire.OP_GLOBGETSOURCES,
+                },
+                body_extra={
+                    "requestOpcode": ed2k_wire.OP_GLOBGETSOURCES,
+                    "requestOpcodeName": "OP_GLOBGETSOURCES",
+                    "serverEndpoint": (
+                        f"{SERVER_UDP_SOURCE_TARGET_HOST}:"
+                        f"{SERVER_UDP_SOURCE_TARGET_PORT}"
+                    ),
+                    "stateId": "server.source.result_applied",
+                    "milestone": "result_applied",
+                    "wireSourceCount": 1,
+                    "sourceCountBefore": 0,
+                    "sourceCountAfter": 1,
+                },
+            ),
+        ]
+    )
+    return records
+
+
+def _server_udp_source_v1_transcript() -> dict[str, object]:
+    request = ed2k_wire.encode_server_udp_source_v1_request(
+        [bytes.fromhex(SERVER_SOURCE_FILE_HASH)]
+    )
+    reply = ed2k_wire.encode_server_udp_source_v1_reply(
+        file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
+        sources=[(SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)],
+    )
+    events: list[dict[str, object]] = []
+    for index, peer in enumerate(("127.0.0.1:41000", "127.0.0.1:41001")):
+        start = index * 4 + 1
+        events.extend(
+            [
+                {
+                    "sequence": start,
+                    "direction": "recv",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBSERVSTATREQ,
+                    "accepted": True,
+                },
+                {
+                    "sequence": start + 1,
+                    "direction": "send",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBSERVSTATRES,
+                    "accepted": True,
+                },
+                {
+                    "sequence": start + 2,
+                    "direction": "recv",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBGETSOURCES,
+                    "frameHex": request.hex().upper(),
+                    "accepted": True,
+                },
+                {
+                    "sequence": start + 3,
+                    "direction": "send",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBFOUNDSOURCES,
+                    "frameHex": reply.hex().upper(),
+                    "accepted": True,
+                },
+            ]
+        )
+    return {
+        "schema": scripted_ed2k_udp_source.TRANSCRIPT_SCHEMA,
+        "serverEndpoint": (
+            f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_PORT}"
+        ),
+        "udpEndpoint": (
+            f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_UDP_PORT}"
+        ),
+        "udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES,
+        "fileHash": SERVER_SOURCE_FILE_HASH,
+        "source": {
+            "host": SERVER_SOURCE_PUBLISHER_HOST,
+            "clientId": SERVER_SOURCE_PUBLISHER_ID,
+            "tcpPort": SERVER_SOURCE_PUBLISHER_PORT,
+        },
+        "events": events,
+    }
+
+
+def attach_server_udp_source_v1(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+) -> dict[str, object]:
+    records = {
+        "rust": _server_udp_source_v1_records(
+            client="rust",
+            process_id=101,
+            run_id="rust-udp-source-v1-run",
+        ),
+        "mfc": _server_udp_source_v1_records(
+            client="mfc",
+            process_id=202,
+            run_id="mfc-udp-source-v1-run",
+        ),
+    }
+    captures: dict[str, dict[str, object]] = {}
+    for client, process_id, run_id in (
+        ("rust", 101, "rust-udp-source-v1-run"),
+        ("mfc", 202, "mfc-udp-source-v1-run"),
+    ):
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{run_id}-000000.jsonl"
+        _write_server_source_segment(segment, records[client])
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+
+    transcript = _server_udp_source_v1_transcript()
+    transcript_path = run_directory / "server-udp-source-v1-transcript.json"
+    transcript_path.write_text(json.dumps(transcript), encoding="utf-8")
+    transfer_rows = {
+        "rust": {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "displayName": SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+        "mfc": {
+            "hash": SERVER_SOURCE_FILE_HASH.upper(),
+            "name": SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+    }
+    evidence = server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+        expected_file_hash=SERVER_SOURCE_FILE_HASH,
+        expected_file_name=SERVER_SOURCE_FILE_NAME,
+        expected_file_size=SERVER_SOURCE_FILE_SIZE,
+        target_server_endpoint=(
+            f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_PORT}"
+        ),
+        target_udp_endpoint=(
+            f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_UDP_PORT}"
+        ),
+        source_host=SERVER_SOURCE_PUBLISHER_HOST,
+        source_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        transfer_rows=transfer_rows,
+        fixture_transcript=transcript,
+    )
+    evidence["captures"] = captures
+
+    report["transfer_scenario"] = "server-udp-source-v1"
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    report["network"] = {
+        "p2p_bind_interface_address": SERVER_UDP_SOURCE_TARGET_HOST,
+        "ed2k_server_address": SERVER_UDP_SOURCE_TARGET_HOST,
+        "ports": {
+            "ed2k_tcp": 4661,
+            "udp_source_target_tcp": SERVER_UDP_SOURCE_TARGET_PORT,
+            "udp_source_target_udp": SERVER_UDP_SOURCE_TARGET_UDP_PORT,
+            "udp_source_peer_tcp": SERVER_SOURCE_PUBLISHER_PORT,
+        },
+    }
+    report["server_udp_source_v1_target"] = transcript
+    peers = sorted(
+        {
+            str(event["peer"])
+            for event in transcript["events"]
+            if event["direction"] == "recv"
+            and event["opcode"] == ed2k_wire.OP_GLOBSERVSTATREQ
+        }
+    )
+    report["checks"]["server_udp_source_v1_capabilities"] = {
+        "ok": True,
+        "expectedClients": 2,
+        "distinctClientCount": 2,
+        "peers": peers,
+        "udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES,
+    }
+    report["checks"]["client_server_udp_source_v1_stimulus"] = {
+        "mode": "source-free-ed2k-link",
+        "link": (
+            f"ed2k://|file|{SERVER_SOURCE_FILE_NAME}|{SERVER_SOURCE_FILE_SIZE}|"
+            f"{SERVER_SOURCE_FILE_HASH}|/"
+        ),
+        "hash": SERVER_SOURCE_FILE_HASH,
+        "name": SERVER_SOURCE_FILE_NAME,
+        "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+    }
+    report["checks"]["client_server_udp_source_v1_transfers"] = transfer_rows
+    report["checks"]["client_server_udp_source_v1_diagnostics"] = evidence
+    report["checks"]["mfc_diagnostics_shutdown"] = {
+        "ok": True,
+        "processId": 202,
+    }
+    report["diagnostics"]["serverUdpSourceV1"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: {
+            "diagnosticsDir": capture["diagnosticsDir"],
+            "processId": capture["processId"],
+            "selectedSegments": list(capture["selectedSegments"]),
+        }
+        for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
+        server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
 
 
@@ -2260,6 +2594,149 @@ def test_build_transfer_registration_rejects_noncanonical_source_fixture(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="canonical source fixture"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_accepts_exact_server_udp_source_v1(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_source_v1(report, run_directory=report_path.parent)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v1",
+        "transfer.block.uncompressed",
+    ]
+    reasons = {
+        row["coverageId"]: row["reason"]
+        for row in registration["coverageEvidence"]
+    }
+    assert "OP_GLOBGETSOURCES" in reasons["server.source.udp-v1"]
+    assert "UDP HighID source" in reasons["server.reply.sources"]
+
+
+def test_build_transfer_registration_rejects_udp_source_v1_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    report["transfer_scenario"] = "server-udp-source-v1"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_source_v1_wrong_scenario(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_source_v1(report, run_directory=report_path.parent)
+    report["transfer_scenario"] = "full-metadata-link"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires its dedicated scenario"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_udp_source_v1_schema(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_source_v1(
+        report,
+        run_directory=report_path.parent,
+    )
+    evidence["schema"] = (
+        "emulebb-build-tests.deterministic-server-udp-source-v1-diagnostics.v0"
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_udp_source_v1_receipt(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_source_v1(
+        report,
+        run_directory=report_path.parent,
+    )
+    evidence["clients"]["rust"]["wire"]["application"]["sourceCountAfter"] = 2
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_source_v1_transcript_drift(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_source_v1(report, run_directory=report_path.parent)
+    transcript_path = report_path.parent / "server-udp-source-v1-transcript.json"
+    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    transcript["events"][-1]["frameHex"] = "E39B00"
+    transcript_path.write_text(json.dumps(transcript), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable transcript"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_revalidates_udp_source_v1_transcript(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_udp_source_v1(report, run_directory=report_path.parent)
+    transcript = report["server_udp_source_v1_target"]
+    transcript["events"][-1]["frameHex"] = "E39B00"
+    transcript_path = report_path.parent / "server-udp-source-v1-transcript.json"
+    transcript_path.write_text(json.dumps(transcript), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_legacy_udp_source_v1_segment(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_source_v1(
+        report,
+        run_directory=report_path.parent,
+    )
+    segment = Path(evidence["captures"]["rust"]["selectedSegments"][0])
+    rows = [json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()]
+    rows[0]["schema"] = "diag_event_v1"
+    _write_server_source_segment(segment, rows)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected diagnostic schema"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_udp_source_v1_stale_capture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_udp_source_v1(
+        report,
+        run_directory=report_path.parent,
+    )
+    evidence["captures"]["rust"]["processId"] = 999
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="final process selection"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

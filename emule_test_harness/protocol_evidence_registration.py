@@ -19,6 +19,8 @@ from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
+from emule_test_harness import server_udp_source_v1_diagnostic_evidence
+from emule_test_harness import scripted_ed2k_udp_source
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -33,6 +35,8 @@ SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
 SERVER_TCP_METADATA_SCENARIO = "server-tcp-metadata"
 SERVER_UDP_METADATA_SCENARIO = "server-udp-metadata"
+SERVER_UDP_SOURCE_V1_SCENARIO = "server-udp-source-v1"
+SERVER_UDP_SOURCE_V1_TRANSCRIPT = "server-udp-source-v1-transcript.json"
 SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
 SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
 SERVER_SEARCH_EVIDENCE_LAYERS = (
@@ -1097,6 +1101,269 @@ def _derived_server_source_coverage_ids(
     return expected_ids
 
 
+def _derived_server_udp_source_v1_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    source_value = diagnostics.get("serverUdpSourceV1")
+    if source_value is None:
+        if report.get("transfer_scenario") == SERVER_UDP_SOURCE_V1_SCENARIO:
+            raise ValueError("server UDP source v1 scenario has no diagnostic evidence")
+        return []
+    if report.get("transfer_scenario") != SERVER_UDP_SOURCE_V1_SCENARIO:
+        raise ValueError("server UDP source v1 evidence requires its dedicated scenario")
+
+    source = _object(source_value, "diagnostics.serverUdpSourceV1")
+    if source.get("schema") != server_udp_source_v1_diagnostic_evidence.SCHEMA:
+        raise ValueError("server UDP source v1 diagnostics use an unexpected schema")
+    try:
+        server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
+            source
+        )
+    except RuntimeError as exc:
+        raise ValueError("server UDP source v1 diagnostics are not complete") from exc
+    expected_ids = list(
+        server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    )
+    if source.get("evidenceLayers") != list(
+        server_udp_source_v1_diagnostic_evidence.EVIDENCE_LAYERS
+    ):
+        raise ValueError("server UDP source v1 evidence layers are not canonical")
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError(
+            "server UDP source v1 scenario requires the exact canonical plaintext case"
+        )
+
+    fixture = _object(source.get("fixture"), "diagnostics.serverUdpSourceV1.fixture")
+    target_host, target_port = _canonical_ipv4_endpoint(
+        fixture.get("targetServerEndpoint"),
+        "server UDP source v1 target endpoint",
+    )
+    udp_host, udp_port = _canonical_ipv4_endpoint(
+        fixture.get("targetUdpEndpoint"),
+        "server UDP source v1 UDP endpoint",
+    )
+    try:
+        source_host = str(ipaddress.IPv4Address(fixture.get("sourceHost")))
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("server UDP source v1 source host is not canonical IPv4") from exc
+    source_port = _positive_int(
+        fixture.get("sourceTcpPort"),
+        "server UDP source v1 source TCP port",
+    )
+    expected_source_id = int.from_bytes(
+        ipaddress.IPv4Address(source_host).packed,
+        "little",
+    )
+    expected_request = ed2k_wire.encode_server_udp_source_v1_request(
+        [bytes.fromhex(SERVER_SOURCE_FILE_HASH)]
+    )
+    expected_reply = ed2k_wire.encode_server_udp_source_v1_reply(
+        file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
+        sources=[(expected_source_id, source_port)],
+    )
+    expected_fixture = {
+        "fileHash": SERVER_SOURCE_FILE_HASH,
+        "fileName": SERVER_SOURCE_FILE_NAME,
+        "fileSize": SERVER_SOURCE_FILE_SIZE,
+        "targetServerEndpoint": f"{target_host}:{target_port}",
+        "targetUdpEndpoint": f"{udp_host}:{udp_port}",
+        "sourceHost": source_host,
+        "sourceClientId": expected_source_id,
+        "sourceTcpPort": source_port,
+        "requestDatagramHex": expected_request.hex(),
+        "replyDatagramHex": expected_reply.hex(),
+    }
+    if fixture != expected_fixture:
+        raise ValueError("server UDP source v1 diagnostic fixture is not canonical")
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    bind_address = network.get("p2p_bind_interface_address")
+    try:
+        canonical_bind_address = str(ipaddress.IPv4Address(bind_address))
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("server UDP source v1 bind address is not canonical IPv4") from exc
+    if (
+        target_host != canonical_bind_address
+        or udp_host != target_host
+        or target_port
+        != _positive_int(
+            ports.get("udp_source_target_tcp"),
+            "network.ports.udp_source_target_tcp",
+        )
+        or udp_port
+        != _positive_int(
+            ports.get("udp_source_target_udp"),
+            "network.ports.udp_source_target_udp",
+        )
+        or udp_port != target_port + 4
+        or source_host != docker_ed2k_source_publisher.PUBLISHER_IP
+        or source_port
+        != _positive_int(
+            ports.get("udp_source_peer_tcp"),
+            "network.ports.udp_source_peer_tcp",
+        )
+        or target_port == ports.get("ed2k_tcp")
+    ):
+        raise ValueError("server UDP source v1 endpoints do not match the managed topology")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_udp_source_v1_diagnostics") != source:
+        raise ValueError(
+            "server UDP source v1 diagnostics do not match the retained snapshot"
+        )
+    stimulus = _object(
+        checks.get("client_server_udp_source_v1_stimulus"),
+        "checks.client_server_udp_source_v1_stimulus",
+    )
+    expected_link = (
+        f"ed2k://|file|{SERVER_SOURCE_FILE_NAME}|{SERVER_SOURCE_FILE_SIZE}|"
+        f"{SERVER_SOURCE_FILE_HASH}|/"
+    )
+    if stimulus != {
+        "mode": "source-free-ed2k-link",
+        "link": expected_link,
+        "hash": SERVER_SOURCE_FILE_HASH,
+        "name": SERVER_SOURCE_FILE_NAME,
+        "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+    }:
+        raise ValueError("server UDP source v1 stimulus is not the exact source-free link")
+
+    transcript_path = _path_within(
+        str(run_directory / SERVER_UDP_SOURCE_V1_TRANSCRIPT),
+        run_directory,
+        "server UDP source v1 transcript",
+    )
+    try:
+        persisted_transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("server UDP source v1 transcript is not valid JSON") from exc
+    target = _object(
+        report.get("server_udp_source_v1_target"),
+        "server_udp_source_v1_target",
+    )
+    if persisted_transcript != target:
+        raise ValueError(
+            "server UDP source v1 report does not match its immutable transcript"
+        )
+    target_source = _object(target.get("source"), "server_udp_source_v1_target.source")
+    target_events = target.get("events")
+    if (
+        set(target)
+        != {
+            "schema",
+            "serverEndpoint",
+            "udpEndpoint",
+            "udpFlags",
+            "fileHash",
+            "source",
+            "events",
+        }
+        or target.get("schema") != scripted_ed2k_udp_source.TRANSCRIPT_SCHEMA
+        or target.get("serverEndpoint") != f"{target_host}:{target_port}"
+        or target.get("udpEndpoint") != f"{udp_host}:{udp_port}"
+        or target.get("udpFlags")
+        != scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES
+        or str(target.get("fileHash") or "").casefold() != SERVER_SOURCE_FILE_HASH
+        or target_source
+        != {
+            "host": source_host,
+            "clientId": expected_source_id,
+            "tcpPort": source_port,
+        }
+        or not isinstance(target_events, list)
+    ):
+        raise ValueError("server UDP source v1 transcript authority is not canonical")
+
+    status_peers = sorted(
+        {
+            str(event.get("peer") or "")
+            for event in target_events
+            if isinstance(event, dict)
+            and event.get("direction") == "recv"
+            and event.get("opcode") == ed2k_wire.OP_GLOBSERVSTATREQ
+            and event.get("accepted") is True
+        }
+    )
+    capabilities = _object(
+        checks.get("server_udp_source_v1_capabilities"),
+        "checks.server_udp_source_v1_capabilities",
+    )
+    if capabilities != {
+        "ok": True,
+        "expectedClients": 2,
+        "distinctClientCount": 2,
+        "peers": status_peers,
+        "udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES,
+    } or len(status_peers) != 2:
+        raise ValueError("server UDP source v1 capability receipt is not bilateral")
+
+    transfer_rows = _object(
+        checks.get("client_server_udp_source_v1_transfers"),
+        "checks.client_server_udp_source_v1_transfers",
+    )
+    if set(transfer_rows) != {"rust", "mfc"}:
+        raise ValueError("server UDP source v1 transfers must contain exactly rust and mfc")
+
+    captures = _object(
+        source.get("captures"),
+        "diagnostics.serverUdpSourceV1.captures",
+    )
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("server UDP source v1 captures must contain exactly rust and mfc")
+    records = {
+        client: _load_server_source_capture(
+            captures.get(client),
+            final_captures.get(client),
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if (
+        mfc_shutdown.get("ok") is not True
+        or mfc_shutdown.get("processId") != captures["mfc"].get("processId")
+    ):
+        raise ValueError(
+            "server UDP source v1 capture is not joined to the stopped oracle process"
+        )
+
+    rebuilt = server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+        expected_file_hash=SERVER_SOURCE_FILE_HASH,
+        expected_file_name=SERVER_SOURCE_FILE_NAME,
+        expected_file_size=SERVER_SOURCE_FILE_SIZE,
+        target_server_endpoint=f"{target_host}:{target_port}",
+        target_udp_endpoint=f"{udp_host}:{udp_port}",
+        source_host=source_host,
+        source_tcp_port=source_port,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+        transfer_rows=transfer_rows,
+        fixture_transcript=target,
+    )
+    retained_without_capture = {
+        key: value for key, value in source.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError(
+            "server UDP source v1 receipt does not match its immutable evidence"
+        )
+    return expected_ids
+
+
 def _derived_server_tcp_metadata_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
@@ -2046,6 +2313,62 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             f"status reply at sequences {sequences['rust']['statusReply']}/"
             f"{sequences['mfc']['statusReply']}."
         )
+    if (
+        diagnostics.get("serverUdpSourceV1") is not None
+        and coverage_id
+        in server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+    ):
+        source = _object(
+            diagnostics.get("serverUdpSourceV1"),
+            "diagnostics.serverUdpSourceV1",
+        )
+        clients = _object(
+            source.get("clients"),
+            "diagnostics.serverUdpSourceV1.clients",
+        )
+        wires = {
+            client: _object(
+                _object(
+                    clients.get(client),
+                    f"server UDP source v1 {client}",
+                ).get("wire"),
+                f"server UDP source v1 {client} wire",
+            )
+            for client in ("rust", "mfc")
+        }
+        if coverage_id == "server.source.udp-v1":
+            requests = {
+                client: _object(
+                    wire.get("request"),
+                    f"server UDP source v1 {client} request",
+                )
+                for client, wire in wires.items()
+            }
+            return (
+                "Rust and MFC each emitted one identical plaintext UDP v1 "
+                "OP_GLOBGETSOURCES request, with no v2 request, at sequences "
+                f"{requests['rust']['sequence']}/{requests['mfc']['sequence']}."
+            )
+        replies = {
+            client: _object(
+                wire.get("reply"),
+                f"server UDP source v1 {client} reply",
+            )
+            for client, wire in wires.items()
+        }
+        applications = {
+            client: _object(
+                wire.get("application"),
+                f"server UDP source v1 {client} application",
+            )
+            for client, wire in wires.items()
+        }
+        return (
+            "Rust and MFC each decoded the same singular UDP HighID source and applied "
+            "the exact 0-to-1 source-state transition at sequences "
+            f"{replies['rust']['sequence']}->{applications['rust']['sequence']}/"
+            f"{replies['mfc']['sequence']}->{applications['mfc']['sequence']}."
+        )
     if coverage_id in server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS:
         source = _object(diagnostics.get("serverSource"), "diagnostics.serverSource")
         clients = _object(source.get("clients"), "diagnostics.serverSource.clients")
@@ -2180,6 +2503,11 @@ def build_transfer_registration(report_path: Path, *, output_root: Path) -> dict
             *_derived_server_login_coverage_ids(report, diagnostics),
             *_derived_server_search_coverage_ids(report, diagnostics),
             *_derived_server_source_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
+            *_derived_server_udp_source_v1_coverage_ids(
                 report,
                 diagnostics,
                 run_directory=run_directory,
