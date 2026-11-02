@@ -564,7 +564,6 @@ def file_not_found_requester_records(requester: str) -> list[dict[str, Any]]:
         "udp_reask_reply_applied",
         {
             "replyOpcode": evidence.OP_FILENOTFOUND,
-            "queueRank": None,
             "requestPendingAfter": False,
             "remoteQueueFullAfter": False,
             "sourceUdpEndpoint": endpoints["sourceUdp"],
@@ -1199,6 +1198,21 @@ def test_file_not_found_requires_exact_dead_list_semantics() -> None:
 
     assert report["ok"] is False
     assert report["clients"]["rust"]["diagnostics"]["counts"]["deadListed"] == 0
+
+
+@pytest.mark.unit
+def test_file_not_found_application_omits_queue_rank() -> None:
+    original = file_not_found_transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[-3]["body"]["queueRank"] = None
+    wrong = evidence.ClientUdpFileNotFoundTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_file_not_found_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 0
 
 
 @pytest.mark.unit
