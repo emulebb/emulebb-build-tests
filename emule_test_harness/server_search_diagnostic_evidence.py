@@ -8,13 +8,18 @@ from typing import Any, Iterable
 from emule_test_harness import ed2k_wire
 
 
-SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
+SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v3"
 EVIDENCE_LAYERS = (
     "codec-transcript",
     "deterministic-state-machine",
     "local-cross-client",
 )
-ELIGIBLE_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
+KEYWORD_VARIANT = "keyword"
+ADVANCED_VARIANT = "advanced"
+COVERAGE_IDS_BY_VARIANT = {
+    KEYWORD_VARIANT: ("server.reply.search", "server.search.keyword"),
+    ADVANCED_VARIANT: ("server.reply.search", "server.search.advanced"),
+}
 SEARCH_PROTOCOL_MARKER = 0xE3
 SEARCH_REQUEST_OPCODE = 0x16
 SEARCH_RESULT_OPCODE = 0x33
@@ -106,11 +111,33 @@ def _file_row_matches(
     return bool(str(row.get("hash") or "").casefold() == expected_hash and name == expected_name and size == expected_size)
 
 
+def _criteria_evidence(criteria: ed2k_wire.ServerSearchCriteria) -> dict[str, int]:
+    values: dict[str, int] = {}
+    if criteria.min_size_bytes is not None:
+        values["minSizeBytes"] = criteria.min_size_bytes
+    if criteria.max_size_bytes is not None:
+        values["maxSizeBytes"] = criteria.max_size_bytes
+    return values
+
+
+def _search_request(
+    query: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
+) -> dict[str, object]:
+    return {
+        "query": query,
+        "method": "server",
+        "type": "",
+        **_criteria_evidence(criteria),
+    }
+
+
 def _rest_search_evidence(
     driven: object,
     *,
     client: str,
     query: str,
+    expected_request: dict[str, object],
     expected_hash: str,
     expected_name: str,
     expected_size: int,
@@ -153,7 +180,8 @@ def _rest_search_evidence(
     else:
         raise ValueError(f"Unsupported deterministic server-search client: {client!r}")
     ok = bool(
-        search_id
+        value.get("request") == expected_request
+        and search_id
         and str(created.get("id") or "") == search_id
         and created.get("query") == query
         and method_ok
@@ -455,7 +483,9 @@ def _comparable_wire_row(row: object) -> dict[str, object] | None:
 
 def build_server_search_diagnostic_evidence(
     *,
+    variant: str,
     query: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
     expected_file_hash: str,
     expected_file_name: str,
     expected_file_size: int,
@@ -464,10 +494,17 @@ def build_server_search_diagnostic_evidence(
     mfc_records: Iterable[dict[str, Any]],
     driven_searches: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Proves one exact keyword request and applied result on Rust and MFC."""
+    """Proves one exact server-search request and applied result on Rust and MFC."""
 
     normalized_query = unicodedata.normalize("NFC", query)
     normalized_hash = expected_file_hash.casefold()
+    if variant not in COVERAGE_IDS_BY_VARIANT:
+        raise ValueError(f"Unsupported deterministic server-search variant: {variant!r}")
+    criteria_values = _criteria_evidence(criteria)
+    if variant == KEYWORD_VARIANT and criteria_values:
+        raise ValueError("Keyword server search must not carry advanced criteria.")
+    if variant == ADVANCED_VARIANT and not criteria_values:
+        raise ValueError("Advanced server search must carry at least one criterion.")
     if not normalized_query:
         raise ValueError("Server search query must not be empty.")
     if len(normalized_hash) != 32 or any(value not in "0123456789abcdef" for value in normalized_hash):
@@ -481,7 +518,11 @@ def build_server_search_diagnostic_evidence(
     if not isinstance(driven_searches, dict) or set(driven_searches) != set(CLIENTS):
         raise ValueError("Driven server searches must contain exactly rust and mfc.")
 
-    expected_request_payload = ed2k_wire.encode_search_request(normalized_query)
+    expected_request = _search_request(normalized_query, criteria)
+    expected_request_payload = ed2k_wire.encode_search_request(
+        normalized_query,
+        criteria,
+    )
     records_by_client = {"rust": list(rust_records), "mfc": list(mfc_records)}
     clients: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
@@ -490,6 +531,7 @@ def build_server_search_diagnostic_evidence(
             driven_searches[client],
             client=client,
             query=normalized_query,
+            expected_request=expected_request,
             expected_hash=normalized_hash,
             expected_name=expected_file_name,
             expected_size=expected_file_size,
@@ -558,11 +600,13 @@ def build_server_search_diagnostic_evidence(
     comparison_ok = all(value is True for value in comparison.values())
     if not comparison_ok:
         failures.append("comparison")
-    observed_ids = list(ELIGIBLE_COVERAGE_IDS) if not failures else []
+    observed_ids = list(COVERAGE_IDS_BY_VARIANT[variant]) if not failures else []
     return {
         "schema": SCHEMA,
         "ok": not failures,
+        "variant": variant,
         "query": normalized_query,
+        "criteria": criteria_values,
         "serverEndpoint": server_endpoint.casefold(),
         "expectedFile": {
             "hash": normalized_hash,

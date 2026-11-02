@@ -247,6 +247,11 @@ def driven_server_search(client: str, search_id: str) -> dict[str, object]:
         {"requestedMethod": "server", "resolvedMethod": "server"} if client == "rust" else {"method": "server"}
     )
     return {
+        "request": {
+            "query": SEARCH_QUERY,
+            "method": "server",
+            "type": "",
+        },
         "searchId": search_id,
         "created": {
             "id": search_id,
@@ -269,6 +274,9 @@ def driven_server_search(client: str, search_id: str) -> dict[str, object]:
 def bilateral_search_evidence(
     driven_searches: dict[str, dict[str, object]],
 ) -> dict[str, object]:
+    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
+        server_search_diagnostic_evidence.KEYWORD_VARIANT
+    ]
     payload_hex = ed2k_wire.encode_search_request(SEARCH_QUERY).hex()
     wire_result = {
         "hash": SEARCH_FILE_HASH.upper(),
@@ -362,7 +370,9 @@ def bilateral_search_evidence(
     return {
         "schema": server_search_diagnostic_evidence.SCHEMA,
         "ok": True,
+        "variant": server_search_diagnostic_evidence.KEYWORD_VARIANT,
         "query": SEARCH_QUERY,
+        "criteria": {},
         "serverEndpoint": "127.0.0.1:4661",
         "expectedFile": {
             "hash": SEARCH_FILE_HASH,
@@ -383,9 +393,9 @@ def bilateral_search_evidence(
             "rustWireRestEqual": True,
             "mfcWireRestEqual": True,
         },
-        "observedCoverageIds": list(server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS),
+        "observedCoverageIds": list(coverage_ids),
         "coverageClaims": {
-            "eligibleCoverageIds": list(server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS),
+            "eligibleCoverageIds": list(coverage_ids),
             "evidenceLayers": list(server_search_diagnostic_evidence.EVIDENCE_LAYERS),
         },
         "captures": {
@@ -396,6 +406,9 @@ def bilateral_search_evidence(
 
 
 def attach_server_search(report: dict[str, object]) -> dict[str, object]:
+    coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
+        server_search_diagnostic_evidence.KEYWORD_VARIANT
+    ]
     driven_searches = {
         "rust": driven_server_search("rust", "rust-search-1"),
         "mfc": driven_server_search("mfc", "mfc-search-1"),
@@ -439,7 +452,7 @@ def attach_server_search(report: dict[str, object]) -> dict[str, object]:
     report["checks"]["client_server_search_diagnostics"] = evidence
     report["diagnostics"]["serverSearch"] = evidence
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        coverage_ids
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
@@ -2123,7 +2136,10 @@ def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_pat
     search_rows = [
         row
         for row in registration["coverageEvidence"]
-        if row["coverageId"] in server_search_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        if row["coverageId"]
+        in server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
+            server_search_diagnostic_evidence.KEYWORD_VARIANT
+        ]
     ]
     assert [row["coverageId"] for row in search_rows] == [
         "server.reply.search",
@@ -2136,7 +2152,7 @@ def test_build_transfer_registration_rejects_legacy_server_search_schema(
 ) -> None:
     report_path, output_root, report = write_transfer_report(tmp_path)
     evidence = attach_server_search(report)
-    evidence["schema"] = "emulebb-build-tests.deterministic-server-search-diagnostics.v1"
+    evidence["schema"] = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected schema"):

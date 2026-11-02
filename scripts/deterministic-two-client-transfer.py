@@ -455,7 +455,9 @@ def collect_server_login_diagnostics(
 
 def collect_server_search_diagnostics(
     *,
+    variant: str,
     query: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
     expected_file_hash: str,
     expected_file_name: str,
     expected_file_size: int,
@@ -481,7 +483,9 @@ def collect_server_search_diagnostics(
         allow_incomplete_active_tail=True,
     )
     evidence = server_search_diagnostic_evidence.build_server_search_diagnostic_evidence(
+        variant=variant,
         query=query,
+        criteria=criteria,
         expected_file_hash=expected_file_hash,
         expected_file_name=expected_file_name,
         expected_file_size=expected_file_size,
@@ -3503,7 +3507,9 @@ def main(argv: list[str] | None = None) -> int:
                 }
             current_phase = "collect_server_search_diagnostics"
             server_search_evidence = collect_server_search_diagnostics(
+                variant=server_search_diagnostic_evidence.KEYWORD_VARIANT,
                 query=SERVER_SEARCH_QUERY,
+                criteria=ed2k_wire.ServerSearchCriteria(),
                 expected_file_hash=SERVER_SEARCH_FILE_HASH.hex(),
                 expected_file_name=SERVER_SEARCH_FILE_NAME,
                 expected_file_size=SERVER_SEARCH_FILE_SIZE,

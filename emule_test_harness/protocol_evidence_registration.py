@@ -43,7 +43,7 @@ SERVER_UDP_SOURCE_TRANSCRIPTS = {
     version: f"server-udp-source-v{version}-transcript.json"
     for version in SERVER_UDP_SOURCE_SCENARIOS
 }
-SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v2"
+SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v3"
 SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
 SERVER_SEARCH_EVIDENCE_LAYERS = (
     "codec-transcript",
@@ -279,6 +279,8 @@ def _derived_server_search_coverage_ids(
         raise ValueError("server search diagnostics use an unexpected schema")
     if search.get("ok") is not True or search.get("failures") != []:
         raise ValueError("server search diagnostics are not complete")
+    if search.get("variant") != "keyword" or search.get("criteria") != {}:
+        raise ValueError("server keyword search diagnostics use an unexpected variant")
 
     expected_ids = list(SERVER_SEARCH_COVERAGE_IDS)
     claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
@@ -386,6 +388,7 @@ def _derived_server_search_coverage_ids(
     if not isinstance(query, str) or not query:
         raise ValueError("server search query must be a non-empty string")
     expected_payload_hex = ed2k_wire.encode_search_request(query).hex()
+    expected_request = {"query": query, "method": "server", "type": ""}
     driven_searches = _object(
         checks.get("client_server_searches"),
         "checks.client_server_searches",
@@ -405,6 +408,8 @@ def _derived_server_search_coverage_ids(
             driven_searches.get(client),
             f"checks.client_server_searches.{client}",
         )
+        if driven.get("request") != expected_request:
+            raise ValueError(f"{client} driven server search request is not exact")
         search_id = driven.get("searchId")
         if not isinstance(search_id, str) or not search_id:
             raise ValueError(f"{client} driven server search has no search ID")

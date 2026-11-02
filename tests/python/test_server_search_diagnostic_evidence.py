@@ -13,6 +13,11 @@ FILE_NAME = "deterministicparitysearch-result.bin"
 FILE_SIZE = 12_345
 QUERY = "deterministicparitysearch"
 ENDPOINT = "127.0.0.1:4661"
+KEYWORD_CRITERIA = ed2k_wire.ServerSearchCriteria()
+ADVANCED_CRITERIA = ed2k_wire.ServerSearchCriteria(
+    min_size_bytes=FILE_SIZE,
+    max_size_bytes=FILE_SIZE,
+)
 
 
 def record(
@@ -36,8 +41,14 @@ def record(
     }
 
 
-def request_record(client: str, seq: int, trace_id: int, send_attempt_id: int | None) -> dict[str, object]:
-    payload = ed2k_wire.encode_search_request(QUERY)
+def request_record(
+    client: str,
+    seq: int,
+    trace_id: int,
+    send_attempt_id: int | None,
+    criteria: ed2k_wire.ServerSearchCriteria,
+) -> dict[str, object]:
+    payload = ed2k_wire.encode_search_request(QUERY, criteria)
     keys: dict[str, object] = {
         "opcode": evidence.SEARCH_REQUEST_OPCODE,
         "peer": ENDPOINT,
@@ -117,7 +128,9 @@ def reply_record(
     )
 
 
-def rust_records() -> list[dict[str, object]]:
+def rust_records(
+    criteria: ed2k_wire.ServerSearchCriteria = KEYWORD_CRITERIA,
+) -> list[dict[str, object]]:
     return [
         record(
             "rust",
@@ -131,7 +144,7 @@ def rust_records() -> list[dict[str, object]]:
                 "traceId": 1,
             },
         ),
-        request_record("rust", 11, 1, 7),
+        request_record("rust", 11, 1, 7, criteria),
         record(
             "rust",
             12,
@@ -180,9 +193,11 @@ def rust_records() -> list[dict[str, object]]:
     ]
 
 
-def mfc_records() -> list[dict[str, object]]:
+def mfc_records(
+    criteria: ed2k_wire.ServerSearchCriteria = KEYWORD_CRITERIA,
+) -> list[dict[str, object]]:
     return [
-        request_record("mfc", 20, 2, None),
+        request_record("mfc", 20, 2, None, criteria),
         reply_record("mfc", 21, 2),
         record(
             "mfc",
@@ -214,7 +229,11 @@ def mfc_records() -> list[dict[str, object]]:
     ]
 
 
-def driven_search(client: str, search_id: str) -> dict[str, object]:
+def driven_search(
+    client: str,
+    search_id: str,
+    criteria: ed2k_wire.ServerSearchCriteria = KEYWORD_CRITERIA,
+) -> dict[str, object]:
     result = {
         "completeSources": 1,
         "hash": FILE_HASH.upper(),
@@ -236,6 +255,21 @@ def driven_search(client: str, search_id: str) -> dict[str, object]:
     else:
         raise AssertionError(f"unsupported test client: {client}")
     return {
+        "request": {
+            "query": QUERY,
+            "method": "server",
+            "type": "",
+            **(
+                {"minSizeBytes": criteria.min_size_bytes}
+                if criteria.min_size_bytes is not None
+                else {}
+            ),
+            **(
+                {"maxSizeBytes": criteria.max_size_bytes}
+                if criteria.max_size_bytes is not None
+                else {}
+            ),
+        },
         "searchId": search_id,
         "created": {
             "id": search_id,
@@ -256,19 +290,30 @@ def driven_search(client: str, search_id: str) -> dict[str, object]:
 
 def build(
     *,
+    variant: str = evidence.KEYWORD_VARIANT,
+    criteria: ed2k_wire.ServerSearchCriteria = KEYWORD_CRITERIA,
     rust: list[dict[str, object]] | None = None,
     mfc: list[dict[str, object]] | None = None,
     searches: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return evidence.build_server_search_diagnostic_evidence(
+        variant=variant,
         query=QUERY,
+        criteria=criteria,
         expected_file_hash=FILE_HASH,
         expected_file_name=FILE_NAME,
         expected_file_size=FILE_SIZE,
         server_endpoint=ENDPOINT,
-        rust_records=rust_records() if rust is None else rust,
-        mfc_records=mfc_records() if mfc is None else mfc,
-        driven_searches=({"rust": driven_search("rust", "1"), "mfc": driven_search("mfc", "2")} if searches is None else searches),
+        rust_records=rust_records(criteria) if rust is None else rust,
+        mfc_records=mfc_records(criteria) if mfc is None else mfc,
+        driven_searches=(
+            {
+                "rust": driven_search("rust", "1", criteria),
+                "mfc": driven_search("mfc", "2", criteria),
+            }
+            if searches is None
+            else searches
+        ),
     )
 
 
@@ -289,10 +334,40 @@ def test_exact_bilateral_keyword_request_and_applied_reply_are_claimable() -> No
         "transportModeEqual": True,
     }
     assert report["coverageClaims"] == {
-        "eligibleCoverageIds": list(evidence.ELIGIBLE_COVERAGE_IDS),
+        "eligibleCoverageIds": list(
+            evidence.COVERAGE_IDS_BY_VARIANT[evidence.KEYWORD_VARIANT]
+        ),
         "evidenceLayers": list(evidence.EVIDENCE_LAYERS),
     }
     evidence.require_server_search_diagnostic_evidence(report)
+
+
+def test_exact_bilateral_advanced_request_and_applied_reply_are_claimable() -> None:
+    report = build(
+        variant=evidence.ADVANCED_VARIANT,
+        criteria=ADVANCED_CRITERIA,
+    )
+
+    assert report["ok"] is True
+    assert report["variant"] == evidence.ADVANCED_VARIANT
+    assert report["criteria"] == {
+        "minSizeBytes": FILE_SIZE,
+        "maxSizeBytes": FILE_SIZE,
+    }
+    assert report["clients"]["rust"]["wire"]["request"]["payloadHex"] == (
+        ed2k_wire.encode_search_request(QUERY, ADVANCED_CRITERIA).hex()
+    )
+    assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "server.reply.search",
+        "server.search.advanced",
+    ]
+
+
+def test_search_variant_and_criteria_shape_must_agree() -> None:
+    with pytest.raises(ValueError, match="must not carry advanced criteria"):
+        build(criteria=ADVANCED_CRITERIA)
+    with pytest.raises(ValueError, match="at least one criterion"):
+        build(variant=evidence.ADVANCED_VARIANT)
 
 
 def test_duplicate_mfc_request_is_not_causally_attributable() -> None:
