@@ -9,10 +9,13 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
+CLEAR_SCHEMA = "emulebb-build-tests.client-udp-clear-diagnostics.v1"
+CLEAR_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-clear-raw-evidence.v1"
 QUEUE_FULL_SCHEMA = "emulebb-build-tests.client-udp-queue-full-diagnostics.v1"
 FILE_NOT_FOUND_SCHEMA = "emulebb-build-tests.client-udp-file-not-found-diagnostics.v1"
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 COVERAGE_ID = "client-udp.v4"
+CLEAR_COVERAGE_ID = "client-udp.clear"
 QUEUE_FULL_COVERAGE_ID = "client-udp.queue-full"
 FILE_NOT_FOUND_COVERAGE_ID = "client-udp.file-not-found"
 CLIENTS = ("rust", "mfc")
@@ -571,6 +574,7 @@ def _transition_evidence(
     *,
     file_hash: str,
     part_count: int,
+    require_clear_transport: bool = False,
 ) -> dict[str, Any]:
     requester_records = list(transition.requester_records)
     responder_records = list(transition.responder_records)
@@ -594,35 +598,46 @@ def _transition_evidence(
     registration, registration_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_source_registered")
-            and identity(record)
-            and _body(record).get("outcome") == "accepted"
-            and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
-            and _body(record).get("sourceUdpVersion") == 4
-            and _body(record).get("lowId") is False
-            and _body(record).get("buddyEndpoint") is None
-            and _body(record).get("buddyId") is None
+            _event(record, "sched", "udp_reask_source_registered") and identity(record)
         ),
+    )
+    registration_ok = bool(
+        registration is not None
+        and _body(registration).get("outcome") == "accepted"
+        and _body(registration).get("sourceUdpEndpoint")
+        == transition.source_udp_endpoint
+        and _body(registration).get("sourceUdpVersion") == 4
+        and (
+            not require_clear_transport
+            or _body(registration).get("shouldCrypt") is False
+        )
+        and _body(registration).get("lowId") is False
+        and _body(registration).get("buddyEndpoint") is None
+        and _body(registration).get("buddyId") is None
     )
     schedule, schedule_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_schedule_decision")
-            and identity(record)
-            and _body(record).get("outcome") == "eligible"
-            and _body(record).get("reason") == "eligible"
+            _event(record, "sched", "udp_reask_schedule_decision") and identity(record)
         ),
+    )
+    schedule_ok = bool(
+        schedule is not None
+        and _body(schedule).get("outcome") == "eligible"
+        and _body(schedule).get("reason") == "eligible"
     )
     decision, decision_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_decision")
-            and identity(record)
-            and _body(record).get("outcome") == "sent"
-            and _body(record).get("transportEligible") is True
-            and _body(record).get("reason") == "udp_reask_sent"
-            and _body(record).get("path") == "direct"
+            _event(record, "sched", "udp_reask_decision") and identity(record)
         ),
+    )
+    decision_ok = bool(
+        decision is not None
+        and _body(decision).get("outcome") == "sent"
+        and _body(decision).get("transportEligible") is True
+        and _body(decision).get("reason") == "udp_reask_sent"
+        and _body(decision).get("path") == "direct"
     )
     request_out, request_out_count = _single(
         requester_records,
@@ -634,13 +649,16 @@ def _transition_evidence(
             and _keys(record).get("protocolMarker") == OP_EMULEPROT
             and _keys(record).get("opcode") == OP_REASKFILEPING
             and _body(record).get("direction") == "send"
-            and _body(record).get("outcome") == "attempted"
-            and _body(record).get("role") == "reask_request"
-            and _body(record).get("phase") == "reask_request"
-            and _body(record).get("transportMode") == "plaintext"
-            and _body(record).get("obfuscated") is False
-            and _body(record).get("payloadHexTruncated") is False
         ),
+    )
+    request_out_ok = bool(
+        request_out is not None
+        and _body(request_out).get("outcome") == "attempted"
+        and _body(request_out).get("role") == "reask_request"
+        and _body(request_out).get("phase") == "reask_request"
+        and _body(request_out).get("transportMode") == "plaintext"
+        and _body(request_out).get("obfuscated") is False
+        and _body(request_out).get("payloadHexTruncated") is False
     )
     request_attempt_id = (
         _keys(request_out).get("sendAttemptId") if request_out else None
@@ -653,10 +671,13 @@ def _transition_evidence(
             == transition.source_udp_endpoint.casefold()
             and _keys(record).get("sendAttemptId") == request_attempt_id
             and _body(record).get("sendAttemptId") == request_attempt_id
-            and _body(record).get("outcome") == "send_succeeded"
-            and _body(record).get("deliveryKnown") is True
-            and _body(record).get("role") == "reask_request"
         ),
+    )
+    request_terminal_ok = bool(
+        request_terminal is not None
+        and _body(request_terminal).get("outcome") == "send_succeeded"
+        and _body(request_terminal).get("deliveryKnown") is True
+        and _body(request_terminal).get("role") == "reask_request"
     )
     request_in, request_in_count = _single(
         responder_records,
@@ -667,12 +688,15 @@ def _transition_evidence(
             and _keys(record).get("protocolMarker") == OP_EMULEPROT
             and _keys(record).get("opcode") == OP_REASKFILEPING
             and _body(record).get("direction") == "recv"
-            and _body(record).get("outcome") == "accepted"
-            and _body(record).get("phase") == "reask_request"
-            and _body(record).get("transportMode") == "plaintext"
-            and _body(record).get("obfuscated") is False
-            and _body(record).get("payloadHexTruncated") is False
         ),
+    )
+    request_in_ok = bool(
+        request_in is not None
+        and _body(request_in).get("outcome") == "accepted"
+        and _body(request_in).get("phase") == "reask_request"
+        and _body(request_in).get("transportMode") == "plaintext"
+        and _body(request_in).get("obfuscated") is False
+        and _body(request_in).get("payloadHexTruncated") is False
     )
     ack_out, ack_out_count = _single(
         responder_records,
@@ -683,13 +707,16 @@ def _transition_evidence(
             and _keys(record).get("protocolMarker") == OP_EMULEPROT
             and _keys(record).get("opcode") == OP_REASKACK
             and _body(record).get("direction") == "send"
-            and _body(record).get("outcome") == "attempted"
-            and _body(record).get("role") == "reciprocity_reply"
-            and _body(record).get("phase") == "reciprocity_reply"
-            and _body(record).get("transportMode") == "plaintext"
-            and _body(record).get("obfuscated") is False
-            and _body(record).get("payloadHexTruncated") is False
         ),
+    )
+    ack_out_ok = bool(
+        ack_out is not None
+        and _body(ack_out).get("outcome") == "attempted"
+        and _body(ack_out).get("role") == "reciprocity_reply"
+        and _body(ack_out).get("phase") == "reciprocity_reply"
+        and _body(ack_out).get("transportMode") == "plaintext"
+        and _body(ack_out).get("obfuscated") is False
+        and _body(ack_out).get("payloadHexTruncated") is False
     )
     ack_attempt_id = _keys(ack_out).get("sendAttemptId") if ack_out else None
     ack_terminal, ack_terminal_count = _single(
@@ -700,10 +727,13 @@ def _transition_evidence(
             == transition.requester_udp_endpoint.casefold()
             and _keys(record).get("sendAttemptId") == ack_attempt_id
             and _body(record).get("sendAttemptId") == ack_attempt_id
-            and _body(record).get("outcome") == "send_succeeded"
-            and _body(record).get("deliveryKnown") is True
-            and _body(record).get("role") == "reciprocity_reply"
         ),
+    )
+    ack_terminal_ok = bool(
+        ack_terminal is not None
+        and _body(ack_terminal).get("outcome") == "send_succeeded"
+        and _body(ack_terminal).get("deliveryKnown") is True
+        and _body(ack_terminal).get("role") == "reciprocity_reply"
     )
     ack_in, ack_in_count = _single(
         requester_records,
@@ -714,12 +744,15 @@ def _transition_evidence(
             and _keys(record).get("protocolMarker") == OP_EMULEPROT
             and _keys(record).get("opcode") == OP_REASKACK
             and _body(record).get("direction") == "recv"
-            and _body(record).get("outcome") == "accepted"
-            and _body(record).get("phase") == "reask_reply"
-            and _body(record).get("transportMode") == "plaintext"
-            and _body(record).get("obfuscated") is False
-            and _body(record).get("payloadHexTruncated") is False
         ),
+    )
+    ack_in_ok = bool(
+        ack_in is not None
+        and _body(ack_in).get("outcome") == "accepted"
+        and _body(ack_in).get("phase") == "reask_reply"
+        and _body(ack_in).get("transportMode") == "plaintext"
+        and _body(ack_in).get("obfuscated") is False
+        and _body(ack_in).get("payloadHexTruncated") is False
     )
 
     request = _decode_request(_body(request_out).get("rawHex") if request_out else None)
@@ -732,24 +765,26 @@ def _transition_evidence(
     applied, applied_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_reply_applied")
-            and identity(record)
-            and _body(record).get("outcome") == "applied"
-            and _body(record).get("replyOpcode") == OP_REASKACK
-            and _body(record).get("queueRank") == queue_rank
-            and _body(record).get("requestPendingAfter") is False
-            and _body(record).get("remoteQueueFullAfter") is False
-            and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
-            and _body(record).get("sourceUdpVersion") == 4
-            and _body(record).get("queueRankApplied") is True
-            and _body(record).get("partStatusIncluded") is True
-            and _body(record).get("wirePartCount") == 0
-            and _body(record).get("partStatusApplied") is True
-            and _body(record).get("partCountAfter") == part_count
-            and _body(record).get("availablePartsAfter") == part_count
-            and _body(record).get("partStatusBitsAfter") == "1" * part_count
-            and _body(record).get("noNeededPartsAfter") is False
+            _event(record, "sched", "udp_reask_reply_applied") and identity(record)
         ),
+    )
+    applied_ok = bool(
+        applied is not None
+        and _body(applied).get("outcome") == "applied"
+        and _body(applied).get("replyOpcode") == OP_REASKACK
+        and _body(applied).get("queueRank") == queue_rank
+        and _body(applied).get("requestPendingAfter") is False
+        and _body(applied).get("remoteQueueFullAfter") is False
+        and _body(applied).get("sourceUdpEndpoint") == transition.source_udp_endpoint
+        and _body(applied).get("sourceUdpVersion") == 4
+        and _body(applied).get("queueRankApplied") is True
+        and _body(applied).get("partStatusIncluded") is True
+        and _body(applied).get("wirePartCount") == 0
+        and _body(applied).get("partStatusApplied") is True
+        and _body(applied).get("partCountAfter") == part_count
+        and _body(applied).get("availablePartsAfter") == part_count
+        and _body(applied).get("partStatusBitsAfter") == "1" * part_count
+        and _body(applied).get("noNeededPartsAfter") is False
     )
 
     requester_sequences = {
@@ -810,7 +845,11 @@ def _transition_evidence(
         else b""
     )
     wire_ok = bool(
-        request.get("ok") is True
+        request_out_ok
+        and request_in_ok
+        and ack_out_ok
+        and ack_in_ok
+        and request.get("ok") is True
         and request.get("fileHash") == file_hash
         and request.get("partStatus", {}).get("wirePartCount") == part_count
         and request.get("partStatus", {}).get("partStatusBits") == "0" * part_count
@@ -821,12 +860,54 @@ def _transition_evidence(
         and ack.get("rawHex") == expected_ack.hex()
         and requester_ack == ack
     )
+    diagnostics_semantics_ok = all(
+        (
+            registration_ok,
+            schedule_ok,
+            decision_ok,
+            request_terminal_ok,
+            ack_terminal_ok,
+            applied_ok,
+        )
+    )
+    clear_transport = None
+    if require_clear_transport:
+        plaintext = {"transportMode": "plaintext", "obfuscated": False}
+
+        def packet_transport(record: dict[str, Any] | None) -> dict[str, Any] | None:
+            if record is None:
+                return None
+            body = _body(record)
+            return {
+                "transportMode": body.get("transportMode"),
+                "obfuscated": body.get("obfuscated"),
+            }
+
+        clear_transport = {
+            "registrationShouldCrypt": (
+                _body(registration).get("shouldCrypt")
+                if registration is not None
+                else None
+            ),
+            "requestOut": packet_transport(request_out),
+            "requestIn": packet_transport(request_in),
+            "ackOut": packet_transport(ack_out),
+            "ackIn": packet_transport(ack_in),
+        }
+        clear_transport["ok"] = bool(
+            clear_transport["registrationShouldCrypt"] is False
+            and all(
+                clear_transport[field] == plaintext
+                for field in ("requestOut", "requestIn", "ackOut", "ackIn")
+            )
+        )
     ok = bool(
         transition.requester in CLIENTS
         and transition.responder in CLIENTS
         and transition.requester != transition.responder
         and control["ok"]
         and all(count == 1 for count in counts.values())
+        and diagnostics_semantics_ok
         and isinstance(request_attempt_id, int)
         and not isinstance(request_attempt_id, bool)
         and request_attempt_id > 0
@@ -836,8 +917,9 @@ def _transition_evidence(
         and requester_ordered
         and responder_ordered
         and wire_ok
+        and (clear_transport is None or clear_transport["ok"] is True)
     )
-    return {
+    result = {
         "ok": ok,
         "requester": transition.requester,
         "responder": transition.responder,
@@ -855,6 +937,7 @@ def _transition_evidence(
         },
         "diagnostics": {
             "ok": all(count == 1 for count in counts.values())
+            and diagnostics_semantics_ok
             and requester_ordered
             and responder_ordered,
             "counts": counts,
@@ -867,6 +950,9 @@ def _transition_evidence(
         },
         "application": _body(applied) if applied is not None else None,
     }
+    if clear_transport is not None:
+        result["clearTransport"] = clear_transport
+    return result
 
 
 def _queue_full_transition_evidence(
@@ -1611,17 +1697,20 @@ def _file_not_found_transition_evidence(
     }
 
 
-def build_client_udp_v4_diagnostic_evidence(
+def _build_client_udp_ack_diagnostic_evidence(
     *,
     file_hash: bytes,
     part_count: int,
     stock_record: object,
     transitions: Iterable[ClientUdpV4Transition],
+    schema: str,
+    coverage_id: str,
+    require_clear_transport: bool,
 ) -> dict[str, Any]:
-    """Prove both clients originate, answer, and apply one exact direct V4 reask."""
+    """Prove both clients originate, answer, and apply one exact direct ACK reask."""
 
     file_hash_hex = file_hash.hex()
-    stock = _stock_authority(stock_record)
+    stock = _stock_authority(stock_record, coverage_id=coverage_id)
     transition_list = list(transitions)
     clients: dict[str, dict[str, Any]] = {}
     duplicate_requesters: list[str] = []
@@ -1633,19 +1722,21 @@ def build_client_udp_v4_diagnostic_evidence(
             transition,
             file_hash=file_hash_hex,
             part_count=part_count,
+            require_clear_transport=require_clear_transport,
         )
     exact_clients = set(clients) == set(CLIENTS) and not duplicate_requesters
+    ordered_clients = [clients[client] for client in CLIENTS if client in clients]
     requests = [
         client.get("wire", {}).get("request", {}).get("rawHex")
-        for client in clients.values()
+        for client in ordered_clients
     ]
     acks = [
         client.get("wire", {}).get("ack", {}).get("rawHex")
-        for client in clients.values()
+        for client in ordered_clients
     ]
     ranks = [
         client.get("wire", {}).get("ack", {}).get("queueRank")
-        for client in clients.values()
+        for client in ordered_clients
     ]
     application_fields = (
         "replyOpcode",
@@ -1665,7 +1756,7 @@ def build_client_udp_v4_diagnostic_evidence(
     )
     applications = [
         {field: application.get(field) for field in application_fields}
-        for client in clients.values()
+        for client in ordered_clients
         if isinstance((application := client.get("application")), dict)
     ]
     comparison = {
@@ -1689,7 +1780,7 @@ def build_client_udp_v4_diagnostic_evidence(
         *([] if comparison["ok"] else ["comparison"]),
     ]
     return {
-        "schema": SCHEMA,
+        "schema": schema,
         "ok": not failures,
         "fileHash": file_hash_hex,
         "partCount": part_count,
@@ -1698,26 +1789,94 @@ def build_client_udp_v4_diagnostic_evidence(
         "clients": clients,
         "comparison": comparison,
         "coverageClaims": {
-            "eligibleCoverageIds": [COVERAGE_ID] if not failures else [],
+            "eligibleCoverageIds": [coverage_id] if not failures else [],
             "evidenceLayers": list(EVIDENCE_LAYERS),
         },
     }
 
 
-def require_client_udp_v4_diagnostic_evidence(report: dict[str, Any]) -> None:
-    """Raise unless both clients causally completed the exact direct V4 transition."""
+def build_client_udp_v4_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpV4Transition],
+) -> dict[str, Any]:
+    """Prove both clients originate, answer, and apply one exact direct V4 reask."""
 
-    if report.get("schema") != SCHEMA:
-        raise RuntimeError("Client-UDP V4 diagnostics have an unexpected schema")
+    return _build_client_udp_ack_diagnostic_evidence(
+        file_hash=file_hash,
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+        schema=SCHEMA,
+        coverage_id=COVERAGE_ID,
+        require_clear_transport=False,
+    )
+
+
+def build_client_udp_clear_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpV4Transition],
+) -> dict[str, Any]:
+    """Prove the direct V4 request/ACK path was selected and carried in clear."""
+
+    return _build_client_udp_ack_diagnostic_evidence(
+        file_hash=file_hash,
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+        schema=CLEAR_SCHEMA,
+        coverage_id=CLEAR_COVERAGE_ID,
+        require_clear_transport=True,
+    )
+
+
+def _require_client_udp_ack_diagnostic_evidence(
+    report: dict[str, Any],
+    *,
+    schema: str,
+    coverage_id: str,
+    label: str,
+) -> None:
+    """Raise unless both clients causally completed one exact direct ACK transition."""
+
+    if report.get("schema") != schema:
+        raise RuntimeError(f"Client-UDP {label} diagnostics have an unexpected schema")
     if report.get("ok") is not True:
         raise RuntimeError(
-            f"Client-UDP V4 diagnostics are incomplete: {report.get('failures')!r}"
+            f"Client-UDP {label} diagnostics are incomplete: {report.get('failures')!r}"
         )
     claims = report.get("coverageClaims")
     if not isinstance(claims, dict) or claims.get("eligibleCoverageIds") != [
-        COVERAGE_ID
+        coverage_id
     ]:
-        raise RuntimeError("Client-UDP V4 coverage claims are invalid")
+        raise RuntimeError(f"Client-UDP {label} coverage claims are invalid")
+
+
+def require_client_udp_v4_diagnostic_evidence(report: dict[str, Any]) -> None:
+    """Raise unless both clients causally completed the exact direct V4 transition."""
+
+    _require_client_udp_ack_diagnostic_evidence(
+        report,
+        schema=SCHEMA,
+        coverage_id=COVERAGE_ID,
+        label="V4",
+    )
+
+
+def require_client_udp_clear_diagnostic_evidence(report: dict[str, Any]) -> None:
+    """Raise unless both clients causally selected and completed the clear path."""
+
+    _require_client_udp_ack_diagnostic_evidence(
+        report,
+        schema=CLEAR_SCHEMA,
+        coverage_id=CLEAR_COVERAGE_ID,
+        label="clear",
+    )
 
 
 def build_client_udp_queue_full_diagnostic_evidence(

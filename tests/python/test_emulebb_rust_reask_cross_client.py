@@ -138,6 +138,68 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
     )
     assert module.SCENARIO_REPLY_OPCODES[file_not_found.scenario] == 0x92
 
+    clear = module.parse_args(
+        [
+            "--scenario",
+            "clear",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert clear.scenario == "clear"
+    assert module.SCENARIO_COVERAGE_IDS[clear.scenario] == "client-udp.clear"
+    assert module.SCENARIO_CAMPAIGN_SCHEMAS[clear.scenario] == (
+        "emulebb-build-tests.client-udp-clear-campaign.v1"
+    )
+    assert module.SCENARIO_REPLY_OPCODES[clear.scenario] == 0x91
+    assert module.SCENARIO_EVIDENCE_BUILDERS[clear.scenario] is (
+        module.udp_evidence.build_client_udp_clear_diagnostic_evidence
+    )
+    assert module.SCENARIO_EVIDENCE_REQUIREMENTS[clear.scenario] is (
+        module.udp_evidence.require_client_udp_clear_diagnostic_evidence
+    )
+
+
+def test_clear_raw_evidence_serializes_complete_reducer_inputs() -> None:
+    module = _load_module()
+    transition = module.udp_evidence.ClientUdpV4Transition(
+        requester="rust",
+        responder="mfc",
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_user_hash=bytes.fromhex(SOURCE_USER_HASH),
+        requester_udp_endpoint="127.0.0.20:4772",
+        control_receipt={"request": {}, "response": {}},
+        requester_records=[{"seq": 1}],
+        responder_records=[{"seq": 2}],
+    )
+
+    payload = module.build_clear_raw_evidence(
+        file_hash=FILE_HASH,
+        part_count=1,
+        transitions=[transition],
+    )
+
+    assert payload == {
+        "schema": module.udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+        "scenario": "clear",
+        "fileHash": FILE_HASH,
+        "partCount": 1,
+        "transitions": [
+            {
+                "requester": "rust",
+                "responder": "mfc",
+                "sourceTcpEndpoint": SOURCE_TCP_ENDPOINT,
+                "sourceUdpEndpoint": SOURCE_UDP_ENDPOINT,
+                "sourceUserHash": SOURCE_USER_HASH,
+                "requesterUdpEndpoint": "127.0.0.20:4772",
+                "controlReceipt": {"request": {}, "response": {}},
+                "requesterRecords": [{"seq": 1}],
+                "responderRecords": [{"seq": 2}],
+            }
+        ],
+    }
+
 
 def test_capacity_precondition_reads_health_validated_segments(tmp_path: Path) -> None:
     module = _load_module()
