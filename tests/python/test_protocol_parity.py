@@ -60,7 +60,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 5,
-        "coveredIdCount": 30,
+        "coveredIdCount": 31,
         "groupVerdictCounts": {
             "parity": 5,
             "divergence": 0,
@@ -69,9 +69,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 30,
+            "parity": 31,
             "divergence": 0,
-            "evidence-incomplete": 70,
+            "evidence-incomplete": 69,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -107,6 +107,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         == "scripts/deterministic-two-client-transfer.py"
     )
     assert [row["coverageId"] for row in payload["coverageEvidence"]] == [
+        "client-udp.clear",
         "client-udp.file-not-found",
         "client-udp.queue-full",
         "client-udp.v4",
@@ -274,11 +275,12 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.login.request",
         "transfer.block.uncompressed",
     ]
-    assert len(payload["evidenceReceipts"]) == 23
+    assert len(payload["evidenceReceipts"]) == 24
     assert payload["evidenceReceipts"][21]["coverageIds"] == ["client-udp.queue-full"]
     assert payload["evidenceReceipts"][22]["coverageIds"] == [
         "client-udp.file-not-found"
     ]
+    assert payload["evidenceReceipts"][23]["coverageIds"] == ["client-udp.clear"]
 
 
 def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
