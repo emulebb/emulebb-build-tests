@@ -197,7 +197,8 @@ def test_buddy_callback_probe_records_complete_socket_chain() -> None:
                 target_tcp_port=target_tcp_port,
                 target_udp_port=target_udp_port,
                 target_user_hash=TARGET_HASH,
-                target_client_id=target_client_id,
+                target_server_client_id=target_client_id,
+                target_peer_hello_client_id=target_client_id,
                 timeout_seconds=2.0,
             )
     finally:

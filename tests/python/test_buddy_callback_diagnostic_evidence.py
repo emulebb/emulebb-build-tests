@@ -23,6 +23,7 @@ FILE_HASH = bytes.fromhex("32547698BADCFE1032547698BADCFE10")
 TARGETS = {
     "rust": {
         "clientId": 1,
+        "peerHelloClientId": 0,
         "idKind": "low-id",
         "tcpPort": 35201,
         "udpPort": 35202,
@@ -30,6 +31,7 @@ TARGETS = {
     },
     "mfc": {
         "clientId": 2,
+        "peerHelloClientId": 0,
         "idKind": "low-id",
         "tcpPort": 35301,
         "udpPort": 35302,
@@ -136,7 +138,7 @@ def _probe(client: str, requester_udp_port: int) -> dict[str, object]:
     )
     target_answer = encode_hello_answer(
         user_hash=bytes.fromhex(target["userHash"]),
-        client_id=target["clientId"],
+        client_id=target["peerHelloClientId"],
         tcp_port=target["tcpPort"],
     )
     requester_answer = encode_hello_answer(
@@ -154,7 +156,8 @@ def _probe(client: str, requester_udp_port: int) -> dict[str, object]:
             "tcpPort": target["tcpPort"],
             "udpPort": target["udpPort"],
             "userHash": target["userHash"],
-            "clientId": target["clientId"],
+            "serverClientId": target["clientId"],
+            "peerHelloClientId": target["peerHelloClientId"],
         },
         "buddy": {
             "host": HOST,

@@ -73,6 +73,7 @@ def _target(value: object) -> dict[str, Any]:
     row = value if isinstance(value, dict) else {}
     user_hash = str(row.get("userHash") or "").upper()
     client_id = row.get("clientId")
+    peer_hello_client_id = row.get("peerHelloClientId")
     tcp_port = row.get("tcpPort")
     udp_port = row.get("udpPort")
     ok = bool(
@@ -80,6 +81,7 @@ def _target(value: object) -> dict[str, Any]:
         and isinstance(client_id, int)
         and not isinstance(client_id, bool)
         and 0 < client_id < ed2k_wire.LOW_ID_CEILING
+        and peer_hello_client_id == 0
         and isinstance(tcp_port, int)
         and not isinstance(tcp_port, bool)
         and 0 < tcp_port <= 0xFFFF
@@ -93,6 +95,7 @@ def _target(value: object) -> dict[str, Any]:
         "ok": ok,
         "userHash": user_hash or None,
         "clientId": client_id,
+        "peerHelloClientId": peer_hello_client_id,
         "tcpPort": tcp_port,
         "udpPort": udp_port,
         "idKind": row.get("idKind"),
@@ -304,7 +307,7 @@ def _probe_receipt(
     }
     expected_target_identity = {
         "userHash": target["userHash"],
-        "clientId": target["clientId"],
+        "clientId": target["peerHelloClientId"],
         "tcpPort": target["tcpPort"],
     }
     requester_answer_identity = {
@@ -323,7 +326,8 @@ def _probe_receipt(
             "tcpPort": target["tcpPort"],
             "udpPort": target["udpPort"],
             "userHash": target["userHash"],
-            "clientId": target["clientId"],
+            "serverClientId": target["clientId"],
+            "peerHelloClientId": target["peerHelloClientId"],
         }
         and receipt.get("buddy")
         == {

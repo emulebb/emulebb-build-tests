@@ -346,7 +346,8 @@ class BuddyCallbackProbe:
         target_tcp_port: int,
         target_udp_port: int,
         target_user_hash: bytes,
-        target_client_id: int,
+        target_server_client_id: int,
+        target_peer_hello_client_id: int,
         timeout_seconds: float,
     ) -> dict[str, object]:
         """Exercises discovery, held relay, callback, and resulting peer HELLO."""
@@ -360,7 +361,12 @@ class BuddyCallbackProbe:
         target_tcp_port = _port(target_tcp_port, "target_tcp_port")
         target_udp_port = _port(target_udp_port, "target_udp_port")
         target_user_hash = _hash16(target_user_hash, "target_user_hash")
-        target_client_id = _u32(target_client_id, "target_client_id")
+        target_server_client_id = _u32(
+            target_server_client_id, "target_server_client_id"
+        )
+        target_peer_hello_client_id = _u32(
+            target_peer_hello_client_id, "target_peer_hello_client_id"
+        )
         timeout_seconds = _timeout(timeout_seconds)
         target_udp_endpoint = (target_host, target_udp_port)
         target_tcp_endpoint = (target_host, target_tcp_port)
@@ -420,7 +426,7 @@ class BuddyCallbackProbe:
             hello_answer = decode_hello_answer(hello_answer_frame)
             if hello_answer["userHash"] != target_user_hash.hex().upper():
                 raise RuntimeError("OP_HELLOANSWER carried an unexpected target hash")
-            if hello_answer["clientId"] != target_client_id:
+            if hello_answer["clientId"] != target_peer_hello_client_id:
                 raise RuntimeError(
                     "OP_HELLOANSWER carried an unexpected target client ID"
                 )
@@ -519,7 +525,8 @@ class BuddyCallbackProbe:
                 "tcpPort": target_tcp_port,
                 "udpPort": target_udp_port,
                 "userHash": target_user_hash.hex().upper(),
-                "clientId": target_client_id,
+                "serverClientId": target_server_client_id,
+                "peerHelloClientId": target_peer_hello_client_id,
             },
             "buddy": {
                 "host": self.bind_host,

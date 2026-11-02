@@ -147,6 +147,7 @@ BUDDY_CALLBACK_BUDDY_USER_HASH = bytes.fromhex("6486A8CAEC0E20426486A8CAEC0E7E10
 BUDDY_CALLBACK_BUDDY_ID = bytes.fromhex("7597B9DBFD1F31537597B9DBFD1F9131")
 BUDDY_CALLBACK_REQUESTER_USER_HASH = bytes.fromhex("86A8CAEC0E20426486A8CAEC0E20A242")
 BUDDY_CALLBACK_BUDDY_CLIENT_ID = 7
+BUDDY_CALLBACK_TARGET_PEER_HELLO_CLIENT_ID = 0
 SERVER_UDP_METADATA_FILE_HASH = bytes.fromhex("11223344556677889900AABBCCDDEEFF")
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
@@ -4700,10 +4701,12 @@ def main(argv: list[str] | None = None) -> int:
                 "mfc": {
                     **callback_targets["mfc"],
                     "udpPort": ports["client2_udp"],
+                    "peerHelloClientId": BUDDY_CALLBACK_TARGET_PEER_HELLO_CLIENT_ID,
                 },
                 "rust": {
                     **callback_targets["rust"],
                     "udpPort": ports["client1_udp"],
+                    "peerHelloClientId": BUDDY_CALLBACK_TARGET_PEER_HELLO_CLIENT_ID,
                 },
             }
             report["checks"]["client_buddy_callback_targets"] = callback_targets
@@ -4755,7 +4758,8 @@ def main(argv: list[str] | None = None) -> int:
                     target_tcp_port=int(target["tcpPort"]),
                     target_udp_port=int(target["udpPort"]),
                     target_user_hash=bytes.fromhex(str(target["userHash"])),
-                    target_client_id=int(target["clientId"]),
+                    target_server_client_id=int(target["clientId"]),
+                    target_peer_hello_client_id=int(target["peerHelloClientId"]),
                     timeout_seconds=SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
                 )
             report["checks"]["client_buddy_callback_controls"] = controls
