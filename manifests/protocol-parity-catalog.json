@@ -258,7 +258,8 @@
         "rust-mfc-transfer-20261101t220451z",
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
-        "rust-mfc-transfer-20261102t002608z"
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z"
       ],
       "verdict": "parity"
     },
@@ -284,7 +285,8 @@
         "rust-mfc-transfer-20261101t220451z",
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
-        "rust-mfc-transfer-20261102t002608z"
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z"
       ],
       "verdict": "parity"
     },
@@ -305,7 +307,8 @@
         "rust-mfc-transfer-20261101t220451z",
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
-        "rust-mfc-transfer-20261102t002608z"
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z"
       ],
       "verdict": "parity"
     },
@@ -352,10 +355,11 @@
     {
       "coverageId": "server.reply.sources",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
-      "reason": "Rust and MFC each decoded the same singular HighID source and applied the exact 0-to-1 source-state transition in plaintext and obfuscated server-source campaigns.",
+      "reason": "Rust and MFC each decoded the same singular HighID source and applied the exact 0-to-1 source-state transition in plaintext TCP, obfuscated TCP, and plaintext UDP v1 campaigns.",
       "receiptIds": [
         "rust-mfc-transfer-20261101t235531z",
-        "rust-mfc-transfer-20261102t002608z"
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z"
       ],
       "verdict": "parity"
     },
@@ -409,6 +413,13 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "server.source.udp-v1",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical plaintext UDP v1 OP_GLOBGETSOURCES request, with no v2 request, at sequences 30/23.",
+      "receiptIds": ["rust-mfc-transfer-20261102t005817z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "transfer.block.compressed",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "All 58 compressed payload frames matched exactly before manifest-backed completion.",
@@ -431,7 +442,8 @@
         "rust-mfc-transfer-20261101t220451z",
         "rust-mfc-transfer-20261101t230237z",
         "rust-mfc-transfer-20261101t235531z",
-        "rust-mfc-transfer-20261102t002608z"
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z"
       ],
       "verdict": "parity"
     }
@@ -1670,6 +1682,35 @@
           "authorityId": "rust-product",
           "executableSha256": "b636909c95b0887a455709a57b8eab8ef7544ec8275cdc2551ad735a5b373f9c",
           "sourceRevision": "dc9804c9c335c20007f83758fe0e7b4c823ee482"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T005817Z-emulebb-main-release-14048/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "6b15f9da1758ffe9420b8f22714de6e2788b81eef578007f86ff88ce6642a94b",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v1",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t005817z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "0739a3638f8a072d97ac1dd7cb36e4e1ef121307",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
         }
       ]
     }
