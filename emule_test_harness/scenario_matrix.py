@@ -59,7 +59,7 @@ def classify_topology(spec: live_e2e_suite.SuiteSpec) -> str:
         return "large-local-swarm"
     if spec.name in {"local-kad-swarm", "local-kad-mixed-client-swarm", "multi-client-p2p-matrix"}:
         return "local-swarm"
-    if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-ed2k-protocol-combinations"}:
+    if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode"}:
         return "local-two-client"
     if spec.is_arr_emulebb or spec.is_prowlarr_emulebb:
         return "controller-stack"
@@ -84,7 +84,7 @@ def classify_stress(spec: live_e2e_suite.SuiteSpec) -> str:
         return "soak"
     if "stress" in name or spec.is_rest_cold_start_dump_stress:
         return "stress"
-    if name in {"multi-client-p2p-matrix", "local-ed2k-protocol-combinations", "category-incoming-path-matrix"}:
+    if name in {"multi-client-p2p-matrix", "category-incoming-path-matrix"}:
         return "matrix"
     if name in {"local-dumps-crash-smoke", "resource-ui-smoke", "command-line-smoke"}:
         return "smoke"
@@ -124,7 +124,7 @@ def classify_optional_client_policy(spec: live_e2e_suite.SuiteSpec) -> str:
         return "mixed-clients-runtime-optional"
     if spec.name == "local-kad-mixed-client-swarm":
         return "mixed-clients-required"
-    if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-ed2k-protocol-combinations", "local-kad-swarm"}:
+    if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-kad-swarm"}:
         return "emulebb-and-harness-required"
     if spec.is_arr_emulebb or spec.is_prowlarr_emulebb:
         return "controller-dependencies-required"

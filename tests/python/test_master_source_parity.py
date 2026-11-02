@@ -2144,6 +2144,16 @@ def _check_packet_diagnostics_source__packet_diagnostics_logging_api_is_compile_
 
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n#include \"Opcodes.h\"\n#endif" in log_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nvoid DiagEventLogInvalidSubOpcode(" in log_source
+    assert (
+        "#if EMULEBB_HAS_DIAG_EVENT_V2\n"
+        "\tInitializeDiagEventV2Writer(strDiagnosticsLogDir, thePrefs.GetMaxLogFileSize());\n"
+        "#endif"
+    ) in emule_source
+    assert (
+        "#if EMULEBB_HAS_DIAG_EVENT_V2\n"
+        "\tShutdownDiagEventV2Writer();\n"
+        "#endif"
+    ) in emule_source
     assert "void DiagEventLogInvalidSubOpcode(" in log_header
     assert '\\"direction\\":\\"recv\\",\\"outcome\\":\\"dropped\\",\\"flow\\":\\"listener\\"' in log_source
     assert '\\"packetFamily\\":%s' in log_source
@@ -2622,6 +2632,219 @@ def _check_server_list_source__get_server_at_rejects_invalid_indices_before_posi
     assert "POSITION serverPos = list.FindIndex(pos);" in header
     assert "return serverPos != NULL ? list.GetAt(serverPos) : NULL;" in header
     assert "return list.GetAt(list.FindIndex(pos));" not in header
+
+
+# --- current server TCP diagnostics contract ---
+
+
+def _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion() -> None:
+    source = (app_source_root() / "ServerSocket.cpp").read_text(encoding="utf-8", errors="ignore")
+    attempt_transport = (
+        'IsServerCryptEnabledConnection() ? _T("obfuscated") : _T("plaintext")'
+    )
+
+    assert source.count(attempt_transport) == 7
+    assert "DiagEventLogEd2kServerCallbackApplied(" in source
+    receive_block = source[source.index("bool CServerSocket::PacketReceived(") : source.index("void CServerSocket::SetConnectionState(")]
+    state_block = source[source.index("void CServerSocket::LogConnectionStateTransition(") : source.index("void CServerSocket::SendPacket(")]
+    send_block = source[source.index("void CServerSocket::SendPacket(") :]
+    assert attempt_transport in receive_block
+    assert attempt_transport in state_block
+    assert attempt_transport in send_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in receive_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in state_block
+    assert 'IsObfusicating() ? _T("obfuscated") : _T("plaintext")' not in send_block
+
+
+def _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality() -> None:
+    log_header = (app_source_root() / "Log.h").read_text(encoding="utf-8", errors="ignore")
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    connect_source = (app_source_root() / "ServerConnect.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+
+    assert (
+        "void DiagEventLogEd2kServerTcpPacket(\n"
+        "\tLPCTSTR pszPeerLabel,\n"
+        "\tULONGLONG ullAttemptId,"
+    ) in log_header
+    packet_logger = log_source[
+        log_source.index("static void DiagEventLogEd2kServerPacket(") :
+        log_source.index("void DiagEventLogEd2kServerUdpPacket(")
+    ]
+    assert '\\"traceId\\":%I64u' in packet_logger
+    assert (
+        'const LPCTSTR pszPacketOutcome = bSend ? _T("attempted") : _T("accepted");'
+        in packet_logger
+    )
+    assert '_T("send_succeeded")' not in packet_logger
+    assert socket_source.count(
+        "DiagEventLogEd2kServerTcpPacket(pszDiagnosticPeer, m_ullDiagnosticAttemptId,"
+    ) == 2
+    receive_block = socket_source[
+        socket_source.index("bool CServerSocket::PacketReceived(") :
+        socket_source.index("void CServerSocket::SetConnectionState(")
+    ]
+    assert "m_ullDiagnosticAttemptId," in receive_block
+
+    fallback_logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerTransportFallback(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        '\\"flow\\":\\"server\\"',
+        '\\"phase\\":\\"connection\\"',
+        '\\"outcome\\":\\"retrying\\"',
+        '\\"fromTransportMode\\":%s',
+        '\\"toTransportMode\\":%s',
+        '\\"error\\":%s',
+        '\\"traceId\\":%I64u',
+    ):
+        assert required_field in fallback_logger
+    assert (
+        'WriteDiagEventV2(_T("ed2k_tcp"), _T("transport_fallback"), '
+        '_T("warning"), strKeys, strBody);'
+    ) in fallback_logger
+
+    automatic_fallback_block = connect_source[
+        connect_source.index("case ServerConnectSeams::EServerListExhaustionAction::FallbackToPlain:") :
+        connect_source.index("case ServerConnectSeams::EServerListExhaustionAction::ScheduleRetry:")
+    ]
+    automatic_fallback_event = (
+        "LogServerTransportFallback(pFailedServer, ullFailedAttemptId, pszFailureReason);"
+    )
+    assert automatic_fallback_event in automatic_fallback_block
+    assert automatic_fallback_block.index(automatic_fallback_event) < automatic_fallback_block.index(
+        "m_bTryObfuscated = false;"
+    )
+
+    failure_block = connect_source[
+        connect_source.index("if (singleconnecting) {") :
+        connect_source.index("StopConnectionTry();", connect_source.index("if (singleconnecting) {"))
+    ]
+    failure_event = (
+        'LogServerTransportFallback(pServer, sender->m_ullDiagnosticAttemptId, '
+        '_T("connection_failed"));'
+    )
+    assert failure_event in failure_block
+    assert failure_block.index(failure_event) < failure_block.index(
+        "ConnectToServer(pServer, false, true);"
+    )
+    assert (
+        'TryAnotherConnectionRequest(pServer, sender->m_ullDiagnosticAttemptId, '
+        '_T("connection_failed"));'
+    ) in connect_source
+
+    timeout_block = connect_source[
+        connect_source.index("if (curTick >= tmpkey + dwServerConnectTimeout)") :
+        connect_source.index("bool CServerConnect::Disconnect()")
+    ]
+    timeout_event = (
+        'LogServerTransportFallback(pRetryServer, tmpsock->m_ullDiagnosticAttemptId, '
+        '_T("connection_timeout"));'
+    )
+    assert timeout_event in timeout_block
+    assert timeout_block.index(timeout_event) < timeout_block.index("DestroySocket(tmpsock);")
+    assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(
+        "ConnectToServer(pRetryServer, false, true);"
+    )
+    timeout_attempt_capture = "const ULONGLONG ullFailedAttemptId = tmpsock->m_ullDiagnosticAttemptId;"
+    automatic_timeout_retry = (
+        'TryAnotherConnectionRequest(pFailedServer, ullFailedAttemptId, '
+        '_T("connection_timeout"));'
+    )
+    assert timeout_attempt_capture in timeout_block
+    assert automatic_timeout_retry in timeout_block
+    assert timeout_block.index(timeout_attempt_capture) < timeout_block.index("DestroySocket(tmpsock);")
+    assert timeout_block.index("DestroySocket(tmpsock);") < timeout_block.index(automatic_timeout_retry)
+
+
+def _check_server_socket_source__search_result_diagnostics_join_post_parse_state() -> None:
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(encoding="utf-8", errors="ignore")
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    search_header = (app_source_root() / "SearchDlg.h").read_text(encoding="utf-8", errors="ignore")
+    result_block = socket_source[
+        socket_source.index("case OP_SEARCHRESULT:") : socket_source.index("case OP_FOUNDSOURCES_OBFU:")
+    ]
+
+    assert "bool IsSearchRunning(uint32 uSearchID) const;" in search_header
+    assert "GetCurrentED2KSearchID()" in result_block
+    assert "GetResultCount(uSearchId)" in result_block
+    assert "GetFoundFiles(uSearchId)" in result_block
+    assert "IsSearchRunning(uSearchId)" in result_block
+    assert result_block.index("ProcessSearchAnswer(") < result_block.index("DiagEventLogEd2kServerSearchResultApplied(")
+    assert result_block.count("GetResultCount(uSearchId)") == 2
+    assert result_block.count("GetFoundFiles(uSearchId)") == 2
+
+    applied_logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerSearchResultApplied(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        'WriteDiagEventV2(_T("ed2k_tcp"), _T("search_result_applied")',
+        '\\"stateId\\":\\"server.search.result_applied\\"',
+        '\\"wireResultCount\\":%u',
+        '\\"cumulativeSourceCountBefore\\":%u',
+        '\\"cumulativeSourceCountAfter\\":%u',
+        '\\"distinctFileCountBefore\\":%u',
+        '\\"distinctFileCountAfter\\":%u',
+        '\\"expectedReply\\":%s',
+        '\\"moreResultsAvailable\\":%s',
+        'bExpectedReply ? _T("\\"accepted\\"") : _T("\\"late\\"")',
+    ):
+        assert required_field in applied_logger
+
+
+def _check_server_socket_source__server_metadata_diagnostics_follow_state_application() -> None:
+    socket_source = (app_source_root() / "ServerSocket.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    log_source = (app_source_root() / "Log.cpp").read_text(encoding="utf-8", errors="ignore")
+    status_block = socket_source[
+        socket_source.index("case OP_SERVERSTATUS:") : socket_source.index("case OP_SERVERIDENT:")
+    ]
+    ident_block = socket_source[
+        socket_source.index("case OP_SERVERIDENT:") : socket_source.index("case OP_SERVERLIST:")
+    ]
+
+    assert status_block.index("pServer->SetUserCount(cur_user);") < status_block.index(
+        "DiagEventLogEd2kServerStatusApplied("
+    )
+    assert status_block.index("pServer->SetFileCount(cur_files);") < status_block.index(
+        "DiagEventLogEd2kServerStatusApplied("
+    )
+    assert ident_block.index("pServer->SetListName(strName);") < ident_block.index(
+        "DiagEventLogEd2kServerIdentApplied("
+    )
+    assert ident_block.index("pServer->SetDescription(strDescription);") < ident_block.index(
+        "DiagEventLogEd2kServerIdentApplied("
+    )
+
+    logger = log_source[
+        log_source.index("void DiagEventLogEd2kServerMetadataApplied(") :
+        log_source.index("#if EMULEBB_HAS_DIAG_EVENT_V2 && EMULEBB_HAS_KAD_DIAGNOSTICS")
+    ]
+    for required_field in (
+        '\\"direction\\":\\"meta\\"',
+        '\\"outcome\\":\\"applied\\"',
+        '\\"protocolMarker\\":%u',
+        '\\"opcode\\":%u',
+        '\\"transportMode\\":%s',
+        '\\"flow\\":\\"server\\"',
+        '\\"traceId\\":%I64u',
+        '_T("server_status_applied")',
+        '_T("server_ident_applied")',
+        '_T("OP_SERVERSTATUS")',
+        '_T("OP_SERVERIDENT")',
+        '\\"users\\":%u',
+        '\\"files\\":%u',
+        '\\"name\\":%s',
+        '\\"description\\":%s',
+    ):
+        assert required_field in logger
 
 
 # --- consolidated from tests/python/test_sha_hash_set_source.py ---
@@ -4221,6 +4444,10 @@ _PARITY_CASES = [
     ("search_results_source::test_search_results_refresh_layout_after_hidden_tab_changes", _check_search_results_source__search_results_refresh_layout_after_hidden_tab_changes),
     ("search_results_source::test_clean_shutdown_removes_tray_icon_before_long_teardown", _check_search_results_source__clean_shutdown_removes_tray_icon_before_long_teardown),
     ("server_list_source::test_get_server_at_rejects_invalid_indices_before_position_access", _check_server_list_source__get_server_at_rejects_invalid_indices_before_position_access),
+    ("server_socket_source::test_diagnostics_use_attempt_transport_before_handshake_completion", _check_server_socket_source__diagnostics_use_attempt_transport_before_handshake_completion),
+    ("server_socket_source::test_fallback_diagnostics_preserve_attempt_causality", _check_server_socket_source__fallback_diagnostics_preserve_attempt_causality),
+    ("server_socket_source::test_search_result_diagnostics_join_post_parse_state", _check_server_socket_source__search_result_diagnostics_join_post_parse_state),
+    ("server_socket_source::test_server_metadata_diagnostics_follow_state_application", _check_server_socket_source__server_metadata_diagnostics_follow_state_application),
     ("sha_hash_set_source::test_aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges", _check_sha_hash_set_source__aich_recovery_hash_set_rejects_missing_owner_and_bad_part_ranges),
     ("shared_directory_rule_index_source::test_shared_directory_ops_owns_rule_index_and_key_helpers", _check_shared_directory_rule_index_source__shared_directory_ops_owns_rule_index_and_key_helpers),
     ("shared_directory_rule_index_source::test_preferences_tree_uses_shared_directory_rule_index", _check_shared_directory_rule_index_source__preferences_tree_uses_shared_directory_rule_index),

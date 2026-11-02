@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -491,6 +492,7 @@ ED2K_TCP_FAMILY = "ed2k_tcp"
 ED2K_SERVER_UDP_FAMILY = "ed2k_server_udp"
 KAD_UDP_FAMILY = "kad_udp"
 KAD_EVENT_FAMILY = "kad_event"
+_KAD_TARGET_HEX = re.compile(r"^[0-9a-f]{32}$")
 
 
 def normalize_server_endpoints(
@@ -581,6 +583,78 @@ def _kad_record_opcode(record: dict[str, Any]) -> int | str | None:
     return packet_trace_diff._kad_opcode(record)  # noqa: SLF001 - harness-internal reuse
 
 
+def _normalized_endpoint(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        host, port_text = value.strip().rsplit(":", 1)
+        port = int(port_text)
+    except ValueError:
+        return None
+    if not host.strip() or not 1 <= port <= 65535:
+        return None
+    return {"host": host.strip().casefold(), "port": port}
+
+
+def _record_peer_matches(record: dict[str, Any], endpoint: str) -> bool:
+    keys = record.get("keys")
+    return bool(
+        isinstance(keys, dict)
+        and _normalized_endpoint(keys.get("peer")) == _normalized_endpoint(endpoint)
+    )
+
+
+def _server_search_query(record: dict[str, Any]) -> str | None:
+    """Decodes the leading ED2K string criterion from OP_SEARCHREQUEST."""
+
+    body = record.get("body")
+    payload_hex = body.get("payloadHex") if isinstance(body, dict) else None
+    if not isinstance(payload_hex, str):
+        return None
+    try:
+        payload = bytes.fromhex(payload_hex)
+    except ValueError:
+        return None
+    if len(payload) < 3 or payload[0] != 0x01:
+        return None
+    query_length = int.from_bytes(payload[1:3], "little")
+    if query_length < 1 or len(payload) != 3 + query_length:
+        return None
+    try:
+        return unicodedata.normalize(
+            "NFC", payload[3 : 3 + query_length].decode("utf-8")
+        )
+    except UnicodeDecodeError:
+        return None
+
+
+def _kad_packet_target_hex(record: dict[str, Any]) -> str | None:
+    """Returns canonical UInt128 hex from a Kad packet's raw wire target."""
+
+    body = record.get("body")
+    decoded_hex = body.get("decodedHex") if isinstance(body, dict) else None
+    if not isinstance(decoded_hex, str):
+        return None
+    try:
+        decoded = bytes.fromhex(decoded_hex)
+    except ValueError:
+        return None
+    opcode = body.get("opcode")
+    if opcode == KAD2_SEARCH_KEY_REQ:
+        target_offset = 2
+    elif opcode == KAD2_SEARCH_RES:
+        # SEARCH_RES prefixes the lookup target with the responder node ID.
+        target_offset = 18
+    else:
+        return None
+    if len(decoded) < target_offset + 16:
+        return None
+    raw_target = decoded[target_offset : target_offset + 16]
+    return b"".join(
+        raw_target[index : index + 4][::-1] for index in range(0, 16, 4)
+    ).hex()
+
+
 def _kad_wire_opcode_observed(
     records: list[dict[str, Any]] | None,
     opcode: int,
@@ -659,6 +733,266 @@ def action_required_diagnostic_families(
     if normalized == SEARCH_METHOD_KAD:
         return (KAD_UDP_FAMILY, KAD_EVENT_FAMILY)
     return ()
+
+
+def _wire_record_matches(
+    record: dict[str, Any],
+    *,
+    family: str,
+    direction: str,
+    protocol_marker: int,
+    opcodes: set[int],
+) -> bool:
+    body = record.get("body")
+    return bool(
+        record.get("family") == family
+        and record.get("event") == "packet"
+        and isinstance(body, dict)
+        and body.get("direction") == direction
+        and body.get("protocolMarker") == protocol_marker
+        and body.get("opcode") in opcodes
+    )
+
+
+def _server_action_records(
+    records: list[dict[str, Any]],
+    *,
+    query: str,
+    server_endpoint: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    expected_query = unicodedata.normalize("NFC", query)
+    endpoint_requests = [
+        record
+        for record in records
+        if _wire_record_matches(
+            record,
+            family=ED2K_TCP_FAMILY,
+            direction="send",
+            protocol_marker=0xE3,
+            opcodes={0x16},
+        )
+        and _record_peer_matches(record, server_endpoint)
+    ]
+    exact_requests = [
+        record
+        for record in endpoint_requests
+        if _server_search_query(record) == expected_query
+    ]
+    endpoint_responses = [
+        record
+        for record in records
+        if _wire_record_matches(
+            record,
+            family=ED2K_TCP_FAMILY,
+            direction="recv",
+            protocol_marker=0xE3,
+            opcodes={0x33},
+        )
+        and _record_peer_matches(record, server_endpoint)
+    ]
+    reasons: list[str] = []
+    if not exact_requests:
+        reasons.append("exact-query-request-missing")
+    elif len(exact_requests) > 1:
+        reasons.append("exact-query-request-ambiguous")
+    if len(endpoint_requests) != 1 and len(exact_requests) == 1:
+        reasons.append("endpoint-request-overlap")
+    selected_ids = {id(record) for record in (*exact_requests, *endpoint_responses)}
+    selected = [record for record in records if id(record) in selected_ids]
+    return selected, {
+        "status": "attributed" if not reasons else "evidence-incomplete",
+        "reasons": reasons,
+        "query": expected_query,
+        "serverEndpoint": _normalized_endpoint(server_endpoint),
+        "endpointRequestCount": len(endpoint_requests),
+        "exactQueryRequestCount": len(exact_requests),
+        "endpointResponseCount": len(endpoint_responses),
+    }
+
+
+def _kad_action_records(
+    records: list[dict[str, Any]],
+    *,
+    search_id: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    lifecycle: list[dict[str, Any]] = []
+    starts: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
+    for record in records:
+        keys = record.get("keys")
+        body = record.get("body")
+        if (
+            record.get("family") != KAD_EVENT_FAMILY
+            or record.get("event") != "lookup"
+            or not isinstance(keys, dict)
+            or str(keys.get("searchId")) != str(search_id)
+            or not isinstance(body, dict)
+            or body.get("action") != "search"
+            or body.get("searchKind") != "keyword"
+            or body.get("milestone") not in {"lookup_started", "lookup_complete"}
+        ):
+            continue
+        lifecycle.append(record)
+        if body.get("milestone") == "lookup_started":
+            starts.append(record)
+        else:
+            completions.append(record)
+
+    target_values = {
+        str(record["body"].get("targetHex", "")).lower()
+        for record in lifecycle
+        if isinstance(record.get("body"), dict)
+    }
+    valid_targets = {
+        value for value in target_values if _KAD_TARGET_HEX.fullmatch(value)
+    }
+    reasons: list[str] = []
+    if len(starts) != 1:
+        reasons.append("lookup-start-missing" if not starts else "lookup-start-ambiguous")
+    if len(completions) != 1:
+        reasons.append(
+            "lookup-complete-missing"
+            if not completions
+            else "lookup-complete-ambiguous"
+        )
+    if len(valid_targets) != 1 or target_values != valid_targets:
+        reasons.append("lookup-target-missing-or-conflicting")
+    target_hex = next(iter(valid_targets)) if len(valid_targets) == 1 else None
+
+    competing_search_ids: set[str] = set()
+    if target_hex is not None:
+        for record in records:
+            keys = record.get("keys")
+            body = record.get("body")
+            if (
+                record.get("family") == KAD_EVENT_FAMILY
+                and record.get("event") == "lookup"
+                and isinstance(keys, dict)
+                and str(keys.get("searchId")) != str(search_id)
+                and isinstance(body, dict)
+                and body.get("action") == "search"
+                and body.get("searchKind") == "keyword"
+                and body.get("milestone") == "lookup_started"
+                and str(body.get("targetHex", "")).lower() == target_hex
+            ):
+                competing_search_ids.add(str(keys.get("searchId")))
+        if competing_search_ids:
+            reasons.append("lookup-target-overlap")
+
+    wire_records: list[dict[str, Any]] = []
+    if target_hex is not None:
+        for record in records:
+            if not (
+                _wire_record_matches(
+                    record,
+                    family=KAD_UDP_FAMILY,
+                    direction="send",
+                    protocol_marker=0xE4,
+                    opcodes={KAD2_SEARCH_KEY_REQ},
+                )
+                or _wire_record_matches(
+                    record,
+                    family=KAD_UDP_FAMILY,
+                    direction="recv",
+                    protocol_marker=0xE4,
+                    opcodes={KAD2_SEARCH_RES},
+                )
+            ):
+                continue
+            if _kad_packet_target_hex(record) == target_hex:
+                wire_records.append(record)
+    matching_requests = [
+        record
+        for record in wire_records
+        if _wire_record_matches(
+            record,
+            family=KAD_UDP_FAMILY,
+            direction="send",
+            protocol_marker=0xE4,
+            opcodes={KAD2_SEARCH_KEY_REQ},
+        )
+    ]
+    if not matching_requests:
+        reasons.append("target-matched-request-missing")
+
+    selected_ids = {id(record) for record in (*lifecycle, *wire_records)}
+    selected = [record for record in records if id(record) in selected_ids]
+    return selected, {
+        "status": "attributed" if not reasons else "evidence-incomplete",
+        "reasons": reasons,
+        "searchId": search_id,
+        "targetHex": target_hex,
+        "lifecycleRecordCount": len(lifecycle),
+        "lookupStartCount": len(starts),
+        "lookupCompleteCount": len(completions),
+        "matchingRequestCount": len(matching_requests),
+        "matchingResponseCount": len(wire_records) - len(matching_requests),
+        "competingSearchIds": sorted(competing_search_ids),
+    }
+
+
+def action_conformance_records(
+    records: list[dict[str, Any]],
+    *,
+    kind: str,
+    method: str | None,
+    search_id: str | None,
+    query: str | None = None,
+    server_endpoint: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Selects diagnostics attributable to one action and reports confidence."""
+
+    if kind != SEARCH or method is None:
+        return list(records), {"status": "not-required", "reasons": []}
+    normalized = str(method).strip().lower()
+    if normalized == SEARCH_METHOD_SERVER:
+        if query is None or server_endpoint is None:
+            return [], {
+                "status": "evidence-incomplete",
+                "reasons": ["server-attribution-authority-missing"],
+                "query": (
+                    unicodedata.normalize("NFC", query)
+                    if isinstance(query, str)
+                    else None
+                ),
+                "serverEndpoint": _normalized_endpoint(server_endpoint),
+                "endpointRequestCount": 0,
+                "exactQueryRequestCount": 0,
+                "endpointResponseCount": 0,
+            }
+        return _server_action_records(
+            records,
+            query=query,
+            server_endpoint=server_endpoint,
+        )
+    if normalized == SEARCH_METHOD_GLOBAL:
+        return [
+            record
+            for record in records
+            if _wire_record_matches(
+                record,
+                family=ED2K_SERVER_UDP_FAMILY,
+                direction="send",
+                protocol_marker=0xE3,
+                opcodes={0x90, 0x92, 0x98},
+            )
+        ], {"status": "not-required", "reasons": []}
+    if normalized != SEARCH_METHOD_KAD:
+        return list(records), {"status": "not-required", "reasons": []}
+    if not search_id:
+        return [], {
+            "status": "evidence-incomplete",
+            "reasons": ["kad-search-id-missing"],
+            "searchId": search_id,
+            "targetHex": None,
+            "lifecycleRecordCount": 0,
+            "lookupStartCount": 0,
+            "lookupCompleteCount": 0,
+            "matchingRequestCount": 0,
+            "matchingResponseCount": 0,
+            "competingSearchIds": [],
+        }
+    return _kad_action_records(records, search_id=search_id)
 
 
 def _diag_wire_opcode_exercised(
@@ -1185,13 +1519,96 @@ def diff_action(
     mfc_server_udp_records = diagnostic_family_records(
         mfc_diag_slice, ED2K_SERVER_UDP_FAMILY
     )
+    rust_search_id = search_ids.get("rust") if isinstance(search_ids, dict) else None
+    mfc_search_id = search_ids.get("mfc") if isinstance(search_ids, dict) else None
+    diagnostics_supplied = rust_diag is not None or mfc_diag is not None
+    attribution_required = diagnostics_supplied and method in {
+        SEARCH_METHOD_SERVER,
+        SEARCH_METHOD_KAD,
+    }
+    if diagnostics_supplied:
+        rust_conformance_records, rust_attribution = action_conformance_records(
+            rust_diag_slice,
+            kind=pair.kind,
+            method=method,
+            search_id=rust_search_id,
+            query=pair.rust.label,
+            server_endpoint=(
+                server_endpoints.get("rust")
+                if isinstance(server_endpoints, dict)
+                else None
+            ),
+        )
+        mfc_conformance_records, mfc_attribution = action_conformance_records(
+            mfc_diag_slice,
+            kind=pair.kind,
+            method=method,
+            search_id=mfc_search_id,
+            query=pair.mfc.label,
+            server_endpoint=(
+                server_endpoints.get("mfc")
+                if isinstance(server_endpoints, dict)
+                else None
+            ),
+        )
+    else:
+        rust_conformance_records = []
+        mfc_conformance_records = []
+        rust_attribution = {"status": "not-required", "reasons": []}
+        mfc_attribution = {"status": "not-required", "reasons": []}
+    attribution_ok = all(
+        row.get("status") in {"attributed", "not-required"}
+        for row in (rust_attribution, mfc_attribution)
+    )
+    attribution_reasons: list[str] = []
+    if (
+        attribution_required
+        and method == SEARCH_METHOD_KAD
+        and rust_attribution.get("targetHex")
+        != mfc_attribution.get("targetHex")
+    ):
+        attribution_reasons.append("bilateral-kad-target-mismatch")
+    attribution_ok = attribution_ok and not attribution_reasons
+    action_attribution = {
+        "required": attribution_required,
+        "status": (
+            "attributed"
+            if attribution_required and attribution_ok
+            else "evidence-incomplete"
+            if attribution_required
+            else "not-required"
+        ),
+        "reasons": attribution_reasons,
+        "clients": {
+            "rust": rust_attribution,
+            "mfc": mfc_attribution,
+        },
+    }
+
+    if attribution_required and method == SEARCH_METHOD_SERVER:
+        rust_slice = diag_event_diff.ed2k_tcp_packet_views(rust_conformance_records)
+        mfc_slice = diag_event_diff.ed2k_tcp_packet_views(mfc_conformance_records)
+        packet_diff = packet_trace_diff.diff_traces(rust_slice, mfc_slice)
+    if attribution_required and method == SEARCH_METHOD_KAD:
+        rust_kad_records = diagnostic_family_records(
+            rust_conformance_records, KAD_UDP_FAMILY
+        )
+        mfc_kad_records = diagnostic_family_records(
+            mfc_conformance_records, KAD_UDP_FAMILY
+        )
+        rust_kad_event_records = diagnostic_family_records(
+            rust_conformance_records, KAD_EVENT_FAMILY
+        )
+        mfc_kad_event_records = diagnostic_family_records(
+            mfc_conformance_records, KAD_EVENT_FAMILY
+        )
     diag_diff: dict[str, Any] | None = None
     diag_conformance: dict[str, Any] | None = None
-    if rust_diag or mfc_diag:
+    if diagnostics_supplied:
         diag_diff = diag_event_diff.diff_traces(rust_diag_slice, mfc_diag_slice)
         diag_conformance = diag_event_diff.family_conformance(
-            rust_diag_slice,
-            mfc_diag_slice,
+            rust_conformance_records,
+            mfc_conformance_records,
             required_families=action_required_diagnostic_families(pair.kind, method),
         )
 
@@ -1209,6 +1626,9 @@ def diff_action(
         rust_server_udp_records=rust_server_udp_records,
         mfc_server_udp_records=mfc_server_udp_records,
     )
+    if attribution_required and not attribution_ok:
+        action_coverage["ok"] = False
+        action_coverage["status"] = "evidence-incomplete"
     if method == SEARCH_METHOD_KAD:
         rust_assessment_count = len(rust_kad_records)
         mfc_assessment_count = len(mfc_kad_records)
@@ -1245,6 +1665,7 @@ def diff_action(
             "rust": rust_assessment_count,
             "mfc": mfc_assessment_count,
         },
+        "actionAttribution": action_attribution,
         "verdict": verdict,
         "coverageOk": bool(action_coverage.get("ok")),
         "fullCoverageOk": bool(packet_diff.get("coverageOk")),

@@ -292,6 +292,25 @@ def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path)
     assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 300
 
 
+def test_write_rust_profile_can_request_stock_server_list_on_connect(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.10:4661",
+        add_servers_from_server=True,
+    )
+
+    assert setting_value(profile_dir, "ed2k", "addServersFromServer") is True
+
+
 def test_write_rust_profile_supports_best_effort_initial_nat_mapping(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
@@ -619,6 +638,32 @@ def test_start_rust_client_executable_uses_staged_binary(monkeypatch: pytest.Mon
     assert calls[0]["command"] == [str(executable), "--profile", str(tmp_path / "profile")]
     assert calls[0]["cwd"] == executable.parent
     assert calls[0]["stdout"].mode == "w"
+    calls[0]["stdout"].close()
+
+
+def test_start_rust_client_executable_passes_child_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return object()
+
+    executable = tmp_path / "emulebb-rust-diagnostics.exe"
+    executable.write_bytes(b"exe")
+    child_env = {"EMULEBB_RUST_LOG_DIR": str(tmp_path / "diagnostics")}
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    rust_client.start_rust_client_executable(
+        executable,
+        tmp_path / "profile",
+        tmp_path / "rust.out",
+        env=child_env,
+    )
+
+    assert calls[0]["env"] is child_env
     calls[0]["stdout"].close()
 
 

@@ -1,4 +1,4 @@
-"""Normalizes tracing-harness protocol JSONL dumps into compact oracle records."""
+"""Normalizes protocol diagnostic JSONL into compact oracle evidence."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.protocol_goldens import run_normalize_cli
+from emule_test_harness.protocol_parity import run_normalize_cli
 
 
 if __name__ == "__main__":

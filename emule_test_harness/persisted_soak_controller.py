@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 import copy
+from functools import wraps
 import hashlib
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -45,11 +47,14 @@ OBSERVER_SCRIPT = REPO_ROOT / "scripts" / "converged-soak-observer.py"
 MANIFEST_SCHEMA = "emulebb.persisted-soak-session.v5"
 STATUS_SCHEMA = "emulebb.persisted-soak-status.v4"
 GATE_STATUS_SCHEMA = "emulebb.persisted-soak-gate-status.v1"
+RUN_TO_GATE_SCHEMA = "emulebb.persisted-soak-run-to-gate.v1"
 WATCH_SCHEMA = "emulebb.persisted-soak-watch.v1"
 DEFAULT_CONTROL_BIND = "127.0.0.1"
 DEFAULT_WATCH_INTERVAL_SECONDS = 60.0
 DEFAULT_WATCH_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_WATCH_SEGMENTS = 4
+DEFAULT_GATE_TIMEOUT_SECONDS = 5 * 60 * 60
+DEFAULT_GATE_POLL_INTERVAL_SECONDS = 30.0
 WATCH_FAILURE_GRACE_SECONDS = 15.0
 OBSERVER_REPORT_READ_ATTEMPTS = 8
 OBSERVER_REPORT_READ_RETRY_SECONDS = 0.25
@@ -212,6 +217,87 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError(f"Expected a JSON object: {path}")
     return parsed
+
+
+def require_finite_number(
+    value: float,
+    name: str,
+    *,
+    allow_zero: bool = False,
+) -> None:
+    """Rejects unbounded or non-positive controller timing values."""
+
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        qualifier = "non-negative" if allow_zero else "greater than zero"
+        raise ValueError(f"{name} must be finite and {qualifier}.")
+
+
+def transition_lock_path(paths: ControlPaths) -> Path:
+    """Returns the output-root lock shared by all persisted-soak controllers."""
+
+    return paths.last_run_manifest.parents[2] / ".persisted-soak-controller.lock"
+
+
+@contextmanager
+def session_transition_lock(paths: ControlPaths):
+    """Serializes start/stop transitions without retaining process ownership."""
+
+    lock_path = transition_lock_path(paths)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+b")
+    locked = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError(
+                f"Another persisted-soak start/stop transition is active: {lock_path}"
+            ) from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def serialized_session_transition(paths_position: int):
+    """Decorates one controller operation with the shared transition lock."""
+
+    def decorate(function):
+        @wraps(function)
+        def locked(*args, **kwargs):
+            paths = kwargs.get("paths")
+            if paths is None:
+                paths = args[paths_position]
+            if not isinstance(paths, ControlPaths):
+                raise TypeError("Persisted-soak transition requires ControlPaths.")
+            with session_transition_lock(paths):
+                return function(*args, **kwargs)
+
+        return locked
+
+    return decorate
 
 
 def file_sha256(path: Path) -> str:
@@ -1674,6 +1760,63 @@ def stop_owned_process(
     }
 
 
+def rollback_unpublished_launcher(
+    paths: ControlPaths,
+    launcher_process: subprocess.Popen[bytes],
+) -> dict[str, Any]:
+    """Stops a launcher tree when exact identity publication fails."""
+
+    processes = windows_processes.collect_processes()
+    row = next((candidate for candidate in processes if candidate.pid == launcher_process.pid), None)
+    captured_tree: tuple[dict[str, Any], ...] = ()
+    if (
+        row is not None
+        and row.creation_date
+        and (
+            not row.command_line
+            or windows_processes.command_line_contains_markers(
+                row.command_line,
+                ("launch-soak.py",),
+            )
+        )
+    ):
+        captured_tree = capture_exact_process_tree(
+            {"pid": row.pid, "creationDate": row.creation_date}
+        )
+
+    paths.control_dir.mkdir(parents=True, exist_ok=True)
+    requested_at = datetime.now(UTC).isoformat() + "\n"
+    paths.stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
+    paths.watch_stop_file.write_text(requested_at, encoding="utf-8", newline="\n")
+    if launcher_process.poll() is None:
+        launcher_process.terminate()
+        wait = getattr(launcher_process, "wait", None)
+        if callable(wait):
+            try:
+                wait(timeout=WATCH_FAILURE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+    forced = (
+        stop_captured_process_tree(
+            captured_tree,
+            timeout_seconds=WATCH_FAILURE_GRACE_SECONDS,
+        )
+        if captured_tree
+        else {
+            "forced": False,
+            "alreadyStopped": launcher_process.poll() is not None,
+            "verifiedStopped": launcher_process.poll() is not None,
+            "capturedCount": 0,
+        }
+    )
+    return {
+        "stopRequested": True,
+        "capturedCount": len(captured_tree),
+        "forced": forced,
+    }
+
+
+@serialized_session_transition(1)
 def start_session(
     config: SessionConfig,
     paths: ControlPaths,
@@ -1695,12 +1838,10 @@ def start_session(
 ) -> dict[str, Any]:
     """Starts one detached dual-client diagnostics session."""
 
-    if config.rest_timeout_seconds <= 0:
-        raise ValueError("rest_timeout_seconds must be greater than zero.")
-    if config.connect_timeout_seconds <= 0:
-        raise ValueError("connect_timeout_seconds must be greater than zero.")
-    if start_watch and watch_interval_seconds <= 0:
-        raise ValueError("watch_interval_seconds must be greater than zero.")
+    require_finite_number(config.rest_timeout_seconds, "rest_timeout_seconds")
+    require_finite_number(config.connect_timeout_seconds, "connect_timeout_seconds")
+    if start_watch:
+        require_finite_number(watch_interval_seconds, "watch_interval_seconds")
     if start_watch and watch_max_bytes <= 0:
         raise ValueError("watch_max_bytes must be greater than zero.")
     if start_watch and watch_segments <= 0:
@@ -1709,14 +1850,35 @@ def start_session(
         raise ValueError("The converged observer requires the persisted health watcher.")
     if observer_drive_actions and not start_observer:
         raise ValueError("Observer action driving requires the converged observer.")
-    if start_observer and observer_ready_timeout_seconds <= 0:
-        raise ValueError("observer_ready_timeout_seconds must be greater than zero.")
-    if start_observer and observer_poll_interval_seconds <= 0:
-        raise ValueError("observer_poll_interval_seconds must be greater than zero.")
-    if start_observer and observer_checkpoint_interval_seconds <= 0:
-        raise ValueError("observer_checkpoint_interval_seconds must be greater than zero.")
+    if start_observer:
+        require_finite_number(
+            observer_ready_timeout_seconds,
+            "observer_ready_timeout_seconds",
+        )
+        require_finite_number(
+            observer_poll_interval_seconds,
+            "observer_poll_interval_seconds",
+        )
+        require_finite_number(
+            observer_checkpoint_interval_seconds,
+            "observer_checkpoint_interval_seconds",
+        )
     if start_observer and observer_failure_threshold <= 0:
         raise ValueError("observer_failure_threshold must be greater than zero.")
+    if observer_drive_actions:
+        require_finite_number(
+            observer_action_start_delay_seconds,
+            "observer_action_start_delay_seconds",
+            allow_zero=True,
+        )
+        require_finite_number(
+            observer_action_search_interval_seconds,
+            "observer_action_search_interval_seconds",
+        )
+        require_finite_number(
+            observer_action_search_timeout_seconds,
+            "observer_action_search_timeout_seconds",
+        )
     existing = load_json(paths.manifest)
     processes = windows_processes.collect_processes()
     if exact_process_row(existing.get("launcher", {}), processes) is not None:
@@ -1778,9 +1940,14 @@ def start_session(
     launcher_process = spawn_detached(launch_command)
     try:
         launcher_row = wait_process_identity(launcher_process.pid, markers=("launch-soak.py",))
-    except Exception:
-        if launcher_process.poll() is None:
-            launcher_process.terminate()
+    except Exception as error:
+        try:
+            rollback_unpublished_launcher(paths, launcher_process)
+        except Exception as rollback_error:  # noqa: BLE001 - retain both startup failures
+            error.add_note(
+                "Unpublished launcher rollback failed: "
+                f"{type(rollback_error).__name__}: {rollback_error}"
+            )
         raise
 
     manifest: dict[str, Any] = {
@@ -2350,6 +2517,249 @@ def parity_gate_status(paths: ControlPaths) -> dict[str, Any]:
         "status": gate["status"],
         "reason": None,
         "gate": copy.deepcopy(gate),
+    }
+
+
+def session_ownership_findings(
+    manifest: dict[str, Any],
+    *,
+    expected_campaign_id: str | None,
+    expected_identities: dict[str, dict[str, Any]] | None,
+) -> list[str]:
+    """Returns immutable campaign/role ownership mismatches."""
+
+    findings: list[str] = []
+    if expected_campaign_id is not None and manifest.get("campaignId") != expected_campaign_id:
+        findings.append("campaign-replaced")
+    for role, expected in (expected_identities or {}).items():
+        if exact_identity_payload(manifest.get(role)) != exact_identity_payload(expected):
+            findings.append(f"{role}-identity-replaced")
+    return findings
+
+
+def owned_session_identities(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Returns the exact controller identities owned by one started session."""
+
+    return {
+        role: identity
+        for role in ("launcher", "observer", "watcher")
+        if (identity := exact_identity_payload(manifest.get(role))) is not None
+    }
+
+
+def wait_for_parity_gate(
+    paths: ControlPaths,
+    *,
+    timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    expected_campaign_id: str | None = None,
+    expected_identities: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Blocks until the exact owned campaign is green, failed, or unhealthy."""
+
+    require_finite_number(timeout_seconds, "Gate timeout")
+    require_finite_number(poll_interval_seconds, "Gate poll interval")
+    started = time.monotonic()
+    samples = 0
+    while True:
+        samples += 1
+        manifest = load_json(paths.manifest)
+        ownership_findings = session_ownership_findings(
+            manifest,
+            expected_campaign_id=expected_campaign_id,
+            expected_identities=expected_identities,
+        )
+        if ownership_findings:
+            return {
+                "status": "campaign-replaced",
+                "reason": ownership_findings[0],
+                "findings": ownership_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": None,
+            }
+        gate = parity_gate_status(paths)
+        manifest = load_json(paths.manifest)
+        ownership_findings = session_ownership_findings(
+            manifest,
+            expected_campaign_id=expected_campaign_id,
+            expected_identities=expected_identities,
+        )
+        if ownership_findings:
+            return {
+                "status": "campaign-replaced",
+                "reason": ownership_findings[0],
+                "findings": ownership_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+        status = gate.get("status")
+        if status == "failed":
+            return {
+                "status": status,
+                "reason": None,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+        if status == "unavailable":
+            return {
+                "status": "gate-unavailable",
+                "reason": gate.get("reason") or "gate-unavailable",
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+
+        processes = windows_processes.collect_processes()
+        runtime_findings = []
+        for role in ("launcher", "observer", "watcher"):
+            identity = manifest.get(role)
+            if not isinstance(identity, dict) or exact_process_row(identity, processes) is None:
+                runtime_findings.append(f"{role}-not-running")
+        if manifest.get("state") != "running":
+            runtime_findings.append("session-not-running")
+        if runtime_findings:
+            return {
+                "status": "runtime-failed",
+                "reason": runtime_findings[0],
+                "findings": runtime_findings,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+        if status == "green":
+            health = session_status(paths)
+            manifest = load_json(paths.manifest)
+            ownership_findings = session_ownership_findings(
+                manifest,
+                expected_campaign_id=expected_campaign_id,
+                expected_identities=expected_identities,
+            )
+            if ownership_findings:
+                return {
+                    "status": "campaign-replaced",
+                    "reason": ownership_findings[0],
+                    "findings": ownership_findings,
+                    "samples": samples,
+                    "elapsedSeconds": time.monotonic() - started,
+                    "gate": gate,
+                }
+            if health.get("ok") is not True:
+                health_findings = health.get("findings")
+                if not isinstance(health_findings, list) or not health_findings:
+                    health_findings = ["session-unhealthy"]
+                return {
+                    "status": "runtime-failed",
+                    "reason": str(health_findings[0]),
+                    "findings": health_findings,
+                    "samples": samples,
+                    "elapsedSeconds": time.monotonic() - started,
+                    "gate": gate,
+                    "health": health,
+                }
+            return {
+                "status": status,
+                "reason": None,
+                "samples": samples,
+                "elapsedSeconds": time.monotonic() - started,
+                "gate": gate,
+            }
+
+        elapsed = time.monotonic() - started
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            return {
+                "status": "timeout",
+                "reason": "gate-timeout",
+                "samples": samples,
+                "elapsedSeconds": elapsed,
+                "gate": gate,
+            }
+        time.sleep(min(poll_interval_seconds, remaining))
+
+
+def run_session_to_gate(
+    config: SessionConfig,
+    paths: ControlPaths,
+    *,
+    gate_timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
+    gate_poll_interval_seconds: float = DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    success_target_per_method: int = converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
+    action_start_delay_seconds: float = converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    action_search_interval_seconds: float = converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    action_search_timeout_seconds: float = converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    graceful_stop_timeout_seconds: float = 90.0,
+) -> dict[str, Any]:
+    """Runs one maintained campaign to its gate and always stops it cleanly."""
+
+    require_finite_number(gate_timeout_seconds, "Gate timeout")
+    require_finite_number(gate_poll_interval_seconds, "Gate poll interval")
+    if success_target_per_method <= 0:
+        raise ValueError("Action success target must be greater than zero.")
+    require_finite_number(action_start_delay_seconds, "Action start delay", allow_zero=True)
+    require_finite_number(action_search_interval_seconds, "Action search interval")
+    require_finite_number(action_search_timeout_seconds, "Action search timeout")
+    require_finite_number(graceful_stop_timeout_seconds, "Graceful stop timeout")
+    started = start_session(
+        config,
+        paths,
+        observer_drive_actions=True,
+        observer_action_success_target_per_method=success_target_per_method,
+        observer_action_start_delay_seconds=action_start_delay_seconds,
+        observer_action_search_interval_seconds=action_search_interval_seconds,
+        observer_action_search_timeout_seconds=action_search_timeout_seconds,
+    )
+    wait_result: dict[str, Any]
+    stopped: dict[str, Any]
+    campaign_id = str(started.get("campaignId") or "")
+    identities = owned_session_identities(started)
+    try:
+        try:
+            wait_result = wait_for_parity_gate(
+                paths,
+                timeout_seconds=gate_timeout_seconds,
+                poll_interval_seconds=gate_poll_interval_seconds,
+                expected_campaign_id=campaign_id,
+                expected_identities=identities,
+            )
+        except Exception as error:  # noqa: BLE001 - report wait failure after stop
+            wait_result = {
+                "status": "wait-failed",
+                "reason": "gate-wait-error",
+                "error": bounded_error(
+                    {"type": type(error).__name__, "message": str(error)}
+                ),
+            }
+    finally:
+        try:
+            stopped = stop_session(
+                paths,
+                graceful_timeout_seconds=graceful_stop_timeout_seconds,
+                expected_campaign_id=campaign_id,
+                expected_identities=identities,
+            )
+        except Exception as error:  # noqa: BLE001 - preserve the gate evidence
+            stopped = {
+                "ok": False,
+                "error": bounded_error(
+                    {"type": type(error).__name__, "message": str(error)}
+                ),
+            }
+    return {
+        "schema": RUN_TO_GATE_SCHEMA,
+        "campaignId": started.get("campaignId"),
+        "ok": bool(
+            wait_result.get("status") == "green" and stopped.get("ok") is True
+        ),
+        "start": {
+            "campaignId": started.get("campaignId"),
+            "campaignDir": started.get("campaignDir"),
+            "startedUtc": started.get("startedUtc"),
+        },
+        "wait": wait_result,
+        "stop": stopped,
     }
 
 
@@ -3275,15 +3685,38 @@ def finalize_stopped_session_diagnostics(
     return {"required": True, "ok": ok, "indexes": indexes}
 
 
-def stop_session(paths: ControlPaths, *, graceful_timeout_seconds: float = 90.0) -> dict[str, Any]:
+@serialized_session_transition(0)
+def stop_session(
+    paths: ControlPaths,
+    *,
+    graceful_timeout_seconds: float = 90.0,
+    expected_campaign_id: str | None = None,
+    expected_identities: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Requests graceful teardown, then force-stops exact owned processes if needed."""
 
+    require_finite_number(graceful_timeout_seconds, "Graceful stop timeout")
     manifest = load_json(paths.manifest)
     if not manifest:
         return {
             "schema": "emulebb.persisted-soak-stop.v1",
             "noSession": True,
             "manifest": str(paths.manifest),
+        }
+    ownership_findings = session_ownership_findings(
+        manifest,
+        expected_campaign_id=expected_campaign_id,
+        expected_identities=expected_identities,
+    )
+    if ownership_findings:
+        return {
+            "schema": "emulebb.persisted-soak-stop.v1",
+            "ok": False,
+            "notOwned": True,
+            "reason": ownership_findings[0],
+            "findings": ownership_findings,
+            "campaignId": manifest.get("campaignId"),
+            "expectedCampaignId": expected_campaign_id,
         }
     launcher_identity = manifest.get("launcher") if isinstance(manifest.get("launcher"), dict) else {}
     observer_identity = manifest.get("observer") if isinstance(manifest.get("observer"), dict) else {}
@@ -3431,6 +3864,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the machine-readable observer parity gate and fail unless green.",
     )
 
+    run_to_gate = subparsers.add_parser(
+        "run-to-gate",
+        help="Start the maintained persisted soak, wait for its parity gate, and stop it.",
+    )
+    add_session_config_arguments(run_to_gate)
+    run_to_gate.add_argument(
+        "--gate-timeout-seconds",
+        type=float,
+        default=DEFAULT_GATE_TIMEOUT_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--gate-poll-interval-seconds",
+        type=float,
+        default=DEFAULT_GATE_POLL_INTERVAL_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-success-target-per-method",
+        type=int,
+        default=converged_observer.DEFAULT_ACTION_SUCCESS_TARGET_PER_METHOD,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-start-delay-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_START_DELAY_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-search-interval-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_INTERVAL_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--observer-action-search-timeout-seconds",
+        type=float,
+        default=converged_observer.DEFAULT_ACTION_SEARCH_TIMEOUT_SECONDS,
+    )
+    run_to_gate.add_argument(
+        "--graceful-stop-timeout-seconds",
+        type=float,
+        default=90.0,
+    )
+
     status = subparsers.add_parser("status", help="Print exact process, client, REST, VPN, and watch health.")
     status.add_argument("--no-rest", action="store_true")
     status.add_argument("--no-vpn", action="store_true")
@@ -3536,6 +4010,24 @@ def main(argv: list[str] | None = None) -> int:
         result = session_status(paths, check_rest=not args.no_rest, check_vpn=not args.no_vpn)
     elif args.command == "gate-status":
         result = parity_gate_status(paths)
+    elif args.command == "run-to-gate":
+        result = run_session_to_gate(
+            session_config_from_args(args),
+            paths,
+            gate_timeout_seconds=args.gate_timeout_seconds,
+            gate_poll_interval_seconds=args.gate_poll_interval_seconds,
+            success_target_per_method=(
+                args.observer_action_success_target_per_method
+            ),
+            action_start_delay_seconds=args.observer_action_start_delay_seconds,
+            action_search_interval_seconds=(
+                args.observer_action_search_interval_seconds
+            ),
+            action_search_timeout_seconds=(
+                args.observer_action_search_timeout_seconds
+            ),
+            graceful_stop_timeout_seconds=args.graceful_stop_timeout_seconds,
+        )
     elif args.command == "watch":
         launcher_fallback = None
         if args.launcher_pid is not None or args.launcher_creation_date is not None:

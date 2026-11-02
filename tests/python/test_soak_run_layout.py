@@ -473,6 +473,7 @@ def test_prepare_clean_run_archives_rust_outputs_and_keeps_state(
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 
@@ -514,6 +515,7 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 
@@ -550,6 +552,36 @@ def test_prepare_clean_run_archives_only_known_mfc_logs(tmp_path: Path) -> None:
     ]
 
 
+def test_prepare_clean_run_preserves_direct_profile_mfc_outputs(tmp_path: Path) -> None:
+    paths = soak_run_layout.build_run_paths(tmp_path / "soak", "20260706T073313Z")
+    rust_profile_dir = tmp_path / "rust-profile"
+    rust_packet_dump = rust_profile_dir / "packet-dump"
+    mfc_logs = tmp_path / "operator-profile" / "logs"
+    rust_packet_dump.mkdir(parents=True)
+    mfc_logs.mkdir(parents=True)
+    retained = []
+    for index in range(32):
+        path = mfc_logs / f"emulebb-diagnostics-packet-{index:04d}.log"
+        path.write_text(f"segment {index}", encoding="utf-8")
+        retained.append(path)
+
+    manifest = soak_run_layout.prepare_clean_run(
+        paths=paths,
+        rust_profile_dir=rust_profile_dir,
+        rust_packet_dump_dir=rust_packet_dump,
+        mfc_log_dir=mfc_logs,
+        artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=True,
+        stop_process_cleanup=False,
+    )
+
+    assert all(path.is_file() for path in retained)
+    cleanup = manifest["preflightCleanup"]
+    assert cleanup["mfcProfileOutputsPreserved"] is True
+    assert cleanup["mfc"]["archivedCount"] == 0
+    assert manifest["mfcLogDir"] == str(mfc_logs)
+
+
 def test_prepare_clean_run_recovers_after_source_removal_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -580,6 +612,7 @@ def test_prepare_clean_run_recovers_after_source_removal_failure(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -604,6 +637,7 @@ def test_prepare_clean_run_recovers_after_source_removal_failure(
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 
@@ -648,6 +682,7 @@ def test_prepare_clean_run_keeps_sources_when_copy_phase_fails(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -670,6 +705,7 @@ def test_prepare_clean_run_keeps_sources_when_copy_phase_fails(
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=mfc_logs,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
     assert recovered["preflightCleanup"]["archiveState"] == "complete"
@@ -696,6 +732,7 @@ def test_prepare_clean_run_rejects_archive_count_before_mutation(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths, preflight_mfc_retained=2),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -725,6 +762,7 @@ def test_prepare_clean_run_rejects_unsupported_name_before_manifest(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -757,6 +795,7 @@ def test_prepare_clean_run_rejects_reparse_destination_during_recovery(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -784,6 +823,7 @@ def test_prepare_clean_run_rejects_reparse_destination_during_recovery(
             rust_packet_dump_dir=rust_packet_dump,
             mfc_log_dir=mfc_logs,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
             stop_process_cleanup=False,
         )
 
@@ -904,6 +944,7 @@ def test_prepare_clean_run_rejects_processes_remaining_after_cleanup(
             rust_packet_dump_dir=rust_profile_dir / "packet-dump",
             mfc_log_dir=None,
             artifact_store=artifact_store(paths),
+            preserve_mfc_profile_outputs=False,
         )
 
 
@@ -920,6 +961,7 @@ def test_prepare_clean_run_publishes_last_run_and_latest_pointers(
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 
@@ -943,6 +985,7 @@ def test_mark_run_finished_retains_preflight_cleanup(tmp_path: Path) -> None:
         rust_packet_dump_dir=rust_packet_dump,
         mfc_log_dir=None,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 
@@ -965,6 +1008,7 @@ def test_mark_run_running_publishes_readiness_without_dropping_preflight(
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=None,
         artifact_store=artifact_store(paths),
+        preserve_mfc_profile_outputs=False,
         stop_process_cleanup=False,
     )
 

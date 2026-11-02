@@ -9,6 +9,12 @@ diagnostic records to that action's
 ``diag_event_diff`` / ``packet_trace_diff`` engines. Emits a per-action verdict plus a
 campaign summary (oracle conformance, cumulative Kad opcode coverage, source_count).
 
+Recordings that explicitly declare the focused client-UDP transfer contract are
+adjudicated as fixture-owned coverage rather than full-campaign parity. That
+contract requires exact file correlation and MFC scheduler/transport decisions;
+native capture, Kad coverage, startup lifecycle, and narrow action-window traffic
+remain outside that focused claim.
+
 This is the offline half of the capture-then-offline-diff model (adopted 2026-07-04):
 reproducible, contention-free, apples-to-apples — no simultaneous operator run.
 """
@@ -16,6 +22,7 @@ reproducible, contention-free, apples-to-apples — no simultaneous operator run
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import re
 import sys
@@ -35,16 +42,120 @@ from emule_test_harness import (  # noqa: E402
     secident_audit,
     soak_action_diff,
     soak_report_summary,
+    transfer_coverage_evidence,
 )
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 
 CAMPAIGN_EXIT_CODES = {
     "parity": 0,
+    "coverage-proven": 0,
     "divergence": 1,
     "harness-failure": 2,
     "inconclusive-external": 3,
 }
+
+UDP_REASK_DECISION_EVENT = "udp_reask_decision"
+UDP_REASK_SCHEDULE_DECISION_EVENT = "udp_reask_schedule_decision"
+FULL_CAMPAIGN_CONTRACT = "full-campaign-parity"
+
+
+def _udp_reask_decision_summary(
+    records: list[dict[str, Any]],
+    *,
+    event: str = UDP_REASK_DECISION_EVENT,
+) -> dict[str, Any]:
+    """Summarize exact current-schema UDP reask decisions without dropping examples."""
+
+    decisions = [record for record in records if record.get("family") == "sched" and record.get("event") == event]
+    reasons: collections.Counter[str] = collections.Counter()
+    outcomes: collections.Counter[str] = collections.Counter()
+    paths: collections.Counter[str] = collections.Counter()
+    transport_eligibility: collections.Counter[str] = collections.Counter()
+    peer_file_keys: set[tuple[object, object]] = set()
+    examples: dict[str, dict[str, Any]] = {}
+    invalid_records = 0
+    for record in decisions:
+        body = record.get("body")
+        keys = record.get("keys")
+        if not isinstance(body, dict) or not isinstance(keys, dict):
+            invalid_records += 1
+            continue
+        reason = body.get("reason")
+        outcome = body.get("outcome")
+        path = body.get("path")
+        transport_eligible = body.get("transportEligible")
+        if not isinstance(reason, str) or not reason:
+            invalid_records += 1
+            reason = "<invalid>"
+        if isinstance(outcome, str) and outcome:
+            outcomes[outcome] += 1
+        else:
+            invalid_records += 1
+        if path is not None:
+            if isinstance(path, str) and path:
+                paths[path] += 1
+            else:
+                invalid_records += 1
+        if transport_eligible is not None:
+            if isinstance(transport_eligible, bool):
+                transport_eligibility[str(transport_eligible).lower()] += 1
+            else:
+                invalid_records += 1
+        reasons[reason] += 1
+        peer_file_keys.add(
+            (
+                keys.get("peerHash") or keys.get("peer"),
+                keys.get("fileHash"),
+            )
+        )
+        examples.setdefault(
+            reason,
+            {
+                "ts": record.get("ts"),
+                "keys": keys,
+                "body": body,
+            },
+        )
+    return {
+        "eventCount": len(decisions),
+        "peerFileKeyCount": len(peer_file_keys),
+        "invalidRecordCount": invalid_records,
+        "outcomes": dict(sorted(outcomes.items())),
+        "reasons": dict(sorted(reasons.items())),
+        "paths": dict(sorted(paths.items())),
+        "transportEligible": dict(sorted(transport_eligibility.items())),
+        "examplesByReason": dict(sorted(examples.items())),
+    }
+
+
+def _merge_diagnostic_records(
+    primary: list[dict[str, Any]], supplemental: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Merge exact envelopes from one run, rejecting conflicting duplicates."""
+
+    indexed: dict[tuple[object, ...], dict[str, Any]] = {}
+    run_identities: set[tuple[object, ...]] = set()
+    for record in [*primary, *supplemental]:
+        identity = (
+            record.get("client"),
+            record.get("processId"),
+            record.get("runId"),
+        )
+        run_identities.add(identity)
+        key = (*identity, record.get("seq"))
+        existing = indexed.get(key)
+        if existing is not None and existing != record:
+            raise ValueError(f"Conflicting diagnostic envelope for identity {key!r}.")
+        indexed[key] = record
+    if len(run_identities) > 1:
+        raise ValueError(f"Raw and compact diagnostic evidence identify different runs: {run_identities!r}")
+    return sorted(
+        indexed.values(),
+        key=lambda record: (record.get("seq"), record.get("streamSeq")),
+    )
+
+
 def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
     """Read sanitized metadata plus raw diagnostics from its private sibling."""
 
@@ -63,6 +174,8 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
             lower = name.lower()
             if lower.endswith("native-capture.pcapng"):
                 raise ValueError("A sanitized recording contains a private packet capture.")
+            if lower.endswith("transfer-coverage-evidence.json"):
+                raise ValueError("A sanitized recording contains private transfer coverage evidence.")
             if lower.endswith("evidence-classification.json"):
                 classification = json.loads(zf.read(name).decode("utf-8", "replace"))
                 continue
@@ -116,12 +229,8 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
         if client == "mfc" and diag_paths:
             health_paths = sorted(dumps_dir.rglob("emulebb-mfc-diag-health.json"))
             if len(health_paths) != 1:
-                raise ValueError(
-                    "An MFC recording must contain exactly one diagnostic writer health file."
-                )
-            selected_segments = diag_event_runs.select_latest_diag_run(
-                diag_paths, client="mfc"
-            )
+                raise ValueError("An MFC recording must contain exactly one diagnostic writer health file.")
+            selected_segments = diag_event_runs.select_latest_diag_run(diag_paths, client="mfc")
             diag_event_runs.load_and_validate_writer_health(
                 health_paths[0], client="mfc", selected_segments=selected_segments
             )
@@ -140,18 +249,37 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
                     continue
                 schema = record.get("schema")
                 if schema == DIAG_EVENT_SCHEMA:
-                    raise ValueError(
-                        f"Diagnostic events must use segmented current-run names: {path.name}"
-                    )
+                    raise ValueError(f"Diagnostic events must use segmented current-run names: {path.name}")
                 if schema in {"ed2k_packet_v1", "udp_packet_v1"}:
-                    raise ValueError(
-                        f"Legacy packet side files are unsupported: {path.name}"
-                    )
+                    raise ValueError(f"Legacy packet side files are unsupported: {path.name}")
+    transfer_coverage_path = private_dir / "transfer-coverage-evidence.json"
+    transfer_coverage_summary = meta.get("transferCoverage")
+    transfer_coverage_enabled = (
+        isinstance(transfer_coverage_summary, dict) and transfer_coverage_summary.get("enabled") is True
+    )
+    if transfer_coverage_enabled:
+        if transfer_coverage_summary.get("privateArtifact") != transfer_coverage_path.name:
+            raise ValueError("Transfer coverage private-artifact authority is invalid.")
+        if not transfer_coverage_path.is_file():
+            raise ValueError("Transfer coverage evidence is required but missing.")
+        transfer_coverage = transfer_coverage_evidence.load_evidence(transfer_coverage_path)
+        if transfer_coverage.get("client") != client:
+            raise ValueError("Transfer coverage evidence client identity is invalid.")
+        _validate_transfer_coverage_summary(
+            transfer_coverage_summary,
+            transfer_coverage,
+        )
+        diag = _merge_diagnostic_records(
+            diag,
+            transfer_coverage_evidence.evidence_records(transfer_coverage),
+        )
+        packets = diag_event_diff.ed2k_tcp_packet_views(diag)
+        meta["_privateTransferCoverageEvidence"] = transfer_coverage
+    elif transfer_coverage_path.exists():
+        raise ValueError("Transfer coverage evidence has no recording authority.")
     private_completion_path = private_dir / "completion-private.json"
     if private_completion_path.is_file():
-        private_completion = json.loads(
-            private_completion_path.read_text(encoding="utf-8")
-        )
+        private_completion = json.loads(private_completion_path.read_text(encoding="utf-8"))
         if not isinstance(private_completion, dict):
             raise ValueError("Private completion evidence is not a JSON object.")
         # Private digests stay in memory and are reduced to counts/booleans by
@@ -164,6 +292,64 @@ def _load_recording(zip_path: Path, *, client: str) -> dict[str, Any]:
         "meta": meta,
         "nativeCaptureSizes": native_capture_sizes,
     }
+
+
+def _validate_transfer_coverage_summary(
+    summary: dict[str, Any],
+    evidence: dict[str, Any],
+) -> None:
+    """Requires recording metadata to describe the exact private proof."""
+
+    expected_fields = {
+        "contract",
+        "enabled",
+        "complete",
+        "protocolChainComplete",
+        "timedOut",
+        "stoppedByOperator",
+        "routeLost",
+        "finalized",
+        "elapsedSeconds",
+        "closedSegmentsScanned",
+        "lastClosedSegmentId",
+        "proofSlots",
+        "privateArtifact",
+    }
+    if set(summary) != expected_fields:
+        raise ValueError("Transfer coverage summary fields are invalid.")
+    if summary.get("contract") != transfer_coverage_evidence.CONTRACT:
+        raise ValueError("Transfer coverage contract is invalid.")
+    for field in (
+        "enabled",
+        "complete",
+        "protocolChainComplete",
+        "timedOut",
+        "stoppedByOperator",
+        "routeLost",
+        "finalized",
+    ):
+        if not isinstance(summary.get(field), bool):
+            raise ValueError(f"Transfer coverage {field} flag is invalid.")
+    elapsed = summary.get("elapsedSeconds")
+    if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or elapsed < 0:
+        raise ValueError("Transfer coverage elapsedSeconds is invalid.")
+    scanned = summary.get("closedSegmentsScanned")
+    if isinstance(scanned, bool) or not isinstance(scanned, int) or scanned < 0:
+        raise ValueError("Transfer coverage closedSegmentsScanned is invalid.")
+    last_segment = summary.get("lastClosedSegmentId")
+    if last_segment is not None and (
+        isinstance(last_segment, bool) or not isinstance(last_segment, int) or last_segment < 0
+    ):
+        raise ValueError("Transfer coverage lastClosedSegmentId is invalid.")
+    expected_slots = sorted(evidence["proof"])
+    if summary.get("proofSlots") != expected_slots:
+        raise ValueError("Transfer coverage proof-slot summary is inconsistent.")
+    if summary.get("complete") is not evidence["complete"]:
+        raise ValueError("Transfer coverage completion summary is inconsistent.")
+    if summary.get("protocolChainComplete") is not evidence["protocolChainComplete"]:
+        raise ValueError("Transfer coverage protocol-chain summary is inconsistent.")
+    if summary.get("privateArtifact") != "transfer-coverage-evidence.json":
+        raise ValueError("Transfer coverage private-artifact authority is invalid.")
 
 
 def _native_capture_evidence(recording: dict[str, Any]) -> dict[str, Any]:
@@ -197,9 +383,7 @@ def _native_capture_evidence(recording: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": not findings,
         "frameCount": frame_count if isinstance(frame_count, int) else 0,
-        "relevantFrameCount": (
-            relevant_frame_count if isinstance(relevant_frame_count, int) else 0
-        ),
+        "relevantFrameCount": (relevant_frame_count if isinstance(relevant_frame_count, int) else 0),
         "capturedByteCount": captured_bytes if isinstance(captured_bytes, int) else 0,
         "findings": findings,
     }
@@ -264,11 +448,11 @@ def _native_action_contract(recording: dict[str, Any]) -> dict[str, Any]:
         if isinstance(row, dict) and row.get("actionId")
     }
     results = recording.get("meta", {}).get("actionResults")
-    result_ids = {
-        str(row.get("actionId"))
-        for row in results
-        if isinstance(row, dict) and row.get("actionId")
-    } if isinstance(results, list) else set()
+    result_ids = (
+        {str(row.get("actionId")) for row in results if isinstance(row, dict) and row.get("actionId")}
+        if isinstance(results, list)
+        else set()
+    )
     findings: list[str] = []
     if marker_ids != expected_ids:
         findings.append("native-marker-action-set-mismatch")
@@ -337,38 +521,49 @@ def _diff_one_action(
     rust_span = pad(rust_win)
     mfc_span = pad(mfc_win)
     if rust_span is None or mfc_span is None:
-        return {"kind": kind, "method": method, "verdict": "no-window", "conformant": False,
-                "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
-                "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
+        return {
+            "kind": kind,
+            "method": method,
+            "verdict": "no-window",
+            "conformant": False,
+            "diagFamilyOk": False,
+            "diagStrictMatchOk": False,
+            "coverageOk": None,
+            "rustRecords": {"packets": 0, "diag": 0},
+            "mfcRecords": {"packets": 0, "diag": 0},
+        }
     if rust_win.get("status") == "error" or mfc_win.get("status") == "error":
-        return {"kind": kind, "method": method, "verdict": "action-error", "conformant": False,
-                "diagFamilyOk": False, "diagStrictMatchOk": False, "coverageOk": None,
-                "rustRecords": {"packets": 0, "diag": 0}, "mfcRecords": {"packets": 0, "diag": 0}}
+        return {
+            "kind": kind,
+            "method": method,
+            "verdict": "action-error",
+            "conformant": False,
+            "diagFamilyOk": False,
+            "diagStrictMatchOk": False,
+            "coverageOk": None,
+            "rustRecords": {"packets": 0, "diag": 0},
+            "mfcRecords": {"packets": 0, "diag": 0},
+        }
     r0, r1 = rust_span
     m0, m1 = mfc_span
     rust_window = soak_action_diff.ActionWindow(start_utc=r0, end_utc=r1)
     mfc_window = soak_action_diff.ActionWindow(start_utc=m0, end_utc=m1)
-    rust_pkt = soak_action_diff.slice_trace(
-        rust["packets"], rust_window, trace_name="rust packet trace"
-    )
-    mfc_pkt = soak_action_diff.slice_trace(
-        mfc["packets"], mfc_window, trace_name="mfc packet trace"
-    )
-    rust_diag = soak_action_diff.slice_trace(
-        rust["diag"], rust_window, trace_name="rust diagnostic trace"
-    )
-    mfc_diag = soak_action_diff.slice_trace(
-        mfc["diag"], mfc_window, trace_name="mfc diagnostic trace"
-    )
+    rust_pkt = soak_action_diff.slice_trace(rust["packets"], rust_window, trace_name="rust packet trace")
+    mfc_pkt = soak_action_diff.slice_trace(mfc["packets"], mfc_window, trace_name="mfc packet trace")
+    rust_diag = soak_action_diff.slice_trace(rust["diag"], rust_window, trace_name="rust diagnostic trace")
+    mfc_diag = soak_action_diff.slice_trace(mfc["diag"], mfc_window, trace_name="mfc diagnostic trace")
 
     diag_diff = diag_event_diff.diff_traces(rust_diag, mfc_diag)
-    sched_rows = [
-        row for row in diag_diff.get("families", []) if row.get("family") == "sched"
-    ]
+    sched_rows = [row for row in diag_diff.get("families", []) if row.get("family") == "sched"]
     state_machine_ok = all(row.get("ok") is True for row in sched_rows) if sched_rows else None
     state_machine_totals = {
         key: sum(int(row.get("totals", {}).get(key) or 0) for row in sched_rows)
-        for key in ("sharedKeys", "matchedKeys", "transitionDivergences", "invariantViolations")
+        for key in (
+            "sharedKeys",
+            "matchedKeys",
+            "transitionDivergences",
+            "invariantViolations",
+        )
     }
     packet_diff = packet_trace_diff.diff_traces(rust_pkt, mfc_pkt) if (rust_pkt or mfc_pkt) else None
     action_coverage = soak_action_diff.build_action_coverage(
@@ -378,18 +573,10 @@ def _diff_one_action(
         server_endpoints=server_endpoints,
         search_ids=search_ids,
         search_result_totals=search_result_totals,
-        rust_kad_records=soak_action_diff.diagnostic_family_records(
-            rust_diag, soak_action_diff.KAD_UDP_FAMILY
-        ),
-        mfc_kad_records=soak_action_diff.diagnostic_family_records(
-            mfc_diag, soak_action_diff.KAD_UDP_FAMILY
-        ),
-        rust_kad_event_records=soak_action_diff.diagnostic_family_records(
-            rust_diag, soak_action_diff.KAD_EVENT_FAMILY
-        ),
-        mfc_kad_event_records=soak_action_diff.diagnostic_family_records(
-            mfc_diag, soak_action_diff.KAD_EVENT_FAMILY
-        ),
+        rust_kad_records=soak_action_diff.diagnostic_family_records(rust_diag, soak_action_diff.KAD_UDP_FAMILY),
+        mfc_kad_records=soak_action_diff.diagnostic_family_records(mfc_diag, soak_action_diff.KAD_UDP_FAMILY),
+        rust_kad_event_records=soak_action_diff.diagnostic_family_records(rust_diag, soak_action_diff.KAD_EVENT_FAMILY),
+        mfc_kad_event_records=soak_action_diff.diagnostic_family_records(mfc_diag, soak_action_diff.KAD_EVENT_FAMILY),
         rust_server_udp_records=soak_action_diff.diagnostic_family_records(
             rust_diag, soak_action_diff.ED2K_SERVER_UDP_FAMILY
         ),
@@ -402,9 +589,7 @@ def _diff_one_action(
     family_gate = diag_event_diff.family_conformance(
         rust_diag,
         mfc_diag,
-        required_families=soak_action_diff.action_required_diagnostic_families(
-            kind, method
-        ),
+        required_families=soak_action_diff.action_required_diagnostic_families(kind, method),
     )
 
     rust_total = len(rust_pkt) + len(rust_diag)
@@ -425,22 +610,12 @@ def _diff_one_action(
         # never true - transition sequences differ. The real parity signal is oracle
         # CONFORMANCE (rust's diag is a superset of the oracle's) over the action window.
         # The strict family-match + server-channel opcode gate are informational only.
-        verdict = (
-            "conformant"
-            if conf["conformant"] and state_machine_ok is not False
-            else "divergence"
-        )
+        verdict = "conformant" if conf["conformant"] and state_machine_ok is not False else "divergence"
     return {
         "kind": kind,
         "method": method,
         "verdict": verdict,
-        "conformant": bool(
-            conf["conformant"]
-            and rust_total > 0
-            and mfc_total > 0
-            and rust_diag
-            and mfc_diag
-        ),
+        "conformant": bool(conf["conformant"] and rust_total > 0 and mfc_total > 0 and rust_diag and mfc_diag),
         # Per-family oracle-conformance gate (rust ⊇ oracle on families present on
         # both sides) — the reported per-action diag gate. The old strict
         # record-identity match is retained as `diagStrictMatchOk`, which is
@@ -473,26 +648,16 @@ def _action_error_count(recording: dict[str, Any]) -> int:
     rows = recording.get("meta", {}).get("actionResults")
     if not isinstance(rows, list):
         return 0
-    return sum(
-        1
-        for row in rows
-        if isinstance(row, dict) and str(row.get("status") or "").casefold() != "ok"
-    )
+    return sum(1 for row in rows if isinstance(row, dict) and str(row.get("status") or "").casefold() != "ok")
 
 
-def _search_action_evidence(
-    recording: dict[str, Any], action_id: str
-) -> tuple[str, int] | None:
+def _search_action_evidence(recording: dict[str, Any], action_id: str) -> tuple[str, int] | None:
     """Returns the exact successful search identity retained by one recording."""
 
     rows = recording.get("meta", {}).get("actionResults")
     if not isinstance(rows, list):
         return None
-    matches = [
-        row
-        for row in rows
-        if isinstance(row, dict) and str(row.get("actionId") or "") == action_id
-    ]
+    matches = [row for row in rows if isinstance(row, dict) and str(row.get("actionId") or "") == action_id]
     if len(matches) != 1 or matches[0].get("status") != "ok":
         return None
     outcome = matches[0].get("outcome")
@@ -523,11 +688,7 @@ def _completion_rows(
     if not isinstance(section, dict) or section.get("required") is not True:
         return True, None, None
     expected_count = section.get("expectedCount")
-    if (
-        not isinstance(expected_count, int)
-        or isinstance(expected_count, bool)
-        or expected_count <= 0
-    ):
+    if not isinstance(expected_count, int) or isinstance(expected_count, bool) or expected_count <= 0:
         return True, None, None
     files = section.get("files")
     if not isinstance(files, list):
@@ -571,15 +732,19 @@ def _completion_statuses(meta: dict[str, Any]) -> dict[str, str] | None:
     return statuses
 
 
-def _compare_native_completions(
-    rust_meta: dict[str, Any], mfc_meta: dict[str, Any]
-) -> dict[str, Any]:
+def _compare_native_completions(rust_meta: dict[str, Any], mfc_meta: dict[str, Any]) -> dict[str, Any]:
     """Compare opted-in completion proofs and emit counts/booleans, never digests."""
 
     rust_required, rust_expected, rust_rows = _completion_rows(rust_meta)
     mfc_required, mfc_expected, mfc_rows = _completion_rows(mfc_meta)
     if not rust_required and not mfc_required:
-        return {"required": False, "ok": None, "expectedCount": None, "matchedCount": 0, "findings": []}
+        return {
+            "required": False,
+            "ok": None,
+            "expectedCount": None,
+            "matchedCount": 0,
+            "findings": [],
+        }
 
     findings: list[str] = []
     if not rust_required or not mfc_required:
@@ -589,7 +754,13 @@ def _compare_native_completions(
     if mfc_expected is None or mfc_rows is None:
         findings.append("mfc-completion-evidence-invalid")
     if findings:
-        return {"required": True, "ok": False, "expectedCount": None, "matchedCount": 0, "findings": findings}
+        return {
+            "required": True,
+            "ok": False,
+            "expectedCount": None,
+            "matchedCount": 0,
+            "findings": findings,
+        }
 
     assert rust_expected is not None and mfc_expected is not None
     assert rust_rows is not None and mfc_rows is not None
@@ -621,9 +792,7 @@ def _compare_native_completions(
     if any(rust_rows[action_id][0] != mfc_rows[action_id][0] for action_id in common):
         findings.append("completion-size-mismatch")
     comparable_digests = [
-        action_id
-        for action_id in common
-        if rust_rows[action_id][1] is not None and mfc_rows[action_id][1] is not None
+        action_id for action_id in common if rust_rows[action_id][1] is not None and mfc_rows[action_id][1] is not None
     ]
     if any(rust_rows[action_id][1] != mfc_rows[action_id][1] for action_id in comparable_digests):
         findings.append("completion-sha256-mismatch")
@@ -672,17 +841,18 @@ def _campaign_verdict(
         findings.append("state-machine-evidence-missing")
     if any(row.get("verdict") == "no-window" for row in per_action):
         findings.append("missing-action-windows")
-    if (
-        any(row.get("verdict") in {"no-traffic", "one-sided"} for row in per_action)
-        and not external_inconclusive
-    ):
+    if any(row.get("verdict") in {"no-traffic", "one-sided"} for row in per_action) and not external_inconclusive:
         findings.append("missing-action-traffic")
     if any(row.get("verdict") == "missing-diagnostics" for row in per_action):
         findings.append("missing-action-diagnostics")
     completion_findings = set(completion.get("findings") or [])
     completion_content_divergence = bool(
         completion_findings
-        & {"completion-size-mismatch", "completion-sha256-mismatch", "completion-invalid"}
+        & {
+            "completion-size-mismatch",
+            "completion-sha256-mismatch",
+            "completion-invalid",
+        }
     )
     completion_incomplete = bool(
         completion_findings
@@ -701,10 +871,7 @@ def _campaign_verdict(
         and not (external_inconclusive and completion_incomplete)
     ):
         findings.append("completion-evidence-failed")
-    action_inconclusive = any(
-        row.get("verdict") in {"not-assessable", "evidence-incomplete"}
-        for row in per_action
-    )
+    action_inconclusive = any(row.get("verdict") in {"not-assessable", "evidence-incomplete"} for row in per_action)
     if findings:
         verdict = "harness-failure"
     else:
@@ -718,8 +885,7 @@ def _campaign_verdict(
                 row.get("verdict") == "divergence"
                 or (
                     row.get("coverageOk") is False
-                    and row.get("verdict")
-                    not in {"not-assessable", "evidence-incomplete"}
+                    and row.get("verdict") not in {"not-assessable", "evidence-incomplete"}
                 )
                 for row in per_action
             )
@@ -730,7 +896,11 @@ def _campaign_verdict(
             verdict = "inconclusive-external"
         else:
             verdict = "parity"
-    return {"verdict": verdict, "exitCode": CAMPAIGN_EXIT_CODES[verdict], "findings": findings}
+    return {
+        "verdict": verdict,
+        "exitCode": CAMPAIGN_EXIT_CODES[verdict],
+        "findings": findings,
+    }
 
 
 def _declared_secident(meta: dict[str, Any]) -> bool | None:
@@ -767,9 +937,175 @@ def _find_recordings(campaign_dir: Path) -> tuple[Path | None, Path | None]:
     return (rust[-1] if rust else None, mfc[-1] if mfc else None)
 
 
+def _recording_server_endpoints(
+    rust: dict[str, Any],
+    mfc: dict[str, Any],
+) -> dict[str, str]:
+    """Loads the explicit server authority recorded by each capture."""
+
+    server_endpoints = {
+        "rust": rust.get("meta", {}).get("serverEndpoint"),
+        "mfc": mfc.get("meta", {}).get("serverEndpoint"),
+    }
+    soak_action_diff.normalize_server_endpoints(server_endpoints)
+    return server_endpoints
+
+
+def _campaign_contract_name(
+    rust: dict[str, Any],
+    mfc: dict[str, Any],
+) -> str:
+    """Selects one bilateral current contract without compatibility fallbacks."""
+
+    names = []
+    for side in (rust, mfc):
+        section = side.get("meta", {}).get("transferCoverage")
+        names.append(section.get("contract") if isinstance(section, dict) else None)
+    if names == [None, None]:
+        return FULL_CAMPAIGN_CONTRACT
+    if names == [transfer_coverage_evidence.CONTRACT] * 2:
+        return transfer_coverage_evidence.CONTRACT
+    raise ValueError(f"Recording evidence contracts do not match: {names!r}")
+
+
+def _focused_transfer_contract(
+    rust: dict[str, Any],
+    mfc: dict[str, Any],
+    *,
+    server_endpoints: dict[str, str],
+    common_action_count: int,
+    missing_action_count: int,
+    action_error_count: int,
+    scenario_mismatch: bool,
+    schema_conformant: bool,
+    full_diag_gate: dict[str, Any],
+) -> dict[str, Any]:
+    """Adjudicates exact fixture-owned client-UDP coverage, not global parity."""
+
+    harness_findings: list[str] = []
+    protocol_findings: list[str] = []
+    external_findings: list[str] = []
+    if common_action_count <= 0:
+        harness_findings.append("no-common-actions")
+    if missing_action_count:
+        harness_findings.append("missing-actions")
+    if action_error_count:
+        harness_findings.append("action-errors")
+    if scenario_mismatch:
+        harness_findings.append("scenario-mismatch")
+    normalized_endpoints = soak_action_diff.normalize_server_endpoints(server_endpoints)
+    if normalized_endpoints["rust"] != normalized_endpoints["mfc"]:
+        harness_findings.append("server-authority-mismatch")
+
+    side_reports: dict[str, dict[str, Any]] = {}
+    fixture_identities: list[list[str]] = []
+    for client, side in (("rust", rust), ("mfc", mfc)):
+        summary = side.get("meta", {}).get("transferCoverage")
+        evidence = side.get("meta", {}).get("_privateTransferCoverageEvidence")
+        if not isinstance(summary, dict) or not isinstance(evidence, dict):
+            harness_findings.append(f"{client}-transfer-proof-missing")
+            continue
+        fixture_identities.append(list(evidence["fixtureHashes"]))
+        side_external = False
+        if summary.get("routeLost") is True:
+            external_findings.append(f"{client}-route-lost")
+            side_external = True
+        if summary.get("timedOut") is True:
+            external_findings.append(f"{client}-transfer-proof-timeout")
+            side_external = True
+        if summary.get("stoppedByOperator") is True:
+            external_findings.append(f"{client}-operator-stop")
+            side_external = True
+        if summary.get("finalized") is not True:
+            harness_findings.append(f"{client}-transfer-proof-not-finalized")
+        if summary.get("complete") is not True and not side_external:
+            harness_findings.append(f"{client}-transfer-proof-incomplete")
+        side_reports[client] = {
+            "complete": summary.get("complete") is True,
+            "finalized": summary.get("finalized") is True,
+            "targetSlots": list(evidence["target"]["requiredSlots"]),
+            "proofSlots": sorted(evidence["proof"]),
+        }
+    if len(fixture_identities) == 2 and fixture_identities[0] != fixture_identities[1]:
+        harness_findings.append("fixture-authority-mismatch")
+
+    family_gate = full_diag_gate["familyConformance"]
+    if family_gate.get("requiredFamiliesOk") is not True:
+        harness_findings.append("required-diagnostic-families-missing")
+    elif family_gate.get("ok") is not True:
+        protocol_findings.append("diagnostic-family-conformance-failed")
+    if not schema_conformant:
+        protocol_findings.append("diagnostic-schema-conformance-failed")
+    lifecycle_report: dict[str, dict[str, Any]] = {}
+    for client in ("rust", "mfc"):
+        lifecycle = full_diag_gate["clientUdpLifecycle"][client]
+        attempts = int(lifecycle.get("attemptCount") or 0)
+        terminals = int(lifecycle.get("terminalCount") or 0)
+        if attempts <= 0 or terminals <= 0:
+            harness_findings.append(f"{client}-client-udp-lifecycle-missing")
+        elif lifecycle.get("ok") is not True:
+            protocol_findings.append(f"{client}-client-udp-lifecycle-invalid")
+        lifecycle_report[client] = {
+            "ok": lifecycle.get("ok") is True,
+            "attempts": attempts,
+            "terminals": terminals,
+        }
+
+    harness_findings = sorted(set(harness_findings))
+    protocol_findings = sorted(set(protocol_findings))
+    external_findings = sorted(set(external_findings))
+    return {
+        "name": transfer_coverage_evidence.CONTRACT,
+        "mode": "focused-coverage",
+        "ok": not harness_findings and not protocol_findings and not external_findings,
+        "harnessFindings": harness_findings,
+        "protocolFindings": protocol_findings,
+        "externalFindings": external_findings,
+        "fixtureIdentityMatches": len(fixture_identities) == 2 and fixture_identities[0] == fixture_identities[1],
+        "sides": side_reports,
+        "diagnostics": {
+            "schemaConformant": schema_conformant,
+            "requiredFamiliesOk": family_gate.get("requiredFamiliesOk") is True,
+            "familyConformanceOk": family_gate.get("ok") is True,
+            "clientUdpLifecycle": lifecycle_report,
+        },
+        "notApplicable": [
+            "cumulative-kad-opcode-coverage",
+            "native-packet-capture",
+            "narrow-action-window-traffic",
+            "server-startup-lifecycle",
+        ],
+    }
+
+
+def _focused_transfer_verdict(contract: dict[str, Any]) -> dict[str, Any]:
+    """Maps one focused proof to an honest non-certification campaign verdict."""
+
+    if contract["harnessFindings"]:
+        verdict = "harness-failure"
+        findings = list(contract["harnessFindings"])
+    elif contract["protocolFindings"]:
+        verdict = "divergence"
+        findings = list(contract["protocolFindings"])
+    elif contract["externalFindings"]:
+        verdict = "inconclusive-external"
+        findings = list(contract["externalFindings"])
+    else:
+        verdict = "coverage-proven"
+        findings = []
+    return {
+        "verdict": verdict,
+        "exitCode": CAMPAIGN_EXIT_CODES[verdict],
+        "findings": findings,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--campaign", help="Campaign folder under soak/reports (finds rust-*.zip + mfc-*.zip).")
+    parser.add_argument(
+        "--campaign",
+        help="Campaign folder under soak/reports (finds rust-*.zip + mfc-*.zip).",
+    )
     parser.add_argument("--rust", help="Explicit rust recording .zip.")
     parser.add_argument("--mfc", help="Explicit mfc recording .zip.")
     parser.add_argument("--lead-seconds", type=float, default=soak_action_diff.DEFAULT_LEAD_SECONDS)
@@ -796,21 +1132,22 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         print(f"harness-failure: could not load recordings ({type(exc).__name__})")
         return CAMPAIGN_EXIT_CODES["harness-failure"]
-    print(f"rust recording: {rust_zip.name}  obf={rust['meta'].get('obfuscation')}  diag={len(rust['diag'])} pkt={len(rust['packets'])}")
-    print(f"mfc  recording: {mfc_zip.name}  obf={mfc['meta'].get('obfuscation')}  diag={len(mfc['diag'])} pkt={len(mfc['packets'])}")
-    server_endpoints = {
-        "rust": rust["meta"].get("rustServer"),
-        "mfc": mfc["meta"].get("mfcServer"),
-    }
+    print(
+        f"rust recording: {rust_zip.name}  obf={rust['meta'].get('obfuscation')}  diag={len(rust['diag'])} pkt={len(rust['packets'])}"
+    )
+    print(
+        f"mfc  recording: {mfc_zip.name}  obf={mfc['meta'].get('obfuscation')}  diag={len(mfc['diag'])} pkt={len(mfc['packets'])}"
+    )
     try:
-        soak_action_diff.normalize_server_endpoints(server_endpoints)
+        server_endpoints = _recording_server_endpoints(rust, mfc)
+        contract_name = _campaign_contract_name(rust, mfc)
     except soak_action_diff.ActionTraceError as error:
         print(f"harness-failure: recording server authority is invalid ({error})")
         return CAMPAIGN_EXIT_CODES["harness-failure"]
-    scenario_mismatch = any(
-        rust["meta"].get(key) != mfc["meta"].get(key)
-        for key in ("obfuscation", "scenario")
-    )
+    except ValueError as error:
+        print(f"harness-failure: recording evidence contract is invalid ({error})")
+        return CAMPAIGN_EXIT_CODES["harness-failure"]
+    scenario_mismatch = any(rust["meta"].get(key) != mfc["meta"].get(key) for key in ("obfuscation", "scenario"))
     if scenario_mismatch:
         print("  !! WARNING: scenario metadata differs between the two recordings")
 
@@ -832,10 +1169,17 @@ def main(argv: list[str] | None = None) -> int:
             search_ids = {"rust": rust_search[0], "mfc": mfc_search[0]}
             search_result_totals = {"rust": rust_search[1], "mfc": mfc_search[1]}
         result = _diff_one_action(
-            kind, rust, mfc, rust_windows[action_id], mfc_windows[action_id],
-            lead=args.lead_seconds, settle=args.settle_seconds,
-            server_endpoints=server_endpoints, method=method,
-            search_ids=search_ids, search_result_totals=search_result_totals,
+            kind,
+            rust,
+            mfc,
+            rust_windows[action_id],
+            mfc_windows[action_id],
+            lead=args.lead_seconds,
+            settle=args.settle_seconds,
+            server_endpoints=server_endpoints,
+            method=method,
+            search_ids=search_ids,
+            search_result_totals=search_result_totals,
         )
         per_action.append({"actionId": action_id, **result})
         viol = result.get("conformanceViolations") or []
@@ -853,6 +1197,14 @@ def main(argv: list[str] | None = None) -> int:
     audit = diag_event_diff.schema_audit(rust["diag"], mfc["diag"])
     conf = audit["conformance"]
     full_diag_gate = _full_run_diagnostic_gate(rust["diag"], mfc["diag"])
+    udp_reask_decisions = {
+        "rust": _udp_reask_decision_summary(rust["diag"]),
+        "mfc": _udp_reask_decision_summary(mfc["diag"]),
+    }
+    udp_reask_schedule_decisions = {
+        "rust": _udp_reask_decision_summary(rust["diag"], event=UDP_REASK_SCHEDULE_DECISION_EVENT),
+        "mfc": _udp_reask_decision_summary(mfc["diag"], event=UDP_REASK_SCHEDULE_DECISION_EVENT),
+    }
     kad_cov = packet_trace_diff.kad_opcode_coverage(
         packet_trace_diff.kad_records(rust["diag"]),
         packet_trace_diff.kad_records(mfc["diag"]),
@@ -877,10 +1229,20 @@ def main(argv: list[str] | None = None) -> int:
         f"mfcServerLifecycleViolations="
         f"{len(full_diag_gate['serverConnectionLifecycle']['mfc']['violations'])}"
     )
+    for name, summary in udp_reask_decisions.items():
+        print(
+            f"  udp reask decisions[{name}]: events={summary['eventCount']} "
+            f"peerFiles={summary['peerFileKeyCount']} "
+            f"outcomes={summary['outcomes']} reasons={summary['reasons']}"
+        )
+    for name, summary in udp_reask_schedule_decisions.items():
+        print(
+            f"  udp reask schedule decisions[{name}]: events={summary['eventCount']} "
+            f"peerFiles={summary['peerFileKeyCount']} "
+            f"outcomes={summary['outcomes']} reasons={summary['reasons']}"
+        )
     print(
-        f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} "
-        f"sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} "
-        f"expectedDivergences={kad_expected}"
+        f"  kad opcode coverage oracleOk={kad_cov['oracleOk']} sentGaps={kad_sent_gaps} recvOnlyNoise={kad_recv_only} expectedDivergences={kad_expected}"
     )
     # SecIdent liveness: a profile claiming SecIdent on while the wire shows
     # zero 0x85/86/87 packets + HELLO secident bits 0 is a silenced parity
@@ -911,34 +1273,49 @@ def main(argv: list[str] | None = None) -> int:
         "mfc": _native_action_contract(mfc),
     }
     action_error_count = _action_error_count(rust) + _action_error_count(mfc)
-    secident_dead = any(
-        row["verdict"] == "secident-dead" for row in secident_report.values()
-    )
-    state_machine_rows = [
-        row.get("stateMachineOk")
-        for row in per_action
-        if row.get("stateMachineOk") is not None
-    ]
+    secident_dead = any(row["verdict"] == "secident-dead" for row in secident_report.values())
+    state_machine_rows = [row.get("stateMachineOk") for row in per_action if row.get("stateMachineOk") is not None]
     state_machine_evidence_observed = bool(state_machine_rows)
     state_machine_ok = state_machine_evidence_observed and all(state_machine_rows)
-    external_inconclusive = any(
-        side["meta"].get("externalInconclusive") is True for side in (rust, mfc)
-    )
-    adjudication = _campaign_verdict(
-        per_action=per_action,
-        missing_action_count=missing_action_count,
-        action_error_count=action_error_count,
-        completion=completion,
-        scenario_mismatch=scenario_mismatch,
-        conformance_ok=bool(full_diag_gate["ok"]),
-        kad_coverage_ok=bool(kad_cov["oracleOk"]),
-        secident_dead=secident_dead,
-        external_inconclusive=external_inconclusive,
-        capture_evidence_ok=all(row["ok"] for row in capture_evidence.values()),
-        action_contract_ok=all(row["ok"] for row in action_contract.values()),
-        state_machine_ok=state_machine_ok,
-        state_machine_evidence_observed=state_machine_evidence_observed,
-    )
+    external_inconclusive = any(side["meta"].get("externalInconclusive") is True for side in (rust, mfc))
+    if contract_name == transfer_coverage_evidence.CONTRACT:
+        evidence_contract = _focused_transfer_contract(
+            rust,
+            mfc,
+            server_endpoints=server_endpoints,
+            common_action_count=len(common),
+            missing_action_count=missing_action_count,
+            action_error_count=action_error_count,
+            scenario_mismatch=scenario_mismatch,
+            schema_conformant=bool(conf["conformant"]),
+            full_diag_gate=full_diag_gate,
+        )
+        adjudication = _focused_transfer_verdict(evidence_contract)
+    else:
+        adjudication = _campaign_verdict(
+            per_action=per_action,
+            missing_action_count=missing_action_count,
+            action_error_count=action_error_count,
+            completion=completion,
+            scenario_mismatch=scenario_mismatch,
+            conformance_ok=bool(full_diag_gate["ok"]),
+            kad_coverage_ok=bool(kad_cov["oracleOk"]),
+            secident_dead=secident_dead,
+            external_inconclusive=external_inconclusive,
+            capture_evidence_ok=all(row["ok"] for row in capture_evidence.values()),
+            action_contract_ok=all(row["ok"] for row in action_contract.values()),
+            state_machine_ok=state_machine_ok,
+            state_machine_evidence_observed=state_machine_evidence_observed,
+        )
+        evidence_contract = {
+            "name": FULL_CAMPAIGN_CONTRACT,
+            "mode": "parity",
+            "ok": adjudication["exitCode"] == 0,
+            "harnessFindings": list(adjudication["findings"]),
+            "protocolFindings": [],
+            "externalFindings": [],
+            "notApplicable": [],
+        }
     all_parity = adjudication["verdict"] == "parity"
     print(f"  per-action verdicts: {sorted(verdicts)}")
     if completion["required"]:
@@ -947,31 +1324,30 @@ def main(argv: list[str] | None = None) -> int:
             f"ok={completion['ok']} expected={completion['expectedCount']} "
             f"matched={completion['matchedCount']} findings={completion['findings']}"
         )
+    print(f"  evidence contract: {evidence_contract['name']} ok={evidence_contract['ok']}")
     print(
-        f"  campaign verdict: {adjudication['verdict']} "
-        f"exit={adjudication['exitCode']} findings={adjudication['findings']}"
+        f"  campaign verdict: {adjudication['verdict']} exit={adjudication['exitCode']} findings={adjudication['findings']}"
     )
 
     report = {
-        "schema": "soak_offline_diff_v1",
+        "schema": "soak_offline_diff_v2",
         "rustRecording": rust_zip.name,
         "mfcRecording": mfc_zip.name,
         "obfuscation": rust["meta"].get("obfuscation"),
+        "evidenceContract": evidence_contract,
         "perAction": per_action,
         "conformance": full_diag_gate["ok"],
         "schemaConformance": conf["conformant"],
         "fullRunDiagnostics": full_diag_gate,
-        "fullRunDiagnosticSummary": soak_report_summary.summarize_full_run_diagnostics(
-            full_diag_gate
-        ),
+        "fullRunDiagnosticSummary": soak_report_summary.summarize_full_run_diagnostics(full_diag_gate),
+        "udpReaskDecisions": udp_reask_decisions,
+        "udpReaskScheduleDecisions": udp_reask_schedule_decisions,
         "kadOpcodeCoverageOracleOk": kad_cov["oracleOk"],
         "kadOnlyEmuleSentGaps": kad_sent_gaps,
         "kadOnlyEmuleReceivedOnly": kad_recv_only,
         "kadExpectedOnlyEmule": kad_expected,
         "secident": secident_report,
-        "secidentDead": [
-            name for name, row in secident_report.items() if row["verdict"] == "secident-dead"
-        ],
+        "secidentDead": [name for name, row in secident_report.items() if row["verdict"] == "secident-dead"],
         "nativeCompletionComparison": completion,
         "nativeCaptureEvidence": capture_evidence,
         "nativeActionContract": action_contract,

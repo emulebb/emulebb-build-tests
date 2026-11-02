@@ -636,7 +636,7 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
         configuration="Release",
         artifacts_dir=tmp_path / "artifacts",
         ed2k_server_exe=tmp_path / "tools" / "ed2k-server",
-        client2_app_exe=tmp_path / "tools" / "tracing-harness" / "emule.exe",
+        client2_app_exe=tmp_path / "tools" / "mfc-oracle" / "emulebb.exe",
         p2p_bind_interface_name="hide.me",
         admin_volume_fixtures=True,
         vhd_size_mb=384,
@@ -647,7 +647,7 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert "--admin-volume-fixtures" in radarr_local_command
     assert option_values(radarr_local_command, "--mount-root") == [str(mount_root.resolve())]
     assert option_values(radarr_local_command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "ed2k-server").resolve())]
-    assert option_values(radarr_local_command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
+    assert option_values(radarr_local_command, "--client2-app-exe") == [str((tmp_path / "tools" / "mfc-oracle" / "emulebb.exe").resolve())]
     assert option_values(radarr_local_command, "--p2p-bind-interface-name") == []
     sonarr_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("sonarr-emulebb"),
@@ -993,7 +993,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]
@@ -1001,7 +1000,6 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
-        "local-ed2k-protocol-combinations",
         "local-kad-swarm",
         "local-kad-mixed-client-swarm",
     ]
@@ -1009,9 +1007,8 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[1], "--p2p-bind-interface-name") == []
     assert option_values(commands[2], "--p2p-bind-interface-name") == []
     assert option_values(commands[3], "--p2p-bind-interface-name") == []
+    assert option_values(commands[3], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[4], "--p2p-bind-interface-name") == []
-    assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
-    assert option_values(commands[5], "--p2p-bind-interface-name") == []
 
 
 def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp_path: Path, monkeypatch) -> None:
@@ -1060,7 +1057,6 @@ def test_multi_client_required_profile_enables_required_optional_clients(tmp_pat
         "multi-client-p2p-matrix.py",
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
-        "local-ed2k-protocol-combinations.py",
         "local-kad-swarm.py",
         "local-kad-mixed-client-swarm.py",
     ]
@@ -1272,7 +1268,7 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
             "--ed2k-server-exe",
             str(tmp_path / "tools" / "ed2k-server"),
             "--client2-app-exe",
-            str(tmp_path / "tools" / "tracing-harness" / "emule.exe"),
+            str(tmp_path / "tools" / "mfc-oracle" / "emulebb.exe"),
             "--godzilla-stage",
             "launch-scale",
             "--godzilla-total-client-count",
@@ -1288,11 +1284,11 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
     assert summary["suites"][0]["status"] == "planned"
     assert script_name(command) == "godzilla-local-swarm.py"
     assert option_values(command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "ed2k-server").resolve())]
-    assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
+    assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "mfc-oracle" / "emulebb.exe").resolve())]
     assert option_values(command, "--stage") == ["launch-scale"]
     assert option_values(command, "--total-client-count") == ["4"]
     assert summary["local_dependency_overrides"]["ed2k_server_exe"] == str(tmp_path / "tools" / "ed2k-server")
-    assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "tracing-harness" / "emule.exe")
+    assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "mfc-oracle" / "emulebb.exe")
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:
@@ -1752,6 +1748,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     deterministic_command = commands[2]
     assert script_name(deterministic_command) == "deterministic-two-client-transfer.py"
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
+    assert option_values(deterministic_command, "--protocol-case") == ["obfuscated-preferred"]
 
     godzilla_command = commands[3]
     assert option_values(godzilla_command, "--stage") == [live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE]
@@ -2061,6 +2058,7 @@ def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: 
 
     deterministic_command = by_script["deterministic-two-client-transfer.py"]
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
+    assert option_values(deterministic_command, "--protocol-case") == ["obfuscated-preferred"]
 
 
 def test_admin_storage_suite_requires_explicit_fixture_gate(tmp_path: Path) -> None:

@@ -590,28 +590,11 @@ def sanitized_binary_provenance(
 
 def deterministic_commands(local_address: str, mfc_diagnostics: Path) -> tuple[tuple[str, ...], ...]:
     return (
-        (sys.executable, str(REPO_ROOT / "scripts/validate-protocol-goldens.py")),
+        (sys.executable, str(REPO_ROOT / "scripts/validate-protocol-catalog.py")),
         (
             sys.executable,
             str(REPO_ROOT / "scripts/stock-protocol-oracle-proof.py"),
             "--execute-rust-proofs",
-        ),
-        (
-            sys.executable,
-            str(REPO_ROOT / "scripts/local-ed2k-protocol-combinations.py"),
-            "--lan-bind-addr", local_address,
-            "--p2p-bind-interface-address", local_address,
-            "--app-exe", str(mfc_diagnostics),
-            "--client2-app-exe", str(mfc_diagnostics),
-        ),
-        (
-            sys.executable,
-            str(REPO_ROOT / "scripts/local-ed2k-rust-protocol-combinations.py"),
-            "--diagnostics",
-            "--lan-bind-addr", local_address,
-            "--p2p-bind-interface-address", local_address,
-            "--app-exe", str(mfc_diagnostics),
-            "--client2-app-exe", str(mfc_diagnostics),
         ),
     )
 

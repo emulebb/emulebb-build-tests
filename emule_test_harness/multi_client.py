@@ -7,11 +7,12 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .paths import get_workspace_output_root
 
 CLIENT01_EMULEBB = "cl-emulebb-001"
-CLIENT02_HARNESS = "cl-harness-002"
+CLIENT02_MFC_ORACLE = "cl-mfc-oracle-002"
 CLIENT03_EMULEAI = "cl-emuleai-003"
 CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
@@ -19,7 +20,7 @@ CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 CLIENT07_AMULE = "cl-amule-007"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
-NICK_CLIENT02_HARNESS = "cl-harness-002"
+NICK_CLIENT02_MFC_ORACLE = "cl-mfc-oracle-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
 NICK_CLIENT04_STOCK_EMULE = "cl-stock-emule-004"
 NICK_CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
@@ -87,10 +88,10 @@ CLIENT_IDENTITIES = {
         role="primary eMuleBB client",
         supports_long_paths=True,
     ),
-    "harness": ClientIdentity(
-        key="harness",
-        profile_id=CLIENT02_HARNESS,
-        nick=NICK_CLIENT02_HARNESS,
+    "mfc_oracle": ClientIdentity(
+        key="mfc_oracle",
+        profile_id=CLIENT02_MFC_ORACLE,
+        nick=NICK_CLIENT02_MFC_ORACLE,
         product="eMuleBB MFC",
         role="MFC parity peer client",
         supports_long_paths=True,
@@ -137,7 +138,7 @@ CLIENT_IDENTITIES = {
         profile_id=CLIENT07_AMULE,
         nick=NICK_CLIENT07_AMULE,
         product="aMule",
-        role="moving official-upstream protocol parity reference",
+        role="frozen aMule 3.0.1 protocol parity reference",
         supports_long_paths=False,
     ),
 }
@@ -247,35 +248,43 @@ def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
     )
 
 
-def resolve_harness_client(workspace_root: Path, configuration: str, override: str | None = None) -> ClientAvailability:
-    """Resolves the MFC parity peer executable.
+def resolve_mfc_oracle_client(
+    workspace_root: Path,
+    configuration: str,
+    override: str | None = None,
+    output_root: Path | None = None,
+    *,
+    flavor: Literal["standard", "diagnostics"] = "standard",
+) -> ClientAvailability:
+    """Resolves one canonical maintained MFC oracle build flavor."""
 
-    The historical key stays `harness` for report/profile compatibility, but
-    current parity tests use the active emulebb-main worktree instead of the
-    retired tracing-harness worktree.
-    """
-
-    identity = CLIENT_IDENTITIES["harness"]
+    identity = CLIENT_IDENTITIES["mfc_oracle"]
+    source_repo = (workspace_root / "app" / "emulebb-main").resolve()
+    if flavor == "standard":
+        executable_name = "emulebb.exe"
+    elif flavor == "diagnostics":
+        executable_name = "emulebb-diagnostics.exe"
+    else:  # pragma: no cover - guarded by the type contract
+        raise ValueError(f"Unsupported MFC oracle flavor: {flavor!r}.")
+    base_dir = (
+        output_root.resolve() if output_root is not None else get_workspace_output_root()
+    ) / "builds" / "app" / "main" / "x64" / configuration / flavor / "bin"
     if override:
         executable = first_existing_file([Path(override)])
+        expected_location = Path(override).resolve()
     else:
-        base_dir = (
-            workspace_root
-            / "app"
-            / "emulebb-main"
-            / "srchybrid"
-            / "x64"
-            / configuration
-        )
-        executable = first_existing_file([base_dir / "emulebb.exe", base_dir / "emule.exe"])
-    reason = "available" if executable is not None else "missing eMuleBB main executable"
+        executable = first_existing_file([base_dir / executable_name])
+        expected_location = base_dir
+    reason = "available" if executable is not None else f"missing eMuleBB main {flavor} executable"
     return ClientAvailability(
         identity=identity,
         available=executable is not None,
         executable=executable,
-        reason=reason if executable is not None else f"{reason} under {workspace_root / 'app' / 'emulebb-main'}",
-        launch_adapter="emulebb-main-rest-profile",
+        reason=reason if executable is not None else f"{reason} under {expected_location}",
+        launch_adapter=f"emulebb-main-{flavor}-rest-profile",
         deterministic_transfer_adapter=True,
+        source_repo=source_repo,
+        source_revision=git_head_revision(source_repo),
     )
 
 
@@ -340,19 +349,19 @@ def resolve_stock_emule_client(
     )
 
 
-def resolve_amule_client(
+def resolve_amule_stable_client(
     workspace_root: Path,
     executable_override: str | None = None,
     control_override: str | None = None,
     output_root: Path | None = None,
 ) -> ClientAvailability:
-    """Resolves the staged official aMule runtime and its EC control executable."""
+    """Resolves the staged frozen aMule runtime and its EC control executable."""
 
     identity = CLIENT_IDENTITIES["amule"]
     try:
-        root = resolve_manifest_repo(workspace_root, "amule")
+        root = resolve_manifest_repo(workspace_root, "amule_stable")
     except (OSError, json.JSONDecodeError, RuntimeError) as exc:
-        return unavailable_manifest_client(identity, "amule", "amule-ec", exc)
+        return unavailable_manifest_client(identity, "amule_stable", "amule-ec", exc)
     staged_bin = (output_root.resolve() if output_root is not None else get_workspace_output_root()) / "tools" / "amule" / "bin"
     executable_candidates = [Path(executable_override)] if executable_override else [
         staged_bin / "amuled.exe",
@@ -410,7 +419,7 @@ def resolve_windows_client_inventory(
     workspace_root: Path,
     app_exe: Path,
     configuration: str,
-    harness_exe: str | None = None,
+    mfc_oracle_exe: str | None = None,
     emuleai_exe: str | None = None,
     stock_emule_exe: str | None = None,
     amule_exe: str | None = None,
@@ -420,10 +429,10 @@ def resolve_windows_client_inventory(
 
     return {
         "emulebb": resolve_emulebb_client(app_exe),
-        "harness": resolve_harness_client(workspace_root, configuration, harness_exe),
+        "mfc_oracle": resolve_mfc_oracle_client(workspace_root, configuration, mfc_oracle_exe),
         "emuleai": resolve_emuleai_client(workspace_root, configuration, emuleai_exe),
         "stock_emule": resolve_stock_emule_client(workspace_root, configuration, stock_emule_exe),
         "emulebb_rust": resolve_emulebb_rust_client(workspace_root),
         "emulebb_rust_peer": resolve_emulebb_rust_client(workspace_root, identity_key="emulebb_rust_peer"),
-        "amule": resolve_amule_client(workspace_root, amule_exe, amule_control_exe),
+        "amule": resolve_amule_stable_client(workspace_root, amule_exe, amule_control_exe),
     }

@@ -10,8 +10,8 @@ from emule_test_harness import multi_client
 def test_client_identities_use_stable_workspace_names() -> None:
     assert multi_client.CLIENT_IDENTITIES["emulebb"].profile_id == "cl-emulebb-001"
     assert multi_client.CLIENT_IDENTITIES["emulebb"].nick == "cl-emulebb-001"
-    assert multi_client.CLIENT_IDENTITIES["harness"].profile_id == "cl-harness-002"
-    assert multi_client.CLIENT_IDENTITIES["harness"].nick == "cl-harness-002"
+    assert multi_client.CLIENT_IDENTITIES["mfc_oracle"].profile_id == "cl-mfc-oracle-002"
+    assert multi_client.CLIENT_IDENTITIES["mfc_oracle"].nick == "cl-mfc-oracle-002"
     assert multi_client.CLIENT_IDENTITIES["emuleai"].profile_id == "cl-emuleai-003"
     assert multi_client.CLIENT_IDENTITIES["stock_emule"].profile_id == "cl-stock-emule-004"
     assert multi_client.CLIENT_IDENTITIES["emulebb_rust"].profile_id == "cl-emulebb-rust-005"
@@ -21,7 +21,7 @@ def test_client_identities_use_stable_workspace_names() -> None:
 
 def test_client_long_path_capabilities_are_explicit() -> None:
     report = multi_client.long_path_capability_report(
-        ["emulebb", "emulebb_rust", "emulebb_rust_peer", "harness"]
+        ["emulebb", "emulebb_rust", "emulebb_rust_peer", "mfc_oracle"]
     )
 
     # The eMuleBB family (MFC master + the Rust client) is long-path capable.
@@ -31,7 +31,7 @@ def test_client_long_path_capabilities_are_explicit() -> None:
     assert report["emulebb"]["supports_long_paths"] is True
     assert report["emulebb_rust"]["supports_long_paths"] is True
     assert report["emulebb_rust_peer"]["supports_long_paths"] is True
-    assert report["harness"]["supports_long_paths"] is True
+    assert report["mfc_oracle"]["supports_long_paths"] is True
 
 
 def test_workspace_parent_root_derives_canonical_root(tmp_path: Path, monkeypatch) -> None:
@@ -50,13 +50,17 @@ def test_workspace_parent_root_honors_env_override(tmp_path: Path, monkeypatch) 
 
 def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
+    output_root = tmp_path / "output"
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))
-    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     workspace = root / "workspaces" / "workspace"
     app_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    oracle_exe = output_root / "builds" / "app" / "main" / "x64" / "Release" / "standard" / "bin" / "emulebb.exe"
     app_exe.parent.mkdir(parents=True)
+    oracle_exe.parent.mkdir(parents=True)
     write_workspace_manifest(workspace, root)
     app_exe.write_bytes(b"")
+    oracle_exe.write_bytes(b"")
 
     inventory = multi_client.resolve_windows_client_inventory(
         workspace_root=workspace,
@@ -65,7 +69,7 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     )
 
     assert inventory["emulebb"].available is True
-    assert inventory["harness"].available is True
+    assert inventory["mfc_oracle"].available is True
     assert inventory["emuleai"].available is False
     assert inventory["stock_emule"].available is False
     assert inventory["emulebb_rust"].available is False
@@ -80,19 +84,55 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["amule"].launch_adapter == "amule-ec"
 
 
-def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
+def test_resolve_mfc_oracle_client_uses_canonical_external_build(tmp_path: Path) -> None:
     workspace = tmp_path / "workspaces" / "workspace"
-    harness_dir = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release"
-    harness_dir.mkdir(parents=True)
-    renamed_exe = harness_dir / "emulebb.exe"
-    legacy_exe = harness_dir / "emule.exe"
+    source_repo = workspace / "app" / "emulebb-main"
+    source_repo.mkdir(parents=True)
+    output_root = tmp_path / "output"
+    oracle_dir = output_root / "builds" / "app" / "main" / "x64" / "Release" / "standard" / "bin"
+    oracle_dir.mkdir(parents=True)
+    oracle_exe = oracle_dir / "emulebb.exe"
 
-    renamed_exe.write_bytes(b"")
-    assert multi_client.resolve_harness_client(workspace, "Release").executable == renamed_exe.resolve()
+    oracle_exe.write_bytes(b"")
+    availability = multi_client.resolve_mfc_oracle_client(
+        workspace,
+        "Release",
+        output_root=output_root,
+    )
 
-    renamed_exe.unlink()
-    legacy_exe.write_bytes(b"")
-    assert multi_client.resolve_harness_client(workspace, "Release").executable == legacy_exe.resolve()
+    assert availability.executable == oracle_exe.resolve()
+    assert availability.source_repo == source_repo.resolve()
+
+
+def test_resolve_mfc_oracle_client_selects_diagnostics_flavor(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspaces" / "workspace"
+    source_repo = workspace / "app" / "emulebb-main"
+    source_repo.mkdir(parents=True)
+    output_root = tmp_path / "output"
+    oracle_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "diagnostics"
+        / "bin"
+        / "emulebb-diagnostics.exe"
+    )
+    oracle_exe.parent.mkdir(parents=True)
+    oracle_exe.write_bytes(b"")
+
+    availability = multi_client.resolve_mfc_oracle_client(
+        workspace,
+        "Release",
+        output_root=output_root,
+        flavor="diagnostics",
+    )
+
+    assert availability.executable == oracle_exe.resolve()
+    assert availability.launch_adapter == "emulebb-main-diagnostics-rest-profile"
+    assert availability.source_repo == source_repo.resolve()
 
 
 def test_resolve_optional_emuleai_client_accepts_manifest_build(tmp_path: Path, monkeypatch) -> None:
@@ -129,12 +169,12 @@ def test_resolve_stock_emule_client_accepts_fixed_baseline_build(tmp_path: Path,
     assert stock.source_revision == "a" * 40
 
 
-def test_resolve_amule_client_requires_staged_runtime_and_control(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_amule_stable_client_requires_staged_runtime_and_control(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
     workspace = root / "workspaces" / "workspace"
     output_root = tmp_path / "output"
     write_workspace_manifest(workspace, root)
-    amule_repo = root / "repos" / "amule"
+    amule_repo = root / "repos" / "amule-stable"
     amule_repo.mkdir(parents=True)
     amuled_exe = output_root / "tools" / "amule" / "bin" / "amuled.exe"
     amulecmd_exe = amuled_exe.with_name("amulecmd.exe")
@@ -142,9 +182,9 @@ def test_resolve_amule_client_requires_staged_runtime_and_control(tmp_path: Path
     amuled_exe.write_bytes(b"")
     monkeypatch.setattr(multi_client, "git_head_revision", lambda repo: "b" * 40 if repo == amule_repo else None)
 
-    missing_control = multi_client.resolve_amule_client(workspace, output_root=output_root)
+    missing_control = multi_client.resolve_amule_stable_client(workspace, output_root=output_root)
     amulecmd_exe.write_bytes(b"")
-    available = multi_client.resolve_amule_client(workspace, output_root=output_root)
+    available = multi_client.resolve_amule_stable_client(workspace, output_root=output_root)
 
     assert missing_control.available is False
     assert "EC control executable is missing" in missing_control.reason
@@ -201,7 +241,7 @@ def write_workspace_manifest(workspace: Path, root: Path) -> None:
                 "workspace": {
                     "repos": {
                         "emuleai": os.path.relpath(root / "repos" / "eMuleAI", workspace),
-                        "amule": os.path.relpath(root / "repos" / "amule", workspace),
+                        "amule_stable": os.path.relpath(root / "repos" / "amule-stable", workspace),
                         "emulebb_rust": os.path.relpath(root / "repos" / "emulebb-rust", workspace),
                     }
                 }

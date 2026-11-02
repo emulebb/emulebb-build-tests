@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from emule_test_harness import scenario_matrix
+from emule_test_harness.protocol_parity import default_catalog_path, load_json
 
 SCHEMA = "emulebb-build-tests.test-inventory.v1"
 
@@ -71,12 +72,14 @@ def build_test_inventory(root: Path | None = None) -> dict[str, Any]:
     native = build_native_layer(root)
     python = build_python_layer(root)
     live = build_live_layer(root)
+    protocol_parity = build_protocol_parity_layer(root, live)
     return {
         "schema": SCHEMA,
         "layers": {
             "native": native,
             "pythonHarness": python,
             "liveE2e": live,
+            "protocolParity": protocol_parity,
         },
         "rollups": {
             "nativeSuiteCount": len(native["suites"]),
@@ -87,7 +90,53 @@ def build_test_inventory(root: Path | None = None) -> dict[str, Any]:
             "pythonSelfTestCount": sum(1 for m in python["modules"] if m["selfTestsScript"]),
             "liveSuiteCount": live["suiteCount"],
             "liveDefaultEnabledCount": live["rollups"]["defaultEnabledCount"],
+            "protocolAssetCount": protocol_parity["classifiedAssetCount"],
+            "protocolCleanupCandidateCount": len(protocol_parity["cleanupCandidates"]),
+            "protocolLiveSuiteCount": len(protocol_parity["liveProtocolSuites"]),
+            "protocolUnclassifiedLiveSuiteCount": len(protocol_parity["unclassifiedLiveProtocolSuites"]),
         },
+    }
+
+
+def build_protocol_parity_layer(root: Path, live: dict[str, Any]) -> dict[str, Any]:
+    """Joins the generic inventory to explicit protocol-catalog ownership."""
+
+    payload = load_json(default_catalog_path(root))
+    raw_assets = payload.get("assetClassifications") if isinstance(payload, dict) else None
+    assets = [row for row in raw_assets if isinstance(row, dict)] if isinstance(raw_assets, list) else []
+    by_path = {str(row.get("path") or ""): row for row in assets}
+    live_protocol_suites: list[dict[str, Any]] = []
+    for suite in live["suites"]:
+        if suite.get("category") != "protocol":
+            continue
+        path = f"scripts/{suite['script']}"
+        classification = by_path.get(path)
+        live_protocol_suites.append(
+            {
+                "name": suite["name"],
+                "path": path,
+                "classification": classification.get("classification") if classification else "unclassified",
+                "campaignIds": classification.get("campaignIds", []) if classification else [],
+                "reason": classification.get("reason", "") if classification else "",
+            }
+        )
+    classification_counts: dict[str, int] = {}
+    for row in assets:
+        classification = str(row.get("classification") or "unclassified")
+        classification_counts[classification] = classification_counts.get(classification, 0) + 1
+    return {
+        "catalogPath": str(default_catalog_path(root).relative_to(root)).replace("\\", "/"),
+        "classifiedAssetCount": len(assets),
+        "classificationCounts": dict(sorted(classification_counts.items())),
+        "cleanupCandidates": sorted(
+            str(row.get("path"))
+            for row in assets
+            if row.get("classification") in {"duplicate", "historical"}
+        ),
+        "liveProtocolSuites": live_protocol_suites,
+        "unclassifiedLiveProtocolSuites": [
+            row["path"] for row in live_protocol_suites if row["classification"] == "unclassified"
+        ],
     }
 
 

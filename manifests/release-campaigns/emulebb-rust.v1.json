@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust product-family campaign",
-  "description": "Campaign for the eMuleBB Rust 0.1.0-beta.1 headless core client. It reuses the shared eMuleBB campaign runner, local deterministic swarm policy, persisted live-wire profiles, and hide.me-bound public live-wire proof for REST, ED2K, Kad, transfer, upload, queue, and local indexing evidence.",
+  "description": "Campaign for the eMuleBB Rust 0.1.0-beta.1 headless core client. It reuses the shared eMuleBB campaign runner, local deterministic swarm policy, bounded isolated live-wire proof, and an optional persisted-profile diagnostic soak for REST, ED2K, Kad, transfer, upload, queue, and local indexing evidence.",
   "proofTier": "future",
   "phases": [
     {
@@ -99,29 +99,13 @@
           ]
         },
         {
-          "id": "emulebb.flow.rust.local-ed2k.protocol-combinations.v1",
-          "title": "Rust local eD2K protocol-combination proof",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe",
-          "evidence": [
-            {
-              "kind": "manual",
-              "required": true,
-              "description": "The Rust protocol-combination matrix reuses the stock eMuleBB local cases for plain server traffic, obfuscated-preferred server traffic, obfuscated-required server traffic, and obfuscated-required transfer with compressible transfer payload while downloading Unicode-named fixtures from the eMuleBB MFC main parity peer through the shared Rust ed2k-server launcher. The suite records a protocol_matrix_coverage check requiring all four cases plus plain, obfuscated, compressible-fixture, low-compressibility fixture, Unicode fixture-name, and hash-only fixture-name surfaces, and each case requires ED2K link name round-trip, three Rust transfers in one protocol session, hash-only ED2K link metadata recovery in every protocol case, completed large-file bytes, source userHash metadata, and MD4/AICH hashset metadata for both named transfers."
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1",
           "title": "Rust and eMuleBB bidirectional local swarm proof",
           "phase": "protocol-parity",
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --require-scenario rust-mfc-bidirectional-transfer",
           "evidence": [
             {
               "kind": "manual",
@@ -159,26 +143,26 @@
       "title": "Live-wire release",
       "scenarios": [
         {
-          "id": "emulebb.flow.rust.live-wire.hideme.v1",
-          "title": "Rust hide.me-bound live-wire proof",
+          "id": "emulebb.flow.rust.live-wire.persisted-diagnostic-soak.v1",
+          "title": "Rust/MFC persisted-profile diagnostic soak",
           "phase": "live-wire-release",
           "flowCategory": "live-wire",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
+          "required": false,
+          "blocking": false,
+          "command": "python scripts/persisted-soak-control.py run-to-gate --inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 --rest-timeout-seconds 1800 --connect-timeout-seconds 600 --observer-action-success-target-per-method 4 --gate-timeout-seconds 18000",
           "localInputs": [
             "CARGO_TARGET_DIR, EMULEBB_WORKSPACE_OUTPUT_ROOT, and EMULEBB_WORKSPACE_ROOT are pre-set environment variables and point to valid paths",
             "operator-owned live-wire inputs stay in ignored local files (live-wire-inputs.local.json) and define mfc_profile.profile_dir plus rust_profile.profile_dir",
-            "X_LOCAL_IP is the REST/control bind address and must match --lan-bind-addr",
-            "public live Rust and MFC P2P bind through the hide.me split tunnel; REST binds stay on X_LOCAL_IP",
+            "REST/control binds to localhost while the hide.me full tunnel carries both clients' public P2P traffic",
+            "hide.me split tunneling is disabled",
             "vpn-guard-live.local.json uses p2pBindInterfaceName hide.me and the approved public CIDRs",
-            "live eD2K connects to 45.82.80.155:5687"
+            "the controller selects the same configured public eD2K server for Rust and MFC"
           ],
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
-              "description": "Host-level converged live-wire run binds REST/control to X_LOCAL_IP, binds P2P through hide.me, uses the persisted MFC and Rust profiles from live-wire inputs, connects both clients to 45.82.80.155:5687, bootstraps Kad from the selected nodes.dat source, and records synchronized REST, server, Kad, upload, transfer, and diagnostic parity checkpoints under EMULEBB_WORKSPACE_OUTPUT_ROOT."
+              "required": false,
+              "description": "The maintained persisted-profile controller binds REST/control to localhost, routes both clients through hide.me with VPN Guard enabled, reuses the MFC and Rust profiles from live-wire inputs, and blocks until four completed server-search and four completed Kad-search diagnostic comparison actions pass. It always stops and finalizes bounded discovery evidence under EMULEBB_WORKSPACE_OUTPUT_ROOT. This lane is not parity certification or release proof."
             }
           ]
         },
@@ -285,7 +269,6 @@
       "id": "emulebb-rust-local-ed2k-protocol",
       "coveredBy": [
         "emulebb.flow.rust.local-ed2k.search-download.v1",
-        "emulebb.flow.rust.local-ed2k.protocol-combinations.v1",
         "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"
       ]
     },
@@ -304,7 +287,6 @@
     {
       "id": "emulebb-rust-live-wire-release",
       "coveredBy": [
-        "emulebb.flow.rust.live-wire.hideme.v1",
         "emulebb.flow.rust.webui.consumer-live.v1"
       ]
     },

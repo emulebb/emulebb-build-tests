@@ -1,0 +1,2539 @@
+{
+  "authorities": [
+    {
+      "authorityId": "rust-product",
+      "path": "repos/emulebb-rust",
+      "role": "product-under-test"
+    },
+    {
+      "authorityId": "stock-source",
+      "path": "repos/emule-stock",
+      "revision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b",
+      "role": "wire-and-state-intent"
+    },
+    {
+      "authorityId": "stock-instrumented",
+      "path": "workspaces/workspace/app/emulebb-community-baseline",
+      "revision": "c547b7cf2b6b59d971600111e425330ec8d2944d",
+      "role": "frozen-executable-reference"
+    },
+    {
+      "authorityId": "mfc-oracle",
+      "path": "workspaces/workspace/app/emulebb-main",
+      "role": "preferred-observable-runtime-oracle"
+    },
+    {
+      "authorityId": "amule-stable",
+      "path": "repos/amule-stable",
+      "revision": "02db0d7faecfc377694ff6242bc23346185990ed",
+      "role": "frozen-independent-parity-reference"
+    },
+    {
+      "authorityId": "amule-head",
+      "path": "repos/amule",
+      "revision": "59425b0c7d9f0e661dd57e7c42b5e92069cf0774",
+      "role": "analysis-only"
+    }
+  ],
+  "assetClassifications": [
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/deterministic-two-client-transfer.py",
+      "reason": "Primary deterministic local two-client state-machine runner."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/emulebb-rust-emulebb-cross-client.py",
+      "reason": "Primary Rust-versus-MFC local cross-client transfer runner."
+    },
+    {
+      "campaignIds": ["client-udp-reask", "source-queue-callback"],
+      "classification": "canonical",
+      "path": "scripts/emulebb-rust-reask-cross-client.py",
+      "reason": "Primary local cross-client UDP reask and queue-state runner."
+    },
+    {
+      "campaignIds": [],
+      "classification": "historical",
+      "path": "scripts/local-ed2k-search-soak.py",
+      "reason": "Legacy aggregate Rust search soak with fork-admin assumptions; retained for extraction only and cannot own parity evidence."
+    },
+    {
+      "campaignIds": ["server-session-source"],
+      "classification": "support",
+      "path": "scripts/local-ed2k-server-state-campaign.py",
+      "reason": "Upstream-clean server dependency gate with causal wire transcripts; proves harness infrastructure only, never Rust product parity."
+    },
+    {
+      "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "canonical",
+      "path": "scripts/local-kad-mixed-client-swarm.py",
+      "reason": "Primary local mixed-client Kad state-machine runner."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback", "client-udp-reask", "kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "canonical",
+      "path": "scripts/stock-protocol-oracle-proof.py",
+      "reason": "Source-anchored stock fixture and Rust proof execution."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback", "client-udp-reask"],
+      "classification": "canonical",
+      "path": "src/protocol_parity.tests.cpp",
+      "reason": "Native stock-compatible wire and state fixture suite."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/compare-protocol-oracle.py",
+      "reason": "Compares normalized evidence records without owning coverage."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/local-ed2k-chaos-mode.py",
+      "reason": "Local fault discovery feeds deterministic regressions but is not standalone parity proof."
+    },
+    {
+      "campaignIds": ["kad-bootstrap-routing", "kad-search-publish-firewall"],
+      "classification": "support",
+      "path": "scripts/local-kad-swarm.py",
+      "reason": "MFC oracle-only Kad control lane supporting mixed-client campaigns."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/local-parity-swarm-matrix.py",
+      "reason": "Multi-client topology support; individual catalog campaigns own verdicts."
+    },
+    {
+      "campaignIds": ["server-session-source", "peer-handshake-ident", "transfer-blocks", "source-queue-callback"],
+      "classification": "support",
+      "path": "scripts/multi-client-p2p-matrix.py",
+      "reason": "Cross-client scenario orchestration; selected scenarios own evidence."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/normalize-protocol-oracle.py",
+      "reason": "Normalizes diagnostic captures without owning coverage."
+    },
+    {
+      "campaignIds": ["server-session-source", "client-udp-reask", "kad-search-publish-firewall"],
+      "classification": "support",
+      "path": "scripts/persisted-soak-control.py",
+      "reason": "Public-network discovery only; never a parity authority."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/protocol-pcap-capture.py",
+      "reason": "Optional passive evidence capture without verdict ownership."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/rust-ed2k-private-parity-modules.py",
+      "reason": "Executes Rust-private proof selectors until catalog-native execution replaces it."
+    },
+    {
+      "campaignIds": [],
+      "classification": "support",
+      "path": "scripts/validate-protocol-catalog.py",
+      "reason": "Validates and reports the catalog without owning protocol evidence."
+    },
+    {
+      "campaignIds": [],
+      "classification": "product-only",
+      "path": "scripts/godzilla-local-swarm.py",
+      "reason": "Scale and stress coverage, not protocol-state parity."
+    },
+    {
+      "campaignIds": [],
+      "classification": "product-only",
+      "path": "scripts/shared-directory-browse-stress.py",
+      "reason": "Shared-directory browsing stress, not protocol-state parity."
+    },
+    {
+      "campaignIds": [],
+      "classification": "historical",
+      "path": "scripts/native-windows-parity-campaign.py",
+      "reason": "Legacy CI-054 all-in-one campaign retained only until catalog campaign migration completes."
+    }
+  ],
+  "campaigns": [
+    {
+      "campaignId": "server-session-source",
+      "coverageGroupIds": [
+        "server-session",
+        "server-query-reply",
+        "server-tcp-metadata",
+        "server-udp-metadata"
+      ]
+    },
+    {
+      "campaignId": "peer-handshake-ident",
+      "coverageGroupIds": [
+        "peer-framing",
+        "tag-vocabulary",
+        "peer-startup-profiles",
+        "secure-ident"
+      ]
+    },
+    {
+      "campaignId": "transfer-blocks",
+      "coverageGroupIds": [
+        "file-size-boundaries",
+        "transfer-blocks"
+      ]
+    },
+    {
+      "campaignId": "source-queue-callback",
+      "coverageGroupIds": [
+        "source-exchange-two",
+        "lowid-callbacks",
+        "queue-upload-state"
+      ]
+    },
+    {
+      "campaignId": "client-udp-reask",
+      "coverageGroupIds": [
+        "client-udp"
+      ]
+    },
+    {
+      "campaignId": "kad-bootstrap-routing",
+      "coverageGroupIds": [
+        "kad-contact-versions",
+        "nodes-dat-persistence"
+      ]
+    },
+    {
+      "campaignId": "kad-search-publish-firewall",
+      "coverageGroupIds": [
+        "kad-crypto-flows"
+      ]
+    }
+  ],
+  "contract": {
+    "evidenceLayers": [
+      "codec-transcript",
+      "deterministic-state-machine",
+      "local-cross-client",
+      "public-discovery"
+    ],
+    "provenanceRequired": [
+      "artifactLocator",
+      "artifactSha256",
+      "runnerPath",
+      "runnerRevision",
+      "profileAuthority",
+      "subjects.authorityId",
+      "subjects.sourceRevision",
+      "subjects.executableSha256"
+    ],
+    "verdicts": [
+      "parity",
+      "divergence",
+      "evidence-incomplete",
+      "not-observed",
+      "intentional-difference"
+    ]
+  },
+  "coverageEvidence": [
+    {
+      "coverageId": "peer.startup.aich",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Matched one exact MD4+AICH hashset answer and persisted two exact AICH part hashes in Rust.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t190951z",
+        "rust-mfc-transfer-20261101t191416z",
+        "rust-mfc-transfer-20261101t194032z",
+        "rust-mfc-transfer-20261101t194931z",
+        "rust-mfc-transfer-20261101t195457z",
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z",
+        "rust-mfc-transfer-20261101t235531z",
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z",
+        "rust-mfc-transfer-20261102t012738z",
+        "rust-mfc-transfer-20261102t012801z",
+        "rust-mfc-transfer-20261102t020224z"
+      ],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "peer.startup.metadata-recovery",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust recovered the exact Unicode name, size, MD4/AICH metadata, and source identity from a causally ordered hash-only startup.",
+      "receiptIds": ["rust-mfc-transfer-20261101t191416z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "peer.startup.multipacket-ext2",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Matched one exact EXT2 startup request and answer with decoded filename and status.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t190951z",
+        "rust-mfc-transfer-20261101t191416z",
+        "rust-mfc-transfer-20261101t194032z",
+        "rust-mfc-transfer-20261101t194931z",
+        "rust-mfc-transfer-20261101t195457z",
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z",
+        "rust-mfc-transfer-20261101t235531z",
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z",
+        "rust-mfc-transfer-20261102t012738z",
+        "rust-mfc-transfer-20261102t012801z",
+        "rust-mfc-transfer-20261102t020224z"
+      ],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "queue.admission",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "MFC recorded 58 exact-hash upload admissions in the causally ordered completed transfer.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t183823z",
+        "rust-mfc-transfer-20261101t185931z",
+        "rust-mfc-transfer-20261101t190951z",
+        "rust-mfc-transfer-20261101t191416z",
+        "rust-mfc-transfer-20261101t194032z",
+        "rust-mfc-transfer-20261101t194931z",
+        "rust-mfc-transfer-20261101t195457z",
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z",
+        "rust-mfc-transfer-20261101t235531z",
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z",
+        "rust-mfc-transfer-20261102t012738z",
+        "rust-mfc-transfer-20261102t012801z",
+        "rust-mfc-transfer-20261102t020224z"
+      ],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.connect.fallback",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each recorded an obfuscated connection failure, a causally joined plaintext fallback, and an accepted plaintext session.",
+      "receiptIds": ["rust-mfc-transfer-20261101t204626z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.connect.obfuscated",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each recorded obfuscated transport on login, ID-change, and accepted-session transitions.",
+      "receiptIds": ["rust-mfc-transfer-20261101t195457z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.connect.plaintext",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each recorded plaintext transport on login, ID-change, and accepted-session transitions.",
+      "receiptIds": ["rust-mfc-transfer-20261101t194931z", "rust-mfc-transfer-20261102t020224z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.login.request",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one decoded stock-core login followed by exact ID-change and accepted-session transitions.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t194032z",
+        "rust-mfc-transfer-20261101t194931z",
+        "rust-mfc-transfer-20261101t195457z",
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261102t020224z"
+      ],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.callback",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded and applied the exact server callback reply at wire/application sequences 17/18 and 19/21, then emitted a callback HELLO matching its accepted LowID login identity.",
+      "receiptIds": ["rust-mfc-transfer-20261102t020224z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.search",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded and applied the same exact server-search result in keyword and advanced campaigns.",
+      "receiptIds": ["rust-mfc-transfer-20261102t012738z", "rust-mfc-transfer-20261102t012801z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.sources",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded the same singular HighID source and applied the exact 0-to-1 source-state transition in plaintext TCP, obfuscated TCP, and plaintext UDP v1/v2 campaigns.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t235531z",
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z"
+      ],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.tcp-ident",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded and post-applied the same exact server ident, then exposed it through REST, at wire sequences 16/13.",
+      "receiptIds": ["rust-mfc-transfer-20261101t220451z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.tcp-status",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each decoded and post-applied one exact server status, then exposed its per-client dynamic counts through REST, at wire sequences 13/9.",
+      "receiptIds": ["rust-mfc-transfer-20261101t220451z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.udp-description",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each causally decoded, applied, and exposed one challenged UDP description reply at sequences 22/23 over obfuscated/plaintext transport.",
+      "receiptIds": ["rust-mfc-transfer-20261101t230237z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.reply.udp-status",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each causally decoded, applied, and exposed one challenged UDP status reply at sequences 19/20.",
+      "receiptIds": ["rust-mfc-transfer-20261101t230237z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.search.advanced",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical encoded advanced request over obfuscated server transport at sequences 20/19.",
+      "receiptIds": ["rust-mfc-transfer-20261102t012801z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.search.keyword",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical encoded keyword request over obfuscated server transport at sequences 21/19.",
+      "receiptIds": ["rust-mfc-transfer-20261102t012738z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.source.tcp-obfuscated",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical obfuscated GETSOURCES request and confirmed delivery at sequences 21/19.",
+      "receiptIds": ["rust-mfc-transfer-20261102t002608z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.source.tcp-plain",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical plaintext GETSOURCES request and confirmed delivery at sequences 18/19.",
+      "receiptIds": ["rust-mfc-transfer-20261101t235531z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.source.udp-v1",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical plaintext UDP v1 OP_GLOBGETSOURCES request, with no v2 request, at sequences 30/23.",
+      "receiptIds": ["rust-mfc-transfer-20261102t005817z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "server.source.udp-v2",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each emitted one identical plaintext UDP v2 OP_GLOBGETSOURCES2 request, with no v1 request, at sequences 30/23.",
+      "receiptIds": ["rust-mfc-transfer-20261102t011511z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "transfer.block.compressed",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "All 58 compressed payload frames matched exactly before manifest-backed completion.",
+      "receiptIds": ["rust-mfc-transfer-20261101t185931z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "transfer.block.uncompressed",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "All 1024 uncompressed payload frames matched exactly before manifest-backed completion.",
+      "receiptIds": [
+        "rust-mfc-transfer-20261101t183823z",
+        "rust-mfc-transfer-20261101t190951z",
+        "rust-mfc-transfer-20261101t191416z",
+        "rust-mfc-transfer-20261101t194032z",
+        "rust-mfc-transfer-20261101t194931z",
+        "rust-mfc-transfer-20261101t195457z",
+        "rust-mfc-transfer-20261101t204626z",
+        "rust-mfc-transfer-20261101t220451z",
+        "rust-mfc-transfer-20261101t230237z",
+        "rust-mfc-transfer-20261101t235531z",
+        "rust-mfc-transfer-20261102t002608z",
+        "rust-mfc-transfer-20261102t005817z",
+        "rust-mfc-transfer-20261102t011511z",
+        "rust-mfc-transfer-20261102t012738z",
+        "rust-mfc-transfer-20261102t012801z",
+        "rust-mfc-transfer-20261102t020224z"
+      ],
+      "verdict": "parity"
+    }
+  ],
+  "coverageGroups": [
+    {
+      "coverageIds": [
+        "server.login.request",
+        "server.connect.plaintext",
+        "server.connect.obfuscated",
+        "server.connect.fallback"
+      ],
+      "groupId": "server-session",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.session",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one authenticated server session with the selected transport or one bounded fallback",
+        "start": "server disconnected",
+        "stimulus": "connect and send login request"
+      },
+      "recordIds": [
+        "stock.server.connect-state",
+        "stock.server.login"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn login_request_matches_oracle_tag_shape"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn server_transport_attempts_fall_back_once_then_succeed"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "packet->opcode = OP_LOGINREQUEST;",
+            "ConnectToServer(next_server, true, !m_bTryObfuscated);"
+          ],
+          "path": "srchybrid/ServerConnect.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.search.keyword",
+        "server.search.advanced",
+        "server.source.tcp-plain",
+        "server.source.tcp-obfuscated",
+        "server.source.udp-v1",
+        "server.source.udp-v2",
+        "server.reply.search",
+        "server.reply.sources",
+        "server.reply.callback"
+      ],
+      "groupId": "server-query-reply",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.query",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "causally matched search, source, or callback reply",
+        "start": "authenticated server session",
+        "stimulus": "issue one typed server query"
+      },
+      "recordIds": [
+        "stock.server.query-corpus",
+        "stock.server.reply-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn udp_source_request_batch_encodes_legacy_hashes"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn source_request_encoding_includes_u32_size_for_small_files"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/decoders.rs",
+          "selector": "fn search_results_decoder_preserves_source_identity_and_metadata"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/server_description.rs",
+          "selector": "fn decodes_challenge_tag_response_and_rejects_mismatch"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define OP_SEARCHREQUEST",
+            "#define OP_GETSOURCES",
+            "#define OP_GETSOURCES_OBFU",
+            "#define OP_GLOBGETSOURCES",
+            "#define OP_GLOBGETSOURCES2",
+            "#define OP_GLOBFOUNDSOURCES",
+            "#define OP_SEARCHRESULT",
+            "#define OP_CALLBACKREQUESTED"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-ident",
+        "server.reply.tcp-status"
+      ],
+      "groupId": "server-tcp-metadata",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.tcp.metadata",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "typed TCP metadata frame is decoded and updates the exact server state",
+        "start": "authenticated TCP server session",
+        "stimulus": "receive OP_SERVERSTATUS or OP_SERVERIDENT"
+      },
+      "recordIds": [
+        "stock.server.tcp-ident",
+        "stock.server.tcp-status"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/decoders.rs",
+          "selector": "fn server_ident_parser_extracts_name_and_description"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn malformed_uncorrelated_search_result_is_packet_local"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_SERVERSTATUS:",
+            "case OP_SERVERIDENT:",
+            "uint32 cur_files = PeekUInt32(packet + 4);"
+          ],
+          "path": "srchybrid/ServerSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-description",
+        "server.reply.udp-status"
+      ],
+      "groupId": "server-udp-metadata",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.udp.metadata",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "reply endpoint and challenge match before typed UDP metadata updates server state",
+        "start": "known server with an outstanding typed UDP metadata request",
+        "stimulus": "receive OP_GLOBSERVSTATRES or OP_SERVER_DESC_RES"
+      },
+      "recordIds": [
+        "stock.server.udp-description",
+        "stock.server.udp-status"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/server_description.rs",
+          "selector": "fn decodes_challenge_tag_response_and_rejects_mismatch"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn server_status_matching_challenge_records_users_files_and_udp_flags"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_GLOBSERVSTATRES:",
+            "challenge != pServer->GetChallenge()",
+            "case OP_SERVER_DESC_RES:",
+            "pServer->GetDescReqChallenge()"
+          ],
+          "path": "srchybrid/UDPSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.framing.e3",
+        "peer.framing.c5",
+        "peer.framing.d4",
+        "peer.framing.fragmented",
+        "peer.framing.coalesced"
+      ],
+      "groupId": "peer-framing",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.peer.framing",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "complete ordered frames independent of segmentation or coalescing",
+        "start": "peer transport connected with an empty receive buffer",
+        "stimulus": "deliver E3, C5, or D4 frames in complete, fragmented, or coalesced chunks"
+      },
+      "recordIds": [
+        "stock.peer.framing-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/transport.rs",
+          "selector": "fn buffered_reads_frame_multiple_packets_from_one_burst"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/background.rs",
+          "selector": "fn source_request_decoder_recovers_fragmented_coalesced_frames"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define OP_EDONKEYHEADER",
+            "#define OP_EMULEPROT",
+            "#define OP_PACKEDPROT"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "tags.fixed-vocabulary",
+        "tags.str1-str22",
+        "tags.bsob",
+        "tags.unknown-name",
+        "tags.malformed-bounds"
+      ],
+      "groupId": "tag-vocabulary",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "protocolDomain": "ed2k.tags",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "known tags decode exactly, unknown tags are bounded, and malformed tails fail closed",
+        "start": "tag decoder at a declared tag boundary",
+        "stimulus": "decode each stock tag representation and malformed boundary"
+      },
+      "recordIds": [
+        "stock.tags.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn hello_binary_corpus_skips_every_stock_tag_representation"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn hello_rejects_truncated_variable_width_stock_tags"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define\tTAGTYPE_BSOB",
+            "#define TAGTYPE_STR1",
+            "#define TAGTYPE_STR22"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        },
+        {
+          "contains": [
+            "case TAGTYPE_BSOB:"
+          ],
+          "path": "srchybrid/kademlia/io/DataIO.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.profile.edonkey",
+        "peer.profile.emule-old",
+        "peer.profile.emule-modern",
+        "peer.startup.multipacket",
+        "peer.startup.multipacket-ext",
+        "peer.startup.multipacket-ext2",
+        "peer.startup.large-file",
+        "peer.startup.aich",
+        "peer.startup.metadata-recovery",
+        "peer.startup.crypt",
+        "peer.startup.sx2"
+      ],
+      "groupId": "peer-startup-profiles",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.peer.startup",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "compatible startup negotiation followed by the supported capability profile",
+        "start": "new inbound or outbound peer session",
+        "stimulus": "exchange hello and emule-info profiles"
+      },
+      "recordIds": [
+        "stock.peer.startup-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/hello.rs",
+          "selector": "fn non_mule_hello_replies_with_emule_info_then_helloanswer"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn multipacket_ext2_source_request_matches_peer_source_exchange_version"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
+          "selector": "fn hash_only_small_file_download_learns_metadata_from_startup_answer"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_MULTIPACKET:",
+            "case OP_MULTIPACKET_EXT:",
+            "case OP_MULTIPACKET_EXT2:"
+          ],
+          "path": "srchybrid/ListenSocket.cpp"
+        },
+        {
+          "contains": [
+            "#define OP_HASHSETREQUEST2",
+            "#define OP_AICHREQUEST",
+            "#define OP_REQUESTSOURCES2"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "peer.boundary.uint32-minus-one",
+        "peer.boundary.uint32",
+        "peer.boundary.uint32-plus-one"
+      ],
+      "groupId": "file-size-boundaries",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["transfer-blocks"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "protocolDomain": "ed2k.file-size",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "the exact small-file or large-file representation without truncation",
+        "start": "file-size field not encoded",
+        "stimulus": "encode and decode values adjacent to UINT32_MAX"
+      },
+      "recordIds": [
+        "stock.peer.boundary-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/tests/protocol.rs",
+          "selector": "fn source_request_encoding_uses_large_file_sentinel"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/search_expr.rs",
+          "selector": "fn uint32_boundary_remains_32bit_for_every_server"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "OP_COMPRESSEDPART_I64",
+            "OP_SENDINGPART_I64"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "transfer.block.uncompressed",
+        "transfer.block.compressed",
+        "transfer.block.invalid-zlib",
+        "transfer.block.compression-bomb"
+      ],
+      "groupId": "transfer-blocks",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["transfer-blocks"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.transfer.blocks",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "valid blocks advance exact ranges while hostile compression is rejected without corruption",
+        "start": "requested part range is outstanding",
+        "stimulus": "receive uncompressed, compressed, invalid-zlib, or expansion-bomb block data"
+      },
+      "recordIds": [
+        "stock.transfer.block-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn compressed_part_fragment_rejects_decompression_bomb"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/stale_packets.rs",
+          "selector": "fn inflate_error_skips_stream_but_session_continues"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/frame_sending_part.rs",
+          "selector": "fn small_file_download_accepts_split_sending_part_frames"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_COMPRESSEDPART:",
+            "case OP_COMPRESSEDPART_I64:"
+          ],
+          "path": "srchybrid/ListenSocket.cpp"
+        },
+        {
+          "contains": [
+            "Z_DATA_ERROR"
+          ],
+          "path": "srchybrid/DownloadClient.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "sx2.v1",
+        "sx2.v2",
+        "sx2.v3",
+        "sx2.v4",
+        "sx2.crypt-options",
+        "sx2.part-needed-filter"
+      ],
+      "groupId": "source-exchange-two",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/emulebb-rust-emulebb-cross-client.py",
+      "protocolDomain": "ed2k.source-exchange",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "version-appropriate useful sources with compatible crypt options and no unneeded parts",
+        "start": "peer transfer has a known file and source set",
+        "stimulus": "request or receive SX2 source exchange"
+      },
+      "recordIds": [
+        "stock.sx2.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/protocol/codec.rs",
+          "selector": "fn source_exchange2_v1_through_v4_preserve_their_wire_capabilities"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_source_exchange_returns_only_parts_useful_to_requester"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_source_exchange_preserves_live_source_connect_options"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define SOURCEEXCHANGE2_VERSION",
+            "#define OP_REQUESTSOURCES2",
+            "#define OP_ANSWERSOURCES2"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        },
+        {
+          "contains": [
+            "min(byRequestedVersion, (uint8)SOURCEEXCHANGE2_VERSION)"
+          ],
+          "path": "srchybrid/PartFile.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "ident.v1",
+        "ident.v2",
+        "ident.ip-kind.local",
+        "ident.ip-kind.remote",
+        "ident.replay",
+        "ident.invalid-key"
+      ],
+      "groupId": "secure-ident",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.secure-ident",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one valid identity transition or an explicit bounded rejection",
+        "start": "peer identity is unverified",
+        "stimulus": "exchange public key, challenge, and signature for v1 or v2"
+      },
+      "recordIds": [
+        "stock.ident.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn v1_valid_signature_verifies"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn v2_localclient_signature_binds_peer_ip"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn verify_without_issued_challenge_errors"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/identity_tests.rs",
+          "selector": "fn tampered_signature_fails"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "Packet *packet = new Packet(OP_SIGNATURE",
+            "Packet *packet = new Packet(OP_SECIDENTSTATE"
+          ],
+          "path": "srchybrid/BaseClient.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "lowid.server-callback",
+        "lowid.direct-callback",
+        "lowid.buddy-callback",
+        "lowid.relayed-reask"
+      ],
+      "groupId": "lowid-callbacks",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.lowid.callback",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "one routed callback or reask through the selected server, direct, or buddy path",
+        "start": "LowID source is unreachable directly",
+        "stimulus": "request server, direct, buddy, or relayed callback"
+      },
+      "recordIds": [
+        "stock.lowid.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/udp_callback.rs",
+          "selector": "fn global_callback_sends_exact_plaintext_datagram_to_server_udp_port"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn direct_callback_req_encode_decode_roundtrips"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn reask_callback_udp_v4_round_trip_prepends_buddy_id"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "packet->opcode = OP_DIRECTCALLBACKREQ;"
+          ],
+          "path": "srchybrid/BaseClient.cpp"
+        },
+        {
+          "contains": [
+            "case OP_REASKCALLBACKUDP:",
+            "case OP_DIRECTCALLBACKREQ:"
+          ],
+          "path": "srchybrid/ClientUDPSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "client-udp.v1",
+        "client-udp.v2",
+        "client-udp.v3",
+        "client-udp.v4",
+        "client-udp.clear",
+        "client-udp.encrypted",
+        "client-udp.queue-full",
+        "client-udp.file-not-found",
+        "client-udp.unsolicited"
+      ],
+      "groupId": "client-udp",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["client-udp-reask"],
+      "deterministicRunner": "scripts/emulebb-rust-reask-cross-client.py",
+      "protocolDomain": "ed2k.client-udp",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "eligible requests produce one correlated send lifecycle and replies update only the owning source",
+        "start": "download source is due or ineligible for UDP reask",
+        "stimulus": "evaluate and optionally send direct or buddy-relayed reask"
+      },
+      "recordIds": [
+        "stock.client-udp.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/codec.rs",
+          "selector": "fn reask_file_ping_v4_round_trip_with_partstatus_and_count"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/outbound.rs",
+          "selector": "fn ack_round_trips_obfuscated"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_client_udp/registry.rs",
+          "selector": "fn pending_registry_correlates_replies_and_drops_unsolicited"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_REASKFILEPING:",
+            "case OP_REASKACK:",
+            "case OP_FILENOTFOUND:",
+            "case OP_QUEUEFULL:"
+          ],
+          "path": "srchybrid/ClientUDPSocket.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "kad.contact.v2",
+        "kad.contact.v3",
+        "kad.contact.v4",
+        "kad.contact.v5",
+        "kad.contact.v6",
+        "kad.contact.v7",
+        "kad.contact.v8",
+        "kad.contact.v9",
+        "kad.contact.v10",
+        "kad.frame.e4",
+        "kad.frame.e5"
+      ],
+      "groupId": "kad-contact-versions",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["kad-bootstrap-routing"],
+      "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
+      "protocolDomain": "kad.routing.contacts",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "supported contact versions enter routing with the exact compatible E4 or E5 frame",
+        "start": "routing table lacks the candidate contact",
+        "stimulus": "decode and process contact versions 2 through 10"
+      },
+      "recordIds": [
+        "stock.kad.contacts-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-dht/src/publish/tests.rs",
+          "selector": "fn source_publish_selects_stock_packet_family_for_versions_two_through_ten"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/traversal/tests.rs",
+          "selector": "fn search_phase_selects_stock_packet_family_for_versions_two_through_ten"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "#define KADEMLIA_VERSION2_47a",
+            "#define KADEMLIA_VERSION3_47b",
+            "#define KADEMLIA_VERSION8_49b",
+            "#define KADEMLIA_VERSION\t\t\t0x0a",
+            "#define OP_KADEMLIAHEADER",
+            "#define OP_KADEMLIAPACKEDPROT"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "kad.crypto.node-id",
+        "kad.crypto.receiver-key",
+        "kad.flow.search",
+        "kad.flow.publish",
+        "kad.flow.firewall",
+        "kad.flow.buddy",
+        "kad.flow.callback"
+      ],
+      "groupId": "kad-crypto-flows",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["kad-search-publish-firewall"],
+      "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
+      "protocolDomain": "kad.operations",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "causally matched encrypted or clear search, publish, firewall, buddy, and callback lifecycles",
+        "start": "Kad routing is ready and no operation owns the target",
+        "stimulus": "start one target-owned Kad operation"
+      },
+      "recordIds": [
+        "stock.kad.flow-corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-net/src/obfuscation/tests.rs",
+          "selector": "fn test_encrypt_decrypt_roundtrip_with_node_id_mode"
+        },
+        {
+          "path": "crates/emulebb-kad-net/src/obfuscation/tests.rs",
+          "selector": "fn test_encrypt_decrypt_roundtrip_with_receiver_key_mode"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_publish_source_req_roundtrip"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_find_buddy_req_roundtrip"
+        },
+        {
+          "path": "crates/emulebb-kad-proto/src/packet/tests.rs",
+          "selector": "fn test_callback_req_roundtrip"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "DecryptReceivedClient",
+            "EncryptSendClient",
+            "verify keys"
+          ],
+          "path": "srchybrid/EncryptedDatagramSocket.cpp"
+        },
+        {
+          "contains": [
+            "case KADEMLIA2_PUBLISH_SOURCE_REQ:",
+            "case KADEMLIA_FINDBUDDY_REQ:",
+            "case KADEMLIA_CALLBACK_REQ:"
+          ],
+          "path": "srchybrid/kademlia/net/KademliaUDPListener.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "nodes-dat.v0",
+        "nodes-dat.v1",
+        "nodes-dat.v2",
+        "nodes-dat.v3-normal",
+        "nodes-dat.v3-bootstrap",
+        "nodes-dat.exact-size",
+        "nodes-dat.restart"
+      ],
+      "groupId": "nodes-dat-persistence",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["kad-bootstrap-routing"],
+      "deterministicRunner": "scripts/stock-protocol-oracle-proof.py",
+      "protocolDomain": "kad.persistence.nodes-dat",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "exact supported layout persists and reloads the same contacts and bootstrap mode",
+        "start": "nodes.dat is absent or contains one supported version",
+        "stimulus": "load, persist, and restart with versions 0 through 3"
+      },
+      "recordIds": [
+        "stock.nodes-dat.corpus"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn encoding_roundtrips_all_extended_security_metadata"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn exact_record_sizes_reject_truncation_and_trailing_bytes"
+        },
+        {
+          "path": "crates/emulebb-core/src/network_api.rs",
+          "selector": "fn learned_contact_is_atomically_persisted_and_reloaded_on_restart"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "void CRoutingZone::ReadFile",
+            "special bootstrap-only nodes.dat",
+            "Skipped storing nodes.dat"
+          ],
+          "path": "srchybrid/kademlia/routing/RoutingZone.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
+        "queue.admission",
+        "queue.rank-transition",
+        "upload.slot-promotion",
+        "upload.slot-recycle",
+        "queue.abuse-escalation"
+      ],
+      "groupId": "queue-upload-state",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.upload.queue",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "deterministic admission, rank, slot promotion, upload, recycle, and abuse outcome",
+        "start": "requester is outside the upload queue",
+        "stimulus": "submit valid, repeated, or abusive upload requests"
+      },
+      "recordIds": [
+        "stock.queue.state"
+      ],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/tests/upload_queue.rs",
+          "selector": "fn upload_queue_grants_immediately_then_promotes_waiter"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/download_abuse.rs",
+          "selector": "fn queue_rank_flood_disconnects_then_bans_across_connections"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_transfer/tests/upload_slot_recycle_window.rs",
+          "selector": "fn burst_then_stall_slot_is_slow_recycled_within_the_ten_second_window"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "void CUploadQueue::AddClientToQueue",
+            "CUploadQueue::AddUpNextClient",
+            "CUploadQueue::GetWaitingPosition"
+          ],
+          "path": "srchybrid/UploadQueue.cpp"
+        },
+        {
+          "contains": [
+            "void CUpDownClient::SendRankingInfo"
+          ],
+          "path": "srchybrid/UploadClient.cpp"
+        }
+      ]
+    }
+  ],
+  "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
+  "evidenceReceipts": [
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T183823Z-emulebb-main-release-15004/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "4d26bd2319ec9eafaee3d84c2800e609a1f6765a2fc05b0139ac9ee5db8ab91a",
+      "coverageIds": ["queue.admission", "transfer.block.uncompressed"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t183823z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "4417566425047daaf8968adfae6db9eded056f97",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T185931Z-emulebb-main-release-14948/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "118caf7127d9a85d26fb628eaced1ed7ae200ce813f0b7c478f2943d6605cfab",
+      "coverageIds": ["queue.admission", "transfer.block.compressed"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t185931z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "03a21bbebaece261061f8f309e625a9a2e461ad4",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T190951Z-emulebb-main-release-14504/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "387b4e7f69ed5b9ace9d95aab93a99cb29ac03002811f1fbea3224526f90973f",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t190951z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "ddbd352ede4a2037ee358b5882210c0cf516b70e",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T191416Z-emulebb-main-release-10176/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "5fc02b960fcf4503505bf2d7b706484beecbfd3cab9a9dac59461bf71ffbbd38",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.metadata-recovery",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t191416z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "8f480e8623f53e4a78f858c01180583f03c679c3",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T194032Z-emulebb-main-release-14448/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "c13af999bb23ff1989f57e2cc3e16fc646f7200ed1e8a086c9c998c64dba01a8",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.login.request",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t194032z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "0c045312d948ef745e1483e13e07df4330f65bb8",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T194931Z-emulebb-main-release-15012/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "e13ea2806cdf88fa85b033dec524dc270850175d3d54e3a41d8e5de1c451ceaa",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t194931z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "b880c382da408ae7c425db40100e87d7365b7831",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "637457534644390e72b9d5f020a369283c12a3fdb91028b1ac431978cc551778",
+          "sourceRevision": "1c99b8f9cd7d4d701a104514882e6c1557e5eee1"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T195457Z-emulebb-main-release-2528/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "b1dfb5bb70970e3f317d7d2b7c1cce39aebfdaae82196bf99aa94d46435bacb7",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.obfuscated",
+        "server.login.request",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t195457z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "7a35545fa799b2d6008f6aeceae295a5fe768043",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "dee24e99e7fad4553e37915ae0bf0aa79bd145eab49eb42529ed896a328cc0aa",
+          "sourceRevision": "84415e72c4e35120ee87f9c29780cadfb65d60f6"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "6c2ba174164af085695e6dc68fb038142ad6f8324d58aa113f65c6de0f23f8d3",
+          "sourceRevision": "4def7119f32e0230d3cc0f09f6117825b1a65d46"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T204626Z-emulebb-main-release-6532/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "7ae22d90cb05d4dc69bc637d7ee1890eb4ed3e692f0560d9489c30caa72243d4",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.fallback",
+        "server.login.request",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t204626z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "7cff7aee08fdad05045583ec3019d8a8db2dae2f",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "1ca1adf48b9d0d9310601e9eb2d0eda1acdd8b34cffba85df8b1c8fac29db258",
+          "sourceRevision": "acc007d07a0107b5a20557d8648dd172f83bd163"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "3fca4e29e4bc18426491cf729f45eadbff4b269dc34761802fe37695277b2545",
+          "sourceRevision": "b365ba140f5db9ba28bbc1138eb9e1512d6e9803"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T220451Z-emulebb-main-release-10372/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "c9acf8151a9fddefce4ddcd828764298d654c6c9f6df9f98354d2b6f2e82b4c8",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.tcp-ident",
+        "server.reply.tcp-status",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t220451z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "53fea9b3380ab2c338b1923f4e83f54abf2e59d9",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "040ff59f632d15324fce0e163bbcc5b8dc351ea50e2fbc7191836291d8f4b392",
+          "sourceRevision": "c014f88019256e02be7dbfd673f08e025a9ed006"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "29efd66ad3841672b7a8fbd86f0a5b2a536f8d7383de224b01f63f7f4d7349ff",
+          "sourceRevision": "3c2c0b27a67bdd7b5af21d9fe611a139831ec1ba"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T230237Z-emulebb-main-release-11248/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "e89a79f10dc17e238a9084379fdc2aa69348eae3d069843ffa89618be6874a59",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.udp-description",
+        "server.reply.udp-status",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t230237z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "ba77ac42536e425df260cdcad6ae3272da6ca750",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "10de8cb83f390ea2759ab123992fbe352fa554200b21bf6f44fff5fef8f640c1",
+          "sourceRevision": "c32a15896e952468463c75ff4d89b919ca1f94e5"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "d9dc0cc3daf16563ce51c5b06dbed4cd6ae48999d98adc4b8c34ef2abfb2617c",
+          "sourceRevision": "fd6390543d5042162c6ec4a6f8e27d70f47bc9f6"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261101T235531Z-emulebb-main-release-11696/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "a226acc680c505e8ea20681de3d915463c36542bc89b1468b923b5f7eb9df4b8",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.tcp-plain",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261101t235531z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "c50f8f7fd948ed076aea82ae4da0399f95e9c82b",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "6223a2eb1c8d6e6cd508eddbd500006275de468b299ddbd728fcc2f7b868f832",
+          "sourceRevision": "aebbc5b279ff43d7cfcab41813d65c21e6790884"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "b636909c95b0887a455709a57b8eab8ef7544ec8275cdc2551ad735a5b373f9c",
+          "sourceRevision": "dc9804c9c335c20007f83758fe0e7b4c823ee482"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T002608Z-emulebb-main-release-12868/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "c6673a16d172c9e41a4218d41e3c113da700a34b303cd47a5194408af4eb972e",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.tcp-obfuscated",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t002608z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "97603afc1c413fca06626e1404a964af7a2a82af",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "6223a2eb1c8d6e6cd508eddbd500006275de468b299ddbd728fcc2f7b868f832",
+          "sourceRevision": "aebbc5b279ff43d7cfcab41813d65c21e6790884"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "b636909c95b0887a455709a57b8eab8ef7544ec8275cdc2551ad735a5b373f9c",
+          "sourceRevision": "dc9804c9c335c20007f83758fe0e7b4c823ee482"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T005817Z-emulebb-main-release-14048/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "6b15f9da1758ffe9420b8f22714de6e2788b81eef578007f86ff88ce6642a94b",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v1",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t005817z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "0739a3638f8a072d97ac1dd7cb36e4e1ef121307",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T011511Z-emulebb-main-release-500/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "6e4fe12abaeb4e02d255e429d3ca18bf27c6a08d2107ab9ee81506fc3e49186a",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.sources",
+        "server.source.udp-v2",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t011511z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "a240a463e71440fc92e84685542fdad582ea07cc",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T012738Z-emulebb-main-release-11248/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "62c486faafd62375c727afd27f89eb1b1794b120c10126b7ce917721c632b35e",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t012738z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "0c79d5e617f4150f4179328044f23a4784a69680",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T012801Z-emulebb-main-release-3136/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "272af4a45cd2bc6f3c7d8362c4a459e03dda4312f0a62799a9dd69578c7f0fcd",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.advanced",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t012801z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "0c79d5e617f4150f4179328044f23a4784a69680",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a56cc028191b51523a60fd2ab44abd45e657a6e8d322e4524d5b556af7098352",
+          "sourceRevision": "2d8fb8b3214f0c1333b5f75f8cc37b185b0b81ae"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "f8718d0530552885d4ba7fa3d9b079e34f1e7d1b6709deea8d5c2841af449136",
+          "sourceRevision": "eb1256bad45f6a91e42177058de2db9cd360281c"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T020224Z-emulebb-main-release-12340/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "5f0e895b0b2b231f55531abb9cb813308de57de906f5e89424ebfddd0d08088c",
+      "coverageIds": [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "server.reply.callback",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t020224z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "ba86acb12863a0d9ea3a7a342810868bf5a918a6",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "fa0a5961caaefb29dfba440d3cf771ec4d9329c6b9f8070efde1d7160a824b1f",
+          "sourceRevision": "9c556184ec898316e8adff86b63d1e1660294187"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "15cb10e6a8753ac78c3f9716b06abae10eaa74ac746c292bf0c0f238f07bc154",
+          "sourceRevision": "e8ff2fafb90eba0a4cda6dce7c9936928d39ca18"
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x17F39CB63770AA53",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "debian"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x27C377811D510298",
+      "payloadLength": 10,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "emule"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0xD13803A7A5A9EF97",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "fedora"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x9AF6C316F24A8DD1",
+      "payloadLength": 12,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "freebsd"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x3E754120FCC3EB84",
+      "payloadLength": 10,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "linux"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0xCE7D5C38D51E41FD",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "ubuntu"
+    },
+    {
+      "direction": "recv",
+      "flow": "tcp_receive",
+      "opcode": "0x01",
+      "opcodeName": "OP_HELLO",
+      "payloadDigest": "sha256:14d110fd136094d8419d1551433bc9009825baf4e1a6a577116295fb1f5faf8a",
+      "payloadLength": 3,
+      "protocol": "ed2k",
+      "recordType": "ed2k-state",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "stateId": "tcp.payload.emit",
+      "stateLabel": "payload_emit",
+      "transport": "tcp",
+      "transportMode": "plaintext"
+    },
+    {
+      "direction": "recv",
+      "flow": "tcp_receive",
+      "opcode": "0x38",
+      "opcodeName": "OP_MESSAGE",
+      "payloadDigest": "sha256:abeff5caaa824c8a904c69ddebcd6e99c68a7fb7d207426a3ba010f43c7c3dff",
+      "payloadLength": 2,
+      "protocol": "ed2k",
+      "recordType": "ed2k-state",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "stateId": "tcp.payload.emit",
+      "stateLabel": "payload_emit",
+      "transport": "tcp",
+      "transportMode": "plaintext"
+    },
+    {
+      "count": 1,
+      "protocol": "ed2k",
+      "recordType": "state-sequence",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "sequence": "tcp.header.partial -> tcp.payload.emit -> tcp.header.complete -> tcp.payload.emit",
+      "transport": "tcp"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x11",
+      "opcodeName": "KADEMLIA2_HELLO_REQ",
+      "payloadDigest": "sha256:4a64a107f0cb32536e5bce6c98c393db21cca7f4ea187ba8c4dca8b51d4ea80a",
+      "protocol": "kad2",
+      "recordType": "udp-packet",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "transport": "udp",
+      "transportMode": "plaintext",
+      "wireLength": 1
+    },
+    {
+      "direction": "send",
+      "opcode": "0x44",
+      "opcodeName": "KADEMLIA2_PUBLISH_SOURCE_REQ",
+      "payloadDigest": "sha256:3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "protocol": "kad2",
+      "recordType": "udp-packet",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "transport": "udp",
+      "transportMode": "receiver_verify_key",
+      "wireLength": 1
+    },
+    {
+      "coverageIds": [
+        "server.connect.plaintext",
+        "server.connect.obfuscated",
+        "server.connect.fallback"
+      ],
+      "fixtureBase64": "cGxhaW46Y29ubmVjdC0+bG9naW58b2JmdXNjYXRlZDpuZWdvdGlhdGUtPmxvZ2lufHByZWZlcnJlZC1mYWlsdXJlLT5wbGFpbi1yZXRyeXxyZXF1aXJlZC1mYWlsdXJlLT5zdG9w",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 102,
+      "payloadDigest": "sha256:3833474af1ac9d40280c32a2efe41fcba1c1363830d63cb38e1ddc3b3e89d9eb",
+      "protocol": "ed2k",
+      "recordId": "stock.server.connect-state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.01.server-connect.v1",
+      "sequence": "plain connect/login; obfuscated negotiate/login; preferred crypt failure/plain retry; required crypt failure/stop",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.login.request"
+      ],
+      "direction": "send",
+      "fixtureBase64": "4xsAAAABAAECAwQFBgcICQoLDA0ODwAAAAA2EgAAAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 32,
+      "opcode": "0x01",
+      "opcodeName": "OP_LOGINREQUEST",
+      "payloadDigest": "sha256:93848ec68b808e04b06ceb59c50b27d9d47b2d95796aba72056aba44977c12d8",
+      "protocol": "ed2k",
+      "recordId": "stock.server.login",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.02.server-login.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.search.keyword",
+        "server.search.advanced",
+        "server.source.tcp-plain",
+        "server.source.tcp-obfuscated",
+        "server.source.udp-v1",
+        "server.source.udp-v2"
+      ],
+      "direction": "send",
+      "fixtureBase64": "4woAAAAWggEFAGxpbnV44xUAAAAZEREREREREREREREREREREf/////jHQAAACMiIiIiIiIiIiIiIiIiIiIiAAAAAAEAAAABAAAA45ozMzMzMzMzMzMzMzMzMzMz45REREREREREREREREREREREAAAAAAEAAAABAAAA",
+      "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
+      "fixtureLength": 123,
+      "opcode": "MULTI",
+      "opcodeName": "SERVER_QUERY_CORPUS",
+      "payloadDigest": "sha256:f531428843945682d14a2fe7f26c451fad119891c99c35888cf4aa09f886e4f3",
+      "protocol": "ed2k",
+      "recordId": "stock.server.query-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.03.server-query.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "server.reply.search",
+        "server.reply.sources",
+        "server.reply.callback"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4wUAAAAzAAAAAOMSAAAAQlVVVVVVVVVVVVVVVVVVVVUA4wcAAAA1fwAAATYS45tmZmZmZmZmZmZmZmZmZmZmAcYS8AI2Eg==",
+      "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
+      "fixtureLength": 70,
+      "opcode": "MULTI",
+      "opcodeName": "SERVER_REPLY_CORPUS",
+      "payloadDigest": "sha256:647987874202f3b2ffcca4ea7d3ebe461d983325570fed0db7860d95682ce0b9",
+      "protocol": "ed2k",
+      "recordId": "stock.server.reply-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-ident"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4xsAAABBEREREREREREREREREREREX8AAAE2EgAAAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 32,
+      "opcode": "0x41",
+      "opcodeName": "OP_SERVERIDENT",
+      "payloadDigest": "sha256:4e55e5988c52e9c84bc6461753bc80f327daf9afd0f3b25b0a91c1a862e811e2",
+      "protocol": "ed2k",
+      "recordId": "stock.server.tcp-ident",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.tcp-status"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4wkAAAA0ewAAAMgBAAA=",
+      "fixtureEncoding": "ed2k-frame",
+      "fixtureLength": 14,
+      "opcode": "0x34",
+      "opcodeName": "OP_SERVERSTATUS",
+      "payloadDigest": "sha256:a94cd1969ebdf0f0c7b2188bf569dcce201ee457d28b2dc9bda5f1734223e0a9",
+      "protocol": "ed2k",
+      "recordId": "stock.server.tcp-status",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-status"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "45d4VjQSewAAAMgBAAA=",
+      "fixtureEncoding": "ed2k-server-udp-datagram",
+      "fixtureLength": 14,
+      "opcode": "0x97",
+      "opcodeName": "OP_GLOBSERVSTATRES",
+      "payloadDigest": "sha256:e90bf8c1b519fdb26555ac6e8aec083248ca5c8b20a9280629de9ab901b28f55",
+      "protocol": "ed2k",
+      "recordId": "stock.server.udp-status",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "server.reply.udp-description"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "46P/8DQSAAAAAA==",
+      "fixtureEncoding": "ed2k-server-udp-datagram",
+      "fixtureLength": 10,
+      "opcode": "0xA3",
+      "opcodeName": "OP_SERVER_DESC_RES",
+      "payloadDigest": "sha256:9fe5ccc0ad211604e73b2aab986595cba343276455d4455f1376a2205e00ec0f",
+      "protocol": "ed2k",
+      "recordId": "stock.server.udp-description",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.04.server-reply.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "peer.framing.e3",
+        "peer.framing.c5",
+        "peer.framing.d4",
+        "peer.framing.fragmented",
+        "peer.framing.coalesced"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4wQAAAABqrvMxQMAAAA43e7UCAAAAEB4nAMAAAAAAQ==",
+      "fixtureEncoding": "concatenated-ed2k-frame-corpus",
+      "fixtureLength": 31,
+      "opcode": "MULTI",
+      "opcodeName": "E3_C5_D4_FRAME_CORPUS",
+      "payloadDigest": "sha256:3eee43eda2779904b2c116c4f0b1b8b14ab53ebc821d2a568bed8cb8c331caf6",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.framing-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.05.peer-framing.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "tags.fixed-vocabulary",
+        "tags.str1-str22",
+        "tags.bsob",
+        "tags.unknown-name",
+        "tags.malformed-bounds"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "AQIDBAUGBwgJCgsREhMUFRYXGBkaGxwdHh8gISIjJCUmfwACeHk=",
+      "fixtureEncoding": "stock-tag-type-and-malformed-tail-corpus",
+      "fixtureLength": 38,
+      "opcode": "NONE",
+      "opcodeName": "TAG_TYPE_CORPUS",
+      "payloadDigest": "sha256:8ce11d11ee0bf808eaf00e17698759d96ede0f1c02c82997cdfcd510352bd17d",
+      "protocol": "ed2k",
+      "recordId": "stock.tags.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.06.tags.v1",
+      "transport": "codec"
+    },
+    {
+      "coverageIds": [
+        "peer.profile.edonkey",
+        "peer.profile.emule-old",
+        "peer.profile.emule-modern",
+        "peer.startup.multipacket",
+        "peer.startup.multipacket-ext",
+        "peer.startup.multipacket-ext2",
+        "peer.startup.large-file",
+        "peer.startup.aich",
+        "peer.startup.metadata-recovery",
+        "peer.startup.crypt",
+        "peer.startup.sx2"
+      ],
+      "direction": "both",
+      "fixtureBase64": "4wEAAAABxQEAAAABxQEAAACSxQEAAACkxQEAAACpxQEAAACxxQEAAACFxQEAAACD",
+      "fixtureEncoding": "concatenated-profile-and-startup-opcode-corpus",
+      "fixtureLength": 48,
+      "opcode": "MULTI",
+      "opcodeName": "PEER_STARTUP_CORPUS",
+      "payloadDigest": "sha256:a08808db822df5cbd6a755e548bfd4b5832948c94dee216db6838753382ea18d",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.startup-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.07.peer-startup.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "peer.boundary.uint32-minus-one",
+        "peer.boundary.uint32",
+        "peer.boundary.uint32-plus-one"
+      ],
+      "direction": "meta",
+      "fixtureBase64": "/v///wAAAAD/////AAAAAAAAAAABAAAA",
+      "fixtureEncoding": "little-endian-u64-corpus",
+      "fixtureLength": 24,
+      "opcode": "NONE",
+      "opcodeName": "UINT32_BOUNDARY_CORPUS",
+      "payloadDigest": "sha256:65b924d9749e0ba966e2fbfd18a7ef7d75ac02d3ba60d6bd66cd16cfe3da90e8",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.boundary-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.08.file-size-boundary.v1",
+      "transport": "codec"
+    },
+    {
+      "coverageIds": [
+        "transfer.block.uncompressed",
+        "transfer.block.compressed",
+        "transfer.block.invalid-zlib",
+        "transfer.block.compression-bomb"
+      ],
+      "direction": "recv",
+      "fixtureBase64": "4xkAAABGAAECAwQFBgcICQoLDA0ODwAAAAABAAAAQcURAAAAQAABAgMEBQYHCAkKCwwNDg8AAAAACAAAAHicAwAAAAABeJz/eAHtwQEBAAAAgA==",
+      "fixtureEncoding": "concatenated-block-and-zlib-corpus",
+      "fixtureLength": 82,
+      "opcode": "MULTI",
+      "opcodeName": "BLOCK_COMPRESSION_CORPUS",
+      "payloadDigest": "sha256:3feae9f5935dc008a67fab060bc7ccb994b51b1c77c748f7b881f9fbb59c448f",
+      "protocol": "ed2k",
+      "recordId": "stock.transfer.block-corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.09.transfer-block.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "sx2.v1",
+        "sx2.v2",
+        "sx2.v3",
+        "sx2.v4",
+        "sx2.crypt-options",
+        "sx2.part-needed-filter"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xRQAAACDAQEBAQEBAQEBAQEBAQEBAQEAAMUUAAAAgwICAgICAgICAgICAgICAgICAQDFFAAAAIMDAwMDAwMDAwMDAwMDAwMDAwIAxRQAAACDBAQEBAQEBAQEBAQEBAQEBAQDAA==",
+      "fixtureEncoding": "concatenated-sx2-v1-v4-corpus",
+      "fixtureLength": 100,
+      "opcode": "0x83",
+      "opcodeName": "OP_REQUESTSOURCES2",
+      "payloadDigest": "sha256:e4acd5dbc4e1a9adbf8fc20a39a5f934e0827549328291de4b416a2ea427ab42",
+      "protocol": "ed2k",
+      "recordId": "stock.sx2.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.10.sx2.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "ident.v1",
+        "ident.v2",
+        "ident.ip-kind.local",
+        "ident.ip-kind.remote",
+        "ident.replay",
+        "ident.invalid-key"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xQYAAACHATQSAADFAwAAAIUBAMUEAAAAhgEAAcUEAAAAhgEAAg==",
+      "fixtureEncoding": "concatenated-secure-ident-corpus",
+      "fixtureLength": 37,
+      "opcode": "MULTI",
+      "opcodeName": "SECURE_IDENT_CORPUS",
+      "payloadDigest": "sha256:775bdf0d1e8f364a6286792f6b4e38ab3808a0f2e7e77a7288a6321bc54086e1",
+      "protocol": "ed2k",
+      "recordId": "stock.ident.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.11.secure-ident.v1",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "lowid.server-callback",
+        "lowid.direct-callback",
+        "lowid.buddy-callback",
+        "lowid.relayed-reask"
+      ],
+      "direction": "both",
+      "fixtureBase64": "4wUAAAAcAQAAAOOcfwAAATYSAQAAAMUUAAAAlTYSAAECAwQFBgcICQoLDA0ODwHFIQAAAJkAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHzYSxSEAAACaAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "fixtureEncoding": "concatenated-lowid-callback-corpus",
+      "fixtureLength": 125,
+      "opcode": "MULTI",
+      "opcodeName": "LOWID_CALLBACK_CORPUS",
+      "payloadDigest": "sha256:41ed731ea1de36604ec96ab00610c1075905a3fac391f9fefc20928e12ebd294",
+      "protocol": "ed2k",
+      "recordId": "stock.lowid.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.12.lowid.v1",
+      "transport": "mixed"
+    },
+    {
+      "coverageIds": [
+        "client-udp.v1",
+        "client-udp.v2",
+        "client-udp.v3",
+        "client-udp.v4",
+        "client-udp.clear",
+        "client-udp.encrypted",
+        "client-udp.queue-full",
+        "client-udp.file-not-found",
+        "client-udp.unsolicited"
+      ],
+      "direction": "both",
+      "fixtureBase64": "xZAAAQIDBAUGBwgJCgsMDQ4PxZEBAMWSxZPFlAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAgABAA==",
+      "fixtureEncoding": "concatenated-client-udp-corpus",
+      "fixtureLength": 64,
+      "opcode": "MULTI",
+      "opcodeName": "CLIENT_UDP_V1_V4_CORPUS",
+      "payloadDigest": "sha256:89468db8e028268f21598216f5949ae11c2b1c3e1370b151d3d7136e8fda812b",
+      "protocol": "client_udp",
+      "recordId": "stock.client-udp.corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.13.client-udp.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "kad.contact.v2",
+        "kad.contact.v3",
+        "kad.contact.v4",
+        "kad.contact.v5",
+        "kad.contact.v6",
+        "kad.contact.v7",
+        "kad.contact.v8",
+        "kad.contact.v9",
+        "kad.contact.v10",
+        "kad.frame.e4",
+        "kad.frame.e5"
+      ],
+      "direction": "both",
+      "fixtureBase64": "5BECAwQFBgcICQrlEQIDBAUGBwgJCg==",
+      "fixtureEncoding": "kad-contact-version-and-marker-corpus",
+      "fixtureLength": 22,
+      "opcode": "0x11",
+      "opcodeName": "KADEMLIA2_HELLO_REQ",
+      "payloadDigest": "sha256:3525a958af88338930449ff0666d8e7a68f37439968c8e566d535a0d6178326c",
+      "protocol": "kad2",
+      "recordId": "stock.kad.contacts-corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.14.kad-contacts.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "kad.crypto.node-id",
+        "kad.crypto.receiver-key",
+        "kad.flow.search",
+        "kad.flow.publish",
+        "kad.flow.firewall",
+        "kad.flow.buddy",
+        "kad.flow.callback"
+      ],
+      "direction": "both",
+      "fixtureBase64": "5DPkNOQ15DvkQ+RE5EXkS+RM5FDkU+RY5FnkYORh5GLkY+RkAhECRAIRAkQCZA==",
+      "fixtureEncoding": "kad-opcode-and-obfuscation-marker-corpus",
+      "fixtureLength": 46,
+      "opcode": "MULTI",
+      "opcodeName": "KAD_FLOW_CORPUS",
+      "payloadDigest": "sha256:367c7f49cb03c5b61135f2c2ae865b88f4077bec7e449e27e897e082bd78e9a8",
+      "protocol": "kad2",
+      "recordId": "stock.kad.flow-corpus",
+      "recordType": "udp-packet",
+      "scenarioId": "stock.15.kad-flows.v1",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "nodes-dat.v0",
+        "nodes-dat.v1",
+        "nodes-dat.v2",
+        "nodes-dat.v3-normal",
+        "nodes-dat.v3-bootstrap",
+        "nodes-dat.exact-size",
+        "nodes-dat.restart"
+      ],
+      "direction": "meta",
+      "fixtureBase64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAgAAAAEAAAAAAAAAAwAAAAAAAAABAAAAAAAAAAMAAAABAAAAAQAAAA==",
+      "fixtureEncoding": "concatenated-nodes-dat-version-header-corpus",
+      "fixtureLength": 88,
+      "opcode": "NONE",
+      "opcodeName": "NODES_DAT_V0_V3_CORPUS",
+      "payloadDigest": "sha256:1bf4c1bcd7ab83665209883edc53dd3aae87c14908e81244d7646d6db1138e2d",
+      "protocol": "kad2",
+      "recordId": "stock.nodes-dat.corpus",
+      "recordType": "wire-vector",
+      "scenarioId": "stock.16.nodes-dat.v1",
+      "transport": "persistence"
+    },
+    {
+      "coverageIds": [
+        "queue.admission",
+        "queue.rank-transition",
+        "upload.slot-promotion",
+        "upload.slot-recycle",
+        "queue.abuse-escalation"
+      ],
+      "fixtureBase64": "d2FpdGluZy0+cmFua2VkLT5ncmFudGVkLT51cGxvYWRpbmctPnJlY3ljbGVkfHJlZnVzZWQtPnNpbGVudHxyYW5rLWZsb29kLT5kaXNjb25uZWN0LT5iYW58b3V0LW9mLXBhcnQtPmNvb2xkb3duLT5xdWFyYW50aW5l",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 123,
+      "payloadDigest": "sha256:f3b80d5993c66c090f7e0505e480c4135ab5af5bcea893c0a376928f78b3319c",
+      "protocol": "ed2k",
+      "recordId": "stock.queue.state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.17.queue-upload.v1",
+      "sequence": "waiting/ranked/granted/uploading/recycled; refused/silent; rank-flood/disconnect/ban; out-of-part/cooldown/quarantine",
+      "transport": "state"
+    }
+  ],
+  "scenarioSource": "stock/community source anchors, native protocol fixtures, and diagnostic evidence normalization",
+  "scenarios": [
+    {
+      "description": "Community-compatible compact eD2K search request vectors.",
+      "protocol": "ed2k",
+      "scenarioId": "ed2k.search.request.v1",
+      "source": "native-protocol-parity"
+    },
+    {
+      "description": "Fragmented eD2K TCP receive-flow packet boundary replay.",
+      "protocol": "ed2k",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "source": "native-protocol-parity"
+    },
+    {
+      "description": "Kad UDP opcode and transport-mode buckets expected from diagnostic oracle captures.",
+      "protocol": "kad2",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "source": "diagnostic-capture"
+    },
+    {
+      "description": "Stock clear/obfuscated server connection and downgrade state machine.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.01.server-connect.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock ED2K server login request frame.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.02.server-login.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock server search and TCP/UDP source request variants.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.03.server-query.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock server search/source/callback replies plus transport-exact TCP and UDP metadata reply shapes.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.04.server-reply.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock E3/C5/D4 fragmented and coalesced peer framing corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.05.peer-framing.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Complete stock tag-type vocabulary and bounded malformed tail corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.06.tags.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "eDonkey/old-modern eMule profile and startup opcode corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.07.peer-startup.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "UINT32_MAX adjacent file-size boundaries.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.08.file-size-boundary.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Uncompressed/compressed block and hostile zlib corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.09.transfer-block.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "SX2 v1-v4 request, crypt-option, and useful-part filtering corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.10.sx2.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Secure-ident v1/v2 IP-kind and adversarial state corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.11.secure-ident.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Server/direct/buddy/relayed LowID callback corpus.",
+      "protocol": "mixed",
+      "scenarioId": "stock.12.lowid.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Client UDP v1-v4 clear/encrypted and reply-correlation corpus.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.13.client-udp.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Kad contact v2-v10 and E4/E5 framing corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.14.kad-contacts.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Kad NodeID/receiver-key crypto and search/publish/firewall/buddy/callback corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.15.kad-flows.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock nodes.dat v0-v3 exact-layout and restart corpus.",
+      "protocol": "kad2",
+      "scenarioId": "stock.16.nodes-dat.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Stock queue/upload transition and anti-abuse state sequence.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.17.queue-upload.v1",
+      "source": "community-stock-source"
+    }
+  ],
+  "schema": "emulebb-build-tests.protocol-parity-catalog",
+  "stockAuthority": {
+    "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
+    "requiredCoverageCount": 100,
+    "sourcePath": "repos/emule-stock",
+    "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
+  }
+}

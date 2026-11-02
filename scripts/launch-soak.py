@@ -9,7 +9,7 @@ bounded Rust diagnostic bundles are captured into the campaign evidence store.
 
 No test/diff logic lives here. Analysis runs separately from this repo
 (``analyze-packet-coverage.py``, ``diag_event_diff``, or the live observer
-``converged-soak-live.py``) over the captured dumps when you ask for it.
+``converged-soak-observer.py``) over the captured dumps when you ask for it.
 
 REST control binds X_LOCAL_IP for split-tunnel or loopback for full-tunnel;
 P2P binds the hide.me tunnel. The Rust
@@ -43,8 +43,9 @@ from emule_test_harness import mfc_profile_import, profile_overlay
 from emule_test_harness import soak_launch, soak_run_layout, soak_storage
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs
-from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root
 from emule_test_harness.rust_client import request_ctrl_c, stop_process_tree
+from emule_test_harness.soak_build_refresh import refresh_diagnostics_build
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
@@ -839,6 +840,19 @@ def main(argv: list[str] | None = None) -> int:
         vpn_topology=args.vpn_topology,
     )
     output_root = get_workspace_output_root()
+    workspace_root = get_required_emule_workspace_root()
+    if not args.rust_regular:
+        log("refreshing rust diagnostics build through emulebb-build")
+        refresh_diagnostics_build(workspace_root, "rust")
+    if not args.no_mfc:
+        log("refreshing mfc diagnostics build through emulebb-build")
+        refresh_diagnostics_build(
+            workspace_root,
+            "mfc",
+            mfc_variant=args.mfc_variant,
+            mfc_arch=args.mfc_arch,
+            mfc_configuration=args.mfc_configuration,
+        )
     stop_file = args.stop_file.resolve() if args.stop_file is not None else None
     if stop_file is not None:
         try:
@@ -923,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
         rust_packet_dump_dir=rust_profile_dir / "packet-dump",
         mfc_log_dir=mfc_log_dir,
         artifact_store=artifact_store,
+        preserve_mfc_profile_outputs=direct_mfc_profile is not None,
     )
     preflight_manifest["daemonOutput"] = daemon_output_manifest(run_paths, daemon_output_policy)
     diagnostic_bundle_policy = storage_policy.stream("diagnostic_bundles")

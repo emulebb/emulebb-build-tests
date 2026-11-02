@@ -19,6 +19,7 @@ SERVER_ENDPOINTS = {
     "rust": "198.51.100.2:4661",
     "mfc": "203.0.113.3:5687",
 }
+KAD_TARGET = "00112233445566778899aabbccddeeff"
 
 
 def _ts(seconds: float) -> datetime:
@@ -31,6 +32,14 @@ def _utc(seconds: float) -> str:
     return _ts(seconds).isoformat()
 
 
+def _kad_wire_target(target_hex: str) -> str:
+    target = bytes.fromhex(target_hex)
+    assert len(target) == 16
+    return b"".join(
+        target[offset : offset + 4][::-1] for offset in range(0, 16, 4)
+    ).hex()
+
+
 def _kad_record(
     *,
     client: str,
@@ -40,7 +49,14 @@ def _kad_record(
     seconds: float,
     opcode: int,
     direction: str,
+    target_hex: str = KAD_TARGET,
 ) -> dict[str, object]:
+    wire_target = _kad_wire_target(target_hex)
+    decoded_hex = (
+        f"e4{opcode:02x}{'00' * 16}{wire_target}0000"
+        if opcode == soak_action_diff.KAD2_SEARCH_RES
+        else f"e4{opcode:02x}{wire_target}0000"
+    )
     return {
         "schema": "diag_event_v2",
         "client": client,
@@ -58,6 +74,7 @@ def _kad_record(
             "direction": direction,
             "protocolMarker": 0xE4,
             "opcode": opcode,
+            "decodedHex": decoded_hex,
         },
     }
 
@@ -71,6 +88,7 @@ def _kad_lifecycle_record(
     seconds: float,
     milestone: str,
     result_count: int,
+    target_hex: str = KAD_TARGET,
 ) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
@@ -90,6 +108,7 @@ def _kad_lifecycle_record(
             "action": "search",
             "searchKind": "keyword",
             "resultCount": result_count,
+            "targetHex": target_hex,
         },
     }
 
@@ -302,8 +321,9 @@ def _kad_records(
     run_id: str,
     *,
     result_total: int = 2,
+    include_response: bool = True,
 ) -> list[dict[str, object]]:
-    return [
+    records = [
         _kad_record(
             client=client,
             process_id=process_id,
@@ -312,35 +332,45 @@ def _kad_records(
             seconds=5,
             opcode=soak_action_diff.KAD2_SEARCH_KEY_REQ,
             direction="send",
-        ),
-        _kad_record(
-            client=client,
-            process_id=process_id,
-            run_id=run_id,
-            sequence=2,
-            seconds=6,
-            opcode=soak_action_diff.KAD2_SEARCH_RES,
-            direction="recv",
-        ),
-        _kad_lifecycle_record(
-            client=client,
-            process_id=process_id,
-            run_id=run_id,
-            sequence=3,
-            seconds=7,
-            milestone="lookup_started",
-            result_count=0,
-        ),
-        _kad_lifecycle_record(
-            client=client,
-            process_id=process_id,
-            run_id=run_id,
-            sequence=4,
-            seconds=8,
-            milestone="lookup_complete",
-            result_count=result_total,
-        ),
+        )
     ]
+    sequence = 2
+    if include_response:
+        records.append(
+            _kad_record(
+                client=client,
+                process_id=process_id,
+                run_id=run_id,
+                sequence=sequence,
+                seconds=6,
+                opcode=soak_action_diff.KAD2_SEARCH_RES,
+                direction="recv",
+            )
+        )
+        sequence += 1
+    records.extend(
+        [
+            _kad_lifecycle_record(
+                client=client,
+                process_id=process_id,
+                run_id=run_id,
+                sequence=sequence,
+                seconds=7,
+                milestone="lookup_started",
+                result_count=0,
+            ),
+            _kad_lifecycle_record(
+                client=client,
+                process_id=process_id,
+                run_id=run_id,
+                sequence=sequence + 1,
+                seconds=8,
+                milestone="lookup_complete",
+                result_count=result_total,
+            ),
+        ]
+    )
+    return records
 
 
 def test_build_report_combines_driver_evidence_and_method_assessment(
@@ -399,6 +429,73 @@ def test_build_report_combines_driver_evidence_and_method_assessment(
     assert (
         observer_action_report.classify_parity_gate_outcome(report)
         == observer_action_report.GATE_SUCCESS
+    )
+
+
+def test_completed_zero_result_kad_search_is_gate_success(tmp_path: Path) -> None:
+    pending = _pending_action()
+    for client in ("rust", "mfc"):
+        pending["clients"][client]["results"]["returnedCount"] = 0
+        pending["clients"][client]["results"]["totalCount"] = 0
+        pending["driverOutcome"]["searches"][client]["results"][
+            "returnedCount"
+        ] = 0
+        pending["driverOutcome"]["searches"][client]["results"]["totalCount"] = 0
+        pending["driverOutcome"]["returnedCounts"][client] = 0
+        pending["driverOutcome"]["resultTotals"][client] = 0
+
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=pending,
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records(
+                "rust", 4101, "rust-run", result_total=0, include_response=False
+            ),
+            mfc_records=_kad_records(
+                "mfc", 4201, "mfc-run", result_total=0, include_response=False
+            ),
+        ),
+        server_endpoints=SERVER_ENDPOINTS,
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert (
+        observer_action_report.classify_parity_gate_outcome(report)
+        == observer_action_report.GATE_SUCCESS
+    )
+
+
+def test_unfinished_search_is_retryable_even_with_complete_diagnostics(
+    tmp_path: Path,
+) -> None:
+    pending = _pending_action()
+    pending["clients"]["rust"]["results"]["completed"] = False
+    pending["clients"]["rust"]["results"]["poll"]["termination"] = "deadline"
+    pending["driverOutcome"]["searches"]["rust"]["results"][
+        "completed"
+    ] = False
+    pending["driverOutcome"]["searches"]["rust"]["results"]["poll"][
+        "termination"
+    ] = "deadline"
+
+    report = observer_action_report.build_observer_action_report(
+        campaign_id="20261026T120000Z",
+        pending_action=pending,
+        evidence=_evidence(
+            tmp_path,
+            rust_records=_kad_records("rust", 4101, "rust-run"),
+            mfc_records=_kad_records("mfc", 4201, "mfc-run"),
+        ),
+        server_endpoints=SERVER_ENDPOINTS,
+    )
+
+    assert report["assessment"]["verdict"] == "coverage-parity"
+    assert report["verdict"] == "evidence-incomplete"
+    assert report["driverOutcome"]["ok"] is True
+    assert (
+        observer_action_report.classify_parity_gate_outcome(report)
+        == observer_action_report.GATE_RETRYABLE
     )
 
 

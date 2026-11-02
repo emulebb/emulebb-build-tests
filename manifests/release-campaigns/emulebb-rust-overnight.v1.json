@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust-overnight",
   "releaseVersion": "0.1.0-beta.1",
   "title": "eMuleBB Rust full overnight parity campaign",
-  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the source-anchored binary/state oracle plus all five Rust proof packages, full protocol-combination matrix, private Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "description": "Long-form Rust headless core proof for stock-compatible local eD2K/Kad behavior. It promotes the canonical stock oracle, focused Rust protocol/runtime modules, Rust/eMuleBB cross-client exchange, and Rust-to-Rust cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
   "proofTier": "overnight-full",
   "phases": [
     {
@@ -59,12 +59,12 @@
               "statusPointer": "/status",
               "matches": {
                 "/checks/stock_protocol_oracle_requirements/allRequirementsPassed": true,
-                "/checks/stock_protocol_oracle_requirements/requiredCoverageCount": 97,
+                "/checks/stock_protocol_oracle_requirements/requiredCoverageCount": 98,
                 "/checks/stock_protocol_oracle_requirements/coverageGroupCount": 15,
                 "/checks/stock_protocol_oracle_requirements/stockRecordCount": 17,
                 "/checks/stock_protocol_oracle_requirements/binaryVectorCount": 15,
                 "/checks/stock_protocol_oracle_requirements/stateVectorCount": 2,
-                "/checks/stock_protocol_oracle_requirements/baselineRevisionPinned": true,
+                "/checks/stock_protocol_oracle_requirements/stockSourceRevisionPinned": true,
                 "/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/rustProofExecutionRequired": true,
@@ -72,34 +72,6 @@
                 "/checks/stock_protocol_oracle_requirements/rustProofPackageCount": 5,
                 "/checks/stock_protocol_oracle_requirements/rustProofExecutionsPassed": true,
                 "/checks/stock_protocol_oracle_requirements/binaryDigestsPassed": true
-              }
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
-          "title": "Rust overnight local eD2K protocol-combination matrix",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/local-ed2k-rust-protocol-combinations/latest/local-ed2k-rust-protocol-combinations-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/checks/protocol_matrix_coverage/caseCount": 4,
-                "/checks/protocol_matrix_coverage/hashOnlyFixtureNames": true,
-                "/checks/protocol_matrix_coverage/multiTransferFixtureNames": true,
-                "/checks/rust_protocol_case_requirements/threeTransfersPerCase": true,
-                "/checks/rust_protocol_case_requirements/hashOnlyMetadataRecoveryPerCase": true,
-                "/checks/rust_protocol_case_requirements/unicodeHashOnlyMetadataPerCase": true,
-                "/checks/rust_protocol_case_requirements/namedTransferHashsetsPerCase": true,
-                "/checks/rust_protocol_case_requirements/obfuscatedSourceUserHashPerCase": true
               }
             }
           ]
@@ -213,7 +185,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server --require-scenario rust-mfc-bidirectional-transfer",
           "evidence": [
             {
               "kind": "json-status",
@@ -222,7 +194,7 @@
               "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/scenarios/0/id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                "/scenarios/0/id": "rust-mfc-bidirectional-transfer",
                 "/scenarios/0/status": "passed",
                 "/scenarios/0/report/status": "passed",
                 "/scenarios/0/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers": true,
@@ -242,7 +214,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server --require-scenario cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server --require-scenario rust-rust-bidirectional-product-integration",
           "evidence": [
             {
               "kind": "json-status",
@@ -251,7 +223,7 @@
               "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/scenarios/0/id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                "/scenarios/0/id": "rust-rust-bidirectional-product-integration",
                 "/scenarios/0/status": "passed",
                 "/scenarios/0/report/status": "passed",
                 "/scenarios/0/report/checks/multiTransferCount": 3,
@@ -260,35 +232,6 @@
                 "/scenarios/0/report/checks/bidirectionalRustTransfers": true,
                 "/scenarios/0/report/checks/sourcePersistenceAfterRestart": true,
                 "/scenarios/0/report/checks/sourceControlOperations": true
-              }
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1",
-          "title": "Rust overnight total eD2K parity audit",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python scripts/rust-ed2k-total-parity-audit.py",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-output",
-              "path": "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json",
-              "statusPointer": "/status",
-              "matches": {
-                "/checks/rust_ed2k_total_parity_audit/requirementCount": 7,
-                "/checks/rust_ed2k_total_parity_audit/allRequirementsPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/failedRequirementCount": 0,
-                "/checks/rust_ed2k_total_parity_audit/stockOraclePassed": true,
-                "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/privateEd2kModulesPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/preflightAndRestPassed": true,
-                "/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed": true
               }
             }
           ]
@@ -333,12 +276,12 @@
           "flowCategory": "live-wire",
           "required": false,
           "blocking": false,
-          "command": "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json --lan-bind-addr ${X_LOCAL_IP} --duration 4h",
+          "command": "python scripts/persisted-soak-control.py run-to-gate --inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 --rest-timeout-seconds 1800 --connect-timeout-seconds 600 --observer-action-success-target-per-method 4 --gate-timeout-seconds 18000",
           "evidence": [
             {
               "kind": "manual",
               "required": false,
-              "description": "Public live-wire proof is owned by the 0.1.0-beta.1 release gate: persisted MFC and Rust profiles from live-wire inputs, REST/control bound to X_LOCAL_IP, P2P bound through hide.me, VPN Guard CIDR validation, and fixed eD2K server 45.82.80.155:5687. The overnight campaign remains the long local protocol matrix."
+              "description": "Public live-wire proof is owned by the 0.1.0-beta.1 release gate: the maintained controller reuses persisted MFC and Rust profiles, binds REST/control to localhost, routes both clients through the hide.me full tunnel with VPN Guard enabled, and requires four completed server-search plus four completed Kad-search diagnostic parity actions. The overnight campaign remains the long local protocol matrix."
             }
           ]
         }
@@ -372,11 +315,9 @@
       "id": "emulebb-rust-overnight-ed2k-protocol-parity",
       "coveredBy": [
         "emulebb.flow.rust.overnight.stock-protocol-oracle.v1",
-        "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
         "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
         "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
-        "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1",
-        "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
+        "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
       ]
     },
     {

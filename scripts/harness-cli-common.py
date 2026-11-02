@@ -31,9 +31,12 @@ except ImportError:  # pragma: no cover - non-Windows import guard
 WORKSPACE_NAME = "workspace"
 DEFAULT_APP_VARIANTS = ("main", "community")
 MAIN_APP_EXE_NAME = "emulebb.exe"
-LEGACY_APP_EXE_NAME = "emule.exe"
 APP_VARIANT_WORKTREE_NAMES = {
     "community": "emulebb-community-baseline",
+}
+APP_VARIANT_KEYS_BY_WORKTREE_NAME = {
+    "emulebb-main": "main",
+    **{worktree_name: variant for variant, worktree_name in APP_VARIANT_WORKTREE_NAMES.items()},
 }
 PROTECTED_VOLUME_DIRECTORY_NAMES = frozenset(("system volume information", "$recycle.bin"))
 # Admin fixture storage roots are runtime-only; reports keep harness artifacts, not mounted volume trees or VHD images.
@@ -583,10 +586,10 @@ def sanitize_report_token(value: str) -> str:
     return token or "run"
 
 
-def get_app_variant_label(app_exe: Path) -> str:
+def get_app_variant_label(app_root: Path) -> str:
     """Returns the app-root label used in report directory names."""
 
-    return app_exe.resolve().parent.parent.parent.parent.name
+    return app_root.resolve().name
 
 
 def resolve_app_root(
@@ -648,8 +651,23 @@ def resolve_app_executable(
     if app_exe:
         resolved_app_exe = Path(app_exe).resolve()
     else:
-        exe_name = MAIN_APP_EXE_NAME if resolved_app_root.name == "emulebb-main" else LEGACY_APP_EXE_NAME
-        resolved_app_exe = (resolved_app_root / "srchybrid" / "x64" / configuration / exe_name).resolve()
+        variant = APP_VARIANT_KEYS_BY_WORKTREE_NAME.get(resolved_app_root.name)
+        if variant is None:
+            raise RuntimeError(
+                "An explicit --app-exe is required for an app root outside the canonical variants: "
+                f"{resolved_app_root}"
+            )
+        resolved_app_exe = (
+            get_workspace_output_root()
+            / "builds"
+            / "app"
+            / variant
+            / "x64"
+            / configuration
+            / "standard"
+            / "bin"
+            / MAIN_APP_EXE_NAME
+        ).resolve()
     if not resolved_app_exe.is_file():
         raise RuntimeError(f"App executable was not found at '{resolved_app_exe}'.")
     return resolved_workspace_root, resolved_app_root, resolved_app_exe
@@ -684,7 +702,7 @@ def prepare_run_paths(
     reject_windows_temp_path(report_root, "report root")
     suite_report_root = report_root / suite_name
     report_stamp = utc_run_id()
-    report_label = f"{report_stamp}-{sanitize_report_token(get_app_variant_label(resolved_app_exe))}-{configuration.lower()}-{os.getpid()}"
+    report_label = f"{report_stamp}-{sanitize_report_token(get_app_variant_label(resolved_app_root))}-{configuration.lower()}-{os.getpid()}"
     source_artifacts_dir = (
         Path(artifacts_dir).resolve()
         if artifacts_dir

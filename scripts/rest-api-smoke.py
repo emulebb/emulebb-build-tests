@@ -335,6 +335,7 @@ NATIVE_JSON_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerJson.cpp"
 QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
+DIAGNOSTIC_BUNDLE_MIN_BYTES = 64 * 1024
 UNSAFE_OPENAPI_OPERATIONS = {
     "bootstrapKad",
     "captureDiagnosticBundle",
@@ -3767,7 +3768,10 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"app_shutdown", "shutdownApp"}:
         return {"confirmShutdown": True}
     if route_name == "captureDiagnosticBundle":
-        return {"confirmCapture": True}
+        return {
+            "confirmCapture": True,
+            "maxBytes": DIAGNOSTIC_BUNDLE_MIN_BYTES,
+        }
     if route_name == "captureDiagnosticDump":
         return {"confirmDump": True}
     if route_name == "triggerDiagnosticCrashTest":

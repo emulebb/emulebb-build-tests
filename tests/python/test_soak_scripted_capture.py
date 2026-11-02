@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -11,6 +12,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from emule_test_harness.scripted_actions import ScriptedAction
+from emule_test_harness.live_wire_inputs import BandwidthPolicy, LiveWireInputs
+from emule_test_harness import soak_build_refresh, soak_storage
+from tests.python.diagnostic_fixtures import current_diagnostic_writer_health
 
 pytestmark = pytest.mark.unit
 
@@ -40,18 +44,612 @@ def test_capture_secident_knob_defaults_on() -> None:
 def test_direct_capture_parser_exposes_connectivity_and_total_download_deadline() -> None:
     module = _load_capture()
 
-    args = module.build_parser().parse_args(
-        ["--client", "rust", "--route", "direct", "--connectivity", "firewalled"]
-    )
+    args = module.build_parser().parse_args(["--client", "rust", "--route", "direct", "--connectivity", "firewalled"])
 
     assert args.route == "direct"
     assert args.connectivity == "firewalled"
     assert args.download_timeout_seconds > 0
+    assert args.fixture_count == 1
+
+
+def test_search_methods_allow_explicit_transfer_only_capture() -> None:
+    module = _load_capture()
+
+    assert module.normalized_search_methods("") == ()
+    assert module.normalized_search_methods("server, kad") == ("server", "kad")
+
+
+def test_diagnostics_build_command_uses_canonical_rust_incremental_build() -> None:
+    command = soak_build_refresh.diagnostics_build_command("rust")
+
+    assert command == [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "clients",
+        "--client",
+        "emulebb-rust",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+        "--build-output-mode",
+        "ErrorsOnly",
+        "--diagnostics",
+    ]
+
+
+def test_diagnostics_build_command_uses_selected_mfc_diagnostics_build() -> None:
+    command = soak_build_refresh.diagnostics_build_command(
+        "mfc",
+        mfc_variant="main",
+        mfc_arch="x64",
+        mfc_configuration="Release",
+    )
+
+    assert command == [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "app",
+        "--variant",
+        "main",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+        "--build-output-mode",
+        "ErrorsOnly",
+        "--diagnostics",
+    ]
+
+
+def test_refresh_diagnostics_build_runs_from_workspace_orchestrator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_capture()
+    build_repo = tmp_path / "repos" / "emulebb-build"
+    build_repo.mkdir(parents=True)
+    calls: list[tuple[list[str], Path, bool]] = []
+
+    def fake_run(command, *, cwd, check):
+        calls.append((list(command), Path(cwd), check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(soak_build_refresh.subprocess, "run", fake_run)
+
+    module.refresh_diagnostics_build(tmp_path, "rust")
+
+    assert calls == [(soak_build_refresh.diagnostics_build_command("rust"), build_repo, False)]
+
+
+def test_refresh_diagnostics_build_aborts_on_build_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_capture()
+    (tmp_path / "repos" / "emulebb-build").mkdir(parents=True)
+    monkeypatch.setattr(
+        soak_build_refresh.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=7),
+    )
+
+    with pytest.raises(RuntimeError, match="rust diagnostics build failed with exit code 7"):
+        module.refresh_diagnostics_build(tmp_path, "rust")
+
+
+def test_full_tunnel_control_uses_loopback_without_local_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    assert module.control_bind_address("vpn") == "127.0.0.1"
+
+
+def test_direct_control_requires_inherited_local_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+    assert module.control_bind_address("direct") == "192.0.2.10"
+
+    monkeypatch.delenv("X_LOCAL_IP")
+    with pytest.raises(RuntimeError, match="must be set for direct-route"):
+        module.control_bind_address("direct")
+
+
+def _live_inputs(
+    tmp_path: Path,
+    *,
+    rust_profile_dir: Path | None,
+    mfc_profile_dir: Path | None,
+    storage: soak_storage.SoakStoragePolicy | None = None,
+) -> LiveWireInputs:
+    return LiveWireInputs(
+        path=tmp_path / "live-wire-inputs.local.json",
+        generic_open_terms=("linux",),
+        document_terms=("manual",),
+        radarr_movie_terms=("movie",),
+        sonarr_series_terms=("series",),
+        video_roots=(),
+        bootstrap_transfer_hashes=("a" * 32,),
+        direct_bootstrap_transfers=(
+            {
+                "hash": "a" * 32,
+                "name": "fixture.iso",
+                "size": 1024,
+                "method": "direct_ed2k",
+            },
+        ),
+        bandwidth=BandwidthPolicy(upload_limit_kibps=8),
+        rust_profile_dir=rust_profile_dir,
+        mfc_profile_dir=mfc_profile_dir,
+        soak_storage=storage,
+    )
+
+
+def _soak_storage_policy() -> soak_storage.SoakStoragePolicy:
+    return soak_storage.SoakStoragePolicy(
+        max_total_bytes=16 * 1024 * 1024 * 1024,
+        max_age_seconds=86_400,
+        minimum_free_bytes=20 * 1024 * 1024 * 1024,
+        bundle_interval_seconds=300,
+        rust_diagnostics=soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=64 * 1024 * 1024,
+            max_segment_seconds=3_600,
+            retained_segments=128,
+            max_total_bytes=8 * 1024 * 1024 * 1024,
+            max_retained_seconds=3_600,
+            minimum_free_bytes=20 * 1024 * 1024 * 1024,
+        ),
+        streams={
+            "diagnostic_bundles": soak_storage.ArtifactStreamPolicy(
+                max_segment_bytes=4 * 1024 * 1024,
+                retained_segments=48,
+            ),
+            "diagnostic_pins": soak_storage.ArtifactStreamPolicy(
+                max_segment_bytes=64 * 1024 * 1024,
+                retained_segments=4,
+            ),
+        },
+    )
+
+
+def test_focused_capture_writer_policy_uses_short_bounded_segments(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+
+    policy = module.focused_capture_writer_policy(inputs)
+
+    assert policy == soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=4 * 1024 * 1024,
+        max_segment_seconds=60,
+        retained_segments=64,
+        max_total_bytes=256 * 1024 * 1024,
+        max_retained_seconds=3_600,
+        minimum_free_bytes=20 * 1024 * 1024 * 1024,
+    )
+
+
+def test_focused_capture_writer_policy_requires_storage_contract(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+    )
+
+    with pytest.raises(RuntimeError, match="requires soak_storage"):
+        module.focused_capture_writer_policy(inputs)
+
+
+def test_focused_mfc_segment_bytes_caps_fixed_ring_to_focused_budget(
+    tmp_path: Path,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+
+    segment_bytes = module.focused_mfc_segment_bytes(inputs)
+
+    assert segment_bytes == 2 * 1024 * 1024
+    assert segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS == 256 * 1024 * 1024
+
+
+def test_focused_mfc_segment_bytes_rejects_budget_below_writer_minimum(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=tmp_path / "rust-profile",
+        mfc_profile_dir=tmp_path / "mfc-profile",
+        storage=_soak_storage_policy(),
+    )
+    monkeypatch.setattr(
+        module,
+        "focused_capture_writer_policy",
+        lambda _inputs: soak_storage.RustDiagnosticWriterPolicy(
+            max_segment_bytes=4 * 1024 * 1024,
+            max_segment_seconds=60,
+            retained_segments=16,
+            max_total_bytes=64 * 1024 * 1024,
+            max_retained_seconds=960,
+            minimum_free_bytes=0,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="minimum diagnostic segment size"):
+        module.focused_mfc_segment_bytes(inputs)
+
+
+def test_require_focused_mfc_writer_ready_matches_fixed_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    segment_bytes = 2 * 1024 * 1024
+    health = current_diagnostic_writer_health(
+        client="mfc",
+        process_id=42,
+        active_file_name="emulebb-mfc-diag-42-run-a-000000.jsonl",
+    )
+    health.update(
+        {
+            "maxSegmentBytes": segment_bytes,
+            "maxSegmentSeconds": module.MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS,
+            "retainedSegments": module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+            "maxTotalBytes": segment_bytes * module.MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+            "maxRetainedSeconds": module.MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS,
+            "minimumFreeBytes": 0,
+        }
+    )
+    requested_base_urls: list[str] = []
+
+    def writer_health(base_url: str, _api_key: str) -> dict[str, object]:
+        requested_base_urls.append(base_url)
+        return health
+
+    monkeypatch.setattr(module.converged_observer, "diagnostic_writer_health", writer_health)
+
+    observed = module.require_focused_mfc_writer_ready(
+        "http://127.0.0.1:4732",
+        "test",
+        42,
+        segment_bytes,
+    )
+
+    assert observed == health
+    assert requested_base_urls == ["http://127.0.0.1:4732/api/v1"]
+
+
+def test_require_focused_mfc_writer_ready_rejects_unbounded_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(
+        client="mfc",
+        process_id=42,
+        active_file_name="emulebb-mfc-diag-42-run-a-000000.jsonl",
+    )
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+
+    with pytest.raises(RuntimeError, match="maxSegmentBytes"):
+        module.require_focused_mfc_writer_ready(
+            "http://127.0.0.1:4732",
+            "test",
+            42,
+            2 * 1024 * 1024,
+        )
+
+
+def _coverage_record(
+    sequence: int,
+    *,
+    segment_id: int,
+    event: str,
+    send_attempt_id: int,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "direction": "send",
+        "role": "reask_request",
+        "sendAttemptId": send_attempt_id,
+    }
+    if event == "send_outcome":
+        body.update({"outcome": "send_succeeded", "deliveryKnown": True})
+    return {
+        "schema": "diag_event_v2",
+        "client": "rust",
+        "processId": 42,
+        "runId": "run-a",
+        "segmentId": segment_id,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": "ed2k_client_udp",
+        "event": event,
+        "severity": "info",
+        "keys": {
+            **({"fileHash": "a" * 32} if event == "packet" else {}),
+            "sendAttemptId": send_attempt_id,
+        },
+        "body": body,
+    }
+
+
+def _write_coverage_segment(
+    directory: Path,
+    records: list[dict[str, object]],
+    *,
+    segment_id: int = 0,
+) -> None:
+    path = directory / f"emulebb-rust-diag-42-run-a-{segment_id:06}.jsonl"
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def test_transfer_coverage_wait_stops_on_exact_client_udp_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    _write_coverage_segment(
+        tmp_path,
+        [
+            _coverage_record(1, segment_id=0, event="packet", send_attempt_id=7),
+            _coverage_record(2, segment_id=0, event="send_outcome", send_attempt_id=7),
+        ],
+    )
+    health = current_diagnostic_writer_health(segment_id=1)
+    health["recordsWritten"] = 2
+    health["rotations"] = 1
+    requested_base_urls: list[str] = []
+
+    def writer_health(base_url: str, _api_key: str) -> dict[str, object]:
+        requested_base_urls.append(base_url)
+        return health
+
+    monkeypatch.setattr(module.converged_observer, "diagnostic_writer_health", writer_health)
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=60.0,
+        poll_seconds=1.0,
+        sleep=lambda _seconds: pytest.fail("completed proof should not sleep"),
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+
+    assert summary["complete"] is True
+    assert summary["contract"] == module.transfer_coverage_evidence.CONTRACT
+    assert summary["finalized"] is False
+    assert checkpoint["source"]["lastClosedSegmentId"] == 0
+    assert evidence["complete"] is True
+    assert evidence_path.is_file()
+    assert requested_base_urls == [
+        "http://127.0.0.1:4731/api/v1",
+        "http://127.0.0.1:4731/api/v1",
+    ]
+
+
+def test_transfer_coverage_operator_stop_is_finalized_after_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(segment_id=0)
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=0,
+        poll_seconds=1.0,
+        sleep=lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+    _write_coverage_segment(
+        tmp_path,
+        [
+            _coverage_record(1, segment_id=0, event="packet", send_attempt_id=9),
+            _coverage_record(2, segment_id=0, event="send_outcome", send_attempt_id=9),
+        ],
+    )
+
+    finalized_summary, finalized = module.finalize_transfer_coverage(
+        client="rust",
+        diagnostics_dir=tmp_path,
+        checkpoint=checkpoint,
+        evidence=evidence,
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        summary=summary,
+        observed_utc="2026-10-31T00:01:00Z",
+    )
+
+    assert summary["stoppedByOperator"] is True
+    assert finalized_summary["stoppedByOperator"] is True
+    assert finalized_summary["finalized"] is True
+    assert finalized_summary["complete"] is True
+    assert finalized["complete"] is True
+
+
+def test_transfer_coverage_route_loss_stops_with_retained_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_capture()
+    health = current_diagnostic_writer_health(segment_id=0)
+    monkeypatch.setattr(
+        module.converged_observer,
+        "diagnostic_writer_health",
+        lambda *_args, **_kwargs: health,
+    )
+    evidence_path = tmp_path / "transfer-coverage-evidence.json"
+    route_checks = iter((None, RuntimeError("private provider detail")))
+
+    def route_guard() -> None:
+        outcome = next(route_checks)
+        if isinstance(outcome, Exception):
+            raise outcome
+
+    summary, checkpoint, evidence = module.observe_transfer_coverage(
+        base_url="http://127.0.0.1:4731",
+        api_key="test",
+        client="rust",
+        process_id=42,
+        diagnostics_dir=tmp_path,
+        fixture_hashes=("a" * 32,),
+        evidence_path=evidence_path,
+        max_bytes=64 * 1024,
+        timeout_seconds=0,
+        poll_seconds=1.0,
+        route_guard=route_guard,
+        sleep=lambda _seconds: None,
+        monotonic=lambda: 1.0,
+        now_utc=lambda: "2026-10-31T00:00:00Z",
+    )
+
+    assert summary["complete"] is False
+    assert summary["routeLost"] is True
+    assert summary["timedOut"] is False
+    assert summary["stoppedByOperator"] is False
+    assert checkpoint["source"]["lastClosedSegmentId"] is None
+    assert evidence["complete"] is False
+    assert evidence_path.is_file()
+    assert "private provider detail" not in json.dumps(summary)
+
+
+@pytest.mark.parametrize("client", ("rust", "mfc"))
+def test_persisted_profile_dir_uses_live_wire_authority(
+    tmp_path: Path,
+    client: str,
+) -> None:
+    module = _load_capture()
+    rust_profile = tmp_path / "rust-profile"
+    mfc_profile = tmp_path / "mfc-profile"
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=rust_profile,
+        mfc_profile_dir=mfc_profile,
+    )
+
+    selected = module.persisted_profile_dir(inputs, client)
+
+    assert selected == (rust_profile if client == "rust" else mfc_profile).resolve()
+
+
+@pytest.mark.parametrize("client", ("rust", "mfc"))
+def test_persisted_profile_dir_fails_closed_without_authority(
+    tmp_path: Path,
+    client: str,
+) -> None:
+    module = _load_capture()
+    inputs = _live_inputs(
+        tmp_path,
+        rust_profile_dir=None,
+        mfc_profile_dir=None,
+    )
+
+    with pytest.raises(RuntimeError, match=rf"Persisted {client} capture requires"):
+        module.persisted_profile_dir(inputs, client)
+
+
+def test_campaign_fixtures_snapshots_approved_direct_transfers(tmp_path: Path) -> None:
+    module = _load_capture()
+    approved = (
+        {"hash": "a" * 32, "name": "first.iso", "size": 1024, "method": "direct_ed2k"},
+        {"hash": "b" * 32, "name": "second.iso", "size": 2048, "method": "direct_ed2k"},
+    )
+
+    fixtures = module.campaign_fixtures(
+        campaign_dir=tmp_path,
+        approved_fixtures=approved,
+        count=1,
+    )
+
+    assert fixtures == [approved[0]]
+    assert json.loads((tmp_path / "fixtures.json").read_text(encoding="utf-8")) == fixtures
+
+
+def test_campaign_fixtures_reuses_exact_snapshot(tmp_path: Path) -> None:
+    module = _load_capture()
+    snapshot = [{"hash": "a" * 32, "name": "first.iso", "size": 1024}]
+    (tmp_path / "fixtures.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    fixtures = module.campaign_fixtures(
+        campaign_dir=tmp_path,
+        approved_fixtures=({"hash": "b" * 32, "name": "changed.iso", "size": 2048},),
+        count=1,
+    )
+
+    assert fixtures == snapshot
+
+
+def test_campaign_fixtures_fails_when_approved_set_is_too_small(tmp_path: Path) -> None:
+    module = _load_capture()
+
+    with pytest.raises(RuntimeError, match="enough approved direct bootstrap transfers"):
+        module.campaign_fixtures(
+            campaign_dir=tmp_path,
+            approved_fixtures=({"hash": "a" * 32, "name": "first.iso", "size": 1024},),
+            count=2,
+        )
 
 
 @pytest.mark.parametrize(
     "value",
-    ("../escape", "nested/case", r"nested\case", r"C:\absolute", ".", "..", "case..escape", "CON"),
+    (
+        "../escape",
+        "nested/case",
+        r"nested\case",
+        r"C:\absolute",
+        ".",
+        "..",
+        "case..escape",
+        "CON",
+    ),
 )
 def test_campaign_leaf_rejects_paths_and_unsafe_windows_names(value: str) -> None:
     module = _load_capture()
@@ -66,7 +664,7 @@ def test_campaign_leaf_returns_sanitized_retained_value() -> None:
     assert module._campaign_leaf("ci-054-native-case") == "ci-054-native-case"
 
 
-def test_cli_maps_unexpected_failures_to_sanitized_harness_exit(
+def test_cli_maps_unexpected_failures_to_actionable_harness_exit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -79,25 +677,21 @@ def test_cli_maps_unexpected_failures_to_sanitized_harness_exit(
 
     assert module._cli_main() == 2
     stderr = capsys.readouterr().err
-    assert stderr == "harness-failure: RuntimeError\n"
-    assert "private fixture path" not in stderr
+    assert stderr == "harness-failure: RuntimeError: private fixture path\n"
 
 
-def test_cli_reports_sanitized_post_run_failure_taxonomy(
+def test_cli_reports_post_run_failure_taxonomy(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_capture()
-    error = module.PostRunSafetyError(
-        [("upnp-absence-audit", RuntimeError("private router detail"))]
-    )
+    error = module.PostRunSafetyError([("upnp-absence-audit", RuntimeError("private router detail"))])
     monkeypatch.setattr(module, "main", lambda: (_ for _ in ()).throw(error))
 
     assert module._cli_main() == 2
     stderr = capsys.readouterr().err
     assert stderr == (
-        "harness-failure: PostRunSafetyError: Post-run safety failures: "
-        "upnp-absence-audit:RuntimeError\n"
+        "harness-failure: PostRunSafetyError: Post-run safety failures: upnp-absence-audit:RuntimeError\n"
     )
     assert "private router detail" not in stderr
 
@@ -120,8 +714,7 @@ def test_native_capture_filter_selects_only_exact_protocol_ports() -> None:
     )
 
     assert capture_filter == (
-        "host 192.0.2.10 and not tcp port 4731 and "
-        "(tcp port 4661 or tcp port 4662 or udp port 1900 or udp port 4665 or udp port 4672)"
+        "host 192.0.2.10 and not tcp port 4731 and (tcp port 4661 or tcp port 4662 or udp port 1900 or udp port 4665 or udp port 4672)"
     )
 
 
@@ -139,9 +732,7 @@ def test_gather_recording_preserves_relative_paths(tmp_path: Path) -> None:
     assert copied == 3
     assert (tmp_path / "recording" / "tcp" / "events.jsonl").read_text(encoding="utf-8") == "tcp\n"
     assert (tmp_path / "recording" / "udp" / "events.jsonl").read_text(encoding="utf-8") == "udp\n"
-    assert (tmp_path / "recording" / "emulebb-mfc-diag-health.json").read_text(
-        encoding="utf-8"
-    ) == "{}"
+    assert (tmp_path / "recording" / "emulebb-mfc-diag-health.json").read_text(encoding="utf-8") == "{}"
 
 
 def test_validate_recorded_diagnostics_rejects_unhealthy_mfc_writer(
@@ -204,22 +795,22 @@ def test_gather_recording_fails_on_destination_collision(tmp_path: Path) -> None
     assert (destination / "events.jsonl").read_text(encoding="utf-8") == "old\n"
 
 
-def test_gather_recording_fails_on_copy_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gather_recording_fails_on_copy_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     source = tmp_path / "source"
     source.mkdir()
     (source / "events.jsonl").write_text("event\n", encoding="utf-8")
-    monkeypatch.setattr(module.shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        module.shutil,
+        "copy2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
 
     with pytest.raises(RuntimeError, match="Could not copy"):
         module.gather_recording(source, tmp_path / "recording", 0.0)
 
 
-def test_gather_recording_fails_on_entry_stat_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gather_recording_fails_on_entry_stat_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     source = tmp_path / "source"
     source.mkdir()
@@ -238,7 +829,9 @@ def test_gather_recording_fails_on_entry_stat_error(
         module.gather_recording(source, tmp_path / "recording", 0.0)
 
 
-def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_path: Path) -> None:
+def test_native_completion_verifies_fixture_without_retaining_name_or_hash(
+    tmp_path: Path,
+) -> None:
     module = _load_capture()
     incoming = tmp_path / "incoming"
     incoming.mkdir()
@@ -286,7 +879,9 @@ def test_native_completion_verifies_fixture_without_retaining_name_or_hash(tmp_p
     ]
 
 
-def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: Path) -> None:
+def test_recording_archive_is_sanitized_and_retains_private_artifacts(
+    tmp_path: Path,
+) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     (report / "rust-profile" / "incoming").mkdir(parents=True)
@@ -300,10 +895,12 @@ def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: 
 
     private_evidence = report / "completion-private.json"
     private_evidence.write_text('{"private": true}', encoding="utf-8")
+    transfer_evidence = report / "transfer-coverage-evidence.json"
+    transfer_evidence.write_text('{"private": true}', encoding="utf-8")
     archive = module.pack_recording(
         report,
         incoming_dir=report / "rust-profile" / "incoming",
-        private_evidence_path=private_evidence,
+        private_evidence_paths=(private_evidence, transfer_evidence),
     )
 
     with zipfile.ZipFile(archive) as zipped:
@@ -322,6 +919,7 @@ def test_recording_archive_is_sanitized_and_retains_private_artifacts(tmp_path: 
     retained = private_artifacts / "downloaded-payloads" / "private.pdf"
     assert retained.read_bytes() == b"payload"
     assert (private_artifacts / "completion-private.json").is_file()
+    assert (private_artifacts / "transfer-coverage-evidence.json").is_file()
     assert (private_artifacts / "native-capture.pcapng").read_bytes() == b"capture"
     assert (private_artifacts / "dumps" / "diag.jsonl").is_file()
     assert not report.exists()
@@ -342,9 +940,7 @@ def test_recording_retains_nested_mfc_incoming_payloads(tmp_path: Path) -> None:
     assert retained.read_bytes() == b"payload"
 
 
-def test_pack_recording_fails_closed_when_private_move_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pack_recording_fails_closed_when_private_move_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     report.mkdir()
@@ -367,15 +963,17 @@ def test_pack_recording_fails_closed_when_private_move_fails(
     assert not report.with_suffix(".zip").exists()
 
 
-def test_pack_recording_reports_source_tree_cleanup_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pack_recording_reports_source_tree_cleanup_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_capture()
     report = tmp_path / "rust-case"
     report.mkdir()
     (report / "results.json").write_text("{}", encoding="utf-8")
     (report / "markers.jsonl").write_text("", encoding="utf-8")
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        module.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
 
     with pytest.raises(RuntimeError, match="source tree could not be removed"):
         module.pack_recording(report)
@@ -392,24 +990,34 @@ def test_shared_inventory_wait_requires_all_files_and_idle_hashing(
     (shared / "nested").mkdir(parents=True)
     (shared / "one.bin").write_bytes(b"1")
     (shared / "nested" / "two.bin").write_bytes(b"2")
-    assert module._approved_shared_file_count(
-        [{"path": str(shared), "recursive": True}]
-    ) == 2
+    assert module._approved_shared_file_count([{"path": str(shared), "recursive": True}]) == 2
 
-    expected = module._approved_shared_file_identities(
-        [{"path": str(shared), "recursive": True}]
-    )
+    expected = module._approved_shared_file_identities([{"path": str(shared), "recursive": True}])
     first_identity, second_identity = sorted(expected)
     replies = iter(
         [
-            {"data": {"runtimeDiagnostics": {"sharedFileCount": 1, "sharedHashingCount": 1}}},
+            {
+                "data": {
+                    "runtimeDiagnostics": {
+                        "sharedFileCount": 1,
+                        "sharedHashingCount": 1,
+                    }
+                }
+            },
             {
                 "data": {
                     "items": [{"hash": first_identity[0], "sizeBytes": first_identity[1]}],
                     "total": 1,
                 }
             },
-            {"data": {"runtimeDiagnostics": {"sharedFileCount": 2, "sharedHashingCount": 0}}},
+            {
+                "data": {
+                    "runtimeDiagnostics": {
+                        "sharedFileCount": 2,
+                        "sharedHashingCount": 0,
+                    }
+                }
+            },
             {
                 "data": {
                     "items": [
@@ -567,9 +1175,7 @@ def test_shared_inventory_wait_bounds_persistently_incoherent_snapshots(
         }
 
     monkeypatch.setattr(module, "_http", request)
-    monkeypatch.setattr(
-        module, "MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS", 2
-    )
+    monkeypatch.setattr(module, "MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS", 2)
 
     with pytest.raises(module.SharedInventoryPollingError):
         module._wait_for_shared_inventory(
@@ -705,7 +1311,11 @@ def test_post_run_audits_attempt_every_invariant_after_failures(
         "compare_forbidden_root_fingerprints",
         lambda *_args: SimpleNamespace(changed_root_indices=()),
     )
-    monkeypatch.setattr(module, "summarize_forbidden_root_metadata_audit", lambda _audit: {"passed": True})
+    monkeypatch.setattr(
+        module,
+        "summarize_forbidden_root_metadata_audit",
+        lambda _audit: {"passed": True},
+    )
     results: dict[str, object] = {}
 
     failures = module._run_post_run_safety_audits(
@@ -810,9 +1420,7 @@ def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     monkeypatch.setattr(
         module,
         "_http",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("private shutdown detail")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private shutdown detail")),
     )
 
     failures = module._teardown_client(
@@ -827,7 +1435,9 @@ def test_rust_teardown_accepts_verified_exit_after_lost_shutdown_response(
     assert failures == []
 
 
-def test_rust_teardown_confirms_shutdown_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rust_teardown_confirms_shutdown_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_capture()
 
     class Process:
@@ -888,9 +1498,7 @@ def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
     monkeypatch.setattr(
         module,
         "_http",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("private shutdown detail")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private shutdown detail")),
     )
     monkeypatch.setattr(module, "stop_process_tree", stopped.append)
 
@@ -904,9 +1512,7 @@ def test_rust_teardown_retains_shutdown_failure_when_forced_stop_is_required(
         sleep=lambda _seconds: None,
     )
 
-    assert [(stage, type(error).__name__) for stage, error in failures] == [
-        ("rust-clean-teardown", "RuntimeError")
-    ]
+    assert [(stage, type(error).__name__) for stage, error in failures] == [("rust-clean-teardown", "RuntimeError")]
     assert stopped == [process]
     assert "private shutdown detail" not in str(module.PostRunSafetyError(failures))
 
@@ -936,6 +1542,4 @@ def test_connectivity_state_normalizes_rust_and_mfc_firewall_signals() -> None:
 
 def test_linux_document_term_selection_accepts_operator_phrase() -> None:
     module = _load_capture()
-    assert module._select_linux_document_term(("public linux documents", "other")) == (
-        "public linux documents"
-    )
+    assert module._select_linux_document_term(("public linux documents", "other")) == ("public linux documents")

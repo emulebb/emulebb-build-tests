@@ -14,6 +14,7 @@ from emule_test_harness.diag_event_diff import (
     full_run_conformance,
     load_trace,
     load_traces,
+    schema_audit,
 )
 from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from emule_test_harness.diag_event_runs import DiagnosticTraceError
@@ -521,6 +522,38 @@ def test_kad_event_multiset_match() -> None:
     assert _family(report, "kad_event")["totals"]["matched"] == 1
 
 
+def test_kad_event_lookup_target_hex_is_comparable() -> None:
+    common = {
+        "milestone": "lookup_started",
+        "action": "search",
+        "searchKind": "keyword",
+        "resultCount": 0,
+    }
+    rust = [
+        _env(
+            "kad_event",
+            "lookup",
+            keys={"searchId": "search-1"},
+            body={**common, "targetHex": "00112233445566778899aabbccddeeff"},
+        )
+    ]
+    mfc = [
+        _env(
+            "kad_event",
+            "lookup",
+            keys={"searchId": "search-1"},
+            body={**common, "targetHex": "ffeeddccbbaa99887766554433221100"},
+        )
+    ]
+
+    report = diff_traces(rust, mfc)
+
+    assert report["ok"] is False
+    family = _family(report, "kad_event")
+    assert family["totals"]["onlyRust"] == 1
+    assert family["totals"]["onlyMfc"] == 1
+
+
 @pytest.mark.parametrize("field", ["outcome", "reason"])
 def test_kad_event_buddy_request_terminal_fields_are_comparable(field) -> None:
     shared = {
@@ -714,6 +747,51 @@ def test_family_conformance_fails_on_missing_oracle_body_key() -> None:
     assert gate["ok"] is False
     fam = next(f for f in gate["families"] if f["family"] == "kad_event")
     assert fam["bodyKeyViolations"][0]["missingOracleKeys"] == ["resultCount"]
+
+
+def test_family_conformance_gates_only_explicitly_required_families() -> None:
+    rust = [
+        _pkt("ed2k_tcp", "send", 0x16, "aabb"),
+        _env("kad_event", "lookup", body={"milestone": "lookup_complete"}),
+    ]
+    mfc = [
+        _pkt("ed2k_tcp", "send", 0x16, "ccdd"),
+        _env(
+            "kad_event",
+            "lookup",
+            body={"milestone": "lookup_complete", "resultCount": 4},
+        ),
+    ]
+
+    gate = family_conformance(
+        rust,
+        mfc,
+        required_families={"ed2k_tcp"},
+    )
+
+    assert gate["ok"] is True
+    assert gate["gatedFamilies"] == ["ed2k_tcp"]
+    families = {family["family"]: family for family in gate["families"]}
+    assert families["ed2k_tcp"]["ok"] is True
+    assert families["kad_event"]["ok"] is False
+
+
+def test_client_udp_routed_reply_note_is_conditional_across_captures() -> None:
+    rust = [_client_udp_packet("send", "c590", outcome="attempted", attempt_id=1)]
+    mfc_packet = _client_udp_packet("recv", "c591")
+    mfc_packet["body"]["note"] = "routed_reply"
+
+    audit = schema_audit(rust, [mfc_packet])
+    assert audit["conformance"]["conformant"] is True
+    assert audit["conformance"]["bodyKeyViolations"] == []
+
+    gate = family_conformance(
+        rust,
+        [mfc_packet],
+        required_families={"ed2k_client_udp"},
+    )
+    assert gate["ok"] is True
+    assert gate["requiredFamiliesOk"] is True
 
 
 def test_family_conformance_ignores_packet_meta_body_key_gap() -> None:

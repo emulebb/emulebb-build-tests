@@ -200,27 +200,24 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} "
         "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
-    )
-    rust_protocol_combinations_command = (
-        "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} "
-        "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
-        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe"
+        "--require-scenario rust-mfc-bidirectional-transfer"
     )
     rust_live_wire_command = (
-        "python scripts/converged-soak-live.py --inputs live-wire-inputs.local.json "
-        "--lan-bind-addr ${X_LOCAL_IP} --duration 4h"
+        "python scripts/persisted-soak-control.py run-to-gate "
+        "--inputs live-wire-inputs.local.json --lan-bind-addr 127.0.0.1 "
+        "--rest-timeout-seconds 1800 --connect-timeout-seconds 600 "
+        "--observer-action-success-target-per-method 4 "
+        "--gate-timeout-seconds 18000"
     )
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
-    assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
-    assert "emulebb.flow.rust.live-wire.hideme.v1" in scenario_ids
-    assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in covered_ids
+    persisted_soak_id = "emulebb.flow.rust.live-wire.persisted-diagnostic-soak.v1"
+    assert persisted_soak_id in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
-    assert "emulebb.flow.rust.live-wire.hideme.v1" in covered_ids
+    assert persisted_soak_id not in covered_ids
     assert sum(
         1
         for phase in campaign["phases"]
@@ -240,18 +237,12 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         for scenario in phase["scenarios"]
     )
     assert any(
-        scenario["command"] == rust_protocol_combinations_command
-        and scenario["required"] is True
-        and scenario["blocking"] is True
-        for phase in campaign["phases"]
-        for scenario in phase["scenarios"]
-    )
-    assert any(
         scenario["command"] == rust_live_wire_command
-        and scenario["required"] is True
-        and scenario["blocking"] is True
+        and scenario["required"] is False
+        and scenario["blocking"] is False
+        and all(evidence["required"] is False for evidence in scenario["evidence"])
         and any("mfc_profile.profile_dir plus rust_profile.profile_dir" in item for item in scenario["localInputs"])
-        and any("45.82.80.155:5687" in item for item in scenario["localInputs"])
+        and any("split tunneling is disabled" in item for item in scenario["localInputs"])
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
     )
@@ -262,21 +253,33 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         if scenario["id"].startswith("emulebb.flow.rust.")
     }
     local_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.search-download.v1"]["evidence"])
-    protocol_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.protocol-combinations.v1"]["evidence"])
     cross_client_description = json.dumps(rust_scenarios["emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"]["evidence"])
     assert "Unicode filenames" in local_description
     assert "hash-only ED2K metadata recovery" in local_description
-    assert "protocol_matrix_coverage" in protocol_description
-    assert "all four cases" in protocol_description
-    assert "Unicode fixture-name, and hash-only fixture-name surfaces" in protocol_description
-    assert "ED2K link name round-trip" in protocol_description
-    assert "three Rust transfers in one protocol session" in protocol_description
-    assert "hash-only ED2K link metadata recovery in every protocol case" in protocol_description
-    assert "source userHash metadata" in protocol_description
-    assert "MD4/AICH hashset metadata for both named transfers" in protocol_description
     assert "Rust-persisted source userHash" in cross_client_description
     assert "Unicode filename" in cross_client_description
     assert "AICH hashset metadata" in cross_client_description
+
+
+def test_persisted_profile_commands_are_never_release_blocking() -> None:
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-rust")
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    persisted_scenarios = [
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if "persisted-soak-control.py" in scenario["command"]
+    ]
+
+    assert persisted_scenarios
+    for scenario in persisted_scenarios:
+        assert scenario["required"] is False
+        assert scenario["blocking"] is False
+        assert scenario["id"] not in covered_ids
 
 
 def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> None:
@@ -300,12 +303,10 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
         for gate in campaign["releaseGates"]
         for scenario_id in gate["coveredBy"]
     }
-    protocol_id = "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"
     stock_oracle_id = "emulebb.flow.rust.overnight.stock-protocol-oracle.v1"
     private_modules_id = "emulebb.flow.rust.overnight.private-ed2k.modules.v1"
     emulebb_cross_id = "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"
     rust_cross_id = "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
-    total_audit_id = "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
     preflight_id = "emulebb.flow.rust.overnight.local-client.pytest.v1"
     rest_contract_id = "emulebb.flow.rust.overnight.rest.contract.v1"
     live_wire_id = "emulebb.flow.rust.overnight.live-wire.release-gate.v1"
@@ -313,16 +314,14 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert covered_ids <= set(scenarios)
     assert preflight_id in covered_ids
     assert rest_contract_id in covered_ids
-    assert protocol_id in covered_ids
     assert stock_oracle_id in covered_ids
     assert private_modules_id in covered_ids
     assert emulebb_cross_id in covered_ids
     assert rust_cross_id in covered_ids
-    assert total_audit_id in covered_ids
     assert live_wire_id in covered_ids
     stock_oracle_evidence = scenarios[stock_oracle_id]["evidence"][0]
     assert stock_oracle_evidence["base"] == "workspace-output"
-    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 97
+    assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/requiredCoverageCount"] == 98
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/sourceAnchorsPassed"] is True
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofSelectorsPassed"] is True
     assert stock_oracle_evidence["matches"]["/checks/stock_protocol_oracle_requirements/rustProofPackageCount"] == 5
@@ -337,15 +336,6 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert rest_contract_evidence["kind"] == "json-status"
     assert rest_contract_evidence["base"] == "workspace-output"
     assert rest_contract_evidence["matches"]["/checks/rust_overnight_pytest_requirements/restContractPytestPassed"] is True
-    assert scenarios[protocol_id]["required"] is True
-    assert scenarios[protocol_id]["blocking"] is True
-    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe" in scenarios[protocol_id]["command"]
-    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/ed2k-server/bin/ed2k-server" in scenarios[protocol_id]["command"]
-    protocol_evidence = scenarios[protocol_id]["evidence"][0]
-    assert protocol_evidence["base"] == "workspace-output"
-    assert protocol_evidence["matches"]["/checks/protocol_matrix_coverage/caseCount"] == 4
-    assert protocol_evidence["matches"]["/checks/rust_protocol_case_requirements/hashOnlyMetadataRecoveryPerCase"] is True
-    assert protocol_evidence["matches"]["/checks/rust_protocol_case_requirements/unicodeHashOnlyMetadataPerCase"] is True
     private_modules_evidence = scenarios[private_modules_id]["evidence"][0]
     assert private_modules_evidence["base"] == "workspace-output"
     assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/caseCount"] == 55
@@ -392,18 +382,6 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert rust_cross_evidence["matches"]["/scenarios/0/report/checks/multiTransferCount"] == 3
     assert rust_cross_evidence["matches"]["/scenarios/0/report/checks/hashOnlyMetadataRecovery"] is True
     assert rust_cross_evidence["matches"]["/scenarios/0/report/checks/bidirectionalRustTransfers"] is True
-    total_audit_evidence = scenarios[total_audit_id]["evidence"][0]
-    assert total_audit_evidence["base"] == "workspace-output"
-    assert total_audit_evidence["path"] == (
-        "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json"
-    )
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 7
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/allRequirementsPassed"] is True
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/failedRequirementCount"] == 0
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/stockOraclePassed"] is True
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed"] is True
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed"] is True
-    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed"] is True
 
 
 def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(tmp_path: Path) -> None:
@@ -413,31 +391,6 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
     manifest_root.mkdir(parents=True)
     for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-
-    protocol_report = output_root / "reports" / "local-ed2k-rust-protocol-combinations" / "latest"
-    protocol_report.mkdir(parents=True)
-    (protocol_report / "local-ed2k-rust-protocol-combinations-result.json").write_text(
-        json.dumps(
-            {
-                "status": "passed",
-                "checks": {
-                    "protocol_matrix_coverage": {
-                        "caseCount": 4,
-                        "hashOnlyFixtureNames": True,
-                        "multiTransferFixtureNames": True,
-                    },
-                    "rust_protocol_case_requirements": {
-                        "threeTransfersPerCase": True,
-                        "hashOnlyMetadataRecoveryPerCase": True,
-                        "unicodeHashOnlyMetadataPerCase": True,
-                        "namedTransferHashsetsPerCase": True,
-                        "obfuscatedSourceUserHashPerCase": True,
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
 
     private_modules_report = output_root / "reports" / "rust-ed2k-private-parity-modules" / "latest"
     private_modules_report.mkdir(parents=True)
@@ -564,12 +517,12 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                 "checks": {
                     "stock_protocol_oracle_requirements": {
                         "allRequirementsPassed": True,
-                        "requiredCoverageCount": 97,
+                        "requiredCoverageCount": 98,
                         "coverageGroupCount": 15,
                         "stockRecordCount": 17,
                         "binaryVectorCount": 15,
                         "stateVectorCount": 2,
-                        "baselineRevisionPinned": True,
+                        "stockSourceRevisionPinned": True,
                         "sourceAnchorsPassed": True,
                         "rustProofSelectorsPassed": True,
                         "rustProofExecutionRequired": True,
@@ -577,31 +530,6 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                         "rustProofPackageCount": 5,
                         "rustProofExecutionsPassed": True,
                         "binaryDigestsPassed": True,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    total_audit_report = output_root / "reports" / "rust-ed2k-total-parity-audit" / "latest"
-    total_audit_report.mkdir(parents=True)
-    (total_audit_report / "rust-ed2k-total-parity-audit-result.json").write_text(
-        json.dumps(
-            {
-                "status": "passed",
-                "checks": {
-                    "rust_ed2k_total_parity_audit": {
-                        "requirementCount": 7,
-                        "allRequirementsPassed": True,
-                        "failedRequirementCount": 0,
-                        "failedRequirementIds": [],
-                        "stockOraclePassed": True,
-                        "protocolVariantsPassed": True,
-                        "multiUnicodeMetadataPassed": True,
-                        "privateEd2kModulesPassed": True,
-                        "preflightAndRestPassed": True,
-                        "crossClientMatrixPassed": True,
                     }
                 },
             }
@@ -619,7 +547,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                     "status": "passed",
                     "scenarios": [
                         {
-                        "id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                        "id": "rust-mfc-bidirectional-transfer",
                         "status": "passed",
                         "report": {
                             "status": "passed",
@@ -646,7 +574,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                     "status": "passed",
                     "scenarios": [
                         {
-                        "id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                        "id": "rust-rust-bidirectional-product-integration",
                         "status": "passed",
                         "report": {
                             "status": "passed",
@@ -676,11 +604,9 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
 
     statuses = {scenario["id"]: scenario["status"] for scenario in report["scenarios"]}
     assert statuses["emulebb.flow.rust.overnight.stock-protocol-oracle.v1"] == "passed"
-    assert statuses["emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.private-ed2k.modules.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"] == "passed"
     assert statuses["emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"] == "passed"
-    assert statuses["emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"] == "passed"
 
 
 def test_campaign_validation_rejects_missing_proof_tier() -> None:

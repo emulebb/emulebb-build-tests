@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_mfc_oracle_client  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -39,7 +39,7 @@ rest_smoke = dtt.rest_smoke
 SUITE_NAME = "local-kad-mixed-client-swarm"
 API_KEY = "local-kad-mixed-client-swarm-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
-CLIENT02 = CLIENT_IDENTITIES["harness"]
+CLIENT02 = CLIENT_IDENTITIES["mfc_oracle"]
 DEFAULT_MIN_CONTACTS_PER_EMULE_CLIENT = 1
 DEFAULT_BOOTSTRAP_THROTTLE_SECONDS = 11.0
 
@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
-    parser.add_argument("--harness-exe")
+    parser.add_argument("--mfc-oracle-exe")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=300.0)
@@ -82,7 +82,7 @@ def build_participant_specs(ports: list[tuple[int, int, int]]) -> dict[str, Any]
     if len(ports) != 2:
         raise ValueError("mixed Kad swarm requires exactly two REST-capable eMule-family clients.")
     emulebb_rest, emulebb_tcp, emulebb_udp = ports[0]
-    harness_rest, harness_tcp, harness_udp = ports[1]
+    mfc_oracle_rest, mfc_oracle_tcp, mfc_oracle_udp = ports[1]
     return {
         "emulebb": local_kad.KadClientSpec(
             index=1,
@@ -92,13 +92,13 @@ def build_participant_specs(ports: list[tuple[int, int, int]]) -> dict[str, Any]
             udp_port=emulebb_udp,
             rest_port=emulebb_rest,
         ),
-        "harness": local_kad.KadClientSpec(
+        "mfc_oracle": local_kad.KadClientSpec(
             index=2,
             profile_id=CLIENT02.profile_id,
             nick=CLIENT02.nick,
-            tcp_port=harness_tcp,
-            udp_port=harness_udp,
-            rest_port=harness_rest,
+            tcp_port=mfc_oracle_tcp,
+            udp_port=mfc_oracle_udp,
+            rest_port=mfc_oracle_rest,
         ),
     }
 
@@ -107,10 +107,10 @@ def explicit_rest_bootstrap_plan(specs: dict[str, Any]) -> list[tuple[str, Any, 
     """Returns every targeted REST bootstrap path available from eMuleBB."""
 
     emulebb = specs["emulebb"]
-    harness = specs["harness"]
+    mfc_oracle = specs["mfc_oracle"]
     return [
-        ("emulebb_to_harness", emulebb, "harness", harness),
-        ("harness_to_emulebb", harness, "emulebb", emulebb),
+        ("emulebb_to_mfc_oracle", emulebb, "mfc_oracle", mfc_oracle),
+        ("mfc_oracle_to_emulebb", mfc_oracle, "emulebb", emulebb),
     ]
 
 
@@ -120,10 +120,10 @@ def preseed_autoconnect_paths(specs: dict[str, Any]) -> list[dict[str, object]]:
     return []
 
 
-def resolve_required_harness(paths, args: argparse.Namespace):
+def resolve_required_mfc_oracle(paths, args: argparse.Namespace):
     """Resolves the MFC peer executable or raises an actionable error."""
 
-    availability = resolve_harness_client(paths.workspace_root, args.configuration, args.harness_exe)
+    availability = resolve_mfc_oracle_client(paths.workspace_root, args.configuration, args.mfc_oracle_exe)
     if not availability.available or availability.executable is None:
         raise RuntimeError(f"MFC peer is unavailable for mixed Kad E2E: {availability.reason}")
     return availability
@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         current_phase = "resolve_clients"
-        harness_client = resolve_required_harness(paths, args)
+        mfc_oracle_client = resolve_required_mfc_oracle(paths, args)
 
         current_phase = "allocate_ports"
         emule_ports = local_kad.choose_local_kad_ports(2, args.lan_bind_addr)
@@ -195,14 +195,14 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
-        all_specs = [specs["emulebb"], specs["harness"]]
+        all_specs = [specs["emulebb"], specs["mfc_oracle"]]
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
             "lan_bind_addr": args.lan_bind_addr,
             "participants": {key: asdict(value) for key, value in specs.items()},
             "client_inventory": {
-                "harness": harness_client.as_report(),
+                "mfcOracle": mfc_oracle_client.as_report(),
             },
         }
 
@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                 [],
                 CLIENT01.profile_id,
             ),
-            "harness": live_common.prepare_scenario_profile(
+            "mfc_oracle": live_common.prepare_scenario_profile(
                 profile_seed_dir,
                 paths.source_artifacts_dir,
                 [],
@@ -224,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         for key, profile in emule_profiles.items():
             spec = specs[key]
-            app_exe = paths.app_exe if key == "emulebb" else harness_client.executable
+            app_exe = paths.app_exe if key == "emulebb" else mfc_oracle_client.executable
             configured = local_kad.configure_kad_client_profile(
                 config_dir=Path(profile["config_dir"]),
                 app_exe=app_exe,
@@ -258,8 +258,8 @@ def main(argv: list[str] | None = None) -> int:
             minimized_to_tray=True,
         )
         apps[CLIENT02.profile_id] = live_common.launch_app(
-            harness_client.executable,
-            Path(emule_profiles["harness"]["profile_base"]),
+            mfc_oracle_client.executable,
+            Path(emule_profiles["mfc_oracle"]["profile_base"]),
             minimized_to_tray=True,
         )
         report["checks"][f"{CLIENT01.profile_id}_rest_ready"] = rest_smoke.compact_http_result(
@@ -271,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"][f"{CLIENT02.profile_id}_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(
-                local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+                local_kad.base_url(args.lan_bind_addr, specs["mfc_oracle"]),
                 args.api_key,
                 args.rest_ready_timeout_seconds,
             )
@@ -288,11 +288,11 @@ def main(argv: list[str] | None = None) -> int:
             args.kad_running_timeout_seconds,
         )
         report["checks"][f"{CLIENT02.profile_id}_kad_start"] = local_kad.start_kad(
-            local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+            local_kad.base_url(args.lan_bind_addr, specs["mfc_oracle"]),
             args.api_key,
         )
         report["checks"][f"{CLIENT02.profile_id}_kad_running"] = rest_smoke.wait_for_kad_running(
-            local_kad.base_url(args.lan_bind_addr, specs["harness"]),
+            local_kad.base_url(args.lan_bind_addr, specs["mfc_oracle"]),
             args.api_key,
             args.kad_running_timeout_seconds,
         )
@@ -326,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
             "mfc_peer_policy": "Both MFC eMule-family clients expose REST and are explicitly bootstrapped through the API.",
         }
         report["checks"]["emule_family_swarm_ready"] = local_kad.wait_for_local_swarm(
-            specs=[specs["emulebb"], specs["harness"]],
+            specs=[specs["emulebb"], specs["mfc_oracle"]],
             lan_bind_addr=args.lan_bind_addr,
             api_key=args.api_key,
             min_contacts_per_client=args.min_contacts_per_emule_client,
@@ -338,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
                 local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["emulebb"]), args.api_key)
             ),
             CLIENT02.profile_id: local_kad.compact_local_kad_status(
-                local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["harness"]), args.api_key)
+                local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["mfc_oracle"]), args.api_key)
             ),
         }
         report["status"] = "passed"

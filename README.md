@@ -150,17 +150,18 @@ Script inventory:
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
-| `scripts\validate-protocol-goldens.py` | protocol parity guard | maintained | validates compact Kad/eD2K oracle goldens and redaction rules |
-| `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
+| `scripts\validate-protocol-catalog.py` | protocol parity guard | maintained | validates the single eD2K/Kad coverage, authority, and evidence catalog |
+| `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes UDP/eD2K diagnostic JSONL into candidate evidence |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
 | `scripts\stock-protocol-oracle-proof.py` | stock protocol oracle gate | maintained | validates complete binary/state coverage and pinned stock-source anchors; the overnight form also executes all five Rust packages containing cited proof selectors |
+| `scripts\local-ed2k-server-state-campaign.py` | upstream server dependency gate | maintained | proves stock LowID login, publish, hash/keyword search, plain/obfuscated source replies, and withdrawal with causal wire transcripts; infrastructure-only, not Rust parity evidence |
 | `scripts\check-rust-openapi-routes.py` | Rust REST contract guard | maintained | compares emulebb-rust route, query, body, Settings section-resource metadata, and section-resource response shapes against the Rust OpenAPI artifact |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
 | `scripts\native-windows-parity-campaign.py` | native Rust/MFC parity runner | maintained | fresh builds, protocol/state oracle stages, then sequential direct UPnP and forced-firewalled diagnostics captures |
 | `scripts\soak-scripted-capture.py` | capture-then-diff recorder | maintained | VPN solo capture by default; the policy-bounded `--route direct` mode adds isolated profiles, PCAPNG, path audits, exact completion verification, and owned firewall rules |
 | `scripts\soak-offline-diff.py` | capture-then-diff adjudicator | maintained | correlates opaque actions and emits parity, divergence, harness-failure, or external-inconclusive verdicts |
 | `scripts\persisted-soak-control.py` | persisted full-tunnel diagnostics controller | maintained | starts, observes, watches, reports, and gracefully stops detached Rust-plus-MFC diagnostics against operator-selected persisted profiles |
-| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, and Rust cross-client transfers; records optional eMuleAI readiness and the explicit aMule EC-adapter gap |
+| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs deterministic eMuleBB, fixed stock Community 0.72a, frozen aMule 3.0.1, and Rust cross-client transfers; records optional eMuleAI readiness |
 | `scripts\discover-rust-consumer-pdf.py` | private Rust consumer candidate discovery | maintained | runs one filtered `linux` server search against an existing loopback daemon and writes an ignored exact PDF-under-5-MiB trigger allowlist without printing its identity |
 | `scripts\rust-consumer-live.py` | packaged Rust WebUI consumer acceptance | maintained | drives a fresh hosted Windows ZIP through required UPnP TCP/UDP mappings, public server/Kad imports, independent disconnect/reconnect, a rendered-UI synthetic shared-tree reload with eD2K offer and acknowledged Kad keyword/source publishing, safe PDF-only searches, received bytes from a sourced PDF below 5 MiB, visible Stop and confirmed Delete actions, restart persistence, and pass-clean/fail-retain disposal |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
@@ -174,16 +175,16 @@ External parity references in the multi-client matrix:
 
 - `cl-stock-emule-004` resolves the fixed `app\emulebb-community-baseline`
   worktree and runs through the deterministic two-client transfer adapter
-- `cl-amule-007` resolves the official `repos\amule` source revision and the
+- `cl-amule-007` resolves only the frozen `repos\amule-stable` 3.0.1 source
+  revision and the
   staged `tools\amule\bin\amuled.exe`/`amulecmd.exe` runtime under
   `EMULEBB_WORKSPACE_OUTPUT_ROOT`
-- aMule discovery is reported with its exact Git revision, but its deterministic
-  scenario remains blocked until a native External Connections adapter exists;
-  requiring `cl-emulebb-001-downloads-from-cl-amule-007` therefore fails rather
-  than silently claiming parity
+- aMule discovery and deterministic transfer evidence report the exact frozen
+  source revision; moving `repos\amule` HEAD is analysis-only and cannot be
+  selected by this runtime path
 - `--stock-emule-exe`, `--amule-daemon-exe`, and `--amule-control-exe`
-  override only runtime discovery; `--amule-exe` remains a compatibility alias,
-  and none of these options alter source provenance or adapter status
+  override only runtime discovery; none alter source provenance or adapter
+  status
 | `scripts\rust-shared-library-io.py` | operator-facing Rust I/O characterization | maintained | owned 100k-file SSD fixture with long paths, live watcher lifecycle, restart/no-change proof, and offline 1% mutation |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
@@ -200,11 +201,10 @@ External parity references in the multi-client matrix:
 Workspace quick reference:
 
 - default canonical workspace: `EMULEBB_WORKSPACE_ROOT\workspaces\workspace`
-- canonical target app paths are `app\emulebb-main`, `app\emulebb-community-baseline`, and `app\emulebb-community-tracing-harness`
+- canonical target app paths are `app\emulebb-main` and `app\emulebb-community-baseline`
 - workspace orchestration commands use variant keys, not folder names:
   `main` maps to `app\emulebb-main`, `community` maps to
-  `app\emulebb-community-baseline`, and `tracing-harness` maps to
-  `app\emulebb-community-tracing-harness`
+  `app\emulebb-community-baseline`
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
@@ -229,9 +229,8 @@ Harness output roots:
 
 The default seam-enabled baseline for 0.72a comparisons is materialized as
 `app\emulebb-community-baseline`. It is test-only and should stay
-behavior-preserving during normal app execution. The tracing-harness workspace
-is reserved for explicit variant-client parity work and is not the default
-regression baseline.
+behavior-preserving during normal app execution. The MFC diagnostics oracle is
+the current `app\emulebb-main` build; there is no separate tracing worktree.
 
 Standalone probe mode:
 
@@ -277,6 +276,7 @@ Persisted full-tunnel diagnostics soak:
 - configure the ignored `live-wire-inputs.local.json` with the existing MFC profile and the operator-owned persisted Rust profile; the Rust profile is imported transactionally only when empty and otherwise must already be valid
 - configure the ignored `vpn-guard-live.local.json` for `hide.me` and the required public CIDRs; the controller performs a read-only preflight and starts nothing unless hide.me is active, split tunneling is off, representative public routes use hide.me, loopback control is valid, and both diagnostics binaries exist
 - run `python scripts\persisted-soak-control.py start --observer-drive-actions --observer-action-success-target-per-method 4` for a detached, until-stopped dual-client diagnostics session; it delegates client lifecycle exclusively to `launch-soak.py`, preserves the profile import/reuse contract, starts the attach-only bounded observer, and starts a bounded rotating health watcher
+- run `python scripts\persisted-soak-control.py run-to-gate --observer-action-success-target-per-method 4` for the blocking release form; it starts the same maintained session, requires the owned launcher, observer, and watcher to remain alive while waiting for the durable gate, and always stops and finalizes diagnostics on green, divergence, timeout, failure, or operator interruption
 - the observer attaches to the launcher's existing campaign, records complete diagnostic-writer health in bounded checkpoints and cumulative state, and never cleans, launches, or stops either client; `--no-observer` disables it, and an enabled observer requires the watcher
 - action driving derives stable campaign-scoped ASCII and NFC Unicode search terms, exercises only eD2K server and Kad search, counts only complete terminal parity evidence, retries public misses, connectivity skips, and incomplete evidence without consuming the success target, and continues alternating both methods after the gate becomes green or failed
 - run `python scripts\persisted-soak-control.py gate-status`; it emits the current durable parity gate and exits successfully only after both eD2K server and Kad reach their configured successful-cycle targets with no confirmed divergence
@@ -439,7 +439,7 @@ Aggregate live E2E lane:
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
   local dump/crash smoke, and auto-browse coverage
 - `--profile multi-client-p2p` runs the deterministic eD2K/Kad matrix for
-  eMuleBB MFC, Rust, fixed stock, and official aMule readiness; generic REST and
+  eMuleBB MFC, Rust, fixed stock, and frozen aMule 3.0.1; generic REST and
   qBittorrent-compatible controller coverage remains in the REST API suites
 - `--profile release-expanded-quick`, `--profile stabilization-stress-quick`,
   and `--profile cpu-heavy-quick` are the first-pass failure triage gates; they

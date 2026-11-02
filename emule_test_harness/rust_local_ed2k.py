@@ -10,7 +10,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import rust_client
+from . import ed2k_wire, rust_client
+
+
+class ServerSearchFailure(RuntimeError):
+    """Carries the terminal REST snapshot for a failed deterministic search."""
+
+    def __init__(self, message: str, evidence: dict[str, object]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 def request_json(
@@ -113,6 +121,299 @@ def wait_for_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float)
         interval_seconds=0.5,
         description="emulebb-rust ED2K connected",
     )
+
+
+def wait_for_server_list_metadata(
+    base_url: str,
+    api_key: str,
+    *,
+    current_server_address: str,
+    current_server_port: int,
+    metadata_server_address: str,
+    metadata_server_port: int,
+    expected_name: str,
+    expected_description: str,
+    expected_users: int | None = None,
+    expected_files: int | None = None,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for one server-list entity while independently proving the active server."""
+
+    last_status: dict[str, object] = {}
+
+    def probe() -> dict[str, object] | None:
+        status = request_json(base_url, "GET", "/api/v1/status", api_key)
+        nested = status.get("servers")
+        connection_status = nested if isinstance(nested, dict) else status
+        server_entity = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/servers/{metadata_server_address}:{metadata_server_port}",
+            api_key,
+        )
+        last_status.clear()
+        last_status.update(
+            {
+                "connectionStatus": connection_status,
+                "serverEntity": server_entity,
+            }
+        )
+        current = (
+            connection_status.get("currentServer")
+            if isinstance(connection_status.get("currentServer"), dict)
+            else {}
+        )
+        users = server_entity.get("users")
+        files = server_entity.get("files")
+        counters_valid = all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (users, files)
+        )
+        counters_match = bool(
+            counters_valid
+            and (expected_users is None or users == expected_users)
+            and (expected_files is None or files == expected_files)
+        )
+        if (
+            connection_status.get("connected") is True
+            and current.get("current") is True
+            and str(current.get("address") or "").casefold()
+            == current_server_address.casefold()
+            and current.get("port") == current_server_port
+            and str(server_entity.get("address") or "").casefold()
+            == metadata_server_address.casefold()
+            and server_entity.get("port") == metadata_server_port
+            and server_entity.get("name") == expected_name
+            and server_entity.get("description") == expected_description
+            and counters_match
+        ):
+            return {
+                "connectionStatus": connection_status,
+                "serverEntity": server_entity,
+            }
+        return None
+
+    try:
+        return wait_for(
+            probe,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=0.25,
+            description="applied ED2K server-list metadata",
+        )
+    except RuntimeError as exc:
+        detail = json.dumps(last_status, sort_keys=True, separators=(",", ":"))
+        raise RuntimeError(f"{exc} Last normalized server state: {detail}") from exc
+
+
+def wait_for_server_search_result(
+    base_url: str,
+    api_key: str,
+    *,
+    query: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until a fresh Rust server search returns the exact file hash."""
+
+    observations: list[dict[str, object]] = []
+    normalized_hash = transfer_hash.lower()
+
+    def probe() -> dict[str, object] | None:
+        created = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            api_key,
+            {"query": query, "method": "server", "type": ""},
+        )
+        search_id = str(created.get("id") or "")
+        if not search_id:
+            return None
+        search = created
+        result_count = 0
+        deadline = time.time() + 35.0
+        while True:
+            search = request_json(
+                base_url,
+                "GET",
+                f"/api/v1/searches/{search_id}?limit=200&offset=0",
+                api_key,
+            )
+            items = search.get("items")
+            result_count = len(items) if isinstance(items, list) else 0
+            if isinstance(items, list):
+                for result in items:
+                    if (
+                        isinstance(result, dict)
+                        and str(result.get("hash") or "").lower() == normalized_hash
+                    ):
+                        observations.append(
+                            {
+                                "result_count": result_count,
+                                "observed_at": round(time.time(), 3),
+                            }
+                        )
+                        return {
+                            "search": search,
+                            "result": result,
+                            "observations": observations[-20:],
+                        }
+            status = str(search.get("status") or "")
+            if status in {"complete", "completed", "error"} or time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        observations.append(
+            {
+                "result_count": result_count,
+                "observed_at": round(time.time(), 3),
+            }
+        )
+        return None
+
+    return wait_for(
+        probe,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=1.0,
+        description=f"emulebb-rust server search result {normalized_hash}",
+    )
+
+
+def run_single_server_search(
+    base_url: str,
+    api_key: str,
+    *,
+    query: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
+    expected_hash: str,
+    expected_name: str,
+    expected_size: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs exactly one server search and requires one exact result row."""
+
+    search_request: dict[str, object] = {
+        "query": query,
+        "method": "server",
+        "type": "",
+    }
+    if criteria.min_size_bytes is not None:
+        search_request["minSizeBytes"] = criteria.min_size_bytes
+    if criteria.max_size_bytes is not None:
+        search_request["maxSizeBytes"] = criteria.max_size_bytes
+    try:
+        created = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            api_key,
+            search_request,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the failed REST stimulus
+        raise ServerSearchFailure(
+            f"Deterministic server search creation failed: {exc}",
+            {
+                "request": search_request,
+                "searchId": None,
+                "created": {},
+                "search": {},
+                "result": None,
+                "observations": [],
+            },
+        ) from exc
+    search_id = str(created.get("id") or "")
+    if not search_id:
+        raise ServerSearchFailure(
+            "Deterministic server search creation returned no search ID.",
+            {
+                "request": search_request,
+                "searchId": None,
+                "created": created,
+                "search": {},
+                "result": None,
+                "observations": [],
+            },
+        )
+    normalized_hash = expected_hash.casefold()
+    deadline = time.time() + timeout_seconds
+    observations: list[dict[str, object]] = []
+
+    def failure(
+        message: str,
+        search: dict[str, object],
+        matches: list[dict[str, object]],
+    ) -> ServerSearchFailure:
+        return ServerSearchFailure(
+            message,
+            {
+                "request": search_request,
+                "searchId": search_id,
+                "created": created,
+                "search": search,
+                "result": matches[0] if len(matches) == 1 else None,
+                "observations": observations[-20:],
+            },
+        )
+
+    while True:
+        try:
+            search = request_json(
+                base_url,
+                "GET",
+                f"/api/v1/searches/{search_id}?limit=200&offset=0",
+                api_key,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve the created search identity
+            raise failure(
+                f"Deterministic server search result request failed: {exc}",
+                {},
+                [],
+            ) from exc
+        items = search.get("items")
+        rows = items if isinstance(items, list) else []
+        observations.append(
+            {
+                "status": str(search.get("status") or ""),
+                "resultCount": len(rows),
+                "observedAt": round(time.time(), 3),
+            }
+        )
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("hash") or "").casefold() == normalized_hash
+            and row.get("displayName", row.get("name")) == expected_name
+            and row.get("sizeBytes", row.get("size")) == expected_size
+        ]
+        if len(matches) > 1:
+            raise failure(
+                "Deterministic server search returned duplicate exact result rows.",
+                search,
+                matches,
+            )
+        status = str(search.get("status") or "").casefold()
+        if len(matches) == 1 and status in {"complete", "completed"}:
+            return {
+                "request": search_request,
+                "searchId": search_id,
+                "created": created,
+                "search": search,
+                "result": matches[0],
+                "observations": observations[-20:],
+            }
+        if status in {"complete", "completed", "error"}:
+            raise failure(
+                "Deterministic server search completed without the exact published file.",
+                search,
+                matches,
+            )
+        if time.time() >= deadline:
+            raise failure(
+                "Deterministic server search timed out before an exact result.",
+                search,
+                matches,
+            )
+        time.sleep(0.25)
 
 
 def file_sha256(path: Path) -> str:

@@ -66,8 +66,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
 WINDOWS_DIRECTORY_PATH_LIMIT = 248
 WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
-MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMuleBB", "eMule harness v")
-MAIN_WINDOW_TITLE_MARKERS = (" eMule v", " eMuleBB", " eMule harness v")
+MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMuleBB")
+MAIN_WINDOW_TITLE_MARKERS = (" eMule v", " eMuleBB")
 NON_MAIN_WINDOW_TITLE_PREFIXES = ("Starting eMule", "Shutting down eMule")
 STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID = startup_diagnostics.STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID
 STARTUP_DIAGNOSTICS_COMPLETE_PHASE_NAME = startup_diagnostics.STARTUP_DIAGNOSTICS_COMPLETE_PHASE_NAME

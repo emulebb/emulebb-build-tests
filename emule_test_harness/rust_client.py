@@ -77,6 +77,7 @@ def write_rust_profile(
     obfuscation_enabled: bool = True,
     connect_timeout_secs: int = 10,
     reconnect_interval_secs: int = 60,
+    add_servers_from_server: bool | None = None,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
     enable_udp_reask: bool = False,
@@ -182,6 +183,8 @@ def write_rust_profile(
                 "publishEmuleRustIdentity": publish_emule_rust_identity,
             }
         )
+    if add_servers_from_server is not None:
+        ed2k_settings["addServersFromServer"] = add_servers_from_server
     # Optional upload-queue policy override. activeSlots=0 forces every
     # requester into the waiting queue (used to make a peer UDP-reask us).
     if upload_active_slots is not None:
@@ -254,14 +257,25 @@ def start_rust_client_append(repo: Path, profile_dir: Path, output_path: Path) -
     return start_rust_client_with_output(repo, profile_dir, output_handle)
 
 
-def start_rust_client_executable(executable: Path, profile_dir: Path, output_path: Path) -> subprocess.Popen[str]:
+def start_rust_client_executable(
+    executable: Path,
+    profile_dir: Path,
+    output_path: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
     """Starts a staged `emulebb-rust` executable with a generated harness profile."""
 
     if not executable.is_file():
         raise RuntimeError(f"eMuleBB Rust executable was not found at '{executable}'.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
-    return start_rust_client_executable_with_output(executable, profile_dir, output_handle)
+    return start_rust_client_executable_with_output(
+        executable,
+        profile_dir,
+        output_handle,
+        env=env,
+    )
 
 
 def start_rust_client_executable_append(

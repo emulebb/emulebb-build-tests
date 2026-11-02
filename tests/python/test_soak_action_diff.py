@@ -17,6 +17,8 @@ DISTINCT_SERVER_ENDPOINTS = {
     "rust": "198.51.100.2:4661",
     "mfc": "203.0.113.3:5687",
 }
+KAD_TARGET = "00112233445566778899aabbccddeeff"
+OTHER_KAD_TARGET = "ffeeddccbbaa99887766554433221100"
 
 
 def _ts(seconds: float) -> datetime:
@@ -584,6 +586,103 @@ def test_diff_action_uses_diag_conformance_not_strict_live_identity() -> None:
     assert report["verdict"] == "coverage-parity"
 
 
+def test_server_search_ignores_unrelated_diagnostic_family_gap() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [_pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3)]
+    mfc_packets = [_pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3)]
+
+    rust_diag = [
+        _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1)),
+        _diag("kad_event", "lookup", _ts(1), {"milestone": "lookup_complete"}),
+    ]
+    mfc_diag = [
+        _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(3)),
+        _diag(
+            "kad_event",
+            "lookup",
+            _ts(3),
+            {"milestone": "lookup_complete", "resultCount": 4},
+        ),
+    ]
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 0},
+        rust_diag=rust_diag,
+        mfc_diag=mfc_diag,
+    )
+
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagOk"] is True
+    assert report["diagConformance"]["gatedFamilies"] == ["ed2k_tcp"]
+    assert [
+        family["family"] for family in report["diagConformance"]["families"]
+    ] == ["ed2k_tcp"]
+    assert report["diagStrictOk"] is False
+
+
+def test_server_search_ignores_unrelated_same_family_schema_gap() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0), method="server"),
+        mfc=_action("mfc", "ubuntu", _ts(2), method="server"),
+    )
+    rust_packets = [_pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3)]
+    mfc_packets = [_pkt("server", "send", 0x16, "bb", _ts(3), marker=0xE3)]
+
+    def ed2k_tcp_diag(
+        ts: datetime,
+        *,
+        opcode: int,
+        direction: str,
+        background_only: bool = False,
+    ) -> dict:
+        body = {
+            "direction": direction,
+            "protocolMarker": 0xE3,
+            "opcode": opcode,
+        }
+        if background_only:
+            body["backgroundOracleOnly"] = True
+        record = _diag("ed2k_tcp", "packet", ts, body)
+        record["keys"] = {"protocolMarker": 0xE3, "opcode": opcode}
+        return record
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=rust_packets,
+        mfc_packets=mfc_packets,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 0},
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1)),
+        ],
+        mfc_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(3)),
+            ed2k_tcp_diag(
+                _ts(4),
+                opcode=0x47,
+                direction="send",
+                background_only=True,
+            ),
+        ],
+    )
+
+    assert report["diagStrictOk"] is False
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagConformance"]["families"][0]["bodyKeyViolations"] == []
+
+
 def test_diff_action_fails_on_diag_oracle_body_key_gap() -> None:
     pair = sad.ActionPair(
         kind=sad.SEARCH,
@@ -738,7 +837,27 @@ def test_diff_action_download_gate_fails_without_request_parts() -> None:
     assert report["actionCoverage"]["required"][0]["presentOnBoth"] is False
 
 
-def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
+def _kad_wire_target(target_hex: str) -> str:
+    target = bytes.fromhex(target_hex)
+    assert len(target) == 16
+    return b"".join(
+        target[offset : offset + 4][::-1] for offset in range(0, 16, 4)
+    ).hex()
+
+
+def _kad_diag(
+    opcode: int,
+    direction: str,
+    ts: datetime,
+    *,
+    target_hex: str = KAD_TARGET,
+) -> dict:
+    wire_target = _kad_wire_target(target_hex)
+    decoded_hex = (
+        f"e4{opcode:02x}{'00' * 16}{wire_target}0000"
+        if opcode == sad.KAD2_SEARCH_RES
+        else f"e4{opcode:02x}{wire_target}0000"
+    )
     return {
         "schema": "diag_event_v2",
         "ts": ts.isoformat().replace("+00:00", "Z"),
@@ -749,6 +868,7 @@ def _kad_diag(opcode: int, direction: str, ts: datetime) -> dict:
             "direction": direction,
             "protocolMarker": 0xE4,
             "opcode": opcode,
+            "decodedHex": decoded_hex,
         },
     }
 
@@ -760,6 +880,7 @@ def _kad_lookup(
     ts: datetime,
     *,
     outcome: str | None = None,
+    target_hex: str | None = KAD_TARGET,
 ) -> dict:
     record = {
         "schema": "diag_event_v2",
@@ -776,7 +897,53 @@ def _kad_lookup(
     }
     if outcome is not None:
         record["body"]["outcome"] = outcome
+    if target_hex is not None:
+        record["body"]["targetHex"] = target_hex
     return record
+
+
+def _server_search_payload(query: str) -> str:
+    query_bytes = query.encode("utf-8")
+    return (b"\x01" + len(query_bytes).to_bytes(2, "little") + query_bytes).hex()
+
+
+def _server_search_diag(
+    query: str,
+    peer: str,
+    ts: datetime,
+    *,
+    payload_hex: str | None = None,
+    extra_body: dict | None = None,
+) -> dict:
+    payload = payload_hex or _server_search_payload(query)
+    clear_frame = f"e316{payload}"
+    body = {
+        "direction": "send",
+        "flow": "server",
+        "transportMode": "plaintext",
+        "obfuscated": False,
+        "protocolMarker": 0xE3,
+        "protocolName": "ED2K",
+        "opcode": 0x16,
+        "opcodeName": "OP_SEARCHREQUEST",
+        "clearFrameLen": len(clear_frame) // 2,
+        "clearFrameHex": clear_frame,
+        "rawLen": len(clear_frame) // 2,
+        "rawHex": clear_frame,
+        "payloadHex": payload,
+        "payloadLen": len(payload) // 2,
+        "payloadHexTruncated": False,
+    }
+    if extra_body:
+        body.update(extra_body)
+    return {
+        "schema": "diag_event_v2",
+        "ts": ts.isoformat().replace("+00:00", "Z"),
+        "family": "ed2k_tcp",
+        "event": "packet",
+        "keys": {"peer": peer, "protocolMarker": 0xE3, "opcode": 0x16},
+        "body": body,
+    }
 
 
 def _server_udp_diag(opcode: int, direction: str, ts: datetime) -> dict:
@@ -794,16 +961,16 @@ def _server_udp_diag(opcode: int, direction: str, ts: datetime) -> dict:
     }
 
 
-def _search_pair(method: str | None) -> sad.ActionPair:
+def _search_pair(method: str | None, *, query: str = "ubuntu") -> sad.ActionPair:
     rust = sad.Action(
-        client="rust", kind=sad.SEARCH, action_id="r-1", key="ubuntu", label="ubuntu",
+        client="rust", kind=sad.SEARCH, action_id="r-1", key=query.casefold(), label=query,
         observed_at=_ts(0), method=method,
     )
     mfc = sad.Action(
-        client="mfc", kind=sad.SEARCH, action_id="m-1", key="ubuntu", label="ubuntu",
+        client="mfc", kind=sad.SEARCH, action_id="m-1", key=query.casefold(), label=query,
         observed_at=_ts(2), method="automatic",
     )
-    return sad.ActionPair(kind=sad.SEARCH, key="ubuntu", rust=rust, mfc=mfc)
+    return sad.ActionPair(kind=sad.SEARCH, key=query.casefold(), rust=rust, mfc=mfc)
 
 
 def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
@@ -841,6 +1008,249 @@ def test_search_gate_kad_method_assessed_from_kad_stream() -> None:
         "mfc": 2,
     }
     assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is True
+
+
+def test_search_gate_kad_ignores_unrelated_same_family_schema_gap() -> None:
+    pair = _search_pair("kad")
+    background_packet = _kad_diag(0x20, "send", _ts(3))
+    background_packet["body"]["backgroundOracleOnly"] = True
+    background_lookup = _kad_lookup(
+        "unrelated-mfc-search",
+        "lookup_complete",
+        7,
+        _ts(4),
+    )
+    background_lookup["body"]["backgroundOracleOnly"] = True
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(0x33, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(0x33, "send", _ts(2)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(2)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+            background_packet,
+            background_lookup,
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["diagStrictOk"] is False
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+    assert report["diagConformance"]["gatedFamilies"] == [
+        "kad_event",
+        "kad_udp",
+    ]
+    assert all(
+        not family["bodyKeyViolations"]
+        for family in report["diagConformance"]["families"]
+    )
+
+
+def test_search_gate_kad_ignores_unrelated_same_opcode_target() -> None:
+    pair = _search_pair("kad")
+    unrelated_request = _kad_diag(
+        sad.KAD2_SEARCH_KEY_REQ,
+        "send",
+        _ts(3),
+        target_hex=OTHER_KAD_TARGET,
+    )
+    unrelated_request["body"]["backgroundOracleOnly"] = True
+    unrelated_response = _kad_diag(
+        sad.KAD2_SEARCH_RES,
+        "recv",
+        _ts(4),
+        target_hex=OTHER_KAD_TARGET,
+    )
+    unrelated_response["body"]["backgroundOracleOnly"] = True
+
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_diag(sad.KAD2_SEARCH_RES, "recv", _ts(2)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 1, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_diag(sad.KAD2_SEARCH_RES, "recv", _ts(2)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 1, _ts(4)),
+            unrelated_request,
+            unrelated_response,
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 1, "mfc": 1},
+    )
+
+    assert report["coverageOk"] is True
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+
+
+def test_search_gate_kad_marks_same_target_with_different_search_id_incomplete() -> (
+    None
+):
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-background", "lookup_started", 0, _ts(2)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_kad_marks_missing_lookup_target_incomplete() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1), target_hex=None),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_kad_marks_conflicting_lookup_targets_incomplete() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup(
+                "rust-1",
+                "lookup_started",
+                0,
+                _ts(2),
+                target_hex=OTHER_KAD_TARGET,
+            ),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_kad_marks_bilateral_target_mismatch_incomplete() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(
+                sad.KAD2_SEARCH_KEY_REQ,
+                "send",
+                _ts(1),
+                target_hex=OTHER_KAD_TARGET,
+            ),
+            _kad_lookup(
+                "mfc-1",
+                "lookup_started",
+                0,
+                _ts(1),
+                target_hex=OTHER_KAD_TARGET,
+            ),
+            _kad_lookup(
+                "mfc-1",
+                "lookup_complete",
+                0,
+                _ts(4),
+                target_hex=OTHER_KAD_TARGET,
+            ),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["actionAttribution"]["reasons"] == [
+        "bilateral-kad-target-mismatch"
+    ]
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_kad_marks_duplicate_completion_incomplete() -> None:
+    pair = _search_pair("kad")
+    report = sad.diff_action(
+        pair,
+        rust_packets=[],
+        mfc_packets=[],
+        rust_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("rust-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(3)),
+            _kad_lookup("rust-1", "lookup_complete", 0, _ts(4)),
+        ],
+        mfc_diag=[
+            _kad_diag(sad.KAD2_SEARCH_KEY_REQ, "send", _ts(1)),
+            _kad_lookup("mfc-1", "lookup_started", 0, _ts(1)),
+            _kad_lookup("mfc-1", "lookup_complete", 0, _ts(4)),
+        ],
+        search_ids={"rust": "rust-1", "mfc": "mfc-1"},
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["verdict"] == "evidence-incomplete"
 
 
 def test_search_gate_kad_rejects_not_dispatched_terminal_receipt() -> None:
@@ -1057,6 +1467,145 @@ def test_search_gate_global_method_uses_direct_server_udp_diagnostics() -> None:
     }
 
 
+def _server_search_assessment(
+    *,
+    query: str = "ubuntu",
+    rust_diag: list[dict] | None = None,
+    mfc_diag: list[dict] | None = None,
+) -> dict:
+    packets = [_pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3)]
+    return sad.diff_action(
+        _search_pair("server", query=query),
+        rust_packets=packets,
+        mfc_packets=packets,
+        rust_diag=rust_diag,
+        mfc_diag=mfc_diag,
+        server_endpoints=SAME_SERVER_ENDPOINTS,
+        search_result_totals={"rust": 0, "mfc": 0},
+    )
+
+
+def test_search_gate_server_attributes_exact_utf8_query_and_endpoint() -> None:
+    query = "Café del Mar"
+    report = _server_search_assessment(
+        query=query,
+        rust_diag=[_server_search_diag(query, SAME_SERVER_ENDPOINTS["rust"], _ts(1))],
+        mfc_diag=[_server_search_diag(query, SAME_SERVER_ENDPOINTS["mfc"], _ts(2))],
+    )
+
+    assert report["coverageOk"] is True
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+
+
+def test_search_gate_server_ignores_unrelated_same_opcode_on_other_endpoint() -> None:
+    unrelated = _server_search_diag(
+        "debian",
+        "203.0.113.99:4661",
+        _ts(3),
+        extra_body={"backgroundOracleOnly": True},
+    )
+    report = _server_search_assessment(
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1))
+        ],
+        mfc_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(2)),
+            unrelated,
+        ],
+    )
+
+    assert report["coverageOk"] is True
+    assert report["diagOk"] is True
+    assert report["verdict"] == "coverage-parity"
+
+
+def test_search_gate_server_marks_duplicate_exact_query_incomplete() -> None:
+    report = _server_search_assessment(
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1))
+        ],
+        mfc_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(2)),
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(3)),
+        ],
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_server_marks_overlapping_endpoint_query_incomplete() -> None:
+    report = _server_search_assessment(
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1))
+        ],
+        mfc_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["mfc"], _ts(2)),
+            _server_search_diag("debian", SAME_SERVER_ENDPOINTS["mfc"], _ts(3)),
+        ],
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_server_rejects_trailing_expression_bytes() -> None:
+    payload = _server_search_payload("ubuntu") + "0100"
+    report = _server_search_assessment(
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1))
+        ],
+        mfc_diag=[
+            _server_search_diag(
+                "ubuntu",
+                SAME_SERVER_ENDPOINTS["mfc"],
+                _ts(2),
+                payload_hex=payload,
+            )
+        ],
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_server_marks_wrong_endpoint_incomplete() -> None:
+    report = _server_search_assessment(
+        rust_diag=[
+            _server_search_diag("ubuntu", SAME_SERVER_ENDPOINTS["rust"], _ts(1))
+        ],
+        mfc_diag=[_server_search_diag("ubuntu", "203.0.113.99:4661", _ts(2))],
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
+def test_search_gate_server_rejects_non_little_endian_query_length() -> None:
+    query = "ubuntu"
+    query_bytes = query.encode("utf-8")
+    malformed = (b"\x01" + len(query_bytes).to_bytes(2, "big") + query_bytes).hex()
+    report = _server_search_assessment(
+        query=query,
+        rust_diag=[_server_search_diag(query, SAME_SERVER_ENDPOINTS["rust"], _ts(1))],
+        mfc_diag=[
+            _server_search_diag(
+                query,
+                SAME_SERVER_ENDPOINTS["mfc"],
+                _ts(2),
+                payload_hex=malformed,
+            )
+        ],
+    )
+
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
+    assert report["coverageOk"] is False
+    assert report["verdict"] == "evidence-incomplete"
+
+
 def test_search_gate_server_requires_ed2k_tcp_diagnostic_family() -> None:
     pair = _search_pair("server")
     packets = [
@@ -1072,7 +1621,8 @@ def test_search_gate_server_requires_ed2k_tcp_diagnostic_family() -> None:
         mfc_diag=[_diag("sched", "tick", _ts(2))],
     )
 
-    assert report["coverageOk"] is True
+    assert report["coverageOk"] is False
+    assert report["actionCoverage"]["status"] == "evidence-incomplete"
     assert report["diagOk"] is False
     assert report["verdict"] == "evidence-incomplete"
 

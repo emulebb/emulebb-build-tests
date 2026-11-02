@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import struct
 import sys
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from emule_test_harness import ed2k_server as ed2k_harness
+from emule_test_harness import ed2k_wire
 from emule_test_harness import rust_ed2k
 
 
@@ -74,6 +76,8 @@ def test_source_lifecycle_arguments_are_opt_in() -> None:
     assert defaults.verify_source_lifecycle is False
     assert defaults.verify_offerfiles_v1_stock_fallback is False
     assert defaults.source_withdraw_timeout_seconds == 30.0
+    assert defaults.protocol_case is None
+    assert defaults.transfer_scenario == module.FULL_METADATA_LINK
     assert enabled.verify_source_lifecycle is True
     assert enabled.source_withdraw_timeout_seconds == 45.0
 
@@ -92,11 +96,293 @@ def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> N
     )
 
     assert defaults.ed2k_server_connect_address is None
-    assert module.resolve_ed2k_server_connect_address("192.0.2.10", defaults.ed2k_server_connect_address) == "192.0.2.10"
-    assert module.resolve_ed2k_server_connect_address(
-        "192.0.2.10",
-        overridden.ed2k_server_connect_address,
-    ) == "172.20.32.2"
+    assert module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address) is None
+    assert module.resolve_ed2k_server_connect_address(overridden.ed2k_server_connect_address) == "172.20.32.2"
+
+
+def test_server_login_collection_returns_failed_snapshot_with_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    failed_evidence = {
+        "schema": "emulebb-build-tests.deterministic-server-login-diagnostics",
+        "ok": False,
+        "failures": ["client.rust"],
+    }
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[], selected_segments=[segment])
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_login_diagnostic_evidence,
+        "build_server_login_diagnostic_evidence",
+        lambda **_kwargs: dict(failed_evidence),
+    )
+
+    result = module.collect_server_login_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        rust_nickname="rust",
+        rust_tcp_port=4662,
+        mfc_nickname="mfc",
+        mfc_tcp_port=4663,
+        expected_transport_plan=("obfuscated", "plaintext"),
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert result["ok"] is False
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
+def test_server_callback_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    callback_evidence = {
+        "schema": "emulebb-build-tests.deterministic-server-callback-diagnostics.v1",
+        "ok": True,
+    }
+
+    def load_capture(
+        _directory: Path, *, side: str, **_kwargs: object
+    ) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[], selected_segments=[segment])
+
+    monkeypatch.setattr(
+        module.converged_live_wire, "load_current_diag_capture", load_capture
+    )
+    monkeypatch.setattr(
+        module.server_callback_diagnostic_evidence,
+        "build_server_callback_diagnostic_evidence",
+        lambda **_kwargs: dict(callback_evidence),
+    )
+
+    result = module.collect_server_callback_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        requester_port=4662,
+        targets={"rust": {}, "mfc": {}},
+        requester_results={"rust": {}, "mfc": {}},
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
+def test_callback_targets_come_from_accepted_lowid_logins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(
+        module.server_login_diagnostic_evidence,
+        "require_server_login_diagnostic_evidence",
+        lambda _report: None,
+    )
+    login = {
+        "clients": {
+            "rust": {
+                "decodedLogin": {"user_hash": "11" * 16},
+                "decodedIdChange": {"assigned_id": 7, "id_kind": "low-id"},
+            },
+            "mfc": {
+                "decodedLogin": {"user_hash": "22" * 16},
+                "decodedIdChange": {"assigned_id": 9, "id_kind": "low-id"},
+            },
+        },
+        "expectedClients": {
+            "rust": {"tcpPort": 4662},
+            "mfc": {"tcpPort": 4663},
+        },
+    }
+
+    assert module.callback_targets_from_login_evidence(login) == {
+        "rust": {
+            "clientId": 7,
+            "idKind": "low-id",
+            "tcpPort": 4662,
+            "userHash": "11" * 16,
+        },
+        "mfc": {
+            "clientId": 9,
+            "idKind": "low-id",
+            "tcpPort": 4663,
+            "userHash": "22" * 16,
+        },
+    }
+
+
+def test_server_tcp_metadata_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    built = {
+        "schema": module.server_tcp_metadata_diagnostic_evidence.SCHEMA,
+        "ok": False,
+        "failures": ["client.rust"],
+    }
+    calls: list[dict[str, object]] = []
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
+
+    def build(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return dict(built)
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_tcp_metadata_diagnostic_evidence,
+        "build_server_tcp_metadata_diagnostic_evidence",
+        build,
+    )
+    snapshots = {"rust": {"connected": True}, "mfc": {"connected": True}}
+
+    result = module.collect_server_tcp_metadata_diagnostics(
+        server_endpoint="127.0.0.1:4661",
+        rest_snapshots=snapshots,
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert calls == [
+        {
+            "server_endpoint": "127.0.0.1:4661",
+            "seed_name": module.SERVER_METADATA_SEED_NAME,
+            "expected_name": module.SERVER_IDENT_NAME,
+            "expected_description": module.SERVER_IDENT_DESCRIPTION,
+            "rust_records": [{"side": "rust"}],
+            "mfc_records": [{"side": "emule"}],
+            "rest_snapshots": snapshots,
+        }
+    ]
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
+def test_server_udp_metadata_collection_preserves_capture_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_suite_module()
+    rust_segment = tmp_path / "rust.jsonl"
+    mfc_segment = tmp_path / "mfc.jsonl"
+    built = {
+        "schema": module.server_udp_metadata_diagnostic_evidence.SCHEMA,
+        "passed": False,
+        "failures": ["client.rust"],
+    }
+    calls: list[dict[str, object]] = []
+
+    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+        segment = rust_segment if side == "rust" else mfc_segment
+        return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
+
+    def build(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return dict(built)
+
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.server_udp_metadata_diagnostic_evidence,
+        "build_server_udp_metadata_diagnostic_evidence",
+        build,
+    )
+    snapshots = {"rust": {"connected": True}, "mfc": {"connected": True}}
+
+    result = module.collect_server_udp_metadata_diagnostics(
+        anchor_server_endpoint="127.0.0.1:4661",
+        target_server_endpoint="127.0.0.1:4761",
+        target_udp_endpoint="127.0.0.1:4765",
+        rest_snapshots=snapshots,
+        rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101,
+        mfc_diagnostics_dir=tmp_path / "mfc",
+        mfc_process_id=202,
+    )
+
+    assert calls == [
+        {
+            "anchor_server_endpoint": "127.0.0.1:4661",
+            "target_server_endpoint": "127.0.0.1:4761",
+            "target_udp_endpoint": "127.0.0.1:4765",
+            "seed_name": module.SERVER_METADATA_SEED_NAME,
+            "seed_description": module.SERVER_METADATA_SEED_DESCRIPTION,
+            "expected_name": module.SERVER_IDENT_NAME,
+            "expected_description": module.SERVER_IDENT_DESCRIPTION,
+            "expected_users": 1,
+            "expected_files": 1,
+            "rust_records": [{"side": "rust"}],
+            "mfc_records": [{"side": "emule"}],
+            "rest_snapshots": snapshots,
+        }
+    ]
+    assert result["captures"] == {
+        "rust": {
+            "processId": 101,
+            "diagnosticsDir": str(tmp_path / "rust"),
+            "selectedSegments": [str(rust_segment)],
+        },
+        "mfc": {
+            "processId": 202,
+            "diagnosticsDir": str(tmp_path / "mfc"),
+            "selectedSegments": [str(mfc_segment)],
+        },
+    }
+
+
+@pytest.mark.parametrize("address", ["0.0.0.0", "ff02::1", "not-an-address"])
+def test_ed2k_server_connect_address_rejects_non_unicast_ipv4(address: str) -> None:
+    module = load_suite_module()
+
+    with pytest.raises(ValueError, match="--ed2k-server-connect-address"):
+        module.resolve_ed2k_server_connect_address(address)
 
 
 def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
@@ -123,6 +409,431 @@ def test_offerfiles_v1_fallback_requires_stock_family_lifecycle() -> None:
         module.validate_args(wrong_client)
     with pytest.raises(ValueError, match="requires --verify-source-lifecycle"):
         module.validate_args(missing_lifecycle)
+
+
+def test_mfc_oracle_requires_explicit_protocol_case() -> None:
+    module = load_suite_module()
+    missing = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    selected = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required-compressible",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="explicit --protocol-case"):
+        module.validate_args(missing)
+    module.validate_args(selected)
+    assert selected.protocol_case == "obfuscated-required-compressible"
+
+
+def test_mfc_oracle_requires_fixture_large_enough_for_startup_hashsets() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--fixture-size-bytes",
+            str(module.rust_metadata.ED2K_PART_SIZE),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="larger than one eD2K part"):
+        module.validate_args(args)
+
+
+def test_hash_only_metadata_recovery_uses_one_canonical_transport_case() -> None:
+    module = load_suite_module()
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.HASH_ONLY_METADATA_RECOVERY,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.HASH_ONLY_METADATA_RECOVERY,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+
+
+@pytest.mark.parametrize(
+    "scenario_name",
+    ["SERVER_KEYWORD_SEARCH", "SERVER_ADVANCED_SEARCH"],
+)
+def test_server_search_variants_use_one_canonical_oracle_case(
+    scenario_name: str,
+) -> None:
+    module = load_suite_module()
+    scenario = getattr(module, scenario_name)
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_tcp_source_accepts_canonical_plaintext_and_obfuscated_cases() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+    obfuscated = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="canonical plaintext or obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    module.validate_args(obfuscated)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_TCP_METADATA,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical obfuscated-required"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_UDP_METADATA,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+@pytest.mark.parametrize("scenario_constant", ["SERVER_UDP_SOURCE_V1", "SERVER_UDP_SOURCE_V2"])
+def test_server_udp_source_uses_one_canonical_plaintext_oracle_case(
+    scenario_constant: str,
+) -> None:
+    module = load_suite_module()
+    scenario = getattr(module, scenario_constant)
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            scenario,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required-compressible",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    obfuscated = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+    fallback = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-preferred-fallback",
+            "--transfer-scenario",
+            module.SERVER_LOGIN_REQUEST,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="canonical plaintext, obfuscated, or fallback"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    module.validate_args(obfuscated)
+    module.validate_args(fallback)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_server_callback_accepts_only_plaintext_mfc_oracle_lane() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_CALLBACK_REPLY,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
+def test_non_search_scenarios_keep_the_multi_part_fixture_default() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+        ]
+    )
+
+    assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
+
+
+def test_reference_clients_reject_mfc_protocol_case() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--protocol-case",
+            "plain-server-plain-clients",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="valid only"):
+        module.validate_args(args)
 
 
 def test_offerfiles_v1_fallback_accepts_zero_negotiation_counters() -> None:
@@ -264,12 +975,27 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     }
 
 
-def test_resolve_client2_app_exe_uses_emulebb_main_executable(tmp_path: Path) -> None:
+def test_resolve_client2_app_exe_uses_canonical_external_build(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    client2_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    output_root = tmp_path / "output"
+    client2_exe = (
+        output_root
+        / "builds"
+        / "app"
+        / "main"
+        / "x64"
+        / "Release"
+        / "diagnostics"
+        / "bin"
+        / "emulebb-diagnostics.exe"
+    )
     client2_exe.parent.mkdir(parents=True)
     client2_exe.write_bytes(b"")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
     assert module.resolve_client2_app_exe(workspace, "Release", None) == client2_exe.resolve()
 
@@ -315,6 +1041,48 @@ def test_is_port_available_rejects_non_ipv4_address(host: str) -> None:
         module.is_port_available(0, host=host)
 
 
+def test_require_local_control_bind_addr_accepts_explicit_loopback() -> None:
+    module = load_suite_module()
+
+    assert module.require_local_control_bind_addr("127.0.0.1") == "127.0.0.1"
+
+
+@pytest.mark.parametrize("host", ["", "0.0.0.0", "localhost", "::1"])
+def test_require_local_control_bind_addr_rejects_non_ipv4_unicast(host: str, monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.delenv("EMULEBB_LAN_BIND_ADDR", raising=False)
+    monkeypatch.delenv("EMULEBB_LIVE_BIND_ADDR", raising=False)
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    with pytest.raises(ValueError, match="explicit LAN address"):
+        module.require_local_control_bind_addr(host)
+
+
+def test_choose_distinct_ports_probes_explicit_loopback(monkeypatch) -> None:
+    module = load_suite_module()
+    observed_hosts: list[str] = []
+
+    def fake_is_port_available(
+        _port: int,
+        *,
+        host: str,
+        udp: bool = False,
+    ) -> bool:
+        del udp
+        observed_hosts.append(host)
+        return True
+
+    monkeypatch.setattr(module, "is_port_available", fake_is_port_available)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6209)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    module.choose_distinct_ports("127.0.0.1")
+
+    assert observed_hosts
+    assert set(observed_hosts) == {"127.0.0.1"}
+
+
 def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_suite_module()
     availability_checks: list[tuple[int, str | None, bool]] = []
@@ -356,6 +1124,104 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert (6206, "172.24.112.1", True) in availability_checks
     assert (6208, "172.24.112.1", True) in availability_checks
     assert (6209, "127.0.0.1", False) in availability_checks
+
+
+def test_choose_distinct_ports_adds_dedicated_search_publisher(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_search_publisher=True,
+    )
+
+    assert ports["search_publisher_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_adds_dedicated_source_publisher(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_source_publisher=True,
+    )
+
+    assert ports["source_publisher_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_adds_dedicated_callback_requester(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6210)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_callback_requester=True,
+    )
+
+    assert ports["callback_requester_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch) -> None:
+    module = load_suite_module()
+    checks: list[tuple[int, bool]] = []
+
+    def available(port: int, *, host: str, udp: bool = False) -> bool:
+        assert host in {"172.24.112.1", "127.0.0.1"}
+        checks.append((port, udp))
+        return True
+
+    monkeypatch.setattr(module, "is_port_available", available)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6240)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_metadata_target=True,
+    )
+
+    target = ports["metadata_ed2k_tcp"]
+    assert target not in {6200, 6204, 6208, 6212, 6214}
+    assert ports["metadata_ed2k_udp"] == target + 4
+    assert "metadata_publisher_tcp" in ports
+    assert all((target + offset, True) in checks for offset in (4, 8, 12, 14))
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_reserves_scripted_udp_source_target(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6240)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_udp_source_target=True,
+    )
+
+    target = ports["udp_source_target_tcp"]
+    assert target not in {6200, 6204, 6208, 6212, 6214}
+    assert ports["udp_source_target_udp"] == target + 4
+    assert "udp_source_peer_tcp" in ports
+    assert len(ports) == len(set(ports.values()))
 
 
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
@@ -419,35 +1285,99 @@ def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(m
         module.discover_interface_ipv4("Ethernet")
 
 
-def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_defaults_to_loopback(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
+
+    assert module.resolve_local_p2p_bind_address() == "127.0.0.1"
+
+
+def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind() -> None:
+    module = load_suite_module()
 
     assert module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.10") == "192.0.2.10"
 
 
-def test_resolve_lan_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda name: f"192.0.2.{len(name)}")
 
-    assert module.resolve_lan_p2p_bind_address(
-        lan_bind_addr="192.0.2.10",
+    assert module.resolve_local_p2p_bind_address(
         p2p_bind_interface_name="Ethernet",
     ) == "192.0.2.8"
 
 
-def test_resolve_lan_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
+def test_resolve_local_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
 
-    assert module.resolve_lan_p2p_bind_address(
-        lan_bind_addr="192.0.2.10",
+    assert module.resolve_local_p2p_bind_address(
         p2p_bind_interface_name="Ethernet",
         p2p_bind_interface_address="192.0.2.44",
     ) == "192.0.2.44"
 
 
-def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_path: Path) -> None:
+def test_resolve_local_p2p_bind_address_accepts_explicit_loopback() -> None:
+    module = load_suite_module()
+
+    assert module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1") == "127.0.0.1"
+
+
+def test_resolve_managed_server_p2p_bind_address_uses_non_loopback_route(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, int]] = []
+
+    def resolve_route(host: str, port: int) -> str:
+        calls.append((host, port))
+        return "172.20.16.1"
+
+    monkeypatch.setattr(module.ed2k_server, "resolve_route_bind_ip", resolve_route)
+
+    assert (
+        module.resolve_managed_server_p2p_bind_address(
+            current_address="127.0.0.1",
+            server_address="172.20.32.2",
+            server_port=4661,
+        )
+        == "172.20.16.1"
+    )
+    assert calls == [("172.20.32.2", 4661)]
+
+
+@pytest.mark.parametrize(
+    ("server_address", "interface_name", "interface_address"),
+    [
+        ("127.0.0.1", "", None),
+        ("172.20.32.2", "Ethernet", None),
+        ("172.20.32.2", "", "192.0.2.10"),
+    ],
+)
+def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bind(
+    monkeypatch,
+    server_address: str,
+    interface_name: str,
+    interface_address: str | None,
+) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(
+        module.ed2k_server,
+        "resolve_route_bind_ip",
+        lambda *_args: pytest.fail("explicit and loopback binds must not resolve a route"),
+    )
+
+    assert (
+        module.resolve_managed_server_p2p_bind_address(
+            current_address="192.0.2.10",
+            server_address=server_address,
+            server_port=4661,
+            p2p_bind_interface_name=interface_name,
+            p2p_bind_interface_address=interface_address,
+        )
+        == "192.0.2.10"
+    )
+
+
+def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
 
@@ -460,7 +1390,38 @@ def test_write_server_met_creates_single_server_with_numeric_and_dynamic_ip(tmp_
     assert port == 4711
     assert tag_count == 3
     assert b"local-ed2k" in data
-    assert b"10.44.55.66" in data
+    assert b"10.44.55.66" not in data
+
+
+def test_write_server_met_entries_preserves_anchor_then_low_priority_target(tmp_path: Path) -> None:
+    module = load_suite_module()
+    server_met = tmp_path / "server.met"
+
+    module.write_server_met_entries(
+        server_met,
+        [
+            {
+                "address": "10.44.55.66",
+                "port": 4711,
+                "name": "anchor",
+                "priority": module.SERVER_PRIORITY_HIGH,
+            },
+            {
+                "address": "10.44.55.66",
+                "port": 4811,
+                "name": "stale-target",
+                "description": "stale-before-udp-metadata",
+                "priority": module.SERVER_PRIORITY_LOW,
+            },
+        ],
+    )
+
+    data = server_met.read_bytes()
+    assert data[:5] == struct.pack("<BI", module.SERVER_MET_HEADER, 2)
+    assert data.find(struct.pack("<H", 4711)) < data.find(struct.pack("<H", 4811))
+    assert b"anchor" in data
+    assert b"stale-target" in data
+    assert b"stale-before-udp-metadata" in data
 
 
 def test_deterministic_transfer_uses_canonical_server_facade() -> None:
@@ -469,14 +1430,177 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
 
     assert "ed2k_server.launch_ed2k_server(" in script_text
     assert "ed2k_server.ed2k_server_control(" in script_text
+    assert "ed2k_file_observer.Ed2kFileObserver(" in script_text
     assert "ed2k_server.stop_process(server_process)" in script_text
+    assert "server_control.wait_for_file" not in script_text
+    assert "server_control.get_file" not in script_text
     assert "server_provider" not in script_text
     assert "token=args.api_key" in script_text
     assert "admin_secret=args.api_key" not in script_text
     assert "windows_client_address=server_connect_address" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert script_text.count("p2p_bind_addr=p2p_address") == 2
+    assert script_text.count("p2p_bind_addr=p2p_address") == 1
+    assert "p2p_bind_ip=p2p_address" in script_text
+    assert "rust_client.start_rust_client_executable(" in script_text
+    assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text
+    assert "converged_live_wire.resolve_rust_regular_exe(" not in script_text
+    assert "transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(" in script_text
+    assert script_text.count("client2_process_id = live_common.resolve_app_process_id(client2_app)") == 2
+    assert 'current_phase = "stop_mfc_for_diagnostics"' in script_text
+    assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
+
+
+def test_server_search_variants_share_one_bilateral_neutral_fixture_lane() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_SEARCH_VARIANTS == {
+        module.SERVER_KEYWORD_SEARCH: "keyword",
+        module.SERVER_ADVANCED_SEARCH: "advanced",
+    }
+    assert module.SERVER_SEARCH_CRITERIA[module.SERVER_KEYWORD_SEARCH] == (
+        ed2k_wire.ServerSearchCriteria()
+    )
+    assert module.SERVER_SEARCH_CRITERIA[module.SERVER_ADVANCED_SEARCH] == (
+        ed2k_wire.ServerSearchCriteria(
+            min_size_bytes=module.SERVER_SEARCH_FILE_SIZE,
+            max_size_bytes=module.SERVER_SEARCH_FILE_SIZE,
+        )
+    )
+    assert module.SERVER_SEARCH_QUERY in module.SERVER_SEARCH_FILE_NAME
+    assert module.SERVER_SEARCH_FILE_NAME != "deterministicserversearch-transfer.bin"
+    assert module.SERVER_SEARCH_QUERY not in "deterministicserversearch-transfer.bin"
+    assert script_text.count("rust_local_ed2k.run_single_server_search(") == 2
+    assert 'report["checks"]["client_server_searches"] = driven_searches' in script_text
+    assert '"client1_server_search"' not in script_text
+    assert "ed2k_wire.Ed2kWireClient(" in script_text
+    assert "server_search_publisher.offer_file(" in script_text
+    assert "file_observer.wait_for_file(" in script_text
+    assert "server_control.wait_for_file(" not in script_text
+    assert script_text.count("except rust_local_ed2k.ServerSearchFailure as exc:") == 2
+    assert 'report["checks"]["client_server_search_failures"] = search_failures' in script_text
+    assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
+
+
+def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_gate() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_SOURCE_FILE_NAME != "deterministicserversource-transfer.bin"
+    assert "include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE" in script_text
+    assert "docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(" in script_text
+    assert "docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS" in script_text
+    assert "docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS" in script_text
+    assert 'source_publisher_login.get("id_kind") != "high-id"' in script_text
+    assert "!= docker_ed2k_source_publisher.PUBLISHER_HIGH_ID" in script_text
+    assert "publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP" in script_text
+    assert "if len(source_transport_plan) != 1:" in script_text
+    assert "expected_transport_mode=source_server_transport_mode" in script_text
+    assert '"mode": "source-free-ed2k-link"' in script_text
+    assert script_text.count("wait_for_transfer_sources(") == 5
+    assert "collect_server_source_diagnostics(" in script_text
+    assert (
+        "server_source_diagnostic_evidence.require_server_source_diagnostic_evidence("
+        in script_text
+    )
+
+
+def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_CALLBACK_REPLY in module.TRANSFER_SCENARIOS
+    assert (
+        "include_callback_requester=args.transfer_scenario == SERVER_CALLBACK_REPLY"
+        in script_text
+    )
+    assert "server_callback_requester.request_callback(" in script_text
+    assert 'for client in ("mfc", "rust"):' in script_text
+    assert "callback_targets_from_login_evidence(" in script_text
+    assert "collect_server_callback_diagnostics(" in script_text
+    assert (
+        "server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence("
+        in script_text
+    )
+    assert "server_callback_evidence=server_callback_evidence" in script_text
+
+
+def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
+    assert script_text.count(
+        "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
+    ) == 2
+    assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 4
+    assert 'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots' in script_text
+    assert (
+        'report["checks"]["client_server_tcp_metadata_diagnostics"] = ('
+        in script_text
+    )
+    assert "collect_server_tcp_metadata_diagnostics(" in script_text
+    assert (
+        "server_tcp_metadata_diagnostic_evidence.require_server_tcp_metadata_diagnostic_evidence("
+        in script_text
+    )
+
+
+def test_server_udp_metadata_uses_two_servers_and_causal_bilateral_gate() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
+    assert module.SERVER_METADATA_SEED_DESCRIPTION != module.SERVER_IDENT_DESCRIPTION
+    assert "include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA" in script_text
+    assert script_text.count("ed2k_server.launch_ed2k_server(") == 2
+    assert "metadata_server_publisher.offer_file(" in script_text
+    assert '"serverPriority": "high"' in script_text
+    assert '"serverPriority": "low"' in script_text
+    assert '"priority": SERVER_PRIORITY_HIGH' in script_text
+    assert '"priority": SERVER_PRIORITY_LOW' in script_text
+    assert 'report["checks"]["client_server_udp_metadata_rest"]' in script_text
+    assert "collect_server_udp_metadata_diagnostics(" in script_text
+    assert (
+        "server_udp_metadata_diagnostic_evidence.require_server_udp_metadata_diagnostic_evidence("
+        in script_text
+    )
+    assert "ed2k_server.stop_process(metadata_server_process)" in script_text
+
+
+def test_server_udp_source_variants_use_one_scripted_causal_bilateral_path() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert (
+        "include_udp_source_target=udp_source_request_version is not None"
+        in script_text
+    )
+    assert "scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer(" in script_text
+    assert "udp_source_fixture.wait_for_status_clients(" in script_text
+    assert '"udpFlags": udp_source_fixture.udp_flags' in script_text
+    assert '"priority": SERVER_PRIORITY_LOW' in script_text
+    assert '"mode": "source-free-ed2k-link"' in script_text
+    assert "collect_server_udp_source_diagnostics(" in script_text
+    assert (
+        "server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence("
+        in script_text
+    )
+
+
+def test_rust_diagnostics_child_env_does_not_mutate_parent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = load_suite_module()
+    parent_value = "operator-owned"
+    monkeypatch.setenv("EMULEBB_RUST_LOG_DIR", parent_value)
+
+    child_env = module.rust_diagnostics_child_env(tmp_path / "diagnostics")
+
+    assert os.environ["EMULEBB_RUST_LOG_DIR"] == parent_value
+    assert child_env["EMULEBB_RUST_LOG_DIR"] == str((tmp_path / "diagnostics").resolve())
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -723,6 +1847,31 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert "EnableUPnP=0" in text
 
 
+def test_configure_client_profile_accepts_loopback_for_rest_control(tmp_path: Path, monkeypatch) -> None:
+    module = load_suite_module()
+    config_dir = tmp_path / "profile" / "config"
+    config_dir.mkdir(parents=True)
+    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+    observed: list[object] = []
+    monkeypatch.setattr(module.live_common, "apply_webserver_profile", lambda _config, spec: observed.append(spec))
+
+    module.configure_client_profile(
+        config_dir=config_dir,
+        app_exe=tmp_path / "app" / "emulebb.exe",
+        nick=module.CLIENT01.nick,
+        tcp_port=4662,
+        udp_port=4672,
+        ed2k_enabled=True,
+        autoconnect=False,
+        rest_api_key="key",
+        rest_port=4711,
+        lan_bind_addr="127.0.0.1",
+    )
+
+    assert len(observed) == 1
+    assert observed[0].lan_bind_addr == "127.0.0.1"
+
+
 def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp_path: Path) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"
@@ -755,7 +1904,7 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
 
 def test_configure_client_profiles_use_resolved_p2p_bind_address(tmp_path: Path) -> None:
     module = load_suite_module()
-    resolved_address = module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.44")
+    resolved_address = module.resolve_local_p2p_bind_address()
 
     for profile_name in ("client1", "client2"):
         config_dir = tmp_path / profile_name / "config"
@@ -906,7 +2055,7 @@ def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(monke
 def test_godzilla_mixed_client_evidence_reports_mfc_peer_swarm() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_mfc_peer_evidence_test")
 
-    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"harness": 7})
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"mfc_oracle": 7})
 
     assert evidence["classification"] == "emulebb-mfc-peer-swarm"
     assert evidence["evidence_strength"] == "full"
@@ -1087,7 +2236,8 @@ def test_default_fixture_size_is_132_mib() -> None:
     assert module.DEFAULT_FIXTURE_SIZE_BYTES == 132 * 1024 * 1024
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
     assert args.transfer_completion_timeout_seconds == 900.0
-    assert args.client2_identity == "harness"
+    assert args.client2_identity == "mfc_oracle"
+    assert args.protocol_case is None
 
 
 def test_client2_identity_accepts_stock_baseline() -> None:
@@ -1125,12 +2275,13 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
             calls.append(("shared_files", nick, minimum, timeout))
             return {"client_name": nick, "ip": "172.17.128.1", "shared_files": 1}
 
-        def wait_for_file(self, file_hash, timeout):
-            calls.append(("file", file_hash, timeout))
+    class FakeFileObserver:
+        def wait_for_file(self, file_hash, file_size, timeout):
+            calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint", file_hash, host, port, timeout, description))
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(("source", file_hash, file_size, host, port, timeout, description))
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
@@ -1150,15 +2301,16 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
         ec_password="secret",
         client_nick="cl-amule-007",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         publish_timeout_seconds=30.0,
     )
 
     assert link == "ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/"
     assert observation["observed_host"] == "172.17.128.1"
     assert observation["published"]["sources"] == 1
-    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "endpoint"]
+    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "source"]
 
 
 def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
@@ -1176,20 +2328,21 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, hash_value, host, port, timeout):
-            calls.append(("endpoint_absent", hash_value, host, port, timeout))
-            return {"absent": True}
-
         def wait_for_client_shared_files(self, nick, minimum, timeout):
             calls.append(("shared_files", nick, minimum, timeout))
             return {"client_name": nick, "shared_files": 1}
 
-        def wait_for_file(self, hash_value, timeout):
-            calls.append(("file", hash_value, timeout))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, hash_value, file_size, host, port, timeout):
+            calls.append(("source_absent", hash_value, file_size, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_file(self, hash_value, file_size, timeout):
+            calls.append(("file", hash_value, file_size, timeout))
             return {"hash": hash_value, "sources": 1}
 
-        def wait_for_file_endpoint(self, hash_value, host, port, timeout, description):
-            calls.append(("endpoint", hash_value, host, port, timeout, description))
+        def wait_for_source(self, hash_value, file_size, host, port, timeout, description):
+            calls.append(("source", hash_value, file_size, host, port, timeout, description))
             return {"hash": hash_value, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
@@ -1223,8 +2376,9 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
         ec_password="secret",
         client_nick="cl-amule-007",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
     )
@@ -1238,12 +2392,12 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
         "observe",
         "shutdown",
         "client_absent",
-        "endpoint_absent",
+        "source_absent",
         "launch",
         "control",
         "shared_files",
         "file",
-        "endpoint",
+        "source",
     ]
 
 
@@ -1258,16 +2412,19 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
-            calls.append(("endpoint_absent", file_hash, host, port, timeout))
-            return {"absent": True}
-
         def wait_for_client(self, nick, timeout):
             calls.append(("client_present", nick, timeout))
             return {"client_name": nick}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, file_hash, file_size, host, port, timeout):
+            calls.append(("source_absent", file_hash, file_size, host, port, timeout))
+            return {"absent": True}
+
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(
+                ("source_present", file_hash, file_size, host, port, timeout, description)
+            )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
@@ -1301,9 +2458,11 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
         api_key="key",
         client_nick="publisher",
         transfer_hash="aa" * 16,
-        endpoint_host="192.0.2.10",
-        endpoint_port=4662,
+        file_size=7,
+        source_host="192.0.2.10",
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         rest_ready_timeout_seconds=10.0,
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
@@ -1311,20 +2470,21 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
 
     assert relaunched is new_app
     assert report["withdrawn"]["client"]["absent"] is True
-    assert report["republished"]["endpoint"]["hash"] == "aa" * 16
+    assert report["republished"]["source"]["hash"] == "aa" * 16
     assert calls == [
         ("close", old_app),
         ("client_absent", "publisher", 20.0),
-        ("endpoint_absent", "aa" * 16, "192.0.2.10", 4662, 20.0),
+        ("source_absent", "aa" * 16, 7, "192.0.2.10", 4662, 20.0),
         ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
         ("client_present", "publisher", 30.0),
         (
-            "endpoint_present",
+            "source_present",
             "aa" * 16,
+            7,
             "192.0.2.10",
             4662,
             30.0,
-            "ED2K publisher endpoint republication",
+            "ED2K publisher source republication",
         ),
     ]
 
@@ -1351,16 +2511,19 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
             calls.append(("client_absent", nick, timeout))
             return {"absent": True}
 
-        def wait_for_file_endpoint_absent(self, file_hash, host, port, timeout):
-            calls.append(("endpoint_absent", file_hash, host, port, timeout))
+    class FakeFileObserver:
+        def wait_for_source_absent(self, file_hash, file_size, host, port, timeout):
+            calls.append(("source_absent", file_hash, file_size, host, port, timeout))
             return {"absent": True}
 
-        def wait_for_file(self, file_hash, timeout):
-            calls.append(("file", file_hash, timeout))
+        def wait_for_file(self, file_hash, file_size, timeout):
+            calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_file_endpoint(self, file_hash, host, port, timeout, description):
-            calls.append(("endpoint_present", file_hash, host, port, timeout, description))
+        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+            calls.append(
+                ("source_present", file_hash, file_size, host, port, timeout, description)
+            )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
@@ -1378,8 +2541,9 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
         config_dir=tmp_path / "profile" / "config",
         client_nick="stock publisher",
         fixture_file=fixture,
-        endpoint_port=4662,
+        source_port=4662,
         server_control=FakeControl(),
+        file_observer=FakeFileObserver(),
         withdraw_timeout_seconds=20.0,
         publish_timeout_seconds=30.0,
     )
@@ -1392,17 +2556,18 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
         ("shared_files", "stock publisher", 1, 30.0),
         ("close", old_app),
         ("client_absent", "stock publisher", 20.0),
-        ("endpoint_absent", "cd" * 16, "172.17.128.1", 4662, 20.0),
+        ("source_absent", "cd" * 16, 7, "172.17.128.1", 4662, 20.0),
         ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
         ("shared_files", "stock publisher", 1, 30.0),
-        ("file", "cd" * 16, 30.0),
+        ("file", "cd" * 16, 7, 30.0),
         (
-            "endpoint_present",
+            "source_present",
             "cd" * 16,
+            7,
             "172.17.128.1",
             4662,
             30.0,
-            "stock ED2K publisher endpoint republication",
+            "stock ED2K publisher source republication",
         ),
     ]
 
@@ -1583,14 +2748,60 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
     ]
 
 
-def test_require_high_id_clients_passes_without_fetching_server_stats() -> None:
+def test_wait_for_transfer_sources_requires_exact_metadata_and_positive_count(monkeypatch) -> None:
+    module = load_suite_module()
+    transfer_hash = module.SERVER_SOURCE_FILE_HASH.hex()
+    payloads = [
+        {
+            "hash": transfer_hash,
+            "displayName": module.SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": module.SERVER_SOURCE_FILE_SIZE,
+            "sources": 0,
+        },
+        {
+            "hash": transfer_hash.upper(),
+            "displayName": module.SERVER_SOURCE_FILE_NAME,
+            "sizeBytes": module.SERVER_SOURCE_FILE_SIZE,
+            "sources": 1,
+        },
+    ]
+
+    def fake_http_request(*_args, **_kwargs):
+        payload = payloads.pop(0)
+        return {
+            "status": 200,
+            "json": payload,
+            "raw_json": {"data": payload, "meta": {"apiVersion": "v1"}},
+        }
+
+    def fake_wait_for(resolve, *_args):
+        assert resolve() is None
+        return resolve()
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
+
+    result = module.wait_for_transfer_sources(
+        "http://127.0.0.1:4711",
+        "key",
+        transfer_hash=transfer_hash,
+        expected_name=module.SERVER_SOURCE_FILE_NAME,
+        expected_size=module.SERVER_SOURCE_FILE_SIZE,
+        timeout_seconds=2.0,
+    )
+
+    assert result["sources"] == 1
+    assert len(result["observations"]) == 2
+
+
+def test_observe_client_id_classes_records_high_id_clients() -> None:
     module = load_suite_module()
 
     class FakeControl:
         def stats(self):
-            raise AssertionError("HighID success must not fetch failure diagnostics")
+            return {"ok": True, "data": {}}
 
-    result = module.require_high_id_clients(
+    result = module.observe_client_id_classes(
         FakeControl(),
         client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": True},
         client1_port=4662,
@@ -1599,16 +2810,17 @@ def test_require_high_id_clients_passes_without_fetching_server_stats() -> None:
     )
 
     assert result == {
-        "required": True,
-        "passed": True,
+        "high_id_required_for_transfer": False,
+        "all_high_id": True,
         "clients": {
             "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": True},
             "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
         },
+        "server_highid_verification": {"available": False},
     }
 
 
-def test_require_high_id_clients_fails_with_compact_server_verification_evidence() -> None:
+def test_observe_client_id_classes_records_low_id_server_evidence_without_gating() -> None:
     module = load_suite_module()
 
     class FakeControl:
@@ -1617,39 +2829,38 @@ def test_require_high_id_clients_fails_with_compact_server_verification_evidence
                 "ok": True,
                 "data": {
                     "bytes_in": 999,
-                    "highid_verify_verified": 1,
-                    "highid_verify_verified_marker": 0,
-                    "highid_verify_mismatch": 2,
-                    "highid_verify_no_answer": 3,
-                    "highid_verify_skipped": 4,
-                    "highid_verify_reasons": "connect failed: 3",
+                    "highid_observe_verified": 1,
+                    "highid_observe_verified_marker": 0,
+                    "highid_observe_mismatch": 2,
+                    "highid_observe_no_answer": 3,
+                    "highid_observe_skipped": 4,
+                    "highid_observe_reasons": "connect failed: 3",
                 },
             }
 
-    with pytest.raises(module.LowIdClientsError) as raised:
-        module.require_high_id_clients(
-            FakeControl(),
-            client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": False},
-            client1_port=4662,
-            client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
-            client2_port=4663,
-        )
+    result = module.observe_client_id_classes(
+        FakeControl(),
+        client1={"client_name": "client-one", "ip": "192.0.2.10", "high_id": False},
+        client1_port=4662,
+        client2={"client_name": "client-two", "ip": "192.0.2.11", "high_id": True},
+        client2_port=4663,
+    )
 
-    assert raised.value.evidence == {
-        "required": True,
-        "passed": False,
+    assert result == {
+        "high_id_required_for_transfer": False,
+        "all_high_id": False,
         "clients": {
             "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": False},
             "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
         },
         "server_highid_verification": {
             "available": True,
-            "highid_verify_verified": 1,
-            "highid_verify_verified_marker": 0,
-            "highid_verify_mismatch": 2,
-            "highid_verify_no_answer": 3,
-            "highid_verify_skipped": 4,
-            "highid_verify_reasons": "connect failed: 3",
+            "highid_observe_verified": 1,
+            "highid_observe_verified_marker": 0,
+            "highid_observe_mismatch": 2,
+            "highid_observe_no_answer": 3,
+            "highid_observe_skipped": 4,
+            "highid_observe_reasons": "connect failed: 3",
         },
     }
 

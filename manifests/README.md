@@ -13,13 +13,12 @@ direct ED2K bootstrap rows are intentionally externalized to the ignored repo-ro
 for the schema shape. Tracked manifests must keep only placeholders, stable
 contract vectors, or redacted summaries for live-wire runtime data.
 
-`protocol-oracle-golden.v1.json` tracks compact Kad/eD2K protocol oracle
-vectors and state-machine summaries. Its source-anchored stock section is a
-blocking coverage contract: every required Phase-4 behavior owns a canonical
-synthetic binary/state fixture, pinned community-baseline source anchors, and
-Rust proof selectors. Raw tracing-harness JSONL dumps, live packet hex,
-timestamps, peer addresses, and passive capture files must stay under generated
-`reports` artifacts and must not be committed as protocol goldens.
+`protocol-parity-catalog.json` is the single tracked eD2K/Kad protocol coverage
+authority. It owns protocol variants and state-machine transitions, their
+source and golden authorities, deterministic proof selectors, campaign
+ownership, evidence requirements, and current evidence status. Raw diagnostic
+JSONL, live packet hex, timestamps, peer addresses, and passive captures remain
+local generated evidence and are never committed into the catalog.
 
 `release-campaigns\` contains the eMuleBB-owned release test campaign model.
 The default template defines the strict release phase taxonomy used by future

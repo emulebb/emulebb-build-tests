@@ -2,7 +2,7 @@
 
 The same action set is executed identically against ONE client at a time (rust
 solo, then MFC solo — never simultaneously, which flaps rust off the operator via
-the shared HighID ``client_id`` = egress IP; see the ``converged-soak-live`` memo).
+the shared HighID ``client_id`` = egress IP; see the persisted-soak runbook).
 Each action emits ``begin``/``end`` markers carrying ``ts_utc`` so the offline diff
 can slice the ``[t0, t1]`` diag/packet window per action and correlate the two solo
 recordings by ``actionId``.
@@ -28,6 +28,8 @@ import os
 import re
 import struct
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -86,6 +88,47 @@ class CompletedFileVerification:
         }
 
 
+class ActionHttpError(RuntimeError):
+    """Stable retained taxonomy for one REST operation failure."""
+
+    def __init__(
+        self,
+        operation: str,
+        http_status: int,
+        api_error_code: str | None,
+    ) -> None:
+        super().__init__(f"{operation} failed with HTTP {http_status}")
+        self.operation = operation
+        self.http_status = http_status
+        self.api_error_code = api_error_code
+
+    def retained_outcome(self) -> dict[str, Any]:
+        outcome: dict[str, Any] = {
+            "errorCode": "action-http-error",
+            "errorType": type(self).__name__,
+            "operation": self.operation,
+            "httpStatus": self.http_status,
+        }
+        if self.api_error_code:
+            outcome["apiErrorCode"] = self.api_error_code
+        return outcome
+
+
+class ActionStateError(RuntimeError):
+    """Stable retained taxonomy for one non-runnable persisted transfer state."""
+
+    def __init__(self, state_code: str, message: str) -> None:
+        super().__init__(message)
+        self.state_code = state_code
+
+    def retained_outcome(self) -> dict[str, Any]:
+        return {
+            "errorCode": "action-state-error",
+            "errorType": type(self).__name__,
+            "stateCode": self.state_code,
+        }
+
+
 def utc_now_iso() -> str:
     """RFC3339 UTC with a ``Z`` suffix, matching the diag/packet ``ts_utc`` format."""
 
@@ -108,7 +151,8 @@ def build_ed2k_link(fixture: dict[str, Any]) -> str:
         raise ValueError("direct-transfer fixture needs a non-empty name")
     if not isinstance(size, int) or size <= 0:
         raise ValueError("direct-transfer fixture needs a positive integer size")
-    return f"ed2k://|file|{name}|{size}|{file_hash}|/"
+    encoded_name = urllib.parse.quote(name, safe="")
+    return f"ed2k://|file|{encoded_name}|{size}|{file_hash}|/"
 
 
 def default_action_set(
@@ -225,6 +269,12 @@ def execute_action_set(
         try:
             outcome = sanitize_action_outcome(action, runner(action))
             status = "ok"
+        except ActionHttpError as exc:
+            outcome = exc.retained_outcome()
+            status = "error"
+        except ActionStateError as exc:
+            outcome = exc.retained_outcome()
+            status = "error"
         except Exception as exc:  # noqa: BLE001 - one failing action must not abort the set
             # WHY: third-party exception text can embed operator-local paths,
             # queries, hashes, or response bodies. Retain only stable taxonomy.
@@ -262,6 +312,46 @@ def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: Any
     request = urllib.request.Request(base_url + path, data=data, method=method, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - trusted LAN REST
         return json.loads(response.read())
+
+
+def _http_optional(base_url: str, api_key: str, path: str) -> Any | None:
+    try:
+        return _http(base_url, api_key, path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise _action_http_error("lookup", error) from None
+
+
+def _action_http_error(operation: str, error: urllib.error.HTTPError) -> ActionHttpError:
+    api_error_code = None
+    try:
+        payload = json.loads(error.read().decode("utf-8", "replace"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            candidate = error_payload.get("code")
+        else:
+            candidate = payload.get("code")
+        if isinstance(candidate, str) and candidate:
+            api_error_code = candidate
+    return ActionHttpError(operation, int(error.code), api_error_code)
+
+
+def _action_http(
+    operation: str,
+    base_url: str,
+    api_key: str,
+    path: str,
+    method: str = "GET",
+    body: Any = None,
+) -> Any:
+    try:
+        return _http(base_url, api_key, path, method, body)
+    except urllib.error.HTTPError as error:
+        raise _action_http_error(operation, error) from None
 
 
 def _data(payload: Any) -> Any:
@@ -310,12 +400,97 @@ def run_search(
     return {"method": method, "searchId": search_id, "resultCount": result_count}
 
 
-def run_download(base_url: str, api_key: str, fixture: dict[str, Any]) -> dict[str, Any]:
-    """Add a direct transfer by ed2k link (``POST /api/v1/transfers``)."""
+def run_download(
+    base_url: str, api_key: str, fixture: dict[str, Any]
+) -> dict[str, Any]:
+    """Ensure the approved direct transfer is active in a persisted profile."""
 
-    link = str(fixture.get("link") or build_ed2k_link(fixture))
-    _http(base_url, api_key, "/api/v1/transfers", "POST", {"link": link})
-    return {"added": True}
+    link = build_ed2k_link(fixture)
+    file_hash = str(fixture["hash"]).strip().lower()
+    expected_size = int(fixture["size"])
+    existing_payload = _http_optional(
+        base_url, api_key, f"/api/v1/transfers/{file_hash}"
+    )
+    if existing_payload is None:
+        shared_payload = _http_optional(
+            base_url, api_key, f"/api/v1/shared-files/{file_hash}"
+        )
+        if shared_payload is not None:
+            shared = _data(shared_payload)
+            if not isinstance(shared, dict):
+                raise ActionStateError(
+                    "shared-response-invalid",
+                    "persisted shared-file response is not an object",
+                )
+            if str(shared.get("hash") or "").strip().lower() != file_hash:
+                raise ActionStateError(
+                    "shared-hash-mismatch",
+                    "persisted shared-file hash does not match approved fixture",
+                )
+            if shared.get("sizeBytes") != expected_size:
+                raise ActionStateError(
+                    "shared-size-mismatch",
+                    "persisted shared-file size does not match approved fixture",
+                )
+            raise ActionStateError(
+                "already-completed",
+                "approved persisted transfer is already completed",
+            )
+        _action_http(
+            "add",
+            base_url,
+            api_key,
+            "/api/v1/transfers",
+            "POST",
+            {"link": link},
+        )
+        return {"added": True, "reused": False, "resumed": False}
+
+    existing = _data(existing_payload)
+    if not isinstance(existing, dict):
+        raise ActionStateError(
+            "transfer-response-invalid",
+            "persisted transfer response is not an object",
+        )
+    if str(existing.get("hash") or "").strip().lower() != file_hash:
+        raise ActionStateError(
+            "transfer-hash-mismatch",
+            "persisted transfer hash does not match approved fixture",
+        )
+    if existing.get("sizeBytes") != expected_size:
+        raise ActionStateError(
+            "transfer-size-mismatch",
+            "persisted transfer size does not match approved fixture",
+        )
+
+    state = str(existing.get("state") or "").strip().lower()
+    if not state:
+        raise ActionStateError(
+            "transfer-state-missing",
+            "persisted transfer response has no state",
+        )
+    if bool(existing.get("stopped")):
+        raise ActionStateError("stopped", "approved persisted transfer is stopped")
+    if state == "completed":
+        raise ActionStateError(
+            "already-completed",
+            "approved persisted transfer is already completed",
+        )
+    if state == "paused":
+        _action_http(
+            "resume",
+            base_url,
+            api_key,
+            f"/api/v1/transfers/{file_hash}/operations/resume",
+            "POST",
+        )
+        return {"added": False, "reused": True, "resumed": True}
+    if state in {"downloading", "queued"}:
+        return {"added": False, "reused": True, "resumed": False}
+    raise ActionStateError(
+        "not-runnable",
+        "approved persisted transfer is not runnable",
+    )
 
 
 def _rotate_left_32(value: int, shift: int) -> int:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,19 @@ def test_build_ed2k_link_roundtrip() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "encoded_name"),
+    [
+        ("fixture with spaces (2026).rar", "fixture%20with%20spaces%20%282026%29.rar"),
+        ("Café fixture.rar", "Caf%C3%A9%20fixture.rar"),
+    ],
+)
+def test_build_ed2k_link_percent_encodes_file_name(name: str, encoded_name: str) -> None:
+    link = sa.build_ed2k_link({"hash": "A" * 32, "name": name, "size": 1234})
+
+    assert link == f"ed2k://|file|{encoded_name}|1234|{'a' * 32}|/"
+
+
+@pytest.mark.parametrize(
     "fixture",
     [
         {"hash": "A" * 31, "name": "x", "size": 1},  # short hash
@@ -29,6 +44,199 @@ def test_build_ed2k_link_roundtrip() -> None:
 def test_build_ed2k_link_rejects_bad_fixture(fixture: dict) -> None:
     with pytest.raises(ValueError):
         sa.build_ed2k_link(fixture)
+
+
+def test_run_download_adds_absent_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, object]] = []
+    fixture = {"hash": "a" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(sa, "_http_optional", lambda *_args: None)
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda _base, _key, path, method="GET", body=None: calls.append(
+            (path, method, body)
+        ),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": True, "reused": False, "resumed": False}
+    assert calls == [
+        (
+            "/api/v1/transfers",
+            "POST",
+            {"link": f"ed2k://|file|sample.bin|1234|{'a' * 32}|/"},
+        )
+    ]
+
+
+def test_run_download_rejects_completed_shared_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "a" * 32, "name": "sample.bin", "size": 1234}
+
+    def optional(_base: str, _key: str, path: str) -> dict | None:
+        if "/transfers/" in path:
+            return None
+        return {
+            "data": {
+                "hash": "A" * 32,
+                "sizeBytes": 1234,
+            }
+        }
+
+    monkeypatch.setattr(sa, "_http_optional", optional)
+    monkeypatch.setattr(
+        sa,
+        "_action_http",
+        lambda *_args, **_kwargs: pytest.fail("completed fixture must not be re-added"),
+    )
+
+    with pytest.raises(sa.ActionStateError, match="already completed") as captured:
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert captured.value.retained_outcome() == {
+        "errorCode": "action-state-error",
+        "errorType": "ActionStateError",
+        "stateCode": "already-completed",
+    }
+
+
+def test_run_download_reuses_active_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "b" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(
+        sa,
+        "_http_optional",
+        lambda *_args: {
+            "data": {
+                "hash": "B" * 32,
+                "sizeBytes": 1234,
+                "state": "downloading",
+                "stopped": False,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda *_args, **_kwargs: pytest.fail("active transfer must not be re-added"),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": False, "reused": True, "resumed": False}
+
+
+def test_run_download_resumes_paused_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, object]] = []
+    fixture = {"hash": "c" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(
+        sa,
+        "_http_optional",
+        lambda *_args: {
+            "data": {
+                "hash": "c" * 32,
+                "sizeBytes": 1234,
+                "state": "paused",
+                "stopped": False,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sa,
+        "_http",
+        lambda _base, _key, path, method="GET", body=None: calls.append(
+            (path, method, body)
+        ),
+    )
+
+    result = sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert result == {"added": False, "reused": True, "resumed": True}
+    assert calls == [
+        (
+            f"/api/v1/transfers/{'c' * 32}/operations/resume",
+            "POST",
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("transfer", "message"),
+    [
+        (
+            {"hash": "d" * 32, "sizeBytes": 1235, "state": "downloading"},
+            "size does not match",
+        ),
+        (
+            {
+                "hash": "d" * 32,
+                "sizeBytes": 1234,
+                "state": "paused",
+                "stopped": True,
+            },
+            "is stopped",
+        ),
+        (
+            {"hash": "d" * 32, "sizeBytes": 1234, "state": "completed"},
+            "already completed",
+        ),
+        (
+            {"hash": "d" * 32, "sizeBytes": 1234, "state": "hashing"},
+            "is not runnable",
+        ),
+    ],
+)
+def test_run_download_rejects_unusable_persisted_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    transfer: dict[str, object],
+    message: str,
+) -> None:
+    fixture = {"hash": "d" * 32, "name": "sample.bin", "size": 1234}
+    monkeypatch.setattr(sa, "_http_optional", lambda *_args: {"data": transfer})
+
+    with pytest.raises(RuntimeError, match=message):
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+
+def test_run_download_retains_lookup_http_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {"hash": "e" * 32, "name": "sample.bin", "size": 1234}
+    error = urllib.error.HTTPError(
+        "http://127.0.0.1:4711/api/v1/transfers/private",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "transfer-state-conflict",
+                        "message": "private fixture detail",
+                    }
+                }
+            ).encode()
+        ),
+    )
+    monkeypatch.setattr(sa, "_http", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+
+    with pytest.raises(sa.ActionHttpError) as captured:
+        sa.run_download("http://127.0.0.1:4711", "secret", fixture)
+
+    assert captured.value.retained_outcome() == {
+        "errorCode": "action-http-error",
+        "errorType": "ActionHttpError",
+        "operation": "lookup",
+        "httpStatus": 409,
+        "apiErrorCode": "transfer-state-conflict",
+    }
+    assert "private fixture detail" not in json.dumps(captured.value.retained_outcome())
 
 
 def test_default_action_set_one_search_per_method_plus_downloads() -> None:
@@ -144,6 +352,55 @@ def test_execute_action_set_isolates_a_failing_action() -> None:
     retained = json.dumps({"markers": markers, "results": results})
     assert "private fixture" not in retained
     assert "secret" not in retained
+
+
+def test_execute_action_set_retains_structured_http_failure() -> None:
+    actions = sa.default_action_set(
+        [], [{"hash": "f" * 32, "name": "private.bin", "size": 5}]
+    )
+    markers: list[dict] = []
+
+    results = sa.execute_action_set(
+        actions,
+        lambda _action: (_ for _ in ()).throw(
+            sa.ActionHttpError("resume", 409, "transfer-not-paused")
+        ),
+        markers.append,
+    )
+
+    assert results == [
+        {
+            "actionId": "action-0001",
+            "status": "error",
+            "outcome": {
+                "errorCode": "action-http-error",
+                "errorType": "ActionHttpError",
+                "operation": "resume",
+                "httpStatus": 409,
+                "apiErrorCode": "transfer-not-paused",
+            },
+        }
+    ]
+
+
+def test_execute_action_set_retains_structured_state_failure() -> None:
+    actions = sa.default_action_set(
+        [], [{"hash": "f" * 32, "name": "private.bin", "size": 5}]
+    )
+
+    results = sa.execute_action_set(
+        actions,
+        lambda _action: (_ for _ in ()).throw(
+            sa.ActionStateError("already-completed", "private fixture completed")
+        ),
+        lambda _marker: None,
+    )
+
+    assert results[0]["outcome"] == {
+        "errorCode": "action-state-error",
+        "errorType": "ActionStateError",
+        "stateCode": "already-completed",
+    }
 
 
 def test_verify_completed_file_checks_size_ed2k_and_computes_sha256(tmp_path: Path) -> None:

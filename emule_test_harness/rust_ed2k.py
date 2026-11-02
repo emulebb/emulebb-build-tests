@@ -351,6 +351,7 @@ def build_server_config(
     offerfiles_v1: bool = False,
     soft_limit_files: int = 5000,
     hard_limit_files: int = 200000,
+    get_sources_cache_seconds: int = 1,
     server_name: str = "emulebb-local-e2e",
 ) -> dict[str, object]:
     """Writes a minimal private Rust server configuration for local harness runs."""
@@ -363,6 +364,8 @@ def build_server_config(
         raise ValueError("soft_limit_files must be non-negative.")
     if hard_limit_files < 0:
         raise ValueError("hard_limit_files must be non-negative.")
+    if not 1 <= get_sources_cache_seconds <= 600:
+        raise ValueError("get_sources_cache_seconds must be between 1 and 600.")
     config: dict[str, object] = {
         "server": {
             "name": server_name,
@@ -374,7 +377,6 @@ def build_server_config(
             "tcp_port": ed2k_port,
             "listen_ip": listen_address,
             "support_crypt": protocol_obfuscation,
-            "private_highid_probe": True,
         },
         "limits": {
             "max_clients": 1000,
@@ -382,6 +384,7 @@ def build_server_config(
             "hard_limit_files": hard_limit_files,
             "ping_delay_seconds": 600,
             "offerfiles_v1": offerfiles_v1,
+            "getsources_cache_secs": get_sources_cache_seconds,
         },
         "content_filter": {
             "hash_banlist": [],
@@ -422,7 +425,6 @@ def build_server_config(
         f"tcp_port = {ed2k_port}",
         f"listen_ip = {_toml_string(listen_address)}",
         f"support_crypt = {str(protocol_obfuscation).lower()}",
-        "private_highid_probe = true",
         "",
         "[limits]",
         "max_clients = 1000",
@@ -430,6 +432,7 @@ def build_server_config(
         f"hard_limit_files = {hard_limit_files}",
         "ping_delay_seconds = 600",
         f"offerfiles_v1 = {str(offerfiles_v1).lower()}",
+        f"getsources_cache_secs = {get_sources_cache_seconds}",
         "",
         "[content_filter]",
         "hash_banlist = []",
@@ -777,7 +780,7 @@ def launch_server(
     if _is_windows_host():
         advertised_address = wsl_ipv4_address(distribution)
         listen_address = "0.0.0.0"
-        client_address = str(windows_client_address or "127.0.0.1").strip()
+        client_address = str(windows_client_address or advertised_address).strip()
     else:
         advertised_address = ed2k_address
         listen_address = ed2k_address
@@ -796,6 +799,7 @@ def launch_server(
         offerfiles_v1=offerfiles_v1,
         soft_limit_files=soft_limit_files,
         hard_limit_files=hard_limit_files,
+        get_sources_cache_seconds=1,
     )
     process = start_server(
         binary.server_exe,

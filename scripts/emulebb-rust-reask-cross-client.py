@@ -20,7 +20,6 @@ which the public live-wire run could not (the server rate-limited searches).
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -33,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
@@ -151,7 +151,7 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
 
 def rust_download_emulebb_file(base_url, api_key, *, query, transfer_hash, timeout):
     """Drives a Rust server search for the eMuleBB file + starts the download."""
-    found = cc.wait_for_rust_search_result(
+    found = rust_local_ed2k.wait_for_server_search_result(
         base_url, api_key, query=query, transfer_hash=transfer_hash, timeout_seconds=timeout,
     )
     search_id = found["search"]["id"]

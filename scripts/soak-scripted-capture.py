@@ -1,14 +1,15 @@
 """Solo scripted-action capture for the capture-then-offline-diff parity model.
 
-Brings up ONE client (rust OR mfc) on the persisted profile, ensures operator +
-Kad, runs the identical scripted action set (``scripted_actions``) with begin/end
-markers, packs sanitized results and markers into a compressed recording under
+Brings up ONE client (rust OR mfc) on the persisted profile through the already
+active hide.me full tunnel, binds local control to loopback, requires VPN Guard
+Block, ensures operator + Kad, runs the identical scripted action set
+(``scripted_actions``) with begin/end markers, packs results and markers under
 ``$OUTPUT_ROOT/soak/reports/<campaign>/``, retains raw diagnostics in a private
 artifact sibling, then tears the client down.
 
 Run it once per client (``--client rust`` then ``--client mfc``) — SEQUENTIALLY,
 never simultaneously: two HighID clients on one hide.me egress IP share a
-``client_id`` and the operator flaps rust off (see the converged-soak-live memo).
+``client_id`` and the operator flaps rust off (see the persisted-soak runbook).
 The two recordings are then diffed offline by ``actionId`` — apples-to-apples,
 reproducible, contention-free.
 
@@ -39,10 +40,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw  # noqa: E402
-from emule_test_harness import scripted_actions, soak_launch  # noqa: E402
-from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready  # noqa: E402
-from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints  # noqa: E402
-from emule_test_harness.live_wire_inputs import load_live_wire_inputs  # noqa: E402
+from emule_test_harness import (  # noqa: E402
+    converged_observer,
+    diagnostic_run_scan,
+    scripted_actions,
+    soak_launch,
+    soak_storage,
+    transfer_coverage_evidence,
+)
+from emule_test_harness import hideme_vpn  # noqa: E402
+from emule_test_harness.kad_nodes import (  # noqa: E402
+    DEFAULT_NODES_DAT_URL,
+    fetch_bootstrap_endpoints,
+)
+from emule_test_harness.live_wire_inputs import LiveWireInputs, load_live_wire_inputs  # noqa: E402
 from emule_test_harness.native_parity_inputs import (  # noqa: E402
     audit_client_processes,
     audit_open_handles,
@@ -72,8 +83,12 @@ from emule_test_harness.native_windows_network import (  # noqa: E402
     resolve_windows_adapter_hints,
     verify_upnp_port_mappings,
 )
-from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness.paths import (  # noqa: E402
+    get_required_emule_workspace_root,
+    get_workspace_output_root,
+)
 from emule_test_harness.rust_client import stop_process_tree  # noqa: E402
+from emule_test_harness.soak_build_refresh import refresh_diagnostics_build  # noqa: E402
 from emule_test_harness.soak_launch import (  # noqa: E402
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
@@ -91,11 +106,130 @@ from emule_test_harness.soak_launch import (  # noqa: E402
 )
 
 MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS = 15
+MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES = 1 * 1024 * 1024
+MFC_DIAGNOSTIC_RETAINED_SEGMENTS = 128
+MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS = 60 * 60
+MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS = 7 * 24 * 60 * 60
+
+
+def persisted_profile_dir(inputs: LiveWireInputs, client: str) -> Path:
+    """Return the configured persisted profile for one solo capture client."""
+
+    if client == "rust":
+        profile_dir = inputs.rust_profile_dir
+    elif client == "mfc":
+        profile_dir = inputs.mfc_profile_dir
+    else:
+        raise ValueError(f"unsupported capture client: {client!r}")
+    if profile_dir is None:
+        raise RuntimeError(f"Persisted {client} capture requires {client}_profile.profile_dir in the live-wire inputs.")
+    return profile_dir.resolve()
+
+
+def focused_capture_writer_policy(
+    inputs: LiveWireInputs,
+) -> soak_storage.RustDiagnosticWriterPolicy:
+    """Derive a short-segment Rust ring for incremental protocol evidence scans."""
+
+    storage = inputs.soak_storage
+    if storage is None:
+        raise RuntimeError("Focused persisted capture requires soak_storage in the live-wire inputs.")
+    source = storage.rust_diagnostics
+    bundle = storage.stream("diagnostic_bundles")
+    pins = storage.stream("diagnostic_pins")
+    max_segment_bytes = min(source.max_segment_bytes, bundle.max_segment_bytes)
+    max_segment_seconds = min(source.max_segment_seconds, 60)
+    pin_capacity_bytes = pins.max_segment_bytes * pins.retained_segments
+    retained_segments = min(
+        source.retained_segments,
+        pin_capacity_bytes // max_segment_bytes,
+    )
+    if retained_segments < 2:
+        raise RuntimeError("Focused persisted capture storage cannot retain two diagnostic segments.")
+    max_total_bytes = min(
+        source.max_total_bytes,
+        pin_capacity_bytes,
+        max_segment_bytes * retained_segments,
+    )
+    return soak_storage.RustDiagnosticWriterPolicy(
+        max_segment_bytes=max_segment_bytes,
+        max_segment_seconds=max_segment_seconds,
+        retained_segments=retained_segments,
+        max_total_bytes=max_total_bytes,
+        max_retained_seconds=min(
+            source.max_retained_seconds,
+            max_segment_seconds * retained_segments,
+        ),
+        minimum_free_bytes=source.minimum_free_bytes,
+    )
+
+
+def focused_mfc_segment_bytes(inputs: LiveWireInputs) -> int:
+    """Fits MFC's fixed 128-segment ring inside the focused capture budget."""
+
+    focused_policy = focused_capture_writer_policy(inputs)
+    segment_bytes, remainder = divmod(
+        focused_policy.max_total_bytes,
+        MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+    )
+    if remainder:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot divide the diagnostic budget across MFC's fixed retained segment count."
+        )
+    if segment_bytes < MFC_DIAGNOSTIC_MIN_SEGMENT_BYTES:
+        raise RuntimeError("Focused persisted capture storage cannot satisfy MFC's minimum diagnostic segment size.")
+    if segment_bytes > focused_policy.max_segment_bytes:
+        raise RuntimeError(
+            "Focused persisted capture storage cannot keep MFC segments within the incremental scan bound."
+        )
+    return segment_bytes
+
+
+def require_focused_mfc_writer_ready(
+    base_url: str,
+    api_key: str,
+    process_id: int,
+    segment_bytes: int,
+) -> dict[str, object]:
+    """Requires the live MFC writer to match the bounded focused-capture ring."""
+
+    health = converged_observer.diagnostic_writer_health(
+        f"{base_url.rstrip('/')}/api/v1",
+        api_key,
+    )
+    expected = {
+        "processId": process_id,
+        "maxSegmentBytes": segment_bytes,
+        "maxSegmentSeconds": MFC_DIAGNOSTIC_MAX_SEGMENT_SECONDS,
+        "retainedSegments": MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+        "maxTotalBytes": segment_bytes * MFC_DIAGNOSTIC_RETAINED_SEGMENTS,
+        "maxRetainedSeconds": MFC_DIAGNOSTIC_MAX_RETAINED_SECONDS,
+        "minimumFreeBytes": 0,
+    }
+    mismatches = [
+        f"{name}={health.get(name)!r} expected {value!r}"
+        for name, value in expected.items()
+        if health.get(name) != value
+    ]
+    active_file_name = health.get("activeFileName")
+    expected_prefix = f"emulebb-mfc-diag-{process_id}-"
+    if not isinstance(active_file_name, str) or not active_file_name.startswith(expected_prefix):
+        mismatches.append(f"activeFileName={active_file_name!r} expected prefix {expected_prefix!r}")
+    if mismatches:
+        raise RuntimeError(
+            "MFC diagnostic writer health does not satisfy the focused capture policy: " + "; ".join(mismatches)
+        )
+    return health
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--client", required=True, choices=("rust", "mfc"), help="Which client to capture (solo).")
+    parser.add_argument(
+        "--client",
+        required=True,
+        choices=("rust", "mfc"),
+        help="Which client to capture (solo).",
+    )
     parser.add_argument(
         "--route",
         choices=("vpn", "direct"),
@@ -108,33 +242,62 @@ def build_parser() -> argparse.ArgumentParser:
         default="upnp",
         help="Direct-route inbound connectivity case.",
     )
-    parser.add_argument("--campaign", default=None, help="Report subfolder name (default: UTC timestamp).")
+    parser.add_argument(
+        "--campaign",
+        default=None,
+        help="Report subfolder name (default: UTC timestamp).",
+    )
     parser.add_argument("--inputs", help="live-wire-inputs.local.json. Default: repo-root copy.")
-    parser.add_argument("--rest-port", type=int, default=None, help="REST port (default 4731 rust / 4732 mfc).")
+    parser.add_argument(
+        "--rest-port",
+        type=int,
+        default=None,
+        help="REST port (default 4731 rust / 4732 mfc).",
+    )
     parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
     parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
     parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
-    parser.add_argument("--search-methods", default="server,global,kad", help="Comma list of search methods.")
+    parser.add_argument(
+        "--search-methods",
+        default="server,global,kad",
+        help="Comma list of search methods; pass an empty value for transfer-only capture.",
+    )
     parser.add_argument(
         "--search-terms",
         default="ubuntu,linux,debian",
         help="Well-sourced search terms (round-robin over methods). AVOID stale terms (e.g. fedora).",
     )
     parser.add_argument(
-        "--download-terms",
-        default="ubuntu,linux",
-        help="Terms searched to RESOLVE well-sourced download fixtures (ranked by source count).",
+        "--fixture-count",
+        type=int,
+        default=1,
+        help="How many approved direct_bootstrap_transfers to use.",
     )
-    parser.add_argument("--fixture-count", type=int, default=2, help="How many sourced download fixtures to use.")
     parser.add_argument(
-        "--fixture-hashes",
-        default=None,
-        help="Explicit CSV of ed2k hashes to download (overrides resolution; use to reuse across runs).",
+        "--spacing-seconds",
+        type=float,
+        default=scripted_actions.DEFAULT_SPACING_SECONDS,
     )
-    parser.add_argument("--spacing-seconds", type=float, default=scripted_actions.DEFAULT_SPACING_SECONDS)
-    parser.add_argument("--settle-seconds", type=float, default=90.0, help="Post-action wait for source-acquisition.")
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=90.0,
+        help="Post-action wait for source-acquisition.",
+    )
+    parser.add_argument(
+        "--transfer-coverage-timeout-seconds",
+        type=float,
+        default=None,
+        help="Persisted VPN only: wait for an exact client-UDP request lifecycle; 0 waits until proof or Ctrl-C.",
+    )
+    parser.add_argument(
+        "--transfer-coverage-poll-seconds",
+        type=float,
+        default=5.0,
+        help="Closed diagnostic-segment scan cadence for transfer coverage.",
+    )
     parser.add_argument(
         "--download-timeout-seconds",
         type=float,
@@ -170,7 +333,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="After connect/actions, hold the client open and poll REST server status for this many seconds.",
     )
-    parser.add_argument("--hold-poll-seconds", type=float, default=5.0, help="REST poll cadence for --hold-seconds.")
+    parser.add_argument(
+        "--hold-poll-seconds",
+        type=float,
+        default=5.0,
+        help="REST poll cadence for --hold-seconds.",
+    )
     parser.add_argument(
         "--fresh-profile",
         action="store_true",
@@ -203,6 +371,233 @@ def _utc_stamp() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def normalized_search_methods(value: str) -> tuple[str, ...]:
+    """Returns the explicitly selected search methods, allowing transfer-only runs."""
+
+    return tuple(method.strip() for method in value.split(",") if method.strip())
+
+
+def control_bind_address(route: str) -> str:
+    """Select loopback for full-tunnel control and inherited LAN state for direct runs."""
+
+    if route == "vpn":
+        return "127.0.0.1"
+    if route != "direct":
+        raise ValueError(f"unsupported capture route: {route!r}")
+    address = os.environ.get("X_LOCAL_IP", "").strip()
+    if not address:
+        raise RuntimeError("X_LOCAL_IP must be set for direct-route REST control.")
+    return address
+
+
+def _transfer_coverage_summary(
+    evidence: dict[str, object],
+    *,
+    timed_out: bool,
+    stopped_by_operator: bool,
+    route_lost: bool,
+    finalized: bool,
+    elapsed_seconds: float,
+) -> dict[str, object]:
+    proof = evidence["proof"]
+    source = evidence["source"]
+    assert isinstance(proof, dict)
+    assert isinstance(source, dict)
+    return {
+        "contract": transfer_coverage_evidence.CONTRACT,
+        "enabled": True,
+        "complete": bool(evidence["complete"]),
+        "protocolChainComplete": bool(evidence["protocolChainComplete"]),
+        "timedOut": timed_out,
+        "stoppedByOperator": stopped_by_operator,
+        "routeLost": route_lost,
+        "finalized": finalized,
+        "elapsedSeconds": round(elapsed_seconds, 3),
+        "closedSegmentsScanned": source["closedSegmentsScanned"],
+        "lastClosedSegmentId": source["lastClosedSegmentId"],
+        "proofSlots": sorted(proof),
+        "privateArtifact": "transfer-coverage-evidence.json",
+    }
+
+
+def observe_transfer_coverage(
+    *,
+    base_url: str,
+    api_key: str,
+    client: str,
+    process_id: int,
+    diagnostics_dir: Path,
+    fixture_hashes: tuple[str, ...],
+    evidence_path: Path,
+    max_bytes: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+    route_guard: Callable[[], object] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    now_utc: Callable[[], str] = _utc_now,
+    checkpoint: dict[str, object] | None = None,
+    evidence: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    """Scan closed segments until exact client-UDP proof, timeout, or operator stop."""
+
+    started = monotonic()
+    deadline = None if timeout_seconds == 0 else started + timeout_seconds
+    diagnostic_base_url = f"{base_url.rstrip('/')}/api/v1"
+    if (checkpoint is None) != (evidence is None):
+        raise RuntimeError("Transfer coverage checkpoint and evidence must be supplied together.")
+    if checkpoint is None:
+        health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
+        if health.get("processId") != process_id:
+            raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
+        evidence = transfer_coverage_evidence.new_evidence(
+            client=client,
+            process_id=process_id,
+            run_id=str(health["runId"]),
+            fixture_hashes=fixture_hashes,
+            observed_utc=now_utc(),
+        )
+    assert evidence is not None
+    timed_out = False
+    stopped_by_operator = False
+    route_lost = False
+    try:
+        while True:
+            if route_guard is not None:
+                try:
+                    route_guard()
+                except Exception:  # noqa: BLE001 - route loss is retained as bounded evidence
+                    route_lost = True
+                    break
+            observed_utc = now_utc()
+            health = converged_observer.diagnostic_writer_health(diagnostic_base_url, api_key)
+            advanced = diagnostic_run_scan.scan_closed_segments(
+                profile_dir=diagnostics_dir,
+                client=client,
+                writer_health=health,
+                observed_utc=observed_utc,
+                checkpoint=checkpoint,
+            )
+            checkpoint = advanced.checkpoint
+            evidence = transfer_coverage_evidence.advance_evidence(
+                evidence,
+                advanced.processed_segments,
+                observed_utc=observed_utc,
+                segment_snapshots=advanced.processed_snapshots,
+            )
+            transfer_coverage_evidence.write_evidence(
+                evidence_path,
+                evidence,
+                max_bytes=max_bytes,
+            )
+            if evidence["complete"]:
+                if route_guard is not None:
+                    try:
+                        route_guard()
+                    except Exception:  # noqa: BLE001 - reject proof after route loss
+                        route_lost = True
+                break
+            now = monotonic()
+            if deadline is not None and now >= deadline:
+                timed_out = True
+                break
+            sleep(poll_seconds if deadline is None else min(poll_seconds, deadline - now))
+    except KeyboardInterrupt:
+        stopped_by_operator = True
+    elapsed = monotonic() - started
+    summary = _transfer_coverage_summary(
+        evidence,
+        timed_out=timed_out,
+        stopped_by_operator=stopped_by_operator,
+        route_lost=route_lost,
+        finalized=False,
+        elapsed_seconds=elapsed,
+    )
+    return summary, checkpoint, evidence
+
+
+def initialize_transfer_coverage(
+    *,
+    base_url: str,
+    api_key: str,
+    client: str,
+    process_id: int,
+    diagnostics_dir: Path,
+    fixture_hashes: tuple[str, ...],
+    observed_utc: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Start a contiguous evidence tail immediately before scripted actions."""
+
+    health = converged_observer.diagnostic_writer_health(
+        f"{base_url.rstrip('/')}/api/v1", api_key
+    )
+    if health.get("processId") != process_id:
+        raise RuntimeError("Diagnostic writer process identity does not match the launched client.")
+    advanced = diagnostic_run_scan.scan_closed_segments(
+        profile_dir=diagnostics_dir,
+        client=client,
+        writer_health=health,
+        observed_utc=observed_utc,
+        tail_from_active=True,
+    )
+    evidence = transfer_coverage_evidence.new_evidence(
+        client=client,
+        process_id=process_id,
+        run_id=str(health["runId"]),
+        fixture_hashes=fixture_hashes,
+        observed_utc=observed_utc,
+    )
+    return advanced.checkpoint, evidence
+
+
+def finalize_transfer_coverage(
+    *,
+    client: str,
+    diagnostics_dir: Path,
+    checkpoint: dict[str, object],
+    evidence: dict[str, object],
+    evidence_path: Path,
+    max_bytes: int,
+    summary: dict[str, object],
+    observed_utc: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Capture the writer's final active segment after graceful client shutdown."""
+
+    advanced = diagnostic_run_scan.finalize_stopped_run(
+        profile_dir=diagnostics_dir,
+        client=client,
+        observed_utc=observed_utc,
+        checkpoint=checkpoint,
+    )
+    finalized = transfer_coverage_evidence.advance_evidence(
+        evidence,
+        advanced.processed_segments,
+        observed_utc=observed_utc,
+        segment_snapshots=advanced.processed_snapshots,
+    )
+    transfer_coverage_evidence.write_evidence(
+        evidence_path,
+        finalized,
+        max_bytes=max_bytes,
+    )
+    result = dict(summary)
+    result.update(
+        _transfer_coverage_summary(
+            finalized,
+            timed_out=bool(summary["timedOut"]),
+            stopped_by_operator=bool(summary["stoppedByOperator"]),
+            route_lost=bool(summary["routeLost"]),
+            finalized=True,
+            elapsed_seconds=float(summary["elapsedSeconds"]),
+        )
+    )
+    return result, finalized
+
+
 def _campaign_leaf(value: str | None) -> str:
     """Return one retention-safe report leaf, never a caller-controlled path."""
 
@@ -215,13 +610,27 @@ def _campaign_leaf(value: str | None) -> str:
         or value.rstrip(". ") != value
     ):
         raise RuntimeError("--campaign must be one safe report-directory leaf.")
-    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
     if value.split(".", 1)[0].upper() in reserved:
         raise RuntimeError("--campaign must be one safe report-directory leaf.")
     return value
 
 
-def _http(base_url: str, api_key: str, path: str, method: str = "GET", body: object = None, timeout: float = 20.0) -> dict:
+def _http(
+    base_url: str,
+    api_key: str,
+    path: str,
+    method: str = "GET",
+    body: object = None,
+    timeout: float = 20.0,
+) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"X-API-Key": api_key}
     if body is not None:
@@ -274,7 +683,12 @@ def observe_operator_hold(
     while time.monotonic() < deadline:
         started = time.monotonic()
         try:
-            payload = _http(base_url, api_key, "/api/v1/status", timeout=min(10.0, max(2.0, poll_seconds)))
+            payload = _http(
+                base_url,
+                api_key,
+                "/api/v1/status",
+                timeout=min(10.0, max(2.0, poll_seconds)),
+            )
             elapsed = time.monotonic() - started
             snapshot = _server_status_snapshot(payload, request_seconds=elapsed)
         except Exception as exc:  # noqa: BLE001
@@ -328,54 +742,31 @@ def ensure_kad(base_url: str, api_key: str, *, wait_seconds: float = 120.0) -> b
     return False
 
 
-def resolve_sourced_fixtures(
-    base_url: str, api_key: str, terms: list[str], count: int, *, poll_seconds: float = 25.0
-) -> list[dict]:
-    """Search well-sourced terms and return the top ``count`` results BY SOURCE COUNT
-    (sources > 0 only), as {hash,name,size} download fixtures. This is why downloads
-    use ubuntu/linux and not a stale/synthetic hash: the source-acquisition + transfer
-    comparison is only meaningful against files that actually have sources."""
-
-    seen: dict[str, dict] = {}
-    for term in terms:
-        result = scripted_actions.run_search(base_url, api_key, term, "global", poll_seconds=poll_seconds)
-        search_id = result.get("searchId") or ""
-        try:
-            page = _http(base_url, api_key, f"/api/v1/searches/{search_id}")
-        except Exception:  # noqa: BLE001
-            continue
-        rows = page.get("data", {}).get("items") if isinstance(page.get("data"), dict) else None
-        for row in rows or []:
-            file_hash = str(row.get("hash") or "").strip().lower()
-            sources = int(row.get("sources") or row.get("completeSources") or 0)
-            size = int(row.get("sizeBytes") or row.get("size") or 0)
-            name = str(row.get("name") or row.get("fileName") or "").strip()
-            if len(file_hash) != 32 or sources <= 0 or size <= 0 or not name:
-                continue
-            existing = seen.get(file_hash)
-            if existing is None or sources > int(existing["sources"]):
-                seen[file_hash] = {"hash": file_hash, "name": name, "size": size, "sources": sources}
-    ranked = sorted(seen.values(), key=lambda fx: (-int(fx["sources"]), int(fx["size"])))
-    return [{"hash": fx["hash"], "name": fx["name"], "size": fx["size"]} for fx in ranked[:count]]
-
-
 def campaign_fixtures(
-    *, campaign_dir: Path, base_url: str, api_key: str, explicit_hashes: str | None,
-    download_terms: list[str], count: int,
+    *,
+    campaign_dir: Path,
+    approved_fixtures: tuple[dict[str, object], ...],
+    count: int,
 ) -> list[dict]:
-    """Resolve download fixtures once per campaign and reuse them across the two solo
-    runs so both clients fetch the SAME sourced files (apples-to-apples)."""
+    """Snapshot approved fixtures once so both solo runs use identical transfers."""
 
     fixtures_path = campaign_dir / "fixtures.json"
-    if explicit_hashes:
-        # Explicit hashes: sizes/names come from a quick search lookup if resolvable.
-        wanted = {h.strip().lower() for h in explicit_hashes.split(",") if h.strip()}
-        resolved = [fx for fx in resolve_sourced_fixtures(base_url, api_key, download_terms, count * 4) if fx["hash"] in wanted]
-        if resolved:
-            return resolved
     if fixtures_path.is_file():
-        return json.loads(fixtures_path.read_text(encoding="utf-8"))
-    fixtures = resolve_sourced_fixtures(base_url, api_key, download_terms, count)
+        fixtures = json.loads(fixtures_path.read_text(encoding="utf-8"))
+        if not isinstance(fixtures, list) or not fixtures:
+            raise RuntimeError("Campaign transfer fixture snapshot is invalid.")
+        for fixture in fixtures:
+            if not isinstance(fixture, dict):
+                raise RuntimeError("Campaign transfer fixture snapshot is invalid.")
+            scripted_actions.build_ed2k_link(fixture)
+        return fixtures
+    if count <= 0:
+        raise RuntimeError("--fixture-count must be greater than zero.")
+    if len(approved_fixtures) < count:
+        raise RuntimeError("Live-wire inputs do not contain enough approved direct bootstrap transfers.")
+    fixtures = [dict(fixture) for fixture in approved_fixtures[:count]]
+    for fixture in fixtures:
+        scripted_actions.build_ed2k_link(fixture)
     fixtures_path.parent.mkdir(parents=True, exist_ok=True)
     fixtures_path.write_text(json.dumps(fixtures, indent=2), encoding="utf-8")
     return fixtures
@@ -408,11 +799,7 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
         if not stat.S_ISREG(source_info.st_mode):
             continue
         name = path.name.lower()
-        if not (
-            name.endswith(".jsonl")
-            or name.endswith(".log")
-            or name == clw.EMULE_DIAG_HEALTH_FILE
-        ):
+        if not (name.endswith(".jsonl") or name.endswith(".log") or name == clw.EMULE_DIAG_HEALTH_FILE):
             continue
         if source_info.st_mtime < since:
             continue
@@ -438,9 +825,7 @@ def gather_recording(dump_dir: Path, dest: Path, since: float) -> int:
     return copied
 
 
-def validate_recorded_diagnostics(
-    dumps_dir: Path, *, client: str, process_id: int
-) -> dict[str, object]:
+def validate_recorded_diagnostics(dumps_dir: Path, *, client: str, process_id: int) -> dict[str, object]:
     """Require a nonempty current run and lossless MFC writer health."""
 
     if client not in {"rust", "mfc"}:
@@ -462,7 +847,7 @@ def pack_recording(
     report_dir: Path,
     *,
     incoming_dir: Path | None = None,
-    private_evidence_path: Path | None = None,
+    private_evidence_paths: tuple[Path, ...] = (),
 ) -> Path:
     """Pack sanitized evidence and move all private/raw artifacts beside it."""
 
@@ -495,15 +880,23 @@ def pack_recording(
             raise RuntimeError("Could not inspect the native incoming directory.") from None
         if incoming_has_files:
             private_moves.append(
-                (resolved_incoming, artifact_dir / "downloaded-payloads", "downloaded payloads")
+                (
+                    resolved_incoming,
+                    artifact_dir / "downloaded-payloads",
+                    "downloaded payloads",
+                )
             )
-    if private_evidence_path is not None:
+    for private_evidence_path in private_evidence_paths:
         if not private_evidence_path.is_file():
-            raise RuntimeError("Private completion evidence is missing.")
+            raise RuntimeError("Private evidence is missing.")
         if not private_evidence_path.resolve().is_relative_to(report_dir.resolve()):
-            raise RuntimeError("Private completion evidence is outside the bounded report tree.")
+            raise RuntimeError("Private evidence is outside the bounded report tree.")
         private_moves.append(
-            (private_evidence_path, artifact_dir / "completion-private.json", "completion evidence")
+            (
+                private_evidence_path,
+                artifact_dir / private_evidence_path.name,
+                f"{private_evidence_path.name} evidence",
+            )
         )
     for source, destination, label in (
         (report_dir / "dumps", artifact_dir / "dumps", "diagnostic dumps"),
@@ -712,9 +1105,7 @@ def _resolve_native_capture_interface(local_address: str, override: str | None):
 def _select_linux_document_term(terms: tuple[str, ...]) -> str:
     matches = [term for term in terms if "linux" in term.casefold().split()]
     if not matches:
-        raise RuntimeError(
-            "Native parity inputs must include the requested Linux document search term."
-        )
+        raise RuntimeError("Native parity inputs must include the requested Linux document search term.")
     return matches[0]
 
 
@@ -874,8 +1265,7 @@ def _teardown_client(
                 failures.append(
                     (
                         "rust-clean-teardown",
-                        shutdown_error
-                        or TimeoutError("Rust process remained alive after graceful shutdown."),
+                        shutdown_error or TimeoutError("Rust process remained alive after graceful shutdown."),
                     )
                 )
                 stop_process_tree(process)
@@ -960,9 +1350,7 @@ def _run_post_run_safety_audits(
         )
         if metadata_audit.changed_root_indices:
             raise RuntimeError("A configured forbidden legacy root changed during the campaign.")
-        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(
-            metadata_audit
-        )
+        results_meta["legacyRootMetadataAudit"] = summarize_forbidden_root_metadata_audit(metadata_audit)
     except Exception as error:  # noqa: BLE001 - this is the final independent audit
         failures.append(("forbidden-root-metadata-audit", error))
     results_meta["upnpMappingAudits"] = upnp_audits
@@ -1023,7 +1411,9 @@ def _approved_shared_file_count(shared_roots: list[dict[str, object]]) -> int:
     return len(_approved_shared_files(shared_roots))
 
 
-def _shared_inventory_page(payload: dict[str, object]) -> tuple[list[dict[str, object]], int]:
+def _shared_inventory_page(
+    payload: dict[str, object],
+) -> tuple[list[dict[str, object]], int]:
     inventory = _status_data(payload)
     if not isinstance(inventory, dict):
         raise RuntimeError("Client returned an invalid shared-inventory page.")
@@ -1037,9 +1427,7 @@ def _shared_inventory_page(payload: dict[str, object]) -> tuple[list[dict[str, o
 
 
 def _shared_file_identity(row: dict[str, object]) -> tuple[str, int]:
-    raw_hash = str(
-        row.get("hash") or row.get("fileHash") or row.get("ed2kHash") or ""
-    ).strip().casefold()
+    raw_hash = str(row.get("hash") or row.get("fileHash") or row.get("ed2kHash") or "").strip().casefold()
     raw_size = row.get("sizeBytes", row.get("size"))
     if re.fullmatch(r"[0-9a-f]{32}", raw_hash) is None:
         raise RuntimeError("Client returned an invalid shared-file identity.")
@@ -1069,26 +1457,18 @@ def _read_shared_inventory_identities(
         if total is None:
             total = page_total
         elif page_total != total:
-            raise SharedInventorySnapshotError(
-                "Client shared-inventory total changed during paging."
-            )
+            raise SharedInventorySnapshotError("Client shared-inventory total changed during paging.")
         if not rows:
             if offset != total:
-                raise SharedInventorySnapshotError(
-                    "Client shared inventory ended before its reported total."
-                )
+                raise SharedInventorySnapshotError("Client shared inventory ended before its reported total.")
             break
         identities.extend(_shared_file_identity(row) for row in rows)
         offset += len(rows)
         if offset > total:
-            raise SharedInventorySnapshotError(
-                "Client shared inventory exceeded its reported total."
-            )
+            raise SharedInventorySnapshotError("Client shared inventory exceeded its reported total.")
     assert total is not None
     if offset != total:
-        raise SharedInventorySnapshotError(
-            "Client shared inventory did not match its reported total."
-        )
+        raise SharedInventorySnapshotError("Client shared inventory did not match its reported total.")
     identity_set = frozenset(identities)
     if len(identity_set) != len(identities):
         raise SharedInventorySafetyError("Client shared inventory contains duplicate identities.")
@@ -1152,9 +1532,7 @@ def _wait_for_shared_inventory(
             hashing = int(data.get("sharedHashingCount") or 0)
             unexpected = identities - expected_identities
             if unexpected or advertised > expected_count:
-                raise SharedInventorySafetyError(
-                    "Client advertised content outside the approved shared identity set."
-                )
+                raise SharedInventorySafetyError("Client advertised content outside the approved shared identity set.")
         except SharedInventorySafetyError:
             raise
         except (json.JSONDecodeError, OSError, SharedInventorySnapshotError) as error:
@@ -1163,13 +1541,8 @@ def _wait_for_shared_inventory(
             # transient REST reads boundedly, but never retry a safety mismatch.
             read_error_count += 1
             consecutive_read_errors += 1
-            max_consecutive_read_errors_observed = max(
-                max_consecutive_read_errors_observed, consecutive_read_errors
-            )
-            if (
-                consecutive_read_errors
-                >= MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS
-            ):
+            max_consecutive_read_errors_observed = max(max_consecutive_read_errors_observed, consecutive_read_errors)
+            if consecutive_read_errors >= MAX_CONSECUTIVE_SHARED_INVENTORY_READ_ERRORS:
                 raise SharedInventoryPollingError(
                     "Client repeatedly returned incoherent shared-inventory snapshots."
                 ) from error
@@ -1255,6 +1628,10 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("--hold-poll-seconds must be > 0.")
     if args.download_timeout_seconds <= 0:
         raise RuntimeError("--download-timeout-seconds must be > 0.")
+    if args.transfer_coverage_timeout_seconds is not None and args.transfer_coverage_timeout_seconds < 0:
+        raise RuntimeError("--transfer-coverage-timeout-seconds must be >= 0.")
+    if args.transfer_coverage_poll_seconds <= 0:
+        raise RuntimeError("--transfer-coverage-poll-seconds must be > 0.")
     if args.share_ready_timeout_seconds <= 0:
         raise RuntimeError("--share-ready-timeout-seconds must be > 0.")
     if args.upnp_audit_timeout_seconds <= 0:
@@ -1264,9 +1641,7 @@ def main(argv: list[str] | None = None) -> int:
     rest_port = args.rest_port or (4731 if client == "rust" else 4732)
     obfuscation = not args.no_obfuscation
 
-    rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
-    if not rest_addr:
-        raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
+    rest_addr = control_bind_address(args.route)
     output_root = get_workspace_output_root()
 
     inputs_path = Path(args.inputs).resolve() if args.inputs else REPO_ROOT / "live-wire-inputs.local.json"
@@ -1276,9 +1651,15 @@ def main(argv: list[str] | None = None) -> int:
     # Well-sourced terms only (ubuntu/linux/debian) — a stale term like fedora yields no
     # results/sources and makes the search + download comparison meaningless.
     search_terms = [term.strip() for term in args.search_terms.split(",") if term.strip()]
-    download_terms = [term.strip() for term in args.download_terms.split(",") if term.strip()]
+    search_methods = normalized_search_methods(args.search_methods)
 
     native_config = load_native_parity_config(inputs_path) if args.route == "direct" else None
+    rust_diagnostic_writer_policy = (
+        focused_capture_writer_policy(inputs) if native_config is None and client == "rust" else None
+    )
+    mfc_diagnostic_segment_bytes = (
+        focused_mfc_segment_bytes(inputs) if native_config is None and client == "mfc" else None
+    )
     native_fixtures: list[dict[str, object]] = []
     expected_shared_identities: frozenset[tuple[str, int]] = frozenset()
     forbidden_roots: tuple[str, ...] = ()
@@ -1286,6 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
     if native_config is not None:
         if args.skip_actions or args.no_shared_roots:
             raise RuntimeError("Direct native parity requires searches, downloads, and shared roots.")
+        if not search_methods:
+            raise RuntimeError("Direct native parity requires at least one search method.")
         args.fresh_profile = True
         links = load_ed2k_link_fixture(native_config.ed2k_links_file)
         shared_paths = load_shared_path_fixture(native_config.shared_paths_file)
@@ -1307,15 +1690,27 @@ def main(argv: list[str] | None = None) -> int:
     campaign = _campaign_leaf(args.campaign)
     report_dir = soak_root / "reports" / campaign / f"{client}-{_utc_stamp()}"
     report_dir.mkdir(parents=True, exist_ok=True)
-    rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
-    mfc_exe = clw.resolve_mfc_diagnostics_exe(
-        output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
+    log(f"refreshing {client} diagnostics build through emulebb-build")
+    refresh_diagnostics_build(
+        get_required_emule_workspace_root(),
+        client,
+        mfc_variant=args.mfc_variant,
+        mfc_arch=args.mfc_arch,
+        mfc_configuration=args.mfc_configuration,
     )
-    exe = rust_exe if client == "rust" else mfc_exe
+    if client == "rust":
+        exe = clw.resolve_rust_diagnostics_exe(output_root)
+    else:
+        exe = clw.resolve_mfc_diagnostics_exe(
+            output_root,
+            variant=args.mfc_variant,
+            arch=args.mfc_arch,
+            configuration=args.mfc_configuration,
+        )
 
     log(f"scripted capture: client={client} campaign={campaign} report={report_dir}")
     if native_config is None:
-        vpn = ensure_vpn_ready(exe, name=f"eMuleBB {client}")
+        vpn = hideme_vpn.require_full_tunnel_ready()
         bind_ip = str(vpn["bindIp"])
     else:
         bind_ip = rest_addr
@@ -1337,6 +1732,14 @@ def main(argv: list[str] | None = None) -> int:
     upnp_audits: dict[str, object] = {}
     network_audit_failure = False
     mapping_tcp_ports, mapping_udp_ports = _client_mapping_ports(client, args)
+    if args.transfer_coverage_timeout_seconds is not None and (
+        native_config is not None or args.fresh_profile or args.skip_actions
+    ):
+        raise RuntimeError("Transfer coverage waiting requires persisted VPN capture with actions enabled.")
+    transfer_coverage_path = report_dir / "transfer-coverage-evidence.json"
+    transfer_coverage_checkpoint: dict[str, object] | None = None
+    transfer_coverage_evidence_payload: dict[str, object] | None = None
+    transfer_coverage_summary: dict[str, object] | None = None
     capture = None
     capture_result = None
     network_stack = contextlib.ExitStack()
@@ -1371,11 +1774,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.connectivity == "firewalled":
             tcp_ports = (args.rust_ed2k_port,) if client == "rust" else (args.mfc_ed2k_port,)
-            udp_ports = (
-                (args.rust_kad_port,)
-                if client == "rust"
-                else (args.mfc_kad_port, args.mfc_server_udp_port)
-            )
+            udp_ports = (args.rust_kad_port,) if client == "rust" else (args.mfc_kad_port, args.mfc_server_udp_port)
             network_stack.enter_context(
                 WindowsInboundBlockRules(
                     case_id=f"{client}-{args.connectivity}",
@@ -1415,36 +1814,69 @@ def main(argv: list[str] | None = None) -> int:
     run_start = time.time()
     try:
         if client == "rust":
-            rust_profile_dir = report_dir / "rust-profile" if args.fresh_profile else soak_root / "rust-profile"
+            rust_profile_dir = (
+                report_dir / "rust-profile" if args.fresh_profile else persisted_profile_dir(inputs, "rust")
+            )
             dump_dir = report_dir / "dumps"  # fresh dir → the whole dir IS this run
             handles = bring_up_rust(
-                rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
-                rest_port=rest_port, profile_dir=rust_profile_dir, packet_dump_dir=dump_dir,
+                rust_mod=rust_mod,
+                exe_path=exe,
+                bind_ip=bind_ip,
+                rest_addr=rest_addr,
+                rest_port=rest_port,
+                profile_dir=rust_profile_dir,
+                packet_dump_dir=dump_dir,
                 incoming_dir=rust_profile_dir / "incoming",
-                bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
-                server_met_url=args.server_met_url, server_endpoint=OPERATOR_SERVER,
-                obfuscation=obfuscation, timeouts=timeouts,
-                ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
+                bootstrap_nodes=bootstrap_nodes,
+                shared_roots=shared_roots,
+                server_met_url=args.server_met_url,
+                server_endpoint=OPERATOR_SERVER,
+                obfuscation=obfuscation,
+                timeouts=timeouts,
+                ed2k_port=args.rust_ed2k_port,
+                kad_port=args.rust_kad_port,
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                vpn_guard_mode="off" if native_config is not None else "block",
+                upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
+                apply_shared_directories=args.fresh_profile,
+                diagnostic_writer_policy=rust_diagnostic_writer_policy,
             )
         else:
             mfc_artifacts_dir = report_dir / "mfc-profile" if args.fresh_profile else soak_root / "mfc-profile"
-            mfc_profile_dir = None if args.fresh_profile else inputs.mfc_profile_dir
+            mfc_profile_dir = None if args.fresh_profile else persisted_profile_dir(inputs, "mfc")
             handles = bring_up_mfc(
-                live_common=mods["live_common"], rest_smoke=mods["rest_smoke"],
-                shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
-                seed_config_dir=Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR,
-                artifacts_dir=mfc_artifacts_dir, direct_profile_dir=mfc_profile_dir,
-                rest_host=rest_addr, rest_port=rest_port, shared_roots=shared_roots,
-                server_endpoint=OPERATOR_SERVER, obfuscation=obfuscation, timeouts=timeouts,
-                ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
+                live_common=mods["live_common"],
+                rest_smoke=mods["rest_smoke"],
+                shared_dirs_mod=mods["shared_dirs"],
+                exe_path=exe,
+                seed_config_dir=Path(args.profile_seed_dir).resolve()
+                if args.profile_seed_dir
+                else DEFAULT_MFC_SEED_CONFIG_DIR,
+                artifacts_dir=mfc_artifacts_dir,
+                direct_profile_dir=mfc_profile_dir,
+                rest_host=rest_addr,
+                rest_port=rest_port,
+                shared_roots=shared_roots,
+                server_endpoint=OPERATOR_SERVER,
+                obfuscation=obfuscation,
+                timeouts=timeouts,
+                ed2k_port=args.mfc_ed2k_port,
+                kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
                 secure_ident=args.secident == "on",
                 p2p_bind_ip=rest_addr if native_config is not None else None,
                 p2p_bind_interface=None if native_config is not None else "hide.me",
                 nat_enabled=args.connectivity == "upnp" if native_config is not None else True,
+                vpn_guard_mode="off" if native_config is not None else "block",
+                upload_limit_kibps=inputs.bandwidth.upload_limit_kibps,
+                allow_loopback_rest=native_config is None,
+                log_trim_bytes=(
+                    mfc_diagnostic_segment_bytes
+                    if mfc_diagnostic_segment_bytes is not None
+                    else soak_launch.DEFAULT_LOG_TRIM_BYTES
+                ),
             )
             dump_dir = Path(handles["packetDumpDir"])
         assert handles is not None
@@ -1452,6 +1884,13 @@ def main(argv: list[str] | None = None) -> int:
         if len(client_process_ids) != 1:
             raise RuntimeError("Could not resolve the launched client process identity.")
         base_url = handles["baseUrl"]
+        if client == "mfc" and mfc_diagnostic_segment_bytes is not None:
+            handles["diagnosticWriterHealth"] = require_focused_mfc_writer_ready(
+                base_url,
+                api_key,
+                next(iter(client_process_ids)),
+                mfc_diagnostic_segment_bytes,
+            )
         if native_config is not None:
             incoming_dir = handles.get("incomingDir")
             if incoming_dir is None:
@@ -1491,14 +1930,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.share_ready_timeout_seconds,
             )
             log(
-                "shared inventory: "
-                f"ready={sharing_state['ready']} "
-                f"advertised={sharing_state['advertisedFileCount']}/"
-                f"{sharing_state['expectedFileCount']}"
+                f"shared inventory: ready={sharing_state['ready']} advertised={sharing_state['advertisedFileCount']}/{sharing_state['expectedFileCount']}"
             )
 
         markers_path = report_dir / "markers.jsonl"
         with markers_path.open("w", encoding="utf-8") as fh:
+
             def _write(marker: dict) -> None:
                 fh.write(json.dumps(marker) + "\n")
                 fh.flush()
@@ -1514,10 +1951,7 @@ def main(argv: list[str] | None = None) -> int:
                     if native_config is not None
                     else campaign_fixtures(
                         campaign_dir=report_dir.parent,
-                        base_url=base_url,
-                        api_key=api_key,
-                        explicit_hashes=args.fixture_hashes,
-                        download_terms=download_terms,
+                        approved_fixtures=inputs.direct_bootstrap_transfers,
                         count=args.fixture_count,
                     )
                 )
@@ -1525,16 +1959,30 @@ def main(argv: list[str] | None = None) -> int:
                 actions = scripted_actions.default_action_set(
                     search_terms,
                     download_fixtures,
-                    methods=tuple(args.search_methods.split(",")),
+                    methods=search_methods,
                     search_options=(
-                        {"type": "doc", "extension": "pdf", "minAvailability": 1}
-                        if native_config is not None
-                        else None
+                        {"type": "doc", "extension": "pdf", "minAvailability": 1} if native_config is not None else None
                     ),
                 )
+                if args.transfer_coverage_timeout_seconds is not None:
+                    fixture_hashes = tuple(str(fixture["hash"]) for fixture in download_fixtures)
+                    (
+                        transfer_coverage_checkpoint,
+                        transfer_coverage_evidence_payload,
+                    ) = initialize_transfer_coverage(
+                        base_url=base_url,
+                        api_key=api_key,
+                        client=client,
+                        process_id=client_process_ids[0],
+                        diagnostics_dir=dump_dir,
+                        fixture_hashes=fixture_hashes,
+                        observed_utc=_utc_now(),
+                    )
                 log(f"running {len(actions)} scripted actions (spacing {args.spacing_seconds}s)...")
                 results = scripted_actions.execute_action_set(
-                    actions, scripted_actions.make_rest_runner(base_url, api_key), _write,
+                    actions,
+                    scripted_actions.make_rest_runner(base_url, api_key),
+                    _write,
                     spacing_seconds=args.spacing_seconds,
                 )
                 if native_config is not None:
@@ -1547,6 +1995,38 @@ def main(argv: list[str] | None = None) -> int:
                     )
         if args.skip_actions:
             log("actions skipped; no post-action settle")
+        elif args.transfer_coverage_timeout_seconds is not None:
+            assert handles is not None
+            assert inputs.soak_storage is not None
+            assert transfer_coverage_checkpoint is not None
+            assert transfer_coverage_evidence_payload is not None
+            log("actions done; scanning closed diagnostic segments for exact transfer coverage...")
+            (
+                transfer_coverage_summary,
+                transfer_coverage_checkpoint,
+                transfer_coverage_evidence_payload,
+            ) = observe_transfer_coverage(
+                base_url=base_url,
+                api_key=api_key,
+                client=client,
+                process_id=client_process_ids[0],
+                diagnostics_dir=dump_dir,
+                fixture_hashes=fixture_hashes,
+                evidence_path=transfer_coverage_path,
+                max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
+                timeout_seconds=args.transfer_coverage_timeout_seconds,
+                poll_seconds=args.transfer_coverage_poll_seconds,
+                route_guard=(hideme_vpn.require_full_tunnel_ready if native_config is None else None),
+                checkpoint=transfer_coverage_checkpoint,
+                evidence=transfer_coverage_evidence_payload,
+            )
+            log(
+                "transfer coverage wait done: "
+                f"complete={transfer_coverage_summary['complete']} "
+                f"operatorStop={transfer_coverage_summary['stoppedByOperator']} "
+                f"timeout={transfer_coverage_summary['timedOut']} "
+                f"routeLost={transfer_coverage_summary['routeLost']}"
+            )
         else:
             log(f"actions done; settling {args.settle_seconds}s for source acquisition...")
             time.sleep(args.settle_seconds)
@@ -1575,10 +2055,16 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         results_meta = {
-            "client": client, "campaign": campaign, "kadConnected": kad_ok,
-            "restPort": rest_port, "obfuscation": obfuscation,
+            "client": client,
+            "campaign": campaign,
+            "kadConnected": kad_ok,
+            "restPort": rest_port,
+            "obfuscation": obfuscation,
+            "serverEndpoint": OPERATOR_SERVER,
             "scenario": {"route": args.route, "connectivity": args.connectivity},
             "profileMode": "fresh" if args.fresh_profile else "persisted",
+            "uploadLimitKiBps": inputs.bandwidth.upload_limit_kibps,
+            "sharedDirectoriesApplied": bool(handles.get("sharedDirectoriesApplied")),
             "sharedRootsEnabled": not args.no_shared_roots,
             # SecIdent campaign dimension: MFC pref pinned by the launcher; rust
             # has no config key (its eD2K secure-ident is always provisioned).
@@ -1617,6 +2103,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             ),
             "hold": hold_result,
+            "transferCoverage": transfer_coverage_summary,
             "runStartEpoch": run_start,
             "runEndEpoch": time.time(),
         }
@@ -1667,6 +2154,29 @@ def main(argv: list[str] | None = None) -> int:
             )
         _preserve_post_run_failures(primary_error, post_run_failures)
 
+    if (
+        transfer_coverage_checkpoint is not None
+        and transfer_coverage_evidence_payload is not None
+        and transfer_coverage_summary is not None
+    ):
+        assert inputs.soak_storage is not None
+        (
+            transfer_coverage_summary,
+            transfer_coverage_evidence_payload,
+        ) = finalize_transfer_coverage(
+            client=client,
+            diagnostics_dir=dump_dir,
+            checkpoint=transfer_coverage_checkpoint,
+            evidence=transfer_coverage_evidence_payload,
+            evidence_path=transfer_coverage_path,
+            max_bytes=inputs.soak_storage.stream("diagnostic_bundles").max_segment_bytes,
+            summary=transfer_coverage_summary,
+            observed_utc=_utc_now(),
+        )
+        results_meta["transferCoverage"] = transfer_coverage_summary
+        if not transfer_coverage_summary["complete"] or transfer_coverage_summary["routeLost"]:
+            results_meta["externalInconclusive"] = True
+
     if native_config is not None:
         if args.connectivity == "firewalled" and not upnp_audits.get("active", {}).get("passed"):
             active_status = upnp_audits.get("active", {}).get("observedStatus")
@@ -1711,13 +2221,13 @@ def main(argv: list[str] | None = None) -> int:
     results_meta["diagnostics"] = validate_recorded_diagnostics(
         dumps_dest, client=client, process_id=client_process_ids[0]
     )
-    (report_dir / "results.json").write_text(
-        json.dumps(results_meta, indent=2), encoding="utf-8"
-    )
+    (report_dir / "results.json").write_text(json.dumps(results_meta, indent=2), encoding="utf-8")
     archive = pack_recording(
         report_dir,
         incoming_dir=(Path(handles["incomingDir"]) if native_config is not None and handles else None),
-        private_evidence_path=private_completion_path,
+        private_evidence_paths=tuple(
+            path for path in (private_completion_path, transfer_coverage_path) if path is not None and path.is_file()
+        ),
     )
     log(f"recording packed: {archive}")
     if any(result.get("status") != "ok" for result in results_meta.get("actionResults", [])):
@@ -1733,19 +2243,17 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _cli_main() -> int:
-    """Map unexpected operator-run failures to the harness-failure exit class."""
+    """Map unexpected operator-run failures to an actionable local exit report."""
 
     try:
         return main()
     except KeyboardInterrupt:
         raise
     except Exception as error:  # noqa: BLE001 - CLI failures are harness failures, never divergences
-        # Do not print the exception text: operator-local inputs and paths can be
-        # embedded in third-party exception messages. PostRunSafetyError is the
-        # exception-safe boundary: it retains only fixed audit stage names and
-        # exception class names, so its taxonomy is safe and necessary to debug.
-        detail = f": {error}" if isinstance(error, PostRunSafetyError) else ""
-        print(f"harness-failure: {type(error).__name__}{detail}", file=sys.stderr)
+        print(
+            f"harness-failure: {type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
         return 2
 
 

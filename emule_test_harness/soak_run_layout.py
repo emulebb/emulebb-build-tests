@@ -1191,6 +1191,7 @@ def prepare_clean_run(
     rust_packet_dump_dir: Path,
     mfc_log_dir: Path | None,
     artifact_store: soak_storage.BoundedArtifactStore,
+    preserve_mfc_profile_outputs: bool,
     stop_process_cleanup: bool = True,
 ) -> dict[str, Any]:
     """Quiesces old clients, promotes diagnostics, and prepares one campaign."""
@@ -1238,7 +1239,7 @@ def prepare_clean_run(
     archived = archive_preflight_outputs(
         paths=paths,
         rust_profile_dir=rust_profile_dir,
-        mfc_log_dir=mfc_log_dir,
+        mfc_log_dir=None if preserve_mfc_profile_outputs else mfc_log_dir,
         store=artifact_store,
     )
     manifest = {
@@ -1256,6 +1257,7 @@ def prepare_clean_run(
             "processes": processes,
             "archiveManifest": archived["manifest"],
             "archiveState": archived["state"],
+            "mfcProfileOutputsPreserved": preserve_mfc_profile_outputs,
             "rust": archived["rust"],
             "mfc": archived["mfc"],
             "diagnosticSegments": diagnostic_segments,

@@ -11,6 +11,7 @@ from types import ModuleType
 
 import pytest
 
+from emule_test_harness import diag_event_runs, transfer_coverage_evidence
 from emule_test_harness.diag_event_schema import ED2K_TCP_PACKET_VIEW_SCHEMA
 from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
 
@@ -33,12 +34,31 @@ def _load_offline_diff() -> ModuleType:
     return module
 
 
+def test_recording_server_endpoints_require_current_explicit_authority() -> None:
+    module = _load_offline_diff()
+    rust = {"meta": {"serverEndpoint": SERVER_ENDPOINTS["rust"]}}
+    mfc = {"meta": {"serverEndpoint": SERVER_ENDPOINTS["mfc"]}}
+
+    assert module._recording_server_endpoints(rust, mfc) == SERVER_ENDPOINTS
+
+    with pytest.raises(module.soak_action_diff.ActionTraceError, match="rust"):
+        module._recording_server_endpoints({"meta": {}}, mfc)
+
+
 def _ts(seconds: float) -> str:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds)
     return stamp.isoformat().replace("+00:00", "Z")
 
 
-def _pkt(flow: str, direction: str, opcode: int, payload_hex: str, at: float, *, marker: int = 0xE3) -> dict:
+def _pkt(
+    flow: str,
+    direction: str,
+    opcode: int,
+    payload_hex: str,
+    at: float,
+    *,
+    marker: int = 0xE3,
+) -> dict:
     return {
         "schema": ED2K_TCP_PACKET_VIEW_SCHEMA,
         "ts_utc": _ts(at),
@@ -156,23 +176,116 @@ def test_full_run_diagnostics_require_client_udp_without_narrow_window_penalty()
     ]
 
 
+def test_udp_reask_decision_summary_retains_reason_counts_and_exact_examples() -> None:
+    mod = _load_offline_diff()
+    records = [
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                1.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "source_exchange_due",
+                    "path": "direct",
+                    "transportEligible": True,
+                    "remoteUdpPort": 4672,
+                },
+            ),
+            "keys": {"peer": "198.51.100.1:4662", "fileHash": "a" * 32},
+        },
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                2.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "source_exchange_due",
+                    "path": "direct",
+                    "transportEligible": True,
+                },
+            ),
+            "keys": {"peer": "198.51.100.1:4662", "fileHash": "a" * 32},
+        },
+        {
+            **_diag(
+                "sched",
+                "udp_reask_decision",
+                3.0,
+                body={
+                    "outcome": "sent",
+                    "reason": "direct_reask_sent",
+                    "path": "direct",
+                    "transportEligible": True,
+                },
+            ),
+            "keys": {"peer": "198.51.100.2:4662", "fileHash": "a" * 32},
+        },
+        _diag("sched", "queue_rank", 4.0, body={"outcome": "waiting"}),
+    ]
+
+    summary = mod._udp_reask_decision_summary(records)
+
+    assert summary["eventCount"] == 3
+    assert summary["peerFileKeyCount"] == 2
+    assert summary["invalidRecordCount"] == 0
+    assert summary["outcomes"] == {"sent": 1, "skipped": 2}
+    assert summary["reasons"] == {
+        "direct_reask_sent": 1,
+        "source_exchange_due": 2,
+    }
+    assert summary["paths"] == {"direct": 3}
+    assert summary["transportEligible"] == {"true": 3}
+    assert summary["examplesByReason"]["source_exchange_due"]["body"]["remoteUdpPort"] == 4672
+
+    schedule_summary = mod._udp_reask_decision_summary(
+        [
+            _diag(
+                "sched",
+                "udp_reask_schedule_decision",
+                5.0,
+                body={
+                    "outcome": "skipped",
+                    "reason": "connect_cooldown",
+                    "path": "direct",
+                    "transportEligible": False,
+                },
+            )
+        ],
+        event=mod.UDP_REASK_SCHEDULE_DECISION_EVENT,
+    )
+    assert schedule_summary["reasons"] == {"connect_cooldown": 1}
+    assert schedule_summary["invalidRecordCount"] == 0
+
+
 def _window(at: float = 0.0) -> dict:
     stamp = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=at)
     return {"kind": "search", "t0": stamp, "t1": stamp + timedelta(seconds=10)}
 
 
-def _sides(rust_pkt: list, mfc_pkt: list, rust_diag: list | None = None, mfc_diag: list | None = None) -> tuple[dict, dict]:
+def _sides(
+    rust_pkt: list,
+    mfc_pkt: list,
+    rust_diag: list | None = None,
+    mfc_diag: list | None = None,
+) -> tuple[dict, dict]:
     rust = {"packets": rust_pkt, "diag": rust_diag or [], "markers": [], "meta": {}}
     mfc = {"packets": mfc_pkt, "diag": mfc_diag or [], "markers": [], "meta": {}}
     return rust, mfc
 
 
-def _write_recording_shell(tmp_path: Path, stem: str) -> tuple[Path, Path]:
+def _write_recording_shell(
+    tmp_path: Path,
+    stem: str,
+    *,
+    results: dict[str, object] | None = None,
+) -> tuple[Path, Path]:
     recording = tmp_path / f"{stem}.zip"
     private_dir = tmp_path / f"{stem}-private-artifacts"
     (private_dir / "dumps").mkdir(parents=True)
     with zipfile.ZipFile(recording, "w") as archive:
-        archive.writestr(f"{stem}/results.json", "{}")
+        archive.writestr(f"{stem}/results.json", json.dumps(results or {}))
         archive.writestr(f"{stem}/markers.jsonl", "")
         archive.writestr(
             f"{stem}/evidence-classification.json",
@@ -184,6 +297,100 @@ def _write_recording_shell(tmp_path: Path, stem: str) -> tuple[Path, Path]:
             ),
         )
     return recording, private_dir
+
+
+def _write_transfer_coverage(
+    private_dir: Path,
+    *,
+    client: str = "rust",
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    private_dir.mkdir(parents=True, exist_ok=True)
+    records = [
+        {
+            **_segmented_diag(client, 42, "active", 0, 1, 1),
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {"fileHash": "a" * 32, "sendAttemptId": 7},
+            "body": {
+                "direction": "send",
+                "role": "reask_request",
+                "sendAttemptId": 7,
+                "outcome": "attempted",
+            },
+        },
+        {
+            **_segmented_diag(client, 42, "active", 0, 2, 2),
+            "family": "ed2k_client_udp",
+            "event": "send_outcome",
+            "keys": {"sendAttemptId": 7},
+            "body": {
+                "direction": "send",
+                "role": "reask_request",
+                "sendAttemptId": 7,
+                "outcome": "send_succeeded",
+                "deliveryKnown": True,
+            },
+        },
+    ]
+    prefix = "emulebb-rust" if client == "rust" else "emulebb-mfc"
+    source = private_dir / f"{prefix}-diag-42-active-000000.jsonl"
+    source.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    snapshot = diag_event_runs.load_diag_event_segment_snapshot(source)
+    evidence = transfer_coverage_evidence.new_evidence(
+        client=client,
+        process_id=42,
+        run_id="active",
+        fixture_hashes=("a" * 32,),
+        observed_utc=_ts(0),
+    )
+    evidence = transfer_coverage_evidence.advance_evidence(
+        evidence,
+        (
+            {
+                "segmentId": 0,
+                "fileName": source.name,
+                "source": str(source.resolve()),
+                "bytes": snapshot.byte_count,
+                "modifiedNs": snapshot.modified_ns,
+                "sha256": snapshot.sha256,
+                "recordCount": len(snapshot.records),
+                "interestingReasons": [],
+            },
+        ),
+        observed_utc=_ts(3),
+    )
+    transfer_coverage_evidence.write_evidence(
+        private_dir / "transfer-coverage-evidence.json",
+        evidence,
+        max_bytes=64 * 1024,
+    )
+    source.unlink()
+    return records, evidence
+
+
+def _transfer_coverage_summary(evidence: dict[str, object]) -> dict[str, object]:
+    source = evidence["source"]
+    proof = evidence["proof"]
+    assert isinstance(source, dict)
+    assert isinstance(proof, dict)
+    return {
+        "contract": transfer_coverage_evidence.CONTRACT,
+        "enabled": True,
+        "complete": evidence["complete"],
+        "protocolChainComplete": evidence["protocolChainComplete"],
+        "timedOut": False,
+        "stoppedByOperator": False,
+        "routeLost": False,
+        "finalized": True,
+        "elapsedSeconds": 1.0,
+        "closedSegmentsScanned": source["closedSegmentsScanned"],
+        "lastClosedSegmentId": source["lastClosedSegmentId"],
+        "proofSlots": sorted(proof),
+        "privateArtifact": "transfer-coverage-evidence.json",
+    }
 
 
 def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
@@ -226,6 +433,60 @@ def test_load_recording_uses_sanitized_archive_and_private_raw_sibling(
     assert loaded["diag"][0]["ts"] == _ts(1)
     assert loaded["diag"][1]["ts"] == _ts(2)
     assert len(loaded["packets"]) == 1
+
+
+def test_load_recording_merges_exact_compact_transfer_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    private_dir = tmp_path / "rust-recording-private-artifacts"
+    expected, evidence = _write_transfer_coverage(private_dir)
+    recording, private_dir = _write_recording_shell(
+        tmp_path,
+        "rust-recording",
+        results={
+            "transferCoverage": _transfer_coverage_summary(evidence),
+        },
+    )
+
+    loaded = mod._load_recording(recording, client="rust")
+
+    assert loaded["diag"] == expected
+    assert loaded["meta"]["_privateTransferCoverageEvidence"]["complete"] is True
+
+
+def test_load_recording_requires_declared_transfer_coverage_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    evidence = transfer_coverage_evidence.new_evidence(
+        client="rust",
+        process_id=42,
+        run_id="active",
+        fixture_hashes=("a" * 32,),
+        observed_utc=_ts(0),
+    )
+    recording, _private_dir = _write_recording_shell(
+        tmp_path,
+        "rust-recording",
+        results={
+            "transferCoverage": _transfer_coverage_summary(evidence),
+        },
+    )
+
+    with pytest.raises(ValueError, match="required but missing"):
+        mod._load_recording(recording, client="rust")
+
+
+def test_load_recording_rejects_undeclared_transfer_coverage_evidence(
+    tmp_path: Path,
+) -> None:
+    mod = _load_offline_diff()
+    recording, private_dir = _write_recording_shell(tmp_path, "rust-recording")
+    _write_transfer_coverage(private_dir)
+
+    with pytest.raises(ValueError, match="no recording authority"):
+        mod._load_recording(recording, client="rust")
 
 
 def test_load_recording_rejects_legacy_packet_side_file(tmp_path: Path) -> None:
@@ -400,8 +661,22 @@ def test_diag_family_gate_passes_across_independent_sessions() -> None:
         _pkt("server", "send", 0x16, "cc22", 1.5),
         _pkt("server", "recv", 0x33, "dd", 2.5),
     ]
-    rust_diag = [_diag("kad_event", "lookup", 1.0, body={"milestone": "lookup_complete", "resultCount": 3})]
-    mfc_diag = [_diag("kad_event", "lookup", 1.2, body={"milestone": "lookup_complete", "resultCount": 9})]
+    rust_diag = [
+        _diag(
+            "kad_event",
+            "lookup",
+            1.0,
+            body={"milestone": "lookup_complete", "resultCount": 3},
+        )
+    ]
+    mfc_diag = [
+        _diag(
+            "kad_event",
+            "lookup",
+            1.2,
+            body={"milestone": "lookup_complete", "resultCount": 9},
+        )
+    ]
     rust, mfc = _sides(rust_pkt, mfc_pkt, rust_diag, mfc_diag)
 
     result = mod._diff_one_action(
@@ -424,7 +699,12 @@ def test_diag_family_gate_fails_on_missing_oracle_body_key() -> None:
     mod = _load_offline_diff()
     rust_diag = [_diag("kad_event", "lookup", 1.0, body={"milestone": "lookup_complete"})]
     mfc_diag = [
-        _diag("kad_event", "lookup", 1.2, body={"milestone": "lookup_complete", "resultCount": 9})
+        _diag(
+            "kad_event",
+            "lookup",
+            1.2,
+            body={"milestone": "lookup_complete", "resultCount": 9},
+        )
     ]
     rust, mfc = _sides(
         [_pkt("server", "send", 0x16, "aa", 1.0)],
@@ -476,8 +756,20 @@ def test_packet_only_action_window_fails_for_missing_diagnostics() -> None:
 def test_action_windows_capture_marker_method() -> None:
     mod = _load_offline_diff()
     markers = [
-        {"actionId": "search-kad-ubuntu", "kind": "search", "method": "kad", "marker": "begin", "ts_utc": _ts(0)},
-        {"actionId": "search-kad-ubuntu", "kind": "search", "method": "kad", "marker": "end", "ts_utc": _ts(5)},
+        {
+            "actionId": "search-kad-ubuntu",
+            "kind": "search",
+            "method": "kad",
+            "marker": "begin",
+            "ts_utc": _ts(0),
+        },
+        {
+            "actionId": "search-kad-ubuntu",
+            "kind": "search",
+            "method": "kad",
+            "marker": "end",
+            "ts_utc": _ts(5),
+        },
     ]
     windows = mod._action_windows(markers)
     assert windows["search-kad-ubuntu"]["method"] == "kad"
@@ -515,6 +807,11 @@ def test_global_search_action_is_not_assessable_without_mfc_udp_evidence() -> No
 
 def test_kad_search_action_assessed_from_kad_stream() -> None:
     mod = _load_offline_diff()
+    target_hex = "00112233445566778899aabbccddeeff"
+    target = bytes.fromhex(target_hex)
+    wire_target = b"".join(
+        target[offset : offset + 4][::-1] for offset in range(0, 16, 4)
+    ).hex()
 
     def _kad(opcode: int, at: float) -> dict:
         return {
@@ -522,8 +819,13 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
             "ts": _ts(at),
             "family": "kad_udp",
             "event": "packet",
-            "keys": {"opcode": opcode},
-            "body": {"direction": "send", "opcode": opcode},
+            "keys": {"protocolMarker": 0xE4, "opcode": opcode},
+            "body": {
+                "direction": "send",
+                "protocolMarker": 0xE4,
+                "opcode": opcode,
+                "decodedHex": f"e4{opcode:02x}{wire_target}0000",
+            },
         }
 
     def _lookup(search_id: str, milestone: str, result_count: int, at: float) -> dict:
@@ -538,6 +840,7 @@ def test_kad_search_action_assessed_from_kad_stream() -> None:
                 "action": "search",
                 "searchKind": "keyword",
                 "resultCount": result_count,
+                "targetHex": target_hex,
             },
         }
 
@@ -594,7 +897,13 @@ def test_no_window_result_carries_gate_keys() -> None:
     rust, mfc = _sides([], [])
     incomplete = {"kind": "search", "t0": _window()["t0"]}
     result = mod._diff_one_action(
-        "search", rust, mfc, incomplete, _window(), lead=1.0, settle=1.0,
+        "search",
+        rust,
+        mfc,
+        incomplete,
+        _window(),
+        lead=1.0,
+        settle=1.0,
         server_endpoints=SERVER_ENDPOINTS,
     )
     assert result["verdict"] == "no-window"
@@ -607,7 +916,13 @@ def test_no_traffic_is_not_conformant() -> None:
     rust, mfc = _sides([], [])
 
     result = mod._diff_one_action(
-        "search", rust, mfc, _window(), _window(), lead=1.0, settle=1.0,
+        "search",
+        rust,
+        mfc,
+        _window(),
+        _window(),
+        lead=1.0,
+        settle=1.0,
         server_endpoints=SERVER_ENDPOINTS,
     )
 
@@ -621,7 +936,13 @@ def test_end_marker_action_error_fails_action_without_diffing() -> None:
     rust_window = {**_window(), "status": "error"}
 
     result = mod._diff_one_action(
-        "search", rust, mfc, rust_window, _window(), lead=1.0, settle=1.0,
+        "search",
+        rust,
+        mfc,
+        rust_window,
+        _window(),
+        lead=1.0,
+        settle=1.0,
         server_endpoints=SERVER_ENDPOINTS,
     )
 
@@ -663,9 +984,7 @@ def test_native_completion_comparison_matches_without_emitting_digest() -> None:
     mod = _load_offline_diff()
     digest = "a" * 64
 
-    result = mod._compare_native_completions(
-        _completion_meta(digest=digest), _completion_meta(digest=digest)
-    )
+    result = mod._compare_native_completions(_completion_meta(digest=digest), _completion_meta(digest=digest))
 
     assert result["ok"] is True
     assert result["matchedCount"] == 1
@@ -677,9 +996,7 @@ def test_native_completion_comparison_reports_digest_mismatch_without_values() -
     rust_digest = "a" * 64
     mfc_digest = "b" * 64
 
-    result = mod._compare_native_completions(
-        _completion_meta(digest=rust_digest), _completion_meta(digest=mfc_digest)
-    )
+    result = mod._compare_native_completions(_completion_meta(digest=rust_digest), _completion_meta(digest=mfc_digest))
 
     assert result["ok"] is False
     assert result["findings"] == ["completion-sha256-mismatch"]
@@ -733,6 +1050,116 @@ def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> 
     assert "native-capture-no-frames" in result["findings"]
 
 
+def _focused_recording(client: str) -> dict[str, object]:
+    required = list(transfer_coverage_evidence.TARGET_SLOTS_BY_CLIENT[client])
+    return {
+        "meta": {
+            "serverEndpoint": SERVER_ENDPOINTS[client],
+            "transferCoverage": {
+                "contract": transfer_coverage_evidence.CONTRACT,
+                "complete": True,
+                "finalized": True,
+                "routeLost": False,
+                "timedOut": False,
+                "stoppedByOperator": False,
+            },
+            "_privateTransferCoverageEvidence": {
+                "fixtureHashes": ["a" * 32],
+                "target": {"requiredSlots": required},
+                "proof": dict.fromkeys(required, {}),
+            },
+        }
+    }
+
+
+def _focused_full_diag_gate() -> dict[str, object]:
+    return {
+        "ok": False,
+        "familyConformance": {
+            "ok": True,
+            "requiredFamiliesOk": True,
+        },
+        "clientUdpLifecycle": {
+            "rust": {"ok": True, "attemptCount": 1, "terminalCount": 1},
+            "mfc": {"ok": True, "attemptCount": 1, "terminalCount": 1},
+        },
+        "serverConnectionLifecycle": {
+            "rust": {"ok": True},
+            "mfc": {"ok": False},
+        },
+    }
+
+
+def test_focused_contract_uses_fixture_owned_udp_evidence_not_global_gates() -> None:
+    mod = _load_offline_diff()
+    rust = _focused_recording("rust")
+    mfc = _focused_recording("mfc")
+
+    contract = mod._focused_transfer_contract(
+        rust,
+        mfc,
+        server_endpoints=SERVER_ENDPOINTS,
+        common_action_count=1,
+        missing_action_count=0,
+        action_error_count=0,
+        scenario_mismatch=False,
+        schema_conformant=True,
+        full_diag_gate=_focused_full_diag_gate(),
+    )
+
+    assert contract["ok"] is True
+    assert "server-startup-lifecycle" in contract["notApplicable"]
+    assert "native-packet-capture" in contract["notApplicable"]
+    assert mod._focused_transfer_verdict(contract) == {
+        "verdict": "coverage-proven",
+        "exitCode": 0,
+        "findings": [],
+    }
+
+
+def test_focused_contract_fails_closed_on_fixture_or_lifecycle_gaps() -> None:
+    mod = _load_offline_diff()
+    rust = _focused_recording("rust")
+    mfc = _focused_recording("mfc")
+    mfc["meta"]["_privateTransferCoverageEvidence"]["fixtureHashes"] = ["b" * 32]
+    gate = _focused_full_diag_gate()
+    gate["clientUdpLifecycle"]["mfc"] = {
+        "ok": True,
+        "attemptCount": 0,
+        "terminalCount": 0,
+    }
+
+    contract = mod._focused_transfer_contract(
+        rust,
+        mfc,
+        server_endpoints=SERVER_ENDPOINTS,
+        common_action_count=1,
+        missing_action_count=0,
+        action_error_count=0,
+        scenario_mismatch=False,
+        schema_conformant=True,
+        full_diag_gate=gate,
+    )
+
+    assert contract["ok"] is False
+    assert set(contract["harnessFindings"]) == {
+        "fixture-authority-mismatch",
+        "mfc-client-udp-lifecycle-missing",
+    }
+    assert mod._focused_transfer_verdict(contract)["verdict"] == "harness-failure"
+
+
+def test_campaign_contract_requires_bilateral_current_authority() -> None:
+    mod = _load_offline_diff()
+    rust = _focused_recording("rust")
+    mfc = _focused_recording("mfc")
+
+    assert mod._campaign_contract_name(rust, mfc) == transfer_coverage_evidence.CONTRACT
+    assert mod._campaign_contract_name({"meta": {}}, {"meta": {}}) == mod.FULL_CAMPAIGN_CONTRACT
+    with pytest.raises(ValueError, match="do not match"):
+        mod._campaign_contract_name(rust, {"meta": {}})
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_verdict", "expected_exit"),
     [
@@ -750,28 +1177,18 @@ def test_native_capture_evidence_requires_frames_and_matching_archive_size() -> 
         ({"missing_action_count": 1}, "harness-failure", 2),
         ({"external_inconclusive": True}, "inconclusive-external", 3),
         (
-            {
-                "per_action": [
-                    {"verdict": "not-assessable", "coverageOk": False}
-                ]
-            },
+            {"per_action": [{"verdict": "not-assessable", "coverageOk": False}]},
             "inconclusive-external",
             3,
         ),
         (
-            {
-                "per_action": [
-                    {"verdict": "evidence-incomplete", "coverageOk": False}
-                ]
-            },
+            {"per_action": [{"verdict": "evidence-incomplete", "coverageOk": False}]},
             "inconclusive-external",
             3,
         ),
     ],
 )
-def test_campaign_verdict_taxonomy_and_exit_codes(
-    overrides: dict, expected_verdict: str, expected_exit: int
-) -> None:
+def test_campaign_verdict_taxonomy_and_exit_codes(overrides: dict, expected_verdict: str, expected_exit: int) -> None:
     mod = _load_offline_diff()
     inputs = {
         "per_action": [{"verdict": "conformant", "coverageOk": True}],
@@ -809,9 +1226,7 @@ def test_missing_state_machine_evidence_is_not_a_protocol_divergence() -> None:
     }
 
     missing = mod._campaign_verdict(**inputs)
-    observed_mismatch = mod._campaign_verdict(
-        **{**inputs, "state_machine_evidence_observed": True}
-    )
+    observed_mismatch = mod._campaign_verdict(**{**inputs, "state_machine_evidence_observed": True})
 
     assert missing == {
         "verdict": "harness-failure",
@@ -976,10 +1391,7 @@ def test_audit_secident_flags_dead_mfc_side() -> None:
     mod = _load_offline_diff()
     # MFC claims secident on but produced steady peer traffic with zero
     # 0x85/86/87 packets -> the offline report must flag secident-dead.
-    mfc_packets = [
-        {**_pkt("client", "send", 0x58, "aa", float(i)), "protocol_marker": 0xE3}
-        for i in range(30)
-    ]
+    mfc_packets = [{**_pkt("client", "send", 0x58, "aa", float(i)), "protocol_marker": 0xE3} for i in range(30)]
     rust, mfc = _sides([], mfc_packets)
     mfc["meta"] = {"secident": {"requested": "on", "applied": "on"}}
     report = mod._audit_secident(rust, mfc)
