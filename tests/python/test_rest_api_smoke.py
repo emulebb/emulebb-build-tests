@@ -14,6 +14,7 @@ import pytest
 from emule_test_harness.diag_event_runs import DIAGNOSTIC_WRITER_HEALTH_FIELDS
 
 PRIVATE_NATIVE_ONLY_ROUTES = {
+    ("POST", "/diagnostics/protocol-controls/queued-source-reasks"),
     ("POST", "/diagnostics/protocol-fixtures/buddy-relay-eligibility"),
     ("POST", "/diagnostics/protocol-fixtures/queued-lowid-sources"),
 }
