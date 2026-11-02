@@ -96,6 +96,26 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
+def test_build_server_config_enables_explicit_hairpin_authority(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+
+    config = rust_ed2k.build_server_config(
+        path,
+        ed2k_port=4661,
+        admin_port=8080,
+        listen_address="0.0.0.0",
+        advertised_address="192.0.2.241",
+        hairpin_lan_clients=True,
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert config["server"]["public"] is False
+    assert config["network"]["hairpin_lan_clients"] is True
+    assert "public = false" in text
+    assert "hairpin_lan_clients = true" in text
+
+
+@pytest.mark.unit
 def test_build_server_config_requires_explicit_addresses(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="listen_address"):
         rust_ed2k.build_server_config(
@@ -507,6 +527,44 @@ def test_rust_server_launches_wsl_with_selected_connect_address(
     assert launch.config["network"]["listen_ip"] == "0.0.0.0"
     assert launch.config["server"]["this_ip"] == "172.20.0.2"
     assert isinstance(rust_ed2k.create_server_control(launch.admin_base_url, "unused"), rust_ed2k.RustEd2kServerControl)
+
+
+@pytest.mark.unit
+def test_rust_server_launch_uses_explicit_advertised_hairpin_address(
+    monkeypatch, tmp_path: Path
+) -> None:
+    server_exe = tmp_path / "tools" / "ed2k-server"
+    server_exe.parent.mkdir(parents=True)
+    server_exe.write_bytes(b"linux")
+    process = FakeProcess()
+    binary = rust_ed2k.RustEd2kServerBinary(server_exe, {"return_code": 0})
+
+    monkeypatch.setattr(rust_ed2k, "_is_windows_host", lambda: True)
+    monkeypatch.setattr(rust_ed2k, "wsl_ipv4_address", lambda _distribution=None: "172.20.0.2")
+    monkeypatch.setattr(rust_ed2k, "prepare_server_binary", lambda *_args, **_kwargs: binary)
+    monkeypatch.setattr(rust_ed2k, "start_server", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        rust_ed2k,
+        "wait_for_admin_health",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+
+    launch = rust_ed2k.launch_server(
+        workspace_root=tmp_path / "workspace",
+        server_dir=tmp_path / "run",
+        ed2k_port=4661,
+        admin_port=8080,
+        admin_secret="unused",
+        admin_address="127.0.0.1",
+        ed2k_address="172.20.0.1",
+        advertised_address_override="192.0.2.241",
+        hairpin_lan_clients=True,
+    )
+
+    assert launch.config["server"]["this_ip"] == "192.0.2.241"
+    assert launch.ed2k_host == "172.20.0.2"
+    assert launch.config["server"]["public"] is False
+    assert launch.config["network"]["hairpin_lan_clients"] is True
 
 
 @pytest.mark.unit

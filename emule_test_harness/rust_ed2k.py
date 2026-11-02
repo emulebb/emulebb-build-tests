@@ -353,6 +353,7 @@ def build_server_config(
     hard_limit_files: int = 200000,
     get_sources_cache_seconds: int = 1,
     server_name: str = "emulebb-local-e2e",
+    hairpin_lan_clients: bool = False,
 ) -> dict[str, object]:
     """Writes a minimal private Rust server configuration for local harness runs."""
 
@@ -377,6 +378,7 @@ def build_server_config(
             "tcp_port": ed2k_port,
             "listen_ip": listen_address,
             "support_crypt": protocol_obfuscation,
+            "hairpin_lan_clients": hairpin_lan_clients,
         },
         "limits": {
             "max_clients": 1000,
@@ -425,6 +427,7 @@ def build_server_config(
         f"tcp_port = {ed2k_port}",
         f"listen_ip = {_toml_string(listen_address)}",
         f"support_crypt = {str(protocol_obfuscation).lower()}",
+        f"hairpin_lan_clients = {str(hairpin_lan_clients).lower()}",
         "",
         "[limits]",
         "max_clients = 1000",
@@ -753,6 +756,8 @@ def launch_server(
     hard_limit_files: int = 200000,
     server_udp: bool = True,
     packet_trace: bool = False,
+    advertised_address_override: str | None = None,
+    hairpin_lan_clients: bool = False,
     health_timeout_seconds: float = 30.0,
 ) -> RustEd2kServerLaunch:
     """Launches the upstream-aligned Linux Rust server."""
@@ -778,11 +783,12 @@ def launch_server(
     )
     distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
     if _is_windows_host():
-        advertised_address = wsl_ipv4_address(distribution)
+        wsl_address = wsl_ipv4_address(distribution)
+        advertised_address = str(advertised_address_override or wsl_address).strip()
         listen_address = "0.0.0.0"
-        client_address = str(windows_client_address or advertised_address).strip()
+        client_address = str(windows_client_address or wsl_address).strip()
     else:
-        advertised_address = ed2k_address
+        advertised_address = str(advertised_address_override or ed2k_address).strip()
         listen_address = ed2k_address
         client_address = ed2k_address
     server_dir.mkdir(parents=True, exist_ok=True)
@@ -800,6 +806,7 @@ def launch_server(
         soft_limit_files=soft_limit_files,
         hard_limit_files=hard_limit_files,
         get_sources_cache_seconds=1,
+        hairpin_lan_clients=hairpin_lan_clients,
     )
     process = start_server(
         binary.server_exe,

@@ -14,6 +14,8 @@ from emule_test_harness import ed2k_wire
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import kad_nodes
+from emule_test_harness import relayed_reask_diagnostic_evidence
+from emule_test_harness import relayed_reask_probe
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -51,6 +53,12 @@ SERVER_SOURCE_PUBLISHER_ID = int.from_bytes(
 )
 SERVER_SOURCE_PUBLISHER_PORT = 48_017
 SERVER_UDP_SOURCE_TARGET_HOST = "127.0.0.1"
+RELAYED_REASK_FILE_HASH = bytes.fromhex("44556677889900112233AABBCCDDEEFF")
+RELAYED_REASK_FILE_NAME = "deterministic-relayed-reask.bin"
+RELAYED_REASK_FILE_SIZE = 34_567
+RELAYED_REASK_SOURCE_HASH = bytes.fromhex("527496B8DAFC1E30527496B8DAFC7E10")
+RELAYED_REASK_BUDDY_ID = bytes.fromhex("6385A7C9EB0D2F416385A7C9EB0D8F21")
+RELAYED_REASK_QUEUE_RANK = 37
 SERVER_UDP_SOURCE_TARGET_PORT = 4_761
 SERVER_UDP_SOURCE_TARGET_UDP_PORT = SERVER_UDP_SOURCE_TARGET_PORT + 4
 SERVER_CALLBACK_REQUESTER_HASH = bytes.fromhex("426486A8CAEC0E20426486A8CAEC6E00")
@@ -1982,9 +1990,7 @@ def attach_direct_callback(
             "sizeBytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
-    report["network"]["directCallbackKadIsolation"]["launchInputs"] = (
-        launch_receipts
-    )
+    report["network"]["directCallbackKadIsolation"]["launchInputs"] = launch_receipts
     targets = {
         client: {
             "clientId": identity["clientId"],
@@ -2039,15 +2045,17 @@ def attach_direct_callback(
         )
         for client in ("rust", "mfc")
     }
-    evidence = direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
-        requester_host="127.0.0.1",
-        requester_tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
-        requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
-        target_host="127.0.0.1",
-        targets=targets,
-        requester_results=results,
-        rust_records=records["rust"],
-        mfc_records=records["mfc"],
+    evidence = (
+        direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+            requester_host="127.0.0.1",
+            requester_tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+            requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+            target_host="127.0.0.1",
+            targets=targets,
+            requester_results=results,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
     )
     evidence["captures"] = captures
     report["checks"].update(
@@ -2448,6 +2456,396 @@ def attach_server_callback(
     }
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
         server_callback_diagnostic_evidence.COVERAGE_ID
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
+def attach_relayed_reask(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+) -> dict[str, object]:
+    host = "127.0.0.1"
+    ports = {
+        "client1_udp": 31_004,
+        "client2_udp": 31_005,
+        "relayed_reask_source_tcp": 31_001,
+        "relayed_reask_source_udp": 31_002,
+        "relayed_reask_buddy_udp": 31_003,
+    }
+    request_raw = (
+        bytes(
+            (
+                relayed_reask_probe.OP_EMULEPROT,
+                relayed_reask_probe.OP_REASKCALLBACKUDP,
+            )
+        )
+        + RELAYED_REASK_BUDDY_ID
+        + RELAYED_REASK_FILE_HASH
+        + bytes.fromhex("0100000000")
+    )
+    ack_raw = relayed_reask_probe.encode_reask_ack(
+        queue_rank=RELAYED_REASK_QUEUE_RANK,
+        requester_udp_version=4,
+    )
+
+    def row(
+        client: str,
+        process_id: int,
+        run_id: str,
+        sequence: int,
+        family: str,
+        event: str,
+        keys: dict[str, object],
+        body: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "schema": DIAG_EVENT_SCHEMA,
+            "client": client,
+            "runId": run_id,
+            "processId": process_id,
+            "segmentId": 0,
+            "seq": sequence,
+            "streamSeq": sequence,
+            "family": family,
+            "event": event,
+            "keys": keys,
+            "body": body,
+        }
+
+    sched_keys = {
+        "peer": f"{host}:{ports['relayed_reask_source_tcp']}",
+        "peerHash": RELAYED_REASK_SOURCE_HASH.hex(),
+        "fileHash": RELAYED_REASK_FILE_HASH.hex(),
+    }
+
+    def records(client: str, process_id: int, run_id: str) -> list[dict[str, object]]:
+        return [
+            row(
+                client,
+                process_id,
+                run_id,
+                1,
+                "sched",
+                "udp_reask_source_registered",
+                dict(sched_keys),
+                {
+                    "outcome": "accepted",
+                    "sourceUdpEndpoint": f"{host}:{ports['relayed_reask_source_udp']}",
+                    "sourceUdpVersion": 4,
+                    "lowId": True,
+                    "buddyEndpoint": f"{host}:{ports['relayed_reask_buddy_udp']}",
+                    "buddyId": RELAYED_REASK_BUDDY_ID.hex(),
+                },
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                2,
+                "sched",
+                "udp_reask_schedule_decision",
+                dict(sched_keys),
+                {"outcome": "eligible", "reason": "eligible"},
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                3,
+                "sched",
+                "udp_reask_decision",
+                dict(sched_keys),
+                {
+                    "outcome": "sent",
+                    "transportEligible": True,
+                    "reason": "callback_reask_sent",
+                    "path": "callback",
+                },
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                4,
+                "ed2k_client_udp",
+                "packet",
+                {
+                    "peer": f"{host}:{ports['relayed_reask_buddy_udp']}",
+                    "fileHash": RELAYED_REASK_FILE_HASH.hex(),
+                    "protocolMarker": relayed_reask_probe.OP_EMULEPROT,
+                    "opcode": relayed_reask_probe.OP_REASKCALLBACKUDP,
+                    "sendAttemptId": 9,
+                },
+                {
+                    "direction": "send",
+                    "outcome": "attempted",
+                    "sendAttemptId": 9,
+                    "role": "buddy_relay_request",
+                    "transportMode": "plaintext",
+                    "obfuscated": False,
+                    "rawHex": request_raw.hex(),
+                    "payloadHexTruncated": False,
+                },
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                5,
+                "ed2k_client_udp",
+                "send_outcome",
+                {
+                    "peer": f"{host}:{ports['relayed_reask_buddy_udp']}",
+                    "sendAttemptId": 9,
+                },
+                {
+                    "sendAttemptId": 9,
+                    "outcome": "send_succeeded",
+                    "deliveryKnown": True,
+                    "role": "buddy_relay_request",
+                },
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                6,
+                "ed2k_client_udp",
+                "packet",
+                {
+                    "peer": f"{host}:{ports['relayed_reask_source_udp']}",
+                    "protocolMarker": relayed_reask_probe.OP_EMULEPROT,
+                    "opcode": relayed_reask_probe.OP_REASKACK,
+                },
+                {
+                    "direction": "recv",
+                    "outcome": "accepted",
+                    "phase": "reask_reply",
+                    "transportMode": "plaintext",
+                    "obfuscated": False,
+                    "rawHex": ack_raw.hex(),
+                    "payloadHexTruncated": False,
+                },
+            ),
+            row(
+                client,
+                process_id,
+                run_id,
+                7,
+                "sched",
+                "udp_reask_reply_applied",
+                dict(sched_keys),
+                {
+                    "outcome": "applied",
+                    "replyOpcode": relayed_reask_probe.OP_REASKACK,
+                    "queueRank": RELAYED_REASK_QUEUE_RANK,
+                    "requestPendingAfter": False,
+                    "remoteQueueFullAfter": False,
+                },
+            ),
+        ]
+
+    controls: dict[str, object] = {}
+    probes: dict[str, object] = {}
+    captures: dict[str, dict[str, object]] = {}
+    records_by_client: dict[str, list[dict[str, object]]] = {}
+    for client, process_id, run_id, requester_port in (
+        ("rust", 101, "rust-relayed-run", ports["client1_udp"]),
+        ("mfc", 202, "mfc-relayed-run", ports["client2_udp"]),
+    ):
+        request = {
+            "fileHash": RELAYED_REASK_FILE_HASH.hex(),
+            "sourceIp": host,
+            "sourceTcpPort": ports["relayed_reask_source_tcp"],
+            "sourceUdpPort": ports["relayed_reask_source_udp"],
+            "sourceUserHash": RELAYED_REASK_SOURCE_HASH.hex(),
+            "sourceUdpVersion": 4,
+            "buddyIp": host,
+            "buddyUdpPort": ports["relayed_reask_buddy_udp"],
+            "buddyId": RELAYED_REASK_BUDDY_ID.hex(),
+        }
+        controls[client] = {
+            "request": request,
+            "response": {
+                "status": 200,
+                "json": {
+                    "accepted": True,
+                    "fileHash": RELAYED_REASK_FILE_HASH.hex(),
+                    "sourceEndpoint": f"{host}:{ports['relayed_reask_source_udp']}",
+                    "sourceTcpPort": ports["relayed_reask_source_tcp"],
+                    "sourceUserHash": RELAYED_REASK_SOURCE_HASH.hex(),
+                    "sourceUdpVersion": 4,
+                    "buddyEndpoint": f"{host}:{ports['relayed_reask_buddy_udp']}",
+                    "buddyId": RELAYED_REASK_BUDDY_ID.hex(),
+                    "state": "queued-lowid-source",
+                },
+            },
+        }
+        decoded = relayed_reask_probe.decode_reask_callback_udp(
+            request_raw,
+            source_udp_version=4,
+        )
+        probes[client] = {
+            "schema": "emulebb.relayed-reask-probe/1",
+            "status": "completed",
+            "targetLabel": client,
+            "buddyEndpoint": f"{host}:{ports['relayed_reask_buddy_udp']}",
+            "sourceEndpoint": f"{host}:{ports['relayed_reask_source_udp']}",
+            "requesterEndpoint": f"{host}:{requester_port}",
+            "request": {**decoded, "receivedAt": 1000.0},
+            "response": {
+                "protocol": relayed_reask_probe.OP_EMULEPROT,
+                "opcode": relayed_reask_probe.OP_REASKACK,
+                "rawHex": ack_raw.hex().upper(),
+                "payloadHex": ack_raw[2:].hex().upper(),
+                "queueRank": RELAYED_REASK_QUEUE_RANK,
+                "sentBytes": len(ack_raw),
+                "sentAt": 1000.1,
+            },
+        }
+        client_records = records(client, process_id, run_id)
+        records_by_client[client] = client_records
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{run_id}-000000.jsonl"
+        _write_server_source_segment(segment, client_records)
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+
+    evidence = (
+        relayed_reask_diagnostic_evidence.build_relayed_reask_diagnostic_evidence(
+            file_hash=RELAYED_REASK_FILE_HASH,
+            source_host=host,
+            source_tcp_port=ports["relayed_reask_source_tcp"],
+            source_udp_port=ports["relayed_reask_source_udp"],
+            source_user_hash=RELAYED_REASK_SOURCE_HASH,
+            source_udp_version=4,
+            buddy_host=host,
+            buddy_udp_port=ports["relayed_reask_buddy_udp"],
+            buddy_id=RELAYED_REASK_BUDDY_ID,
+            requester_udp_ports={
+                "rust": ports["client1_udp"],
+                "mfc": ports["client2_udp"],
+            },
+            queue_rank=RELAYED_REASK_QUEUE_RANK,
+            controls=controls,
+            probe_results=probes,
+            rust_records=records_by_client["rust"],
+            mfc_records=records_by_client["mfc"],
+        )
+    )
+    evidence["captures"] = captures
+
+    rust_nodes = kad_nodes.encode_nodes_dat(
+        [
+            kad_nodes.BootstrapContact(
+                host,
+                ports["relayed_reask_source_tcp"],
+                ports["relayed_reask_source_tcp"],
+            )
+        ]
+    )
+    mfc_nodes = kad_nodes.encode_nodes_dat([])
+    launch_dir = run_directory / "launch-inputs" / "relayed-reask-kad"
+    launch_dir.mkdir(parents=True)
+    launch_receipts: dict[str, object] = {}
+    for label, name, payload in (
+        ("rustNodesDat", "rust-nodes.dat", rust_nodes),
+        ("mfcNodesDat", "mfc-nodes.dat", mfc_nodes),
+    ):
+        path = launch_dir / name
+        path.write_bytes(payload)
+        launch_receipts[label] = {
+            "path": str(path),
+            "sizeBytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    link = (
+        f"ed2k://|file|{RELAYED_REASK_FILE_NAME}|{RELAYED_REASK_FILE_SIZE}|"
+        f"{RELAYED_REASK_FILE_HASH.hex()}|/"
+    )
+    report["transfer_scenario"] = "relayed-reask"
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    report["network"] = {
+        "p2p_bind_interface_address": host,
+        "ports": ports,
+        "relayedReaskKadIsolation": {
+            "publicDiscovery": False,
+            "rustBootstrapSeed": {
+                "endpoint": f"{host}:{ports['relayed_reask_source_tcp']}",
+                "tcpPort": ports["relayed_reask_source_tcp"],
+            },
+            "mfcBootstrapSeeds": [],
+            "launchInputs": launch_receipts,
+        },
+    }
+    transfer_row = {
+        "hash": RELAYED_REASK_FILE_HASH.hex(),
+        "displayName": RELAYED_REASK_FILE_NAME,
+        "sizeBytes": RELAYED_REASK_FILE_SIZE,
+    }
+    report["checks"].update(
+        {
+            "client_relayed_reask_kad_running": {
+                client: {
+                    "status": {"status": 200, "json": {"running": True}},
+                    "observations": [{"running": True, "observed_at": 999.0}],
+                }
+                for client in ("rust", "mfc")
+            },
+            "client_relayed_reask_stimulus": {
+                "mode": "source-free-ed2k-link-plus-diagnostic-lowid-source",
+                "link": link,
+                "hash": RELAYED_REASK_FILE_HASH.hex(),
+                "name": RELAYED_REASK_FILE_NAME,
+                "sizeBytes": RELAYED_REASK_FILE_SIZE,
+                "source": {
+                    "host": host,
+                    "tcpPort": ports["relayed_reask_source_tcp"],
+                    "udpPort": ports["relayed_reask_source_udp"],
+                    "userHash": RELAYED_REASK_SOURCE_HASH.hex(),
+                    "udpVersion": 4,
+                },
+                "buddy": {
+                    "host": host,
+                    "udpPort": ports["relayed_reask_buddy_udp"],
+                    "id": RELAYED_REASK_BUDDY_ID.hex(),
+                },
+                "queueRank": RELAYED_REASK_QUEUE_RANK,
+            },
+            "client_relayed_reask_transfers": {
+                client: {
+                    "add": {
+                        "item": {
+                            "ok": True,
+                            "hash": RELAYED_REASK_FILE_HASH.hex(),
+                        }
+                    },
+                    "transfer": dict(transfer_row),
+                }
+                for client in ("rust", "mfc")
+            },
+            "client_relayed_reask_controls": controls,
+            "client_relayed_reask_probe": probes,
+            "client_relayed_reask_diagnostics": evidence,
+            "mfc_diagnostics_shutdown": {"ok": True, "processId": 202},
+        }
+    )
+    report["diagnostics"]["relayedReask"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: dict(capture) for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        relayed_reask_diagnostic_evidence.COVERAGE_ID
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence
@@ -2987,9 +3385,9 @@ def test_build_transfer_registration_rejects_mutated_mfc_kad_launch_input(
 ) -> None:
     report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
     retained = Path(
-        report["network"]["directCallbackKadIsolation"]["launchInputs"][
-            "mfcNodesDat"
-        ]["path"]
+        report["network"]["directCallbackKadIsolation"]["launchInputs"]["mfcNodesDat"][
+            "path"
+        ]
     )
     retained.write_bytes(
         kad_nodes.encode_nodes_dat(
@@ -3011,6 +3409,70 @@ def test_build_transfer_registration_rejects_mutated_direct_callback_capture(
         json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
     ]
     records[0]["body"]["note"] = "direct_callback_disabled"
+    _write_server_source_segment(segment, records)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def write_relayed_reask_report(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_relayed_reask(report, run_directory=report_path.parent)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, output_root, report, evidence
+
+
+def test_build_transfer_registration_accepts_exact_relayed_reask(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, _, _ = write_relayed_reask_report(tmp_path)
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert "lowid.relayed-reask" in registration["evidenceReceipt"]["coverageIds"]
+    reason = next(
+        row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] == "lowid.relayed-reask"
+    )
+    assert "identical OP_REASKCALLBACKUDP bytes" in reason
+    assert "OP_REASKACK queue rank" in reason
+
+
+def test_build_transfer_registration_rejects_relayed_reask_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_relayed_reask_report(tmp_path)
+    del report["diagnostics"]["relayedReask"]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_public_relayed_reask_seed(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_relayed_reask_report(tmp_path)
+    report["network"]["relayedReaskKadIsolation"]["publicDiscovery"] = True
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Kad isolation is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_relayed_reask_capture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, evidence = write_relayed_reask_report(tmp_path)
+    segment = Path(evidence["captures"]["mfc"]["selectedSegments"][0])
+    records = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
+    records[-1]["body"]["queueRank"] = RELAYED_REASK_QUEUE_RANK + 1
     _write_server_source_segment(segment, records)
     report_path.write_text(json.dumps(report), encoding="utf-8")
 

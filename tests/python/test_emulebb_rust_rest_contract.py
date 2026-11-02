@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from emule_test_harness.paths import get_emule_workspace_root
+from emule_test_harness.rust_rest_contract import RUST_PRIVATE_DIAGNOSTICS_ROUTES
 
 
 ROUTE_SPEC_FUNCTION = "inline const std::vector<SApiRouteSpec> &GetApiRouteSpecs()"
@@ -213,7 +214,9 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
     assert openapi_routes
     assert rust_routes
     assert sorted(openapi_routes - rust_routes) == []
-    assert sorted(rust_routes - openapi_routes) == [("GET", "/healthz")]
+    assert rust_routes - openapi_routes == {
+        ("GET", "/healthz"),
+    } | RUST_PRIVATE_DIAGNOSTICS_ROUTES
 
 
 def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:

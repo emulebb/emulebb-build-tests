@@ -251,6 +251,13 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "lowid.relayed-reask",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each registered the same queued LowID source, took the eligible buddy-relay path, emitted identical OP_REASKCALLBACKUDP bytes, settled the exact send attempt, and applied the source-endpoint OP_REASKACK queue rank at diagnostic sequences 37/27.",
+      "receiptIds": ["rust-mfc-transfer-20261102t060324z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "lowid.server-callback",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each started from an accepted LowID assignment, received and applied the exact server-routed callback at wire/application sequences 17/18 and 19/21, then connected to the HighID requester with a HELLO matching the assigned identity.",
@@ -277,7 +284,8 @@
         "rust-mfc-transfer-20261102t012738z",
         "rust-mfc-transfer-20261102t012801z",
         "rust-mfc-transfer-20261102t020224z",
-        "rust-mfc-transfer-20261102t035422z"
+        "rust-mfc-transfer-20261102t035422z",
+        "rust-mfc-transfer-20261102t060324z"
       ],
       "verdict": "parity"
     },
@@ -308,7 +316,8 @@
         "rust-mfc-transfer-20261102t012738z",
         "rust-mfc-transfer-20261102t012801z",
         "rust-mfc-transfer-20261102t020224z",
-        "rust-mfc-transfer-20261102t035422z"
+        "rust-mfc-transfer-20261102t035422z",
+        "rust-mfc-transfer-20261102t060324z"
       ],
       "verdict": "parity"
     },
@@ -334,7 +343,8 @@
         "rust-mfc-transfer-20261102t012738z",
         "rust-mfc-transfer-20261102t012801z",
         "rust-mfc-transfer-20261102t020224z",
-        "rust-mfc-transfer-20261102t035422z"
+        "rust-mfc-transfer-20261102t035422z",
+        "rust-mfc-transfer-20261102t060324z"
       ],
       "verdict": "parity"
     },
@@ -497,7 +507,8 @@
         "rust-mfc-transfer-20261102t012738z",
         "rust-mfc-transfer-20261102t012801z",
         "rust-mfc-transfer-20261102t020224z",
-        "rust-mfc-transfer-20261102t035422z"
+        "rust-mfc-transfer-20261102t035422z",
+        "rust-mfc-transfer-20261102t060324z"
       ],
       "verdict": "parity"
     }
@@ -1884,6 +1895,34 @@
           "authorityId": "rust-product",
           "executableSha256": "15cb10e6a8753ac78c3f9716b06abae10eaa74ac746c292bf0c0f238f07bc154",
           "sourceRevision": "cc2db5abbcd0105a22e177959b415e62b008dc74"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T060324Z-emulebb-main-release-5788/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "f3be72053dd8b7ddb563fe72dbb573fb7ed71857b42f7c602e37474d1f5f3574",
+      "coverageIds": [
+        "lowid.relayed-reask",
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "transfer.block.uncompressed"
+      ],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-transfer-20261102t060324z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "eede50092c9d41c54634f8895e6f9e1d3a051a95",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "068f3d94039ddc74aa6a882f58a0fb9be51e3c66486273415a8d9f43bc4852ee",
+          "sourceRevision": "a576a56619f0055049634a268742a3bf7b9d0922"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "64a8feb064d685518b7cca248281c435be6f565f019f20fff51cd38e9d3f544e",
+          "sourceRevision": "ebe2740fc782cb4ab6f35148b15ff05dbde7a911"
         }
       ]
     }

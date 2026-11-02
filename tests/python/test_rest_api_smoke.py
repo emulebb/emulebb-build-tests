@@ -13,7 +13,9 @@ import pytest
 
 from emule_test_harness.diag_event_runs import DIAGNOSTIC_WRITER_HEALTH_FIELDS
 
-PRIVATE_NATIVE_ONLY_ROUTES: set[tuple[str, str]] = set()
+PRIVATE_NATIVE_ONLY_ROUTES = {
+    ("POST", "/diagnostics/protocol-fixtures/queued-lowid-sources"),
+}
 
 
 def load_rest_api_smoke_module():
