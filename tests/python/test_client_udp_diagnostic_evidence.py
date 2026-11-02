@@ -565,6 +565,7 @@ def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any
     report = {
         "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
         "suite": "emulebb-rust-reask-cross-client",
+        "scenario": "v4",
         "coverageId": "client-udp.v4",
         "status": "passed",
         "currentPhase": "complete",
@@ -662,6 +663,148 @@ def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any
                 },
                 "queueSource": {
                     "queueRank": QUEUE_RANK,
+                    "sourceIp": "127.0.0.30",
+                    "sourceTcpPort": 4862,
+                    "sourceUserHash": mfc["sourceUserHash"],
+                },
+            },
+        },
+        "evidence": diagnostics,
+    }
+    report_path = run_dir / "emulebb-rust-reask-cross-client-result.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return output_root, report_path, report
+
+
+def immutable_queue_full_campaign_report(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, Any]]:
+    output_root = tmp_path / "output"
+    run_dir = (
+        output_root
+        / "artifacts"
+        / "emulebb-rust-reask-cross-client"
+        / "20261102T150409Z-emulebb-main-release-16096"
+    )
+    fixture_path = run_dir / "fixture" / "client-udp-queue-full.bin"
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_bytes(b"fixture")
+    diagnostics = passing_queue_full_report()
+    rust = diagnostics["clients"]["rust"]
+    mfc = diagnostics["clients"]["mfc"]
+
+    def raw_receipt(client: dict[str, Any], field: str) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in client[field].items()
+            if key != "ok"
+        }
+
+    report = {
+        "schema": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
+        "suite": "emulebb-rust-reask-cross-client",
+        "scenario": "queue-full",
+        "coverageId": "client-udp.queue-full",
+        "status": "passed",
+        "currentPhase": "complete",
+        "network": {"publicTraffic": False, "transportMode": "plaintext"},
+        "fixture": {
+            "path": str(fixture_path),
+            "sizeBytes": fixture_path.stat().st_size,
+            "partCount": 1,
+        },
+        "builds": {
+            "runnerRevision": "1" * 40,
+            "mfcDiagnostics": {
+                "sha256": "2" * 64,
+                "sourceRevision": "3" * 40,
+            },
+            "rustDiagnostics": {
+                "sha256": "4" * 64,
+                "sourceRevision": "5" * 40,
+            },
+        },
+        "checks": {
+            "rustRequesterMfcResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": raw_receipt(rust, "control"),
+                "waiterRemoval": raw_receipt(rust, "waiterRemoval"),
+                "queuePressure": {
+                    "request": rust["queuePressure"]["request"],
+                    "response": rust["queuePressure"]["response"],
+                },
+                "applicationSequence": rust["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "capacity": {
+                    "baseSlots": 2,
+                    "elasticSlots": 0,
+                    "effectiveSlotCap": 2,
+                    "activeSlots": 2,
+                },
+                "publication": {
+                    "clientName": "mfc-responder",
+                    "address": "192.0.2.1",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "rustHighIdClients": [
+                    {
+                        "clientName": f"rust-{index}",
+                        "address": f"192.0.2.{index + 2}",
+                        "highId": True,
+                        "sharedFiles": 0,
+                    }
+                    for index in range(3)
+                ],
+                "registration": {
+                    "fileHash": FILE_HASH.hex(),
+                    "sourceTcpEndpoint": rust["sourceTcpEndpoint"],
+                    "sourceUdpEndpoint": rust["sourceUdpEndpoint"],
+                    "sourceUserHash": rust["sourceUserHash"],
+                    "sourceUdpVersion": 4,
+                },
+            },
+            "mfcRequesterRustResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": raw_receipt(mfc, "control"),
+                "waiterRemoval": raw_receipt(mfc, "waiterRemoval"),
+                "queuePressure": {
+                    "request": mfc["queuePressure"]["request"],
+                    "response": mfc["queuePressure"]["response"],
+                },
+                "applicationSequence": mfc["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "publication": {
+                    "clientName": "rust-responder",
+                    "address": "192.0.2.10",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "occupierHighIdClient": {
+                    "clientName": "rust-occupier",
+                    "address": "192.0.2.11",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "mfcHighIdClient": {
+                    "clientName": "mfc-requester",
+                    "address": "192.0.2.12",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "occupiedSlot": {
+                    "fileHash": FILE_HASH.hex(),
+                    "slotOpenedSequence": 10,
+                    "policy": {
+                        "baseSlots": 1,
+                        "elasticSlots": 0,
+                        "effectiveSlotCap": 1,
+                    },
+                },
+                "queueSource": {
+                    "queueRank": 1,
                     "sourceIp": "127.0.0.30",
                     "sourceTcpPort": 4862,
                     "sourceUserHash": mfc["sourceUserHash"],
@@ -803,8 +946,9 @@ def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
 ) -> None:
     output_root, report_path, _report = immutable_campaign_report(tmp_path)
 
-    result = registration.build_client_udp_v4_registration(
+    result = registration.build_client_udp_registration(
         report_path,
+        scenario="v4",
         output_root=output_root,
     )
 
@@ -819,6 +963,98 @@ def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
 
 
 @pytest.mark.unit
+def test_immutable_queue_full_campaign_builds_exact_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_queue_full_campaign_report(tmp_path)
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="queue-full",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == (
+        "rust-mfc-client-udp-queue-full-20261102t150409z"
+    )
+    assert receipt["coverageIds"] == ["client-udp.queue-full"]
+    assert receipt["runnerPath"] == "scripts/emulebb-rust-reask-cross-client.py"
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.queue-full",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC each produced and applied the same clear zero-payload "
+                "queue-full reply after exact real-waiter removal and one causally "
+                "consumed stock queue-pressure prerequisite."
+            ),
+            "receiptIds": [
+                "rust-mfc-client-udp-queue-full-20261102t150409z"
+            ],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_queue_full_registration_rejects_tampered_fixture_order(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_queue_full_campaign_report(tmp_path)
+    sequences = report["evidence"]["clients"]["rust"]["diagnostics"][
+        "responderSequences"
+    ]
+    sequences["fixtureConsumed"] = sequences["queueFullOut"]
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="responder sequence is not causal"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="queue-full",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_queue_full_registration_rejects_unconfirmed_waiter_removal(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_queue_full_campaign_report(tmp_path)
+    report["evidence"]["clients"]["mfc"]["waiterRemoval"][
+        "verifiedAbsent"
+    ] = False
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"waiterRemoval differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="queue-full",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_queue_full_registration_rejects_failed_udp_application(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_queue_full_campaign_report(tmp_path)
+    report["evidence"]["clients"]["rust"]["application"]["udpFailedAfter"] = 1
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"application differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="queue-full",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
 def test_client_udp_v4_registration_rejects_tampered_causal_order(
     tmp_path: Path,
 ) -> None:
@@ -830,8 +1066,9 @@ def test_client_udp_v4_registration_rejects_tampered_causal_order(
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match="requester sequence is not causal"):
-        registration.build_client_udp_v4_registration(
+        registration.build_client_udp_registration(
             report_path,
+            scenario="v4",
             output_root=output_root,
         )
 
@@ -845,8 +1082,9 @@ def test_client_udp_v4_registration_rejects_tampered_wire_bytes(
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"evidence\.clients\.mfc\.wire differs"):
-        registration.build_client_udp_v4_registration(
+        registration.build_client_udp_registration(
             report_path,
+            scenario="v4",
             output_root=output_root,
         )
 
@@ -860,8 +1098,9 @@ def test_client_udp_v4_registration_requires_source_provenance(
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match="sourceRevision is malformed"):
-        registration.build_client_udp_v4_registration(
+        registration.build_client_udp_registration(
             report_path,
+            scenario="v4",
             output_root=output_root,
         )
 
