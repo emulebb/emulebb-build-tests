@@ -64,6 +64,34 @@ jobs:
           ref: main
           path: workspaces/workspace/app/emulebb-main
 
+      - name: Checkout stock source authority
+        uses: actions/checkout@v7
+        with:
+          repository: irwir/eMule
+          ref: ac3d52eafd88e9f6d9e0c2204c6dbead18db750b
+          path: repos/emule-stock
+
+      - name: Checkout stock instrumented authority
+        uses: actions/checkout@v7
+        with:
+          repository: emulebb/emulebb
+          ref: c547b7cf2b6b59d971600111e425330ec8d2944d
+          path: workspaces/workspace/app/emulebb-community-baseline
+
+      - name: Checkout frozen aMule authority
+        uses: actions/checkout@v7
+        with:
+          repository: amule-org/amule
+          ref: 02db0d7faecfc377694ff6242bc23346185990ed
+          path: repos/amule-stable
+
+      - name: Checkout aMule analysis authority
+        uses: actions/checkout@v7
+        with:
+          repository: amule-org/amule
+          ref: 59425b0c7d9f0e661dd57e7c42b5e92069cf0774
+          path: repos/amule
+
       - name: Checkout tooling docs
         uses: actions/checkout@v7
         with:
