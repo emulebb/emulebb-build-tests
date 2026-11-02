@@ -283,6 +283,10 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     ]
     assert payload["evidenceReceipts"][23]["coverageIds"] == ["client-udp.clear"]
     assert payload["evidenceReceipts"][24]["coverageIds"] == ["client-udp.encrypted"]
+    assert [
+        subject["authorityId"]
+        for subject in payload["evidenceReceipts"][24]["subjects"]
+    ] == ["mfc-oracle", "rust-product", "ed2k-server-dependency"]
 
 
 def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
