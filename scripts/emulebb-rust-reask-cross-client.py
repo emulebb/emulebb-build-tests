@@ -29,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
-from emule_test_harness import client_udp_v4_diagnostic_evidence as udp_v4_evidence  # noqa: E402
+from emule_test_harness import client_udp_diagnostic_evidence as udp_evidence  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -178,7 +178,7 @@ def find_udp_reask_registration(
         keys = record.get("keys") if isinstance(record.get("keys"), dict) else {}
         body = record.get("body") if isinstance(record.get("body"), dict) else {}
         if (
-            record.get("schema") == udp_v4_evidence.DIAGNOSTIC_SCHEMA
+            record.get("schema") == udp_evidence.DIAGNOSTIC_SCHEMA
             and record.get("family") == "sched"
             and record.get("event") == "udp_reask_source_registered"
             and str(keys.get("fileHash") or "").lower() == normalized_file_hash
@@ -302,7 +302,7 @@ def find_udp_reask_applied(
         keys = record.get("keys") if isinstance(record.get("keys"), dict) else {}
         body = record.get("body") if isinstance(record.get("body"), dict) else {}
         if (
-            record.get("schema") == udp_v4_evidence.DIAGNOSTIC_SCHEMA
+            record.get("schema") == udp_evidence.DIAGNOSTIC_SCHEMA
             and record.get("family") == "sched"
             and record.get("event") == "udp_reask_reply_applied"
             and str(keys.get("fileHash") or "").lower() == normalized_file_hash
@@ -577,7 +577,7 @@ def wait_for_rust_occupied_upload_slot(
             opened = [
                 record
                 for record in records
-                if record.get("schema") == udp_v4_evidence.DIAGNOSTIC_SCHEMA
+                if record.get("schema") == udp_evidence.DIAGNOSTIC_SCHEMA
                 and record.get("family") == "sched"
                 and record.get("event") == "upload_slot_opened"
                 and isinstance(record.get("keys"), dict)
@@ -835,7 +835,7 @@ def run_rust_requester_phase(
     server_endpoint: str,
     admin_base_url: str,
     fixture_path: Path,
-) -> tuple[udp_v4_evidence.ClientUdpV4Transition, dict[str, object]]:
+) -> tuple[udp_evidence.ClientUdpV4Transition, dict[str, object]]:
     mfc = None
     rust_clients: list[RustRuntime] = []
     try:
@@ -957,7 +957,7 @@ def run_rust_requester_phase(
         )
         responder_records = current_diag_records(mfc["diagnosticsDir"], side="emule")
         return (
-            udp_v4_evidence.ClientUdpV4Transition(
+            udp_evidence.ClientUdpV4Transition(
                 requester="rust",
                 responder="mfc",
                 source_tcp_endpoint=mfc["tcpEndpoint"],
@@ -1000,7 +1000,7 @@ def run_mfc_requester_phase(
     admin_base_url: str,
     fixture_path: Path,
     expected_file_hash: str,
-) -> tuple[udp_v4_evidence.ClientUdpV4Transition, dict[str, object]]:
+) -> tuple[udp_evidence.ClientUdpV4Transition, dict[str, object]]:
     mfc = None
     uploader = None
     occupier = None
@@ -1121,7 +1121,7 @@ def run_mfc_requester_phase(
             side="rust",
         )
         return (
-            udp_v4_evidence.ClientUdpV4Transition(
+            udp_evidence.ClientUdpV4Transition(
                 requester="mfc",
                 responder="rust",
                 source_tcp_endpoint=uploader.tcp_endpoint,
@@ -1179,7 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
     report: dict[str, object] = {
         "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
         "suite": SUITE_NAME,
-        "coverageId": udp_v4_evidence.COVERAGE_ID,
+        "coverageId": udp_evidence.COVERAGE_ID,
         "status": "running",
         "checks": {},
     }
@@ -1301,14 +1301,14 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["mfcRequesterRustResponder"] = mfc_check
 
         report["currentPhase"] = "causal-evidence"
-        evidence = udp_v4_evidence.build_client_udp_v4_diagnostic_evidence(
+        evidence = udp_evidence.build_client_udp_v4_diagnostic_evidence(
             file_hash=bytes.fromhex(rust_check["fileHash"]),
             part_count=part_count,
             stock_record=load_stock_client_udp_record(),
             transitions=[rust_transition, mfc_transition],
         )
         report["evidence"] = evidence
-        udp_v4_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
+        udp_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
         report["currentPhase"] = "complete"
         report["status"] = "passed"
         return 0

@@ -14,7 +14,7 @@ from typing import Any
 
 from emule_test_harness import diag_event_runs
 from emule_test_harness import buddy_callback_diagnostic_evidence
-from emule_test_harness import client_udp_v4_diagnostic_evidence
+from emule_test_harness import client_udp_diagnostic_evidence
 from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
@@ -4298,7 +4298,7 @@ def _client_udp_v4_stock_authority(catalog_path: Path) -> dict[str, Any]:
         record
         for record in records or []
         if isinstance(record, dict)
-        and record.get("recordId") == client_udp_v4_diagnostic_evidence.STOCK_RECORD_ID
+        and record.get("recordId") == client_udp_diagnostic_evidence.STOCK_RECORD_ID
     ]
     if len(matches) != 1:
         raise ValueError("catalog must contain one stock client-UDP authority")
@@ -4310,13 +4310,13 @@ def _client_udp_v4_stock_authority(catalog_path: Path) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise ValueError("stock client-UDP corpus is not valid base64") from exc
     digest = hashlib.sha256(fixture).hexdigest()
-    expected_digest = client_udp_v4_diagnostic_evidence.STOCK_CORPUS_SHA256
+    expected_digest = client_udp_diagnostic_evidence.STOCK_CORPUS_SHA256
     if (
         record.get("protocol") != "client_udp"
         or record.get("recordType") != "udp-packet"
         or record.get("direction") != "both"
         or record.get("transport") != "udp"
-        or client_udp_v4_diagnostic_evidence.COVERAGE_ID
+        or client_udp_diagnostic_evidence.COVERAGE_ID
         not in (record.get("coverageIds") or [])
         or record.get("fixtureEncoding") != "concatenated-client-udp-corpus"
         or record.get("fixtureLength") != len(fixture)
@@ -4327,7 +4327,7 @@ def _client_udp_v4_stock_authority(catalog_path: Path) -> dict[str, Any]:
         raise ValueError("stock client-UDP corpus authority is invalid")
     return {
         "ok": True,
-        "recordId": client_udp_v4_diagnostic_evidence.STOCK_RECORD_ID,
+        "recordId": client_udp_diagnostic_evidence.STOCK_RECORD_ID,
         "sha256": digest,
         "length": len(fixture),
         "semanticsOk": True,
@@ -4409,8 +4409,8 @@ def _validate_client_udp_v4_client(
     request_raw = (
         bytes(
             (
-                client_udp_v4_diagnostic_evidence.OP_EMULEPROT,
-                client_udp_v4_diagnostic_evidence.OP_REASKFILEPING,
+                client_udp_diagnostic_evidence.OP_EMULEPROT,
+                client_udp_diagnostic_evidence.OP_REASKFILEPING,
             )
         )
         + bytes.fromhex(file_hash)
@@ -4430,8 +4430,8 @@ def _validate_client_udp_v4_client(
         raise ValueError(f"evidence.clients.{client_id} queue rank exceeds u16")
     ack_raw = bytes(
         (
-            client_udp_v4_diagnostic_evidence.OP_EMULEPROT,
-            client_udp_v4_diagnostic_evidence.OP_REASKACK,
+            client_udp_diagnostic_evidence.OP_EMULEPROT,
+            client_udp_diagnostic_evidence.OP_REASKACK,
             0,
             0,
         )
@@ -4558,7 +4558,7 @@ def _validate_client_udp_v4_client(
         "queueRank": queue_rank,
         "queueRankApplied": True,
         "remoteQueueFullAfter": False,
-        "replyOpcode": client_udp_v4_diagnostic_evidence.OP_REASKACK,
+        "replyOpcode": client_udp_diagnostic_evidence.OP_REASKACK,
         "requestPendingAfter": False,
         "sourceUdpEndpoint": source_udp_endpoint,
         "sourceUdpVersion": 4,
@@ -4641,7 +4641,7 @@ def build_client_udp_v4_registration(
         or report.get("suite") != CLIENT_UDP_V4_SUITE
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
-        or report.get("coverageId") != client_udp_v4_diagnostic_evidence.COVERAGE_ID
+        or report.get("coverageId") != client_udp_diagnostic_evidence.COVERAGE_ID
     ):
         raise ValueError("report is not a completed client-UDP V4 campaign")
 
@@ -4661,7 +4661,7 @@ def build_client_udp_v4_registration(
 
     evidence = _object(report.get("evidence"), "evidence")
     if (
-        evidence.get("schema") != client_udp_v4_diagnostic_evidence.SCHEMA
+        evidence.get("schema") != client_udp_diagnostic_evidence.SCHEMA
         or evidence.get("ok") is not True
         or evidence.get("failures") != []
         or evidence.get("partCount") != part_count
@@ -4684,8 +4684,8 @@ def build_client_udp_v4_registration(
     _require_exact_value(
         evidence.get("coverageClaims"),
         {
-            "eligibleCoverageIds": [client_udp_v4_diagnostic_evidence.COVERAGE_ID],
-            "evidenceLayers": list(client_udp_v4_diagnostic_evidence.EVIDENCE_LAYERS),
+            "eligibleCoverageIds": [client_udp_diagnostic_evidence.COVERAGE_ID],
+            "evidenceLayers": list(client_udp_diagnostic_evidence.EVIDENCE_LAYERS),
         },
         "evidence.coverageClaims",
     )
@@ -4852,8 +4852,8 @@ def build_client_udp_v4_registration(
 
     stamp = stamp_match.group("stamp").lower()
     receipt_id = f"rust-mfc-client-udp-v4-{stamp}"
-    coverage_id = client_udp_v4_diagnostic_evidence.COVERAGE_ID
-    evidence_layers = list(client_udp_v4_diagnostic_evidence.EVIDENCE_LAYERS)
+    coverage_id = client_udp_diagnostic_evidence.COVERAGE_ID
+    evidence_layers = list(client_udp_diagnostic_evidence.EVIDENCE_LAYERS)
     receipt = {
         "artifactLocator": f"output-root:{relative_report.as_posix()}",
         "artifactSha256": _file_sha256(resolved_report),

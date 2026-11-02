@@ -1,4 +1,4 @@
-"""Causal bilateral evidence gate for direct client-UDP version 4 reasks."""
+"""Canonical causal evidence gates for deterministic client-UDP scenarios."""
 
 from __future__ import annotations
 

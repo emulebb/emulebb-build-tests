@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from emule_test_harness import client_udp_v4_diagnostic_evidence as evidence
+from emule_test_harness import client_udp_diagnostic_evidence as evidence
 from emule_test_harness import protocol_evidence_registration as registration
 
 
