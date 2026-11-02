@@ -51,19 +51,19 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
 
     assert report["valid"] is True
     assert report["coverage"] == {
-        "coveredGroupCount": 3,
-        "coveredIdCount": 22,
+        "coveredGroupCount": 4,
+        "coveredIdCount": 23,
         "groupVerdictCounts": {
-            "parity": 3,
+            "parity": 4,
             "divergence": 0,
-            "evidence-incomplete": 14,
+            "evidence-incomplete": 13,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 22,
+            "parity": 23,
             "divergence": 0,
-            "evidence-incomplete": 78,
+            "evidence-incomplete": 77,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -99,6 +99,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.connect.obfuscated",
         "server.connect.plaintext",
         "server.login.request",
+        "server.reply.callback",
         "server.reply.search",
         "server.reply.sources",
         "server.reply.tcp-ident",
@@ -230,6 +231,15 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.search.advanced",
         "transfer.block.uncompressed",
     ]
+    assert payload["evidenceReceipts"][16]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "server.reply.callback",
+        "transfer.block.uncompressed",
+    ]
 
 
 def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
@@ -320,7 +330,7 @@ def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixtu
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
-    assert report["coverage"]["coveredGroupCount"] == 3
+    assert report["coverage"]["coveredGroupCount"] == 4
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
