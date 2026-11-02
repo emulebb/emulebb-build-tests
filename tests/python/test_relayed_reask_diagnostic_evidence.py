@@ -260,6 +260,18 @@ def test_reply_application_must_carry_exact_queue_rank() -> None:
 
 
 @pytest.mark.unit
+def test_reply_must_be_captured_before_its_state_application() -> None:
+    wrong = records()
+    wrong[-2]["seq"] = 7
+    wrong[-1]["seq"] = 6
+
+    report = passing_report(rust_records=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["ordered"] is False
+
+
+@pytest.mark.unit
 def test_probe_request_bytes_must_match_bilateral_wire() -> None:
     wrong = probe("rust")
     wrong["request"] = {**wrong["request"], "rawHex": REQUEST_RAW[:-1].hex().upper()}

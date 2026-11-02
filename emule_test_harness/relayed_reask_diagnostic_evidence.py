@@ -357,6 +357,7 @@ def _client_evidence(
         and sequences["outbound"] < sequences["sendOutcome"]
         and sequences["sendOutcome"] < sequences["inbound"]
         and sequences["sendOutcome"] < sequences["applied"]
+        and sequences["inbound"] < sequences["applied"]
     )
     counts = {
         "registration": registration_count,
