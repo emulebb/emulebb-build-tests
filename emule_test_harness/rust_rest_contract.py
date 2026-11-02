@@ -12,6 +12,7 @@ RUST_PRIVATE_DIAGNOSTICS_ROUTES = frozenset(
     {
         ("POST", "/api/v1/diagnostics/protocol-controls/queued-source-reasks"),
         ("POST", "/api/v1/diagnostics/protocol-fixtures/buddy-relay-eligibility"),
+        ("POST", "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"),
         ("POST", "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources"),
     }
 )
