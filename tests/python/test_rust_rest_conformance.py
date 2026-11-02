@@ -173,11 +173,12 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
     }
 
 
-def test_diagnostic_bundle_contract_body_uses_inline_capture_confirmation() -> None:
+def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
 
     assert module.get_contract_route_body("captureDiagnosticBundle") == {
-        "confirmCapture": True
+        "confirmCapture": True,
+        "maxBytes": 65_536,
     }
 
 
