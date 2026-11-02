@@ -19,9 +19,11 @@ OP_LOGINREQUEST = 0x01
 OP_OFFERFILES = 0x15
 OP_SEARCHREQUEST = 0x16
 OP_GETSOURCES = 0x19
+OP_CALLBACKREQUEST = 0x1C
 OP_GETSOURCES_OBFU = 0x23
 OP_SEARCHRESULT = 0x33
 OP_SERVERSTATUS = 0x34
+OP_CALLBACKREQUESTED = 0x35
 OP_IDCHANGE = 0x40
 OP_SERVERIDENT = 0x41
 OP_FOUNDSOURCES = 0x42
@@ -751,6 +753,41 @@ def encode_source_request(file_hash: bytes, size: int) -> bytes:
     if size <= 0xFFFF_FFFF:
         return file_hash + struct.pack("<I", size)
     return file_hash + struct.pack("<I", 0) + struct.pack("<Q", size)
+
+
+def encode_callback_request(target_client_id: int) -> bytes:
+    """Encodes one stock OP_CALLBACKREQUEST target LowID."""
+
+    if (
+        not isinstance(target_client_id, int)
+        or isinstance(target_client_id, bool)
+        or not 0 < target_client_id < LOW_ID_CEILING
+    ):
+        raise ValueError("target_client_id must be a nonzero LowID")
+    return struct.pack("<I", target_client_id)
+
+
+def decode_callback_requested(payload: bytes) -> dict[str, object]:
+    """Decodes stock OP_CALLBACKREQUESTED short or crypt-profile payloads."""
+
+    if len(payload) < 6:
+        raise Ed2kWireError(
+            f"OP_CALLBACKREQUESTED payload is truncated: expected at least 6 bytes, got {len(payload)}."
+        )
+    has_crypt_profile = len(payload) >= 23
+    return {
+        "peer_host": str(ipaddress.IPv4Address(payload[:4])),
+        "peer_port": int.from_bytes(payload[4:6], "little"),
+        "has_crypt_profile": has_crypt_profile,
+        "connect_options": payload[6] if has_crypt_profile else None,
+        "user_hash": payload[7:23].hex().upper() if has_crypt_profile else None,
+        "payload_length": len(payload),
+        "trailing_hex": (
+            payload[23:].hex().upper()
+            if has_crypt_profile
+            else payload[6:].hex().upper()
+        ),
+    }
 
 
 def _decode_tag(reader: _Reader) -> tuple[int | str, Any]:

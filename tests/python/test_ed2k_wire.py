@@ -114,6 +114,44 @@ def test_server_session_reply_decoders_are_exact() -> None:
 
 
 @pytest.mark.unit
+def test_server_callback_request_and_short_reply_match_stock_vectors() -> None:
+    assert ed2k_wire.encode_callback_request(0x0012_3456) == bytes.fromhex("56341200")
+    assert ed2k_wire.decode_callback_requested(bytes.fromhex("7F0000013612")) == {
+        "peer_host": "127.0.0.1",
+        "peer_port": 4662,
+        "has_crypt_profile": False,
+        "connect_options": None,
+        "user_hash": None,
+        "payload_length": 6,
+        "trailing_hex": "",
+    }
+
+
+@pytest.mark.unit
+def test_server_callback_reply_decodes_crypt_profile_and_rejects_truncation() -> None:
+    payload = bytes.fromhex("01020304361203") + bytes([0xAB]) * 16
+    assert ed2k_wire.decode_callback_requested(payload) == {
+        "peer_host": "1.2.3.4",
+        "peer_port": 4662,
+        "has_crypt_profile": True,
+        "connect_options": 3,
+        "user_hash": "AB" * 16,
+        "payload_length": 23,
+        "trailing_hex": "",
+    }
+
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="truncated"):
+        ed2k_wire.decode_callback_requested(payload[:5])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("target_client_id", [0, ed2k_wire.LOW_ID_CEILING, True])
+def test_server_callback_request_requires_nonzero_low_id(target_client_id: int) -> None:
+    with pytest.raises(ValueError, match="nonzero LowID"):
+        ed2k_wire.encode_callback_request(target_client_id)
+
+
+@pytest.mark.unit
 def test_server_udp_status_transaction_decoder_preserves_extended_fields() -> None:
     challenge = 0x55AA_1234
     request = struct.pack("<I", challenge)
