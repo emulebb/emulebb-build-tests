@@ -40,6 +40,12 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("POST", "/api/v1/vpn-guard/operations/probe"),
 }
 
+# Compile-time diagnostics controls are intentionally private harness surfaces,
+# not public product API. They must remain absent from the product OpenAPI.
+DIAGNOSTICS_ONLY_RUST_ROUTES = {
+    ("POST", "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources"),
+}
+
 # Legacy MFC REST routes that remain tracked as parity backlog for the Rust-native
 # product. They are excluded from the strict route-equality gate so this harness
 # can stay green while the product OpenAPI owns the current Rust contract.
@@ -213,7 +219,9 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
     assert openapi_routes
     assert rust_routes
     assert sorted(openapi_routes - rust_routes) == []
-    assert sorted(rust_routes - openapi_routes) == [("GET", "/healthz")]
+    assert rust_routes - openapi_routes == {
+        ("GET", "/healthz"),
+    } | DIAGNOSTICS_ONLY_RUST_ROUTES
 
 
 def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:
