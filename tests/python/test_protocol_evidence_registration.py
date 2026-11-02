@@ -13,6 +13,7 @@ from emule_test_harness import direct_callback_probe
 from emule_test_harness import ed2k_wire
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
+from emule_test_harness import kad_nodes
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -1932,10 +1933,13 @@ def attach_direct_callback(
     report["network"].update(
         {
             "p2p_bind_interface_address": "127.0.0.1",
-            "isolatedKadSeed": {
-                "endpoint": f"127.0.0.1:{SERVER_CALLBACK_REQUESTER_PORT}",
-                "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+            "directCallbackKadIsolation": {
                 "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": f"127.0.0.1:{SERVER_CALLBACK_REQUESTER_PORT}",
+                    "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+                },
+                "mfcBootstrapSeeds": [],
             },
         }
     )
@@ -1946,6 +1950,21 @@ def attach_direct_callback(
             "callback_requester_tcp": SERVER_CALLBACK_REQUESTER_PORT,
         }
     )
+    rust_profile_dir = run_directory / "profiles" / "rust"
+    mfc_config_dir = run_directory / "profiles" / "mfc" / "config"
+    report["profiles"]["rust"]["profile_dir"] = str(rust_profile_dir)
+    report["profiles"]["mfc"]["config_dir"] = str(mfc_config_dir)
+    kad_nodes.write_nodes_dat(
+        rust_profile_dir / "nodes.dat",
+        [
+            kad_nodes.BootstrapContact(
+                "127.0.0.1",
+                SERVER_CALLBACK_REQUESTER_PORT,
+                SERVER_CALLBACK_REQUESTER_PORT,
+            )
+        ],
+    )
+    kad_nodes.write_nodes_dat(mfc_config_dir / "nodes.dat", [])
     targets = {
         client: {
             "clientId": identity["clientId"],
@@ -2920,10 +2939,25 @@ def test_build_transfer_registration_rejects_public_direct_callback_seed(
     tmp_path: Path,
 ) -> None:
     report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
-    report["network"]["isolatedKadSeed"]["publicDiscovery"] = True
+    report["network"]["directCallbackKadIsolation"]["publicDiscovery"] = True
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Kad seed is not isolated"):
+    with pytest.raises(ValueError, match="Kad isolation is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mfc_direct_callback_kad_contact(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    mfc_nodes = Path(report["profiles"]["mfc"]["config_dir"]) / "nodes.dat"
+    kad_nodes.write_nodes_dat(
+        mfc_nodes,
+        [kad_nodes.BootstrapContact("127.0.0.1", 4672, 4662)],
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="MFC direct callback nodes.dat is not empty"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

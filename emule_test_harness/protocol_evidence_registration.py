@@ -16,6 +16,7 @@ from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
+from emule_test_harness import kad_nodes
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
@@ -2713,16 +2714,40 @@ def _derived_direct_callback_coverage_ids(
     }
     if requester_port > 0xFFFF or any(port > 0xFFFF for port in udp_ports.values()):
         raise ValueError("direct callback topology contains an invalid port")
-    isolated_seed = _object(
-        network.get("isolatedKadSeed"),
-        "network.isolatedKadSeed",
+    kad_isolation = _object(
+        network.get("directCallbackKadIsolation"),
+        "network.directCallbackKadIsolation",
     )
-    if isolated_seed != {
-        "endpoint": f"{requester_host}:{requester_port}",
-        "tcpPort": requester_port,
+    if kad_isolation != {
         "publicDiscovery": False,
+        "rustBootstrapSeed": {
+            "endpoint": f"{requester_host}:{requester_port}",
+            "tcpPort": requester_port,
+        },
+        "mfcBootstrapSeeds": [],
     }:
-        raise ValueError("direct callback Kad seed is not isolated and exact")
+        raise ValueError("direct callback Kad isolation is not exact")
+
+    profiles = _object(report.get("profiles"), "profiles")
+    rust_profile = _profile_by_client_key(profiles, "emulebb_rust")
+    mfc_profile = _profile_by_client_key(profiles, "mfc_oracle")
+    rust_nodes_path = _path_within(
+        str(Path(str(rust_profile.get("profile_dir"))) / "nodes.dat"),
+        run_directory,
+        "Rust direct callback nodes.dat",
+    )
+    mfc_nodes_path = _path_within(
+        str(Path(str(mfc_profile.get("config_dir"))) / "nodes.dat"),
+        run_directory,
+        "MFC direct callback nodes.dat",
+    )
+    expected_rust_nodes = kad_nodes.encode_nodes_dat(
+        [kad_nodes.BootstrapContact(requester_host, requester_port, requester_port)]
+    )
+    if rust_nodes_path.read_bytes() != expected_rust_nodes:
+        raise ValueError("Rust direct callback nodes.dat is not the isolated seed")
+    if mfc_nodes_path.read_bytes() != kad_nodes.encode_nodes_dat([]):
+        raise ValueError("MFC direct callback nodes.dat is not empty")
 
     kad_runtimes = _object(
         checks.get("client_direct_callback_kad_running"),

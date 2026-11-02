@@ -2636,7 +2636,7 @@ def main(argv: list[str] | None = None) -> int:
         docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
     ) = None
     direct_callback_requester: direct_callback_probe.DirectCallbackProbe | None = None
-    isolated_kad_seed: kad_nodes.BootstrapContact | None = None
+    rust_isolated_kad_seed: kad_nodes.BootstrapContact | None = None
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
@@ -2717,15 +2717,18 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["ed2k_server_address"] = server_address
 
         if args.transfer_scenario == DIRECT_CALLBACK:
-            isolated_kad_seed = kad_nodes.BootstrapContact(
+            rust_isolated_kad_seed = kad_nodes.BootstrapContact(
                 p2p_address,
                 ports["callback_requester_tcp"],
                 ports["callback_requester_tcp"],
             )
-            report["network"]["isolatedKadSeed"] = {
-                "endpoint": isolated_kad_seed.endpoint,
-                "tcpPort": isolated_kad_seed.tcp_port,
+            report["network"]["directCallbackKadIsolation"] = {
                 "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": rust_isolated_kad_seed.endpoint,
+                    "tcpPort": rust_isolated_kad_seed.tcp_port,
+                },
+                "mfcBootstrapSeeds": [],
             }
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
@@ -3106,7 +3109,7 @@ def main(argv: list[str] | None = None) -> int:
                 else True
             ),
             local_only_discovery=True,
-            local_kad_seed=isolated_kad_seed,
+            local_kad_seed=rust_isolated_kad_seed,
             add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -3224,10 +3227,13 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
             )
-            if isolated_kad_seed is not None:
+            if args.transfer_scenario == DIRECT_CALLBACK:
+                # MFC treats a private-only Kad routing table as LAN mode, where
+                # stock deliberately reports TCP-open and rejects direct callbacks.
+                # An empty nodes.dat keeps Kad running, offline, and firewalled.
                 kad_nodes.write_nodes_dat(
                     Path(client2["config_dir"]) / "nodes.dat",
-                    [isolated_kad_seed],
+                    [],
                 )
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
@@ -3511,18 +3517,25 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.transfer_scenario == DIRECT_CALLBACK:
             current_phase = "wait_for_isolated_kad_runtimes"
-            report["checks"]["client_direct_callback_kad_running"] = {
-                "mfc": rest_smoke.wait_for_kad_running(
-                    client2_base_url,
-                    args.api_key,
-                    args.server_connect_timeout_seconds,
-                ),
-                "rust": rest_smoke.wait_for_kad_running(
-                    base_url,
-                    args.api_key,
-                    args.server_connect_timeout_seconds,
-                ),
-            }
+            kad_running: dict[str, object] = {}
+            for client, kad_base_url in (
+                ("mfc", client2_base_url),
+                ("rust", base_url),
+            ):
+                try:
+                    kad_running[client] = rest_smoke.wait_for_kad_running(
+                        kad_base_url,
+                        args.api_key,
+                        args.server_connect_timeout_seconds,
+                    )
+                except Exception as exc:
+                    report["checks"]["client_direct_callback_kad_running"] = (
+                        kad_running
+                    )
+                    raise RuntimeError(
+                        f"{client} Kad runtime did not start for direct callback: {exc}"
+                    ) from exc
+            report["checks"]["client_direct_callback_kad_running"] = kad_running
 
         current_phase = "observe_client_id_classes"
         report["checks"]["client_id_classes"] = observe_client_id_classes(
