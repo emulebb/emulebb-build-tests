@@ -668,16 +668,25 @@ def file_not_found_responder_records(requester: str) -> list[dict[str, Any]]:
     ]
 
 
-def shared_withdrawal() -> dict[str, object]:
-    return {
+def shared_withdrawal(*, method: str) -> dict[str, object]:
+    receipt: dict[str, object] = {
         "fileHash": FILE_HASH.hex(),
-        "sharedPath": "C:/campaign/fixture/client-udp-v4.bin",
-        "withdrawnPath": "C:/campaign/withdrawn/client-udp-v4.bin",
+        "method": method,
+        "fixturePath": "C:/campaign/fixture/client-udp-v4.bin",
         "presentBefore": True,
-        "movedOutsideSharedRoot": True,
         "reloadResponse": {"status": 200, "json": {"ok": True}},
         "absentAfter": True,
     }
+    if method == "file-move":
+        receipt["movedToPath"] = "C:/campaign/withdrawn/client-udp-v4.bin"
+    elif method == "shared-roots-cleared":
+        receipt["sharedDirectories"] = {
+            "request": {"roots": [], "confirmReplaceRoots": True},
+            "response": {"status": 200, "json": {"roots": []}},
+        }
+    else:
+        raise ValueError(f"unsupported test withdrawal method: {method}")
+    return receipt
 
 
 def source_absence(requester: str) -> dict[str, object]:
@@ -703,7 +712,9 @@ def file_not_found_transition(
         source_user_hash=endpoints["sourceHash"],
         requester_udp_endpoint=str(endpoints["requesterUdp"]),
         control_receipt=control(requester),
-        shared_withdrawal_receipt=shared_withdrawal(),
+        shared_withdrawal_receipt=shared_withdrawal(
+            method=("file-move" if requester == "rust" else "shared-roots-cleared")
+        ),
         source_absence_receipt=source_absence(requester),
         requester_records=file_not_found_requester_records(requester),
         responder_records=file_not_found_responder_records(requester),
@@ -1024,8 +1035,9 @@ def immutable_file_not_found_campaign_report(
     for requester in ("rust", "mfc"):
         original = file_not_found_transition(requester)
         withdrawal = copy.deepcopy(original.shared_withdrawal_receipt)
-        withdrawal["sharedPath"] = str(fixture_path.resolve())
-        withdrawal["withdrawnPath"] = str(withdrawn_path.resolve())
+        withdrawal["fixturePath"] = str(fixture_path.resolve())
+        if withdrawal["method"] == "file-move":
+            withdrawal["movedToPath"] = str(withdrawn_path.resolve())
         transitions.append(
             evidence.ClientUdpFileNotFoundTransition(
                 **{
@@ -1556,9 +1568,7 @@ def test_file_not_found_registration_rejects_unrestored_fixture_path(
         tmp_path
     )
     withdrawn_path = Path(
-        report["checks"]["rustRequesterMfcResponder"]["sharedWithdrawal"][
-            "withdrawnPath"
-        ]
+        report["checks"]["rustRequesterMfcResponder"]["sharedWithdrawal"]["movedToPath"]
     )
     withdrawn_path.parent.mkdir(parents=True)
     withdrawn_path.write_bytes(b"not-restored")

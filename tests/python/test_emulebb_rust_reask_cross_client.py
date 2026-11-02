@@ -539,10 +539,10 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
     assert withdrawn.read_bytes() == b"fixture"
     assert receipt == {
         "fileHash": FILE_HASH,
-        "sharedPath": str(fixture.resolve()),
-        "withdrawnPath": str(withdrawn),
+        "method": "file-move",
+        "fixturePath": str(fixture.resolve()),
+        "movedToPath": str(withdrawn),
         "presentBefore": True,
-        "movedOutsideSharedRoot": True,
         "reloadResponse": {"status": 200, "json": {"ok": True}},
         "absentAfter": True,
     }
@@ -581,6 +581,88 @@ def test_shared_catalog_presence_uses_selected_client_route(
         timeout=0.1,
     ) == {"hash": FILE_HASH.upper()}
     assert calls == [shared_files_path]
+
+
+def test_rust_shared_root_withdrawal_uses_production_configuration(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    fixture = tmp_path / "fixture" / "client-udp-file-not-found.bin"
+    fixture.parent.mkdir()
+    fixture.write_bytes(b"fixture")
+    observed_states: list[tuple[bool, str]] = []
+
+    monkeypatch.setattr(
+        module,
+        "wait_for_shared_file_presence",
+        lambda *_args, present, shared_files_path, **_kwargs: observed_states.append(
+            (present, shared_files_path)
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "clear_shared_roots",
+        lambda *_args, **_kwargs: {
+            "request": {"roots": [], "confirmReplaceRoots": True},
+            "response": {"status": 200, "json": {"roots": []}},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "reload_shared_catalog",
+        lambda *_args, **_kwargs: {"status": 200, "json": {"ok": True}},
+    )
+
+    assert module.withdraw_rust_shared_root(
+        "http://responder.test",
+        "secret",
+        fixture_path=fixture,
+        file_hash=FILE_HASH,
+        timeout=0.1,
+    ) == {
+        "fileHash": FILE_HASH,
+        "method": "shared-roots-cleared",
+        "fixturePath": str(fixture.resolve()),
+        "sharedDirectories": {
+            "request": {"roots": [], "confirmReplaceRoots": True},
+            "response": {"status": 200, "json": {"roots": []}},
+        },
+        "presentBefore": True,
+        "reloadResponse": {"status": 200, "json": {"ok": True}},
+        "absentAfter": True,
+    }
+    assert fixture.read_bytes() == b"fixture"
+    assert observed_states == [
+        (True, module.RUST_SHARED_FILES_PATH),
+        (False, module.RUST_SHARED_FILES_PATH),
+    ]
+
+
+def test_clear_shared_roots_uses_exact_production_patch(monkeypatch) -> None:
+    module = _load_module()
+    calls: list[tuple[str, str, object]] = []
+
+    def retry_rest_request(_base_url, path, *, method, json_body, **_kwargs):
+        calls.append((method, path, json_body))
+        return {
+            "status": 200,
+            "raw_json": {"data": {"roots": []}},
+        }
+
+    monkeypatch.setattr(module.dtt, "retry_rest_request", retry_rest_request)
+
+    assert module.clear_shared_roots("http://responder.test", "secret") == {
+        "request": {"roots": [], "confirmReplaceRoots": True},
+        "response": {"status": 200, "json": {"roots": []}},
+    }
+    assert calls == [
+        (
+            "PATCH",
+            module.SHARED_DIRECTORIES_PATH,
+            {"roots": [], "confirmReplaceRoots": True},
+        )
+    ]
 
 
 def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None:

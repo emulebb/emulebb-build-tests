@@ -453,37 +453,77 @@ def _shared_withdrawal_evidence(
     file_hash: str,
 ) -> dict[str, Any]:
     receipt = value if isinstance(value, dict) else {}
+    method = receipt.get("method")
+    fixture_path = receipt.get("fixturePath")
     reload_response = (
         receipt.get("reloadResponse")
         if isinstance(receipt.get("reloadResponse"), dict)
         else {}
     )
-    shared_path = receipt.get("sharedPath")
-    withdrawn_path = receipt.get("withdrawnPath")
-    paths_ok = bool(
-        isinstance(shared_path, str)
-        and shared_path.strip()
-        and isinstance(withdrawn_path, str)
-        and withdrawn_path.strip()
-        and shared_path.casefold() != withdrawn_path.casefold()
-    )
-    return {
+    method_evidence: dict[str, Any]
+    if method == "file-move":
+        moved_to_path = receipt.get("movedToPath")
+        method_ok = bool(
+            isinstance(fixture_path, str)
+            and fixture_path.strip()
+            and isinstance(moved_to_path, str)
+            and moved_to_path.strip()
+            and fixture_path.casefold() != moved_to_path.casefold()
+        )
+        method_evidence = {"movedToPath": moved_to_path}
+    elif method == "shared-roots-cleared":
+        shared_directories = (
+            receipt.get("sharedDirectories")
+            if isinstance(receipt.get("sharedDirectories"), dict)
+            else {}
+        )
+        request = (
+            shared_directories.get("request")
+            if isinstance(shared_directories.get("request"), dict)
+            else {}
+        )
+        response = (
+            shared_directories.get("response")
+            if isinstance(shared_directories.get("response"), dict)
+            else {}
+        )
+        response_json = response.get("json")
+        method_ok = bool(
+            isinstance(fixture_path, str)
+            and fixture_path.strip()
+            and request == {"roots": [], "confirmReplaceRoots": True}
+            and response.get("status") == 200
+            and (response_json is None or isinstance(response_json, dict))
+        )
+        method_evidence = {
+            "sharedDirectories": {
+                "request": request or None,
+                "response": {
+                    "status": response.get("status"),
+                    "json": response_json,
+                },
+            }
+        }
+    else:
+        method_ok = False
+        method_evidence = {}
+    result = {
         "ok": bool(
             receipt.get("fileHash") == file_hash
-            and paths_ok
+            and method_ok
             and receipt.get("presentBefore") is True
-            and receipt.get("movedOutsideSharedRoot") is True
             and reload_response.get("status") == 200
             and receipt.get("absentAfter") is True
         ),
         "fileHash": receipt.get("fileHash"),
-        "sharedPath": shared_path,
-        "withdrawnPath": withdrawn_path,
+        "method": method,
+        "fixturePath": fixture_path,
+        **method_evidence,
         "presentBefore": receipt.get("presentBefore") is True,
-        "movedOutsideSharedRoot": receipt.get("movedOutsideSharedRoot") is True,
         "reloadResponse": reload_response or None,
         "absentAfter": receipt.get("absentAfter") is True,
     }
+    return result
 
 
 def _source_absence_evidence(

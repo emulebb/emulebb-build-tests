@@ -13,11 +13,13 @@ queue before one exact, expiring queue-pressure prerequisite is armed. The
 ordinary scheduler and production packet path remain responsible for the
 request, response, and state transition.
 
-For file-not-found, the harness-owned fixture is moved outside the responder's
-shared root after the requester has registered the real queued source. The
-production shared catalog is reloaded and must prove the exact hash absent
-before the ordinary scheduler sends one reask. The fixture is restored only
-after the responder stops.
+For file-not-found, the harness withdraws the fixture from the responder's
+production shared catalog after the requester has registered the real queued
+source. MFC uses a reversible file move; Rust clears the ephemeral profile's
+configured shared roots so its live Windows file handle is not disturbed. The
+production shared catalog must prove the exact hash absent before the ordinary
+scheduler sends one reask. A moved fixture is restored only after the responder
+stops.
 
 The verdict comes only from complete ``diag_event_v2`` causal evidence, exact
 wire bytes, the accepted stock corpus, and matching applied state. Process exit,
@@ -60,6 +62,7 @@ SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
 QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
+SHARED_DIRECTORIES_PATH = "/api/v1/shared-directories"
 MFC_SHARED_FILES_PATH = "/api/v1/shared-files?offset=0&limit=100"
 MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
 RUST_SHARED_FILES_PATH = "/api/v1/shared-files"
@@ -901,6 +904,38 @@ def reload_shared_catalog(
     return receipt
 
 
+def clear_shared_roots(
+    base_url: str,
+    api_key: str,
+) -> dict[str, object]:
+    """Replace an ephemeral responder profile's shared roots with none."""
+
+    request = {"roots": [], "confirmReplaceRoots": True}
+    response = dtt.retry_rest_request(
+        base_url,
+        SHARED_DIRECTORIES_PATH,
+        method="PATCH",
+        api_key=api_key,
+        json_body=request,
+        timeout_seconds=30.0,
+    )
+    status = int(response.get("status") or 0)
+    payload = _api_data(response.get("raw_json"))
+    receipt = {
+        "request": request,
+        "response": {
+            "status": status,
+            "json": payload if isinstance(payload, dict) else None,
+        },
+    }
+    if status != 200:
+        raise RuntimeError(
+            "shared-root replacement failed: "
+            f"{dtt.rest_smoke.compact_http_result(response)!r}"
+        )
+    return receipt
+
+
 def restore_shared_fixture(shared_path: Path, withdrawn_path: Path) -> None:
     """Restore one harness-owned fixture without overwriting another file."""
 
@@ -965,15 +1000,58 @@ def withdraw_shared_fixture(
     return (
         {
             "fileHash": _canonical_hash(file_hash, field="file_hash"),
-            "sharedPath": str(shared_path),
-            "withdrawnPath": str(withdrawn_path),
+            "method": "file-move",
+            "fixturePath": str(shared_path),
+            "movedToPath": str(withdrawn_path),
             "presentBefore": True,
-            "movedOutsideSharedRoot": True,
             "reloadResponse": reload_response,
             "absentAfter": True,
         },
         withdrawn_path,
     )
+
+
+def withdraw_rust_shared_root(
+    base_url: str,
+    api_key: str,
+    *,
+    fixture_path: Path,
+    file_hash: str,
+    timeout: float,
+) -> dict[str, object]:
+    """Withdraw one Rust fixture by clearing its ephemeral production roots."""
+
+    wait_for_shared_file_presence(
+        base_url,
+        api_key,
+        file_hash=file_hash,
+        present=True,
+        shared_files_path=RUST_SHARED_FILES_PATH,
+        timeout=timeout,
+    )
+    shared_directories = clear_shared_roots(base_url, api_key)
+    reload_response = reload_shared_catalog(
+        base_url,
+        api_key,
+        reload_path=RUST_SHARED_RELOAD_PATH,
+    )
+    wait_for_shared_file_presence(
+        base_url,
+        api_key,
+        file_hash=file_hash,
+        present=False,
+        shared_files_path=RUST_SHARED_FILES_PATH,
+        timeout=timeout,
+    )
+    return {
+        "fileHash": _canonical_hash(file_hash, field="file_hash"),
+        "method": "shared-roots-cleared",
+        "fixturePath": str(fixture_path.resolve()),
+        "sharedDirectories": shared_directories,
+        "presentBefore": True,
+        "reloadResponse": reload_response,
+        "absentAfter": True,
+    }
 
 
 def find_transfer_source(
@@ -1802,16 +1880,11 @@ def run_mfc_requester_phase(
                 pressure_request,
             )
         elif scenario == "file-not-found":
-            (
-                shared_withdrawal_receipt,
-                withdrawn_fixture_path,
-            ) = withdraw_shared_fixture(
+            shared_withdrawal_receipt = withdraw_rust_shared_root(
                 uploader.base_url,
                 args.api_key,
                 fixture_path=fixture_path,
                 file_hash=file_hash,
-                reload_path=RUST_SHARED_RELOAD_PATH,
-                shared_files_path=RUST_SHARED_FILES_PATH,
                 timeout=args.reask_observe_timeout_seconds,
             )
         control_request = queued_source_reask_request(
