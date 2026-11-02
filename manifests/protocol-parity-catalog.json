@@ -534,6 +534,7 @@
             "#define OP_GETSOURCES_OBFU",
             "#define OP_GLOBGETSOURCES",
             "#define OP_GLOBGETSOURCES2",
+            "#define OP_GLOBFOUNDSOURCES",
             "#define OP_SEARCHRESULT",
             "#define OP_CALLBACKREQUESTED"
           ],
@@ -1871,12 +1872,12 @@
         "server.reply.callback"
       ],
       "direction": "recv",
-      "fixtureBase64": "4wUAAAAzAAAAAOMSAAAAQlVVVVVVVVVVVVVVVVVVVVUA4wcAAAA1fwAAATYS",
+      "fixtureBase64": "4wUAAAAzAAAAAOMSAAAAQlVVVVVVVVVVVVVVVVVVVVUA4wcAAAA1fwAAATYS45tmZmZmZmZmZmZmZmZmZmZmAcYS8AI2Eg==",
       "fixtureEncoding": "concatenated-ed2k-server-vector-corpus",
-      "fixtureLength": 45,
+      "fixtureLength": 70,
       "opcode": "MULTI",
       "opcodeName": "SERVER_REPLY_CORPUS",
-      "payloadDigest": "sha256:a921d37adf552c38f82deebc7137a0681e03fb37755d0475027567c148ffb80f",
+      "payloadDigest": "sha256:647987874202f3b2ffcca4ea7d3ebe461d983325570fed0db7860d95682ce0b9",
       "protocol": "ed2k",
       "recordId": "stock.server.reply-corpus",
       "recordType": "wire-vector",
