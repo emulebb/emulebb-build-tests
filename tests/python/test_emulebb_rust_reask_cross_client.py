@@ -507,11 +507,13 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
         == row
     )
 
-    observed_states: list[bool] = []
+    observed_states: list[tuple[bool, str]] = []
     monkeypatch.setattr(
         module,
         "wait_for_shared_file_presence",
-        lambda *_args, present, **_kwargs: observed_states.append(present),
+        lambda *_args, present, shared_files_path, **_kwargs: observed_states.append(
+            (present, shared_files_path)
+        ),
     )
     monkeypatch.setattr(
         module,
@@ -525,10 +527,14 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
         fixture_path=fixture,
         file_hash=FILE_HASH,
         reload_path=module.MFC_SHARED_RELOAD_PATH,
+        shared_files_path=module.MFC_SHARED_FILES_PATH,
         timeout=0.1,
     )
 
-    assert observed_states == [True, False]
+    assert observed_states == [
+        (True, module.MFC_SHARED_FILES_PATH),
+        (False, module.MFC_SHARED_FILES_PATH),
+    ]
     assert not fixture.exists()
     assert withdrawn.read_bytes() == b"fixture"
     assert receipt == {
@@ -544,6 +550,37 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
     module.restore_shared_fixture(fixture.resolve(), withdrawn)
     assert fixture.read_bytes() == b"fixture"
     assert not withdrawn.exists()
+
+
+@pytest.mark.parametrize(
+    "shared_files_path",
+    [
+        "/api/v1/shared-files?offset=0&limit=100",
+        "/api/v1/shared-files",
+    ],
+)
+def test_shared_catalog_presence_uses_selected_client_route(
+    monkeypatch,
+    shared_files_path: str,
+) -> None:
+    module = _load_module()
+    calls: list[str] = []
+
+    def request_json(_base_url, _method, path, _api_key):
+        calls.append(path)
+        return {"items": [{"hash": FILE_HASH.upper()}]}
+
+    monkeypatch.setattr(module.cc, "request_json", request_json)
+
+    assert module.wait_for_shared_file_presence(
+        "http://responder.test",
+        "secret",
+        file_hash=FILE_HASH,
+        present=True,
+        shared_files_path=shared_files_path,
+        timeout=0.1,
+    ) == {"hash": FILE_HASH.upper()}
+    assert calls == [shared_files_path]
 
 
 def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None:
