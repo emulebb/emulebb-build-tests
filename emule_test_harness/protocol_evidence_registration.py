@@ -17,6 +17,7 @@ from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
 from emule_test_harness import kad_nodes
+from emule_test_harness import relayed_reask_diagnostic_evidence
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
@@ -38,6 +39,7 @@ COMMAND_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_CALLBACK_SCENARIO = "server-callback-reply"
 DIRECT_CALLBACK_SCENARIO = "direct-callback"
+RELAYED_REASK_SCENARIO = "relayed-reask"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_ADVANCED_SEARCH_SCENARIO = "server-advanced-search"
 SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
@@ -77,6 +79,12 @@ SERVER_SOURCE_PUBLISHER_HASH = "32547698badcfe1021436587a9cbed0f"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_UDP_METADATA_SEED_DESCRIPTION = "seed metadata before server reply"
+RELAYED_REASK_FILE_HASH = "44556677889900112233aabbccddeeff"
+RELAYED_REASK_FILE_NAME = "deterministic-relayed-reask.bin"
+RELAYED_REASK_FILE_SIZE = 34_567
+RELAYED_REASK_SOURCE_USER_HASH = "527496b8dafc1e30527496b8dafc7e10"
+RELAYED_REASK_BUDDY_ID = "6385a7c9eb0d2f416385a7c9eb0d8f21"
+RELAYED_REASK_QUEUE_RANK = 37
 SERVER_IDENT_NAME = "emulebb-local-e2e"
 SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
 SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
@@ -2879,6 +2887,292 @@ def _derived_direct_callback_coverage_ids(
     return [direct_callback_diagnostic_evidence.COVERAGE_ID]
 
 
+def _derived_relayed_reask_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    reask_value = diagnostics.get("relayedReask")
+    scenario = report.get("transfer_scenario")
+    if reask_value is None:
+        if scenario == RELAYED_REASK_SCENARIO:
+            raise ValueError("relayed reask scenario has no diagnostic evidence")
+        return []
+    if scenario != RELAYED_REASK_SCENARIO:
+        raise ValueError("relayed reask evidence requires its dedicated scenario")
+
+    reask = _object(reask_value, "diagnostics.relayedReask")
+    if reask.get("schema") != relayed_reask_diagnostic_evidence.SCHEMA:
+        raise ValueError("relayed reask diagnostics use an unexpected schema")
+    try:
+        relayed_reask_diagnostic_evidence.require_relayed_reask_diagnostic_evidence(
+            reask
+        )
+    except RuntimeError as exc:
+        raise ValueError("relayed reask diagnostics are not complete") from exc
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError("relayed reask scenario requires the canonical plaintext case")
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_relayed_reask_diagnostics") != reask:
+        raise ValueError("relayed reask diagnostics do not match the retained snapshot")
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    try:
+        host = str(ipaddress.IPv4Address(network.get("p2p_bind_interface_address")))
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("relayed reask bind address is not canonical IPv4") from exc
+    port_names = (
+        "client1_udp",
+        "client2_udp",
+        "relayed_reask_source_tcp",
+        "relayed_reask_source_udp",
+        "relayed_reask_buddy_udp",
+    )
+    topology_ports = {
+        name: _positive_int(ports.get(name), f"network.ports.{name}")
+        for name in port_names
+    }
+    if any(port > 0xFFFF for port in topology_ports.values()) or len(
+        set(topology_ports.values())
+    ) != len(topology_ports):
+        raise ValueError("relayed reask topology contains invalid or duplicate ports")
+
+    kad_isolation = _object(
+        network.get("relayedReaskKadIsolation"),
+        "network.relayedReaskKadIsolation",
+    )
+    expected_kad_isolation = {
+        "publicDiscovery": False,
+        "rustBootstrapSeed": {
+            "endpoint": f"{host}:{topology_ports['relayed_reask_source_tcp']}",
+            "tcpPort": topology_ports["relayed_reask_source_tcp"],
+        },
+        "mfcBootstrapSeeds": [],
+    }
+    if (
+        set(kad_isolation) != {*expected_kad_isolation, "launchInputs"}
+        or any(
+            kad_isolation.get(field) != value
+            for field, value in expected_kad_isolation.items()
+        )
+    ):
+        raise ValueError("relayed reask Kad isolation is not exact")
+    launch_inputs = _object(
+        kad_isolation.get("launchInputs"),
+        "network.relayedReaskKadIsolation.launchInputs",
+    )
+    expected_launch_inputs = {
+        "rustNodesDat": (
+            run_directory / "launch-inputs" / "relayed-reask-kad" / "rust-nodes.dat",
+            kad_nodes.encode_nodes_dat(
+                [
+                    kad_nodes.BootstrapContact(
+                        host,
+                        topology_ports["relayed_reask_source_tcp"],
+                        topology_ports["relayed_reask_source_tcp"],
+                    )
+                ]
+            ),
+        ),
+        "mfcNodesDat": (
+            run_directory / "launch-inputs" / "relayed-reask-kad" / "mfc-nodes.dat",
+            kad_nodes.encode_nodes_dat([]),
+        ),
+    }
+    if set(launch_inputs) != set(expected_launch_inputs):
+        raise ValueError("relayed reask Kad launch inputs are incomplete")
+    for label, (expected_path, expected_payload) in expected_launch_inputs.items():
+        receipt = _object(
+            launch_inputs.get(label),
+            f"network.relayedReaskKadIsolation.launchInputs.{label}",
+        )
+        if set(receipt) != {"path", "sizeBytes", "sha256"}:
+            raise ValueError(f"{label} relayed-reask launch-input receipt is not exact")
+        retained_path = _path_within(
+            receipt.get("path"),
+            run_directory,
+            f"{label} relayed-reask launch-input path",
+        )
+        retained_sha256 = _lower_hex(
+            receipt.get("sha256"),
+            SHA256_PATTERN,
+            f"{label} relayed-reask launch-input SHA-256",
+        )
+        if (
+            retained_path != expected_path.resolve()
+            or receipt.get("sizeBytes") != len(expected_payload)
+            or retained_path.read_bytes() != expected_payload
+            or _file_sha256(retained_path) != retained_sha256
+        ):
+            raise ValueError(
+                f"{label} relayed-reask launch input does not match the isolated topology"
+            )
+
+    kad_runtimes = _object(
+        checks.get("client_relayed_reask_kad_running"),
+        "checks.client_relayed_reask_kad_running",
+    )
+    if set(kad_runtimes) != {"rust", "mfc"}:
+        raise ValueError("relayed reask Kad runtimes must contain rust and mfc")
+    for client in ("rust", "mfc"):
+        runtime = _object(
+            kad_runtimes.get(client),
+            f"checks.client_relayed_reask_kad_running.{client}",
+        )
+        status = _object(
+            runtime.get("status"),
+            f"checks.client_relayed_reask_kad_running.{client}.status",
+        )
+        payload = _object(
+            status.get("json"),
+            f"checks.client_relayed_reask_kad_running.{client}.status.json",
+        )
+        observations = runtime.get("observations")
+        if (
+            status.get("status") != 200
+            or payload.get("running") is not True
+            or not isinstance(observations, list)
+            or not observations
+            or not isinstance(observations[-1], dict)
+            or observations[-1].get("running") is not True
+        ):
+            raise ValueError(f"{client} relayed reask Kad runtime is not running")
+
+    expected_link = (
+        "ed2k://|file|"
+        f"{RELAYED_REASK_FILE_NAME}|{RELAYED_REASK_FILE_SIZE}|"
+        f"{RELAYED_REASK_FILE_HASH}|/"
+    )
+    stimulus = _object(
+        checks.get("client_relayed_reask_stimulus"),
+        "checks.client_relayed_reask_stimulus",
+    )
+    expected_stimulus = {
+        "mode": "source-free-ed2k-link-plus-diagnostic-lowid-source",
+        "link": expected_link,
+        "hash": RELAYED_REASK_FILE_HASH,
+        "name": RELAYED_REASK_FILE_NAME,
+        "sizeBytes": RELAYED_REASK_FILE_SIZE,
+        "source": {
+            "host": host,
+            "tcpPort": topology_ports["relayed_reask_source_tcp"],
+            "udpPort": topology_ports["relayed_reask_source_udp"],
+            "userHash": RELAYED_REASK_SOURCE_USER_HASH,
+            "udpVersion": 4,
+        },
+        "buddy": {
+            "host": host,
+            "udpPort": topology_ports["relayed_reask_buddy_udp"],
+            "id": RELAYED_REASK_BUDDY_ID,
+        },
+        "queueRank": RELAYED_REASK_QUEUE_RANK,
+    }
+    if stimulus != expected_stimulus:
+        raise ValueError("relayed reask stimulus is not the canonical fixture")
+
+    transfers = _object(
+        checks.get("client_relayed_reask_transfers"),
+        "checks.client_relayed_reask_transfers",
+    )
+    if set(transfers) != {"rust", "mfc"}:
+        raise ValueError("relayed reask transfers must contain exactly rust and mfc")
+    for client in ("rust", "mfc"):
+        transfer_receipt = _object(
+            transfers.get(client), f"checks.client_relayed_reask_transfers.{client}"
+        )
+        add = _object(
+            transfer_receipt.get("add"),
+            f"checks.client_relayed_reask_transfers.{client}.add",
+        )
+        item = _object(
+            add.get("item"),
+            f"checks.client_relayed_reask_transfers.{client}.add.item",
+        )
+        transfer = _object(
+            transfer_receipt.get("transfer"),
+            f"checks.client_relayed_reask_transfers.{client}.transfer",
+        )
+        if (
+            item.get("ok") is not True
+            or str(item.get("hash") or "").casefold() != RELAYED_REASK_FILE_HASH
+            or str(transfer.get("hash") or "").casefold()
+            != RELAYED_REASK_FILE_HASH
+            or transfer.get("displayName", transfer.get("name"))
+            != RELAYED_REASK_FILE_NAME
+            or transfer.get("sizeBytes", transfer.get("size"))
+            != RELAYED_REASK_FILE_SIZE
+        ):
+            raise ValueError(f"{client} relayed reask transfer is not exact")
+
+    controls = _object(
+        checks.get("client_relayed_reask_controls"),
+        "checks.client_relayed_reask_controls",
+    )
+    probe_results = _object(
+        checks.get("client_relayed_reask_probe"),
+        "checks.client_relayed_reask_probe",
+    )
+    if set(controls) != {"rust", "mfc"} or set(probe_results) != {"rust", "mfc"}:
+        raise ValueError("relayed reask controls and probes must contain rust and mfc")
+
+    captures = _object(reask.get("captures"), "diagnostics.relayedReask.captures")
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("relayed reask captures must contain exactly rust and mfc")
+    records = {
+        client: _load_final_capture_subset(
+            captures.get(client),
+            final_captures.get(client),
+            evidence_name="relayed reask",
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
+        raise ValueError("relayed reask capture is not joined to the stopped oracle")
+
+    rebuilt = relayed_reask_diagnostic_evidence.build_relayed_reask_diagnostic_evidence(
+        file_hash=bytes.fromhex(RELAYED_REASK_FILE_HASH),
+        source_host=host,
+        source_tcp_port=topology_ports["relayed_reask_source_tcp"],
+        source_udp_port=topology_ports["relayed_reask_source_udp"],
+        source_user_hash=bytes.fromhex(RELAYED_REASK_SOURCE_USER_HASH),
+        source_udp_version=4,
+        buddy_host=host,
+        buddy_udp_port=topology_ports["relayed_reask_buddy_udp"],
+        buddy_id=bytes.fromhex(RELAYED_REASK_BUDDY_ID),
+        requester_udp_ports={
+            "rust": topology_ports["client1_udp"],
+            "mfc": topology_ports["client2_udp"],
+        },
+        queue_rank=RELAYED_REASK_QUEUE_RANK,
+        controls=controls,
+        probe_results=probe_results,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+    )
+    retained_without_capture = {
+        key: value for key, value in reask.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError("relayed reask receipt does not match its immutable captures")
+    return [relayed_reask_diagnostic_evidence.COVERAGE_ID]
+
+
 def _derived_server_login_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
@@ -3333,6 +3627,25 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == relayed_reask_diagnostic_evidence.COVERAGE_ID:
+        reask = _object(
+            diagnostics.get("relayedReask"),
+            "diagnostics.relayedReask",
+        )
+        clients = _object(
+            reask.get("clients"),
+            "diagnostics.relayedReask.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.relayedReask.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.relayedReask.clients.mfc")
+        return (
+            "Rust and MFC each registered the same queued LowID source, took the "
+            "eligible buddy-relay path, emitted identical OP_REASKCALLBACKUDP bytes, "
+            "settled the exact send attempt, and applied the source-endpoint "
+            f"OP_REASKACK queue rank at diagnostic sequences "
+            f"{rust['diagnostics']['sequences']['applied']}/"
+            f"{mfc['diagnostics']['sequences']['applied']}."
+        )
     if coverage_id == direct_callback_diagnostic_evidence.COVERAGE_ID:
         callback = _object(
             diagnostics.get("directCallback"),
@@ -3738,6 +4051,11 @@ def build_transfer_registration(
                 run_directory=run_directory,
             ),
             *_derived_direct_callback_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
+            *_derived_relayed_reask_coverage_ids(
                 report,
                 diagnostics,
                 run_directory=run_directory,
