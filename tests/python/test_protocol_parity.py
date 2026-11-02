@@ -26,7 +26,9 @@ from emule_test_harness.protocol_parity import (
 
 
 def test_tracked_protocol_oracle_manifest_validates() -> None:
-    validation = validate_protocol_catalog(default_catalog_path(Path(__file__).resolve().parents[2]))
+    validation = validate_protocol_catalog(
+        default_catalog_path(Path(__file__).resolve().parents[2])
+    )
 
     assert validation.errors == ()
 
@@ -34,12 +36,18 @@ def test_tracked_protocol_oracle_manifest_validates() -> None:
 def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> None:
     manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    coverage_ids = [coverage_id for group in payload["coverageGroups"] for coverage_id in group["coverageIds"]]
+    coverage_ids = [
+        coverage_id
+        for group in payload["coverageGroups"]
+        for coverage_id in group["coverageIds"]
+    ]
 
     assert len(REQUIRED_STOCK_COVERAGE_IDS) == 100
     assert len(coverage_ids) == len(set(coverage_ids))
     assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
-    assert payload["stockAuthority"]["requiredCoverageCount"] == len(REQUIRED_STOCK_COVERAGE_IDS)
+    assert payload["stockAuthority"]["requiredCoverageCount"] == len(
+        REQUIRED_STOCK_COVERAGE_IDS
+    )
 
 
 def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() -> None:
@@ -52,7 +60,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 5,
-        "coveredIdCount": 27,
+        "coveredIdCount": 28,
         "groupVerdictCounts": {
             "parity": 5,
             "divergence": 0,
@@ -61,9 +69,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 27,
+            "parity": 28,
             "divergence": 0,
-            "evidence-incomplete": 73,
+            "evidence-incomplete": 72,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -84,16 +92,25 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     ]
 
     assets = {row["path"]: row for row in payload["assetClassifications"]}
-    assert assets["scripts/local-ed2k-server-state-campaign.py"]["classification"] == "support"
+    assert (
+        assets["scripts/local-ed2k-server-state-campaign.py"]["classification"]
+        == "support"
+    )
     assert assets["scripts/local-ed2k-search-soak.py"]["classification"] == "historical"
     server_queries = next(
-        group for group in payload["coverageGroups"] if group["groupId"] == "server-query-reply"
+        group
+        for group in payload["coverageGroups"]
+        if group["groupId"] == "server-query-reply"
     )
-    assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
+    assert (
+        server_queries["deterministicRunner"]
+        == "scripts/deterministic-two-client-transfer.py"
+    )
     assert [row["coverageId"] for row in payload["coverageEvidence"]] == [
+        "client-udp.v4",
         "lowid.buddy-callback",
         "lowid.direct-callback",
-            "lowid.relayed-reask",
+        "lowid.relayed-reask",
         "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.metadata-recovery",
@@ -119,39 +136,32 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "transfer.block.compressed",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][0]["coverageIds"] == [
+    assert payload["evidenceReceipts"][0]["coverageIds"] == ["client-udp.v4"]
+    assert payload["evidenceReceipts"][1]["coverageIds"] == [
         "queue.admission",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][1]["coverageIds"] == [
+    assert payload["evidenceReceipts"][2]["coverageIds"] == [
         "queue.admission",
         "transfer.block.compressed",
     ]
-    assert payload["evidenceReceipts"][2]["coverageIds"] == [
-        "peer.startup.aich",
-        "peer.startup.multipacket-ext2",
-        "queue.admission",
-        "transfer.block.uncompressed",
-    ]
     assert payload["evidenceReceipts"][3]["coverageIds"] == [
         "peer.startup.aich",
-        "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
         "queue.admission",
         "transfer.block.uncompressed",
     ]
     assert payload["evidenceReceipts"][4]["coverageIds"] == [
         "peer.startup.aich",
+        "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.login.request",
         "transfer.block.uncompressed",
     ]
     assert payload["evidenceReceipts"][5]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.connect.plaintext",
         "server.login.request",
         "transfer.block.uncompressed",
     ]
@@ -159,7 +169,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.connect.obfuscated",
+        "server.connect.plaintext",
         "server.login.request",
         "transfer.block.uncompressed",
     ]
@@ -167,7 +177,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.connect.fallback",
+        "server.connect.obfuscated",
         "server.login.request",
         "transfer.block.uncompressed",
     ]
@@ -175,11 +185,19 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
+        "server.connect.fallback",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][9]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
         "server.reply.tcp-ident",
         "server.reply.tcp-status",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][9]["coverageIds"] == [
+    assert payload["evidenceReceipts"][10]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -187,7 +205,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.reply.udp-status",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][10]["coverageIds"] == [
+    assert payload["evidenceReceipts"][11]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -195,7 +213,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.tcp-plain",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][11]["coverageIds"] == [
+    assert payload["evidenceReceipts"][12]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -203,7 +221,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.tcp-obfuscated",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][12]["coverageIds"] == [
+    assert payload["evidenceReceipts"][13]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -211,7 +229,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.udp-v1",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][13]["coverageIds"] == [
+    assert payload["evidenceReceipts"][14]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -219,7 +237,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.udp-v2",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][14]["coverageIds"] == [
+    assert payload["evidenceReceipts"][15]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -227,7 +245,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.search.keyword",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][15]["coverageIds"] == [
+    assert payload["evidenceReceipts"][16]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -235,7 +253,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.search.advanced",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][16]["coverageIds"] == [
+    assert payload["evidenceReceipts"][17]["coverageIds"] == [
         "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
@@ -245,7 +263,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.reply.callback",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][17]["coverageIds"] == [
+    assert payload["evidenceReceipts"][18]["coverageIds"] == [
         "lowid.direct-callback",
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
@@ -262,7 +280,8 @@ def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
     records = {
         row["coverageIds"][0]: row
         for row in payload["records"]
-        if len(row.get("coverageIds", [])) == 1 and row["coverageIds"][0].startswith("server.reply.")
+        if len(row.get("coverageIds", [])) == 1
+        and row["coverageIds"][0].startswith("server.reply.")
     }
 
     actual = {
@@ -276,8 +295,20 @@ def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
         for coverage_id, row in records.items()
     }
     expected = {
-        "server.reply.tcp-ident": ("tcp", "recv", "0x41", "OP_SERVERIDENT", "ed2k-frame"),
-        "server.reply.tcp-status": ("tcp", "recv", "0x34", "OP_SERVERSTATUS", "ed2k-frame"),
+        "server.reply.tcp-ident": (
+            "tcp",
+            "recv",
+            "0x41",
+            "OP_SERVERIDENT",
+            "ed2k-frame",
+        ),
+        "server.reply.tcp-status": (
+            "tcp",
+            "recv",
+            "0x34",
+            "OP_SERVERSTATUS",
+            "ed2k-frame",
+        ),
         "server.reply.udp-description": (
             "udp",
             "recv",
@@ -296,11 +327,15 @@ def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
     assert expected.items() <= actual.items()
 
 
-def test_stock_server_metadata_vector_rejects_encoded_request_opcode(tmp_path: Path) -> None:
+def test_stock_server_metadata_vector_rejects_encoded_request_opcode(
+    tmp_path: Path,
+) -> None:
     source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
     record = next(
-        row for row in payload["records"] if row.get("coverageIds") == ["server.reply.udp-status"]
+        row
+        for row in payload["records"]
+        if row.get("coverageIds") == ["server.reply.udp-status"]
     )
     fixture = bytearray(base64.b64decode(record["fixtureBase64"]))
     fixture[1] = 0x96
@@ -333,14 +368,28 @@ def test_catalog_report_keeps_partially_proven_group_incomplete() -> None:
 
     assert report["coverage"]["coveredIdCount"] == 1
     assert report["coverage"]["coveredGroupCount"] == 0
-    transfer = next(row for row in report["entries"] if row["groupId"] == "transfer-blocks")
+    transfer = next(
+        row for row in report["entries"] if row["groupId"] == "transfer-blocks"
+    )
     assert transfer["coveredCoverageIdCount"] == 1
     assert transfer["coverageIdCount"] == 4
     assert transfer["verdict"] == "evidence-incomplete"
 
 
-def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixture[str]) -> None:
-    assert run_validate_cli(["--test-repo-root", str(Path(__file__).resolve().parents[2]), "--format", "json"]) == 0
+def test_catalog_cli_json_report_is_machine_readable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        run_validate_cli(
+            [
+                "--test-repo-root",
+                str(Path(__file__).resolve().parents[2]),
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
@@ -357,28 +406,39 @@ def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -
 
     validation = validate_protocol_catalog(manifest)
 
-    assert any("payloadDigest does not match fixtureBase64" in error for error in validation.errors)
+    assert any(
+        "payloadDigest does not match fixtureBase64" in error
+        for error in validation.errors
+    )
     assert any("missing required coverage IDs" in error for error in validation.errors)
 
 
-def test_catalog_rejects_unproven_green_and_analysis_only_authority(tmp_path: Path) -> None:
+def test_catalog_rejects_unproven_green_and_analysis_only_authority(
+    tmp_path: Path,
+) -> None:
     source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
     payload["coverageGroups"][0]["authorityIds"].append("amule-head")
-    payload["coverageEvidence"] = [{
-        "coverageId": "server.login.request",
-        "evidenceLayers": payload["coverageGroups"][0]["requiredEvidenceLayers"],
-        "reason": "invalid synthetic green",
-        "receiptIds": ["missing"],
-        "verdict": "parity",
-    }]
+    payload["coverageEvidence"] = [
+        {
+            "coverageId": "server.login.request",
+            "evidenceLayers": payload["coverageGroups"][0]["requiredEvidenceLayers"],
+            "reason": "invalid synthetic green",
+            "receiptIds": ["missing"],
+            "verdict": "parity",
+        }
+    ]
     catalog = tmp_path / "catalog.json"
     catalog.write_text(json.dumps(payload), encoding="utf-8")
 
     validation = validate_protocol_catalog(catalog)
 
-    assert any("cannot use analysis-only amule-head" in error for error in validation.errors)
-    assert any("references unknown receipt missing" in error for error in validation.errors)
+    assert any(
+        "cannot use analysis-only amule-head" in error for error in validation.errors
+    )
+    assert any(
+        "references unknown receipt missing" in error for error in validation.errors
+    )
 
 
 def test_catalog_rejects_legacy_group_evidence(tmp_path: Path) -> None:
@@ -409,7 +469,10 @@ def test_catalog_rejects_unclassified_canonical_runner(tmp_path: Path) -> None:
 
     validation = validate_protocol_catalog(catalog)
 
-    assert any("server-session deterministic runner is not classified" in error for error in validation.errors)
+    assert any(
+        "server-session deterministic runner is not classified" in error
+        for error in validation.errors
+    )
 
 
 def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> None:
@@ -497,7 +560,10 @@ def test_udp_jsonl_normalizer_builds_compact_opcode_buckets() -> None:
     by_opcode = {record["opcodeName"]: record for record in records}
     assert by_opcode["KADEMLIA2_HELLO_REQ"]["transportMode"] == "plaintext"
     assert by_opcode["KADEMLIA2_HELLO_REQ"]["payloadDigest"].startswith("sha256:")
-    assert by_opcode["KADEMLIA2_PUBLISH_SOURCE_REQ"]["transportMode"] == "receiver_verify_key"
+    assert (
+        by_opcode["KADEMLIA2_PUBLISH_SOURCE_REQ"]["transportMode"]
+        == "receiver_verify_key"
+    )
 
 
 def test_ed2k_jsonl_normalizer_preserves_state_machine_shape() -> None:
@@ -532,12 +598,20 @@ def test_ed2k_jsonl_normalizer_preserves_state_machine_shape() -> None:
 
 
 def test_compare_record_sets_reports_count_drift() -> None:
-    left = [{"scenarioId": "a", "recordType": "udp-packet", "opcodeName": "KADEMLIA2_HELLO_REQ"}]
+    left = [
+        {
+            "scenarioId": "a",
+            "recordType": "udp-packet",
+            "opcodeName": "KADEMLIA2_HELLO_REQ",
+        }
+    ]
     right = left + left
 
     lines = compare_record_sets(left, right)
 
-    assert lines == ['record={"opcodeName":"KADEMLIA2_HELLO_REQ","recordType":"udp-packet","scenarioId":"a"} left=1 right=2']
+    assert lines == [
+        'record={"opcodeName":"KADEMLIA2_HELLO_REQ","recordType":"udp-packet","scenarioId":"a"} left=1 right=2'
+    ]
 
 
 def test_normalize_cli_writes_manifest(tmp_path: Path) -> None:
@@ -558,7 +632,19 @@ def test_normalize_cli_writes_manifest(tmp_path: Path) -> None:
     )
     output = tmp_path / "candidate.json"
 
-    assert run_normalize_cli(["--scenario-id", "kad.cli.v1", "--udp-jsonl", str(udp_jsonl), "--output", str(output)]) == 0
+    assert (
+        run_normalize_cli(
+            [
+                "--scenario-id",
+                "kad.cli.v1",
+                "--udp-jsonl",
+                str(udp_jsonl),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema"] == NORMALIZED_EVIDENCE_SCHEMA
@@ -573,16 +659,27 @@ def test_compare_cli_detects_manifest_drift(tmp_path: Path) -> None:
         "records": [{"scenarioId": "a", "recordType": "udp-packet"}],
     }
     left.write_text(json.dumps(payload), encoding="utf-8")
-    right.write_text(json.dumps({**payload, "records": payload["records"] * 2}), encoding="utf-8")
+    right.write_text(
+        json.dumps({**payload, "records": payload["records"] * 2}), encoding="utf-8"
+    )
 
     assert run_compare_cli(["--left", str(left), "--right", str(right)]) == 1
 
 
-def test_pcap_helper_reports_tool_availability_and_command_shape(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("emule_test_harness.protocol_parity.shutil.which", lambda name: f"C:/Tools/{name}.exe")
+def test_pcap_helper_reports_tool_availability_and_command_shape(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "emule_test_harness.protocol_parity.shutil.which",
+        lambda name: f"C:/Tools/{name}.exe",
+    )
 
     status = pcap_tool_status()
-    command = build_dumpcap_command(output_path=tmp_path / "capture.pcapng", capture_filter="udp port 4662", interface="1")
+    command = build_dumpcap_command(
+        output_path=tmp_path / "capture.pcapng",
+        capture_filter="udp port 4662",
+        interface="1",
+    )
 
     assert status["dumpcap"] == "C:/Tools/dumpcap.exe"
     assert command[:2] == ("C:/Tools/dumpcap.exe", "-w")
@@ -590,7 +687,11 @@ def test_pcap_helper_reports_tool_availability_and_command_shape(monkeypatch, tm
 
 
 def test_pcap_helper_fails_when_dumpcap_missing(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("emule_test_harness.protocol_parity.shutil.which", lambda name: None)
+    monkeypatch.setattr(
+        "emule_test_harness.protocol_parity.shutil.which", lambda name: None
+    )
 
     with pytest.raises(RuntimeError, match="dumpcap is not available"):
-        build_dumpcap_command(output_path=tmp_path / "capture.pcapng", capture_filter="udp")
+        build_dumpcap_command(
+            output_path=tmp_path / "capture.pcapng", capture_filter="udp"
+        )
