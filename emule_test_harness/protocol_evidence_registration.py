@@ -1191,7 +1191,7 @@ def _derived_server_udp_source_v1_coverage_ids(
     expected_request = ed2k_wire.encode_server_udp_source_v1_request(
         [bytes.fromhex(SERVER_SOURCE_FILE_HASH)]
     )
-    expected_reply = ed2k_wire.encode_server_udp_source_v1_reply(
+    expected_reply = ed2k_wire.encode_server_udp_source_reply(
         file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
         sources=[(expected_source_id, source_port)],
     )

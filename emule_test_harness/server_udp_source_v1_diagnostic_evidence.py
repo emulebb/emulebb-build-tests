@@ -239,7 +239,7 @@ def _reply_evidence(
             malformed += 1
             continue
         try:
-            value = ed2k_wire.decode_server_udp_source_v1_reply(
+            value = ed2k_wire.decode_server_udp_source_reply(
                 bytes((ed2k_wire.PROTO_EDONKEY, ed2k_wire.OP_GLOBFOUNDSOURCES)) + payload
             )
         except ed2k_wire.Ed2kWireError:
@@ -509,7 +509,7 @@ def build_server_udp_source_v1_diagnostic_evidence(
     request_datagram = ed2k_wire.encode_server_udp_source_v1_request(
         [bytes.fromhex(normalized_hash)]
     )
-    reply_datagram = ed2k_wire.encode_server_udp_source_v1_reply(
+    reply_datagram = ed2k_wire.encode_server_udp_source_reply(
         file_hash=bytes.fromhex(normalized_hash),
         sources=[(source_id, source_tcp_port)],
     )

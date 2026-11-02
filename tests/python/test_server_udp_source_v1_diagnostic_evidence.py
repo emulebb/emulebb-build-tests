@@ -74,7 +74,7 @@ def _record(
 
 def _records(*, rust: bool) -> list[dict[str, object]]:
     request_payload = bytes.fromhex(FILE_HASH)
-    reply_payload = ed2k_wire.encode_server_udp_source_v1_reply(
+    reply_payload = ed2k_wire.encode_server_udp_source_reply(
         file_hash=request_payload,
         sources=[(SOURCE_ID, SOURCE_PORT)],
     )[2:]
@@ -140,7 +140,7 @@ def _records(*, rust: bool) -> list[dict[str, object]]:
 
 def _transcript() -> dict[str, object]:
     request = ed2k_wire.encode_server_udp_source_v1_request([bytes.fromhex(FILE_HASH)])
-    reply = ed2k_wire.encode_server_udp_source_v1_reply(
+    reply = ed2k_wire.encode_server_udp_source_reply(
         file_hash=bytes.fromhex(FILE_HASH),
         sources=[(SOURCE_ID, SOURCE_PORT)],
     )

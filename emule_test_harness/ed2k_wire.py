@@ -26,6 +26,7 @@ OP_IDCHANGE = 0x40
 OP_SERVERIDENT = 0x41
 OP_FOUNDSOURCES = 0x42
 OP_FOUNDSOURCES_OBFU = 0x44
+OP_GLOBGETSOURCES2 = 0x94
 OP_GLOBSERVSTATREQ = 0x96
 OP_GLOBSERVSTATRES = 0x97
 OP_GLOBGETSOURCES = 0x9A
@@ -393,7 +394,78 @@ def decode_server_udp_source_v1_request(datagram: bytes) -> dict[str, object]:
     return {"hash_count": len(hashes), "hashes": hashes}
 
 
-def encode_server_udp_source_v1_reply(
+def encode_server_udp_source_v2_request(
+    targets: Iterable[tuple[bytes, int]],
+) -> bytes:
+    """Encodes one canonical clear ``OP_GLOBGETSOURCES2`` datagram."""
+
+    target_rows = tuple(targets)
+    if not target_rows:
+        raise ValueError("GLOBGETSOURCES2 requires at least one target")
+    payload = bytearray()
+    for file_hash, file_size in target_rows:
+        if len(file_hash) != 16:
+            raise ValueError("each GLOBGETSOURCES2 file hash must be 16 bytes")
+        if (
+            not isinstance(file_size, int)
+            or isinstance(file_size, bool)
+            or not 1 <= file_size <= 0xFFFF_FFFF_FFFF_FFFF
+        ):
+            raise ValueError("each GLOBGETSOURCES2 file size must fit in a nonzero u64")
+        payload.extend(file_hash)
+        if file_size > 0xFFFF_FFFF:
+            payload.extend(struct.pack("<IQ", 0, file_size))
+        else:
+            payload.extend(struct.pack("<I", file_size))
+    return bytes([PROTO_EDONKEY, OP_GLOBGETSOURCES2]) + bytes(payload)
+
+
+def decode_server_udp_source_v2_request(datagram: bytes) -> dict[str, object]:
+    """Decodes one canonical clear ``OP_GLOBGETSOURCES2`` datagram."""
+
+    payload = _server_udp_payload(
+        datagram,
+        expected_opcode=OP_GLOBGETSOURCES2,
+        message_name="GLOBGETSOURCES2",
+    )
+    if not payload:
+        raise Ed2kWireError("GLOBGETSOURCES2 requires at least one target.")
+    targets: list[dict[str, object]] = []
+    offset = 0
+    while offset < len(payload):
+        remaining = len(payload) - offset
+        if remaining < 20:
+            raise Ed2kWireError(
+                "GLOBGETSOURCES2 target requires a 16-byte hash and 4-byte file size."
+            )
+        file_hash = payload[offset : offset + 16]
+        file_size32 = struct.unpack_from("<I", payload, offset + 16)[0]
+        offset += 20
+        large_file = file_size32 == 0
+        if large_file:
+            if len(payload) - offset < 8:
+                raise Ed2kWireError(
+                    "GLOBGETSOURCES2 large-file target requires an 8-byte file size."
+                )
+            file_size = struct.unpack_from("<Q", payload, offset)[0]
+            offset += 8
+            if file_size <= 0xFFFF_FFFF:
+                raise Ed2kWireError(
+                    "GLOBGETSOURCES2 large-file marker requires a size above u32."
+                )
+        else:
+            file_size = file_size32
+        targets.append(
+            {
+                "hash": file_hash.hex().upper(),
+                "size_bytes": file_size,
+                "large_file": large_file,
+            }
+        )
+    return {"target_count": len(targets), "targets": targets}
+
+
+def encode_server_udp_source_reply(
     *,
     file_hash: bytes,
     sources: Iterable[tuple[int, int]],
@@ -424,7 +496,7 @@ def encode_server_udp_source_v1_reply(
     return bytes([PROTO_EDONKEY, OP_GLOBFOUNDSOURCES]) + bytes(payload)
 
 
-def decode_server_udp_source_v1_reply(datagram: bytes) -> dict[str, object]:
+def decode_server_udp_source_reply(datagram: bytes) -> dict[str, object]:
     """Decodes one exact clear IPv4 ``OP_GLOBFOUNDSOURCES`` datagram."""
 
     payload = _server_udp_payload(

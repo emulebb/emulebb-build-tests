@@ -178,12 +178,81 @@ def test_server_udp_source_v1_request_codec_rejects_malformed_datagrams() -> Non
 
 
 @pytest.mark.unit
-def test_server_udp_source_v1_reply_codec_preserves_exact_plaintext_source() -> None:
+def test_server_udp_source_v2_request_codec_preserves_normal_and_large_sizes() -> None:
+    normal_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    large_hash = bytes.fromhex("FFEEDDCCBBAA99887766554433221100")
+    normal_size = 913_101_138
+    large_size = 0x1_0000_0001
+
+    datagram = ed2k_wire.encode_server_udp_source_v2_request(
+        [(normal_hash, normal_size), (large_hash, large_size)]
+    )
+
+    assert datagram == (
+        bytes([ed2k_wire.PROTO_EDONKEY, ed2k_wire.OP_GLOBGETSOURCES2])
+        + normal_hash
+        + struct.pack("<I", normal_size)
+        + large_hash
+        + struct.pack("<IQ", 0, large_size)
+    )
+    assert ed2k_wire.decode_server_udp_source_v2_request(datagram) == {
+        "target_count": 2,
+        "targets": [
+            {
+                "hash": normal_hash.hex().upper(),
+                "size_bytes": normal_size,
+                "large_file": False,
+            },
+            {
+                "hash": large_hash.hex().upper(),
+                "size_bytes": large_size,
+                "large_file": True,
+            },
+        ],
+    }
+
+
+@pytest.mark.unit
+def test_server_udp_source_v2_request_codec_rejects_noncanonical_datagrams() -> None:
+    file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+
+    with pytest.raises(ValueError, match="at least one"):
+        ed2k_wire.encode_server_udp_source_v2_request([])
+    with pytest.raises(ValueError, match="16 bytes"):
+        ed2k_wire.encode_server_udp_source_v2_request([(file_hash[:-1], 123)])
+    with pytest.raises(ValueError, match="nonzero u64"):
+        ed2k_wire.encode_server_udp_source_v2_request([(file_hash, 0)])
+    with pytest.raises(ValueError, match="nonzero u64"):
+        ed2k_wire.encode_server_udp_source_v2_request([(file_hash, 1 << 64)])
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="protocol marker"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xd4\x94" + file_hash + struct.pack("<I", 123)
+        )
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="opcode"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xe3\x9a" + file_hash + struct.pack("<I", 123)
+        )
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="at least one"):
+        ed2k_wire.decode_server_udp_source_v2_request(b"\xe3\x94")
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="16-byte hash"):
+        ed2k_wire.decode_server_udp_source_v2_request(b"\xe3\x94" + file_hash)
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="8-byte file size"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xe3\x94" + file_hash + struct.pack("<I", 0)
+        )
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="size above u32"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xe3\x94" + file_hash + struct.pack("<IQ", 0, 123)
+        )
+
+
+@pytest.mark.unit
+def test_server_udp_source_reply_codec_preserves_exact_plaintext_source() -> None:
     file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
     source_ip = bytes([198, 18, 240, 2])
     source_id = int.from_bytes(source_ip, "little")
 
-    datagram = ed2k_wire.encode_server_udp_source_v1_reply(
+    datagram = ed2k_wire.encode_server_udp_source_reply(
         file_hash=file_hash,
         sources=[(source_id, 4662)],
     )
@@ -196,7 +265,7 @@ def test_server_udp_source_v1_reply_codec_preserves_exact_plaintext_source() -> 
         + struct.pack("<H", 4662)
     )
     assert len(datagram) == 25
-    assert ed2k_wire.decode_server_udp_source_v1_reply(datagram) == {
+    assert ed2k_wire.decode_server_udp_source_reply(datagram) == {
         "hash": file_hash.hex().upper(),
         "source_count": 1,
         "sources": [
@@ -213,38 +282,38 @@ def test_server_udp_source_v1_reply_codec_preserves_exact_plaintext_source() -> 
 
 
 @pytest.mark.unit
-def test_server_udp_source_v1_reply_codec_rejects_malformed_lengths() -> None:
+def test_server_udp_source_reply_codec_rejects_malformed_lengths() -> None:
     file_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
     source = struct.pack(
         "<IH", int.from_bytes(bytes([198, 18, 240, 2]), "little"), 4662
     )
 
     with pytest.raises(ValueError, match="16 bytes"):
-        ed2k_wire.encode_server_udp_source_v1_reply(
+        ed2k_wire.encode_server_udp_source_reply(
             file_hash=file_hash[:-1], sources=[]
         )
     with pytest.raises(ValueError, match="source count"):
-        ed2k_wire.encode_server_udp_source_v1_reply(
+        ed2k_wire.encode_server_udp_source_reply(
             file_hash=file_hash,
             sources=[(0x01020304, 4662)] * 256,
         )
     with pytest.raises(ValueError, match="TCP port"):
-        ed2k_wire.encode_server_udp_source_v1_reply(
+        ed2k_wire.encode_server_udp_source_reply(
             file_hash=file_hash,
             sources=[(0x01020304, 0)],
         )
     with pytest.raises(ed2k_wire.Ed2kWireError, match="protocol marker"):
-        ed2k_wire.decode_server_udp_source_v1_reply(b"\xd4\x9b" + file_hash + b"\x00")
+        ed2k_wire.decode_server_udp_source_reply(b"\xd4\x9b" + file_hash + b"\x00")
     with pytest.raises(ed2k_wire.Ed2kWireError, match="opcode"):
-        ed2k_wire.decode_server_udp_source_v1_reply(b"\xe3\x42" + file_hash + b"\x00")
+        ed2k_wire.decode_server_udp_source_reply(b"\xe3\x42" + file_hash + b"\x00")
     with pytest.raises(ed2k_wire.Ed2kWireError, match="requires"):
-        ed2k_wire.decode_server_udp_source_v1_reply(b"\xe3\x9b" + file_hash)
+        ed2k_wire.decode_server_udp_source_reply(b"\xe3\x9b" + file_hash)
     with pytest.raises(ed2k_wire.Ed2kWireError, match="length mismatch"):
-        ed2k_wire.decode_server_udp_source_v1_reply(
+        ed2k_wire.decode_server_udp_source_reply(
             b"\xe3\x9b" + file_hash + b"\x02" + source
         )
     with pytest.raises(ed2k_wire.Ed2kWireError, match="length mismatch"):
-        ed2k_wire.decode_server_udp_source_v1_reply(
+        ed2k_wire.decode_server_udp_source_reply(
             b"\xe3\x9b" + file_hash + b"\x01" + source + b"\x00"
         )
 

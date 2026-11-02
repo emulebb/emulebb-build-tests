@@ -981,7 +981,7 @@ def _server_udp_source_v1_records(
         f"{SERVER_UDP_SOURCE_TARGET_HOST}:{SERVER_UDP_SOURCE_TARGET_UDP_PORT}"
     )
     request_payload = bytes.fromhex(SERVER_SOURCE_FILE_HASH)
-    reply_payload = ed2k_wire.encode_server_udp_source_v1_reply(
+    reply_payload = ed2k_wire.encode_server_udp_source_reply(
         file_hash=request_payload,
         sources=[(SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)],
     )[2:]
@@ -1115,7 +1115,7 @@ def _server_udp_source_v1_transcript() -> dict[str, object]:
     request = ed2k_wire.encode_server_udp_source_v1_request(
         [bytes.fromhex(SERVER_SOURCE_FILE_HASH)]
     )
-    reply = ed2k_wire.encode_server_udp_source_v1_reply(
+    reply = ed2k_wire.encode_server_udp_source_reply(
         file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
         sources=[(SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)],
     )
