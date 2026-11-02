@@ -12,7 +12,6 @@ HARNESS_ROOT = REPO_ROOT / "emule_test_harness"
 
 STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
     "emulebb-rust-emulebb-cross-client.py": "lan",
-    "emulebb-rust-reask-capture-emulebb.py": "lan",
     "emulebb-rust-reask-cross-client.py": "lan",
     "fake-kad-trust-soak.py": "vpn",
     "radarr-sonarr-emulebb-live.py": "vpn",
