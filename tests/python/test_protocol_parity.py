@@ -282,9 +282,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "client-udp.file-not-found"
     ]
     assert payload["evidenceReceipts"][23]["coverageIds"] == ["client-udp.clear"]
-    assert payload["evidenceReceipts"][24]["coverageIds"] == [
-        "client-udp.encrypted"
-    ]
+    assert payload["evidenceReceipts"][24]["coverageIds"] == ["client-udp.encrypted"]
 
 
 def test_stock_server_metadata_vectors_are_transport_and_opcode_exact() -> None:
