@@ -124,6 +124,20 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
     )
     assert args.scenario == "queue-full"
 
+    file_not_found = module.parse_args(
+        [
+            "--scenario",
+            "file-not-found",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert file_not_found.scenario == "file-not-found"
+    assert module.SCENARIO_COVERAGE_IDS[file_not_found.scenario] == (
+        "client-udp.file-not-found"
+    )
+    assert module.SCENARIO_REPLY_OPCODES[file_not_found.scenario] == 0x92
+
 
 def test_capacity_precondition_reads_health_validated_segments(tmp_path: Path) -> None:
     module = _load_module()
@@ -179,12 +193,15 @@ def test_rust_capacity_requires_one_exact_opened_production_slot(monkeypatch) ->
         ],
     )
 
-    assert module.wait_for_rust_occupied_upload_slot(
-        Path("unused"),
-        file_hash=FILE_HASH,
-        peer_endpoint=SOURCE_TCP_ENDPOINT,
-        timeout=0.1,
-    )["slotOpenedSequence"] == 2
+    assert (
+        module.wait_for_rust_occupied_upload_slot(
+            Path("unused"),
+            file_hash=FILE_HASH,
+            peer_endpoint=SOURCE_TCP_ENDPOINT,
+            timeout=0.1,
+        )["slotOpenedSequence"]
+        == 2
+    )
 
 
 def test_server_publication_uses_exact_named_client(monkeypatch) -> None:
@@ -428,9 +445,7 @@ def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
         },
         "verifiedAbsent": True,
     }
-    assert calls == [
-        "/api/v1/upload-queue/127.0.0.20%3A4662/operations/remove"
-    ]
+    assert calls == ["/api/v1/upload-queue/127.0.0.20%3A4662/operations/remove"]
 
 
 def test_queue_pressure_receipt_uses_exact_requester_udp_endpoint(monkeypatch) -> None:
@@ -471,6 +486,160 @@ def test_queue_pressure_receipt_uses_exact_requester_udp_endpoint(monkeypatch) -
     ) == {
         "request": request,
         "response": {"status": 200, "json": payload},
+    }
+
+
+def test_shared_catalog_identity_and_fixture_withdrawal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    fixture = tmp_path / "fixture" / "client-udp-file-not-found.bin"
+    fixture.parent.mkdir()
+    fixture.write_bytes(b"fixture")
+    row = {"name": fixture.name, "hash": FILE_HASH.upper()}
+
+    assert (
+        module.find_shared_file_by_hash(
+            {"data": {"items": [row]}},
+            file_hash=FILE_HASH,
+        )
+        == row
+    )
+
+    observed_states: list[bool] = []
+    monkeypatch.setattr(
+        module,
+        "wait_for_shared_file_presence",
+        lambda *_args, present, **_kwargs: observed_states.append(present),
+    )
+    monkeypatch.setattr(
+        module,
+        "reload_shared_catalog",
+        lambda *_args, **_kwargs: {"status": 200, "json": {"ok": True}},
+    )
+
+    receipt, withdrawn = module.withdraw_shared_fixture(
+        "http://responder.test",
+        "secret",
+        fixture_path=fixture,
+        file_hash=FILE_HASH,
+        reload_path=module.MFC_SHARED_RELOAD_PATH,
+        timeout=0.1,
+    )
+
+    assert observed_states == [True, False]
+    assert not fixture.exists()
+    assert withdrawn.read_bytes() == b"fixture"
+    assert receipt == {
+        "fileHash": FILE_HASH,
+        "sharedPath": str(fixture.resolve()),
+        "withdrawnPath": str(withdrawn),
+        "presentBefore": True,
+        "movedOutsideSharedRoot": True,
+        "reloadResponse": {"status": 200, "json": {"ok": True}},
+        "absentAfter": True,
+    }
+
+    module.restore_shared_fixture(fixture.resolve(), withdrawn)
+    assert fixture.read_bytes() == b"fixture"
+    assert not withdrawn.exists()
+
+
+def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None:
+    module = _load_module()
+    applied = _applied_record()
+    applied["seq"] = 7
+    applied["body"]["replyOpcode"] = 0x92
+    dead_listed = {
+        "schema": "diag_event_v2",
+        "seq": 8,
+        "family": "sched",
+        "event": "source_dead_listed",
+        "keys": {
+            "fileHash": FILE_HASH,
+            "peer": SOURCE_TCP_ENDPOINT,
+            "peerHash": SOURCE_USER_HASH,
+        },
+        "body": {
+            "outcome": "dead_listed",
+            "reason": "udp_fnf",
+            "blockSecs": 2700,
+        },
+    }
+    dropped = {
+        "schema": "diag_event_v2",
+        "seq": 9,
+        "family": "sched",
+        "event": "source_dropped",
+        "keys": {
+            "fileHash": FILE_HASH,
+            "peer": SOURCE_TCP_ENDPOINT,
+            "peerHash": SOURCE_USER_HASH,
+        },
+        "body": {"outcome": "dropped"},
+    }
+
+    completion = module.find_file_not_found_completion(
+        [applied, dead_listed, dropped],
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_user_hash=SOURCE_USER_HASH,
+    )
+
+    assert completion == {
+        "applied": applied,
+        "deadListed": dead_listed,
+        "dropped": dropped,
+    }
+
+    swapped = {
+        **dropped,
+        "event": "source_swapped",
+        "body": {"outcome": "swapped"},
+    }
+    with pytest.raises(RuntimeError, match="swapped instead of dropped"):
+        module.find_file_not_found_completion(
+            [applied, dead_listed, dropped, swapped],
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+        )
+
+
+def test_transfer_source_absence_uses_exact_endpoint_and_hash(monkeypatch) -> None:
+    module = _load_module()
+    exact = {
+        "address": "127.0.0.10",
+        "port": 4662,
+        "userHash": SOURCE_USER_HASH.upper(),
+    }
+    assert (
+        module.find_transfer_source(
+            {"data": {"items": [exact]}},
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+        )
+        == exact
+    )
+
+    monkeypatch.setattr(
+        module.cc,
+        "request_json",
+        lambda *_args, **_kwargs: {"data": {"items": []}},
+    )
+    assert module.wait_for_transfer_source_absent(
+        "http://requester.test",
+        "secret",
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_user_hash=SOURCE_USER_HASH,
+        timeout=0.1,
+    ) == {
+        "fileHash": FILE_HASH,
+        "sourceTcpEndpoint": SOURCE_TCP_ENDPOINT,
+        "sourceUserHash": SOURCE_USER_HASH,
+        "verifiedAbsent": True,
     }
 
 
