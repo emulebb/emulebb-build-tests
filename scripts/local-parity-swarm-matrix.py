@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +34,7 @@ from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
+from emule_test_harness.multi_client import resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
@@ -220,7 +220,7 @@ def launch_mfc(client: SwarmClient, *, app_exe: Path, seed_dir: Path, artifacts:
     client.connected = True  # add_and_connect_server blocks until connected
 
 
-def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, upload_active_slots: int | None = None, crypt: bool = True) -> None:
+def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifacts: Path, server_ip: str, ed2k_port: int, kad_port: int, timeout: float, base_upload_slots: int | None = None, crypt: bool = True) -> None:
     profile_dir = artifacts / f"{client.name}-profile"
     log_dir = artifacts / f"{client.name}-packet-dump"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -237,7 +237,8 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         kad_port=kad_port,
         server_endpoint=f"{server_ip}:{ed2k_port}",
         obfuscation_enabled=crypt,
-        upload_active_slots=upload_active_slots,
+        base_upload_slots=base_upload_slots,
+        upload_slot_elastic_percent=0 if base_upload_slots is not None else None,
     )
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
     client.process = rust_client.start_rust_client_executable(rust_exe, profile_dir, artifacts / f"{client.name}.out")
@@ -553,7 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                   + (f" uploadSlots={slots}" if slots is not None else ""), flush=True)
             launch_rust(c, rust_exe=rust_exe, rust_repo=rust_repo, artifacts=artifacts,
                         server_ip=server_ip, ed2k_port=server_ed2k, kad_port=kad,
-                        timeout=args.server_connect_timeout_seconds, upload_active_slots=slots,
+                        timeout=args.server_connect_timeout_seconds, base_upload_slots=slots,
                         crypt=args.crypt == "on")
             clients.append(c)
 
