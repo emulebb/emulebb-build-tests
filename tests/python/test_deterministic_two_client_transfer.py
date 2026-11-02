@@ -764,45 +764,49 @@ def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
-def test_server_callback_accepts_only_plaintext_mfc_oracle_lane() -> None:
+def test_callback_scenarios_accept_only_plaintext_mfc_oracle_lane() -> None:
     module = load_suite_module()
-    wrong_client = module.parse_args(
-        [
-            "--lan-bind-addr",
-            "192.0.2.10",
-            "--client2-identity",
-            "stock_emule",
-            "--transfer-scenario",
-            module.SERVER_CALLBACK_REPLY,
-        ]
-    )
-    wrong_case = module.parse_args(
-        [
-            "--lan-bind-addr",
-            "192.0.2.10",
-            "--protocol-case",
-            "obfuscated-required",
-            "--transfer-scenario",
-            module.SERVER_CALLBACK_REPLY,
-        ]
-    )
-    canonical = module.parse_args(
-        [
-            "--lan-bind-addr",
-            "192.0.2.10",
-            "--protocol-case",
-            "plain-server-plain-clients",
-            "--transfer-scenario",
-            module.SERVER_CALLBACK_REPLY,
-        ]
-    )
+    for scenario in (module.SERVER_CALLBACK_REPLY, module.DIRECT_CALLBACK):
+        wrong_client = module.parse_args(
+            [
+                "--lan-bind-addr",
+                "192.0.2.10",
+                "--client2-identity",
+                "stock_emule",
+                "--transfer-scenario",
+                scenario,
+            ]
+        )
+        wrong_case = module.parse_args(
+            [
+                "--lan-bind-addr",
+                "192.0.2.10",
+                "--protocol-case",
+                "obfuscated-required",
+                "--transfer-scenario",
+                scenario,
+            ]
+        )
+        canonical = module.parse_args(
+            [
+                "--lan-bind-addr",
+                "192.0.2.10",
+                "--protocol-case",
+                "plain-server-plain-clients",
+                "--transfer-scenario",
+                scenario,
+            ]
+        )
 
-    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
-        module.validate_args(wrong_client)
-    with pytest.raises(ValueError, match="single canonical plaintext"):
-        module.validate_args(wrong_case)
-    module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+        with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+            module.validate_args(wrong_client)
+        with pytest.raises(ValueError, match="single canonical plaintext"):
+            module.validate_args(wrong_case)
+        module.validate_args(canonical)
+        assert (
+            canonical.fixture_size_bytes
+            == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+        )
 
 
 def test_non_search_scenarios_keep_the_multi_part_fixture_default() -> None:
@@ -1511,10 +1515,8 @@ def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() ->
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert module.SERVER_CALLBACK_REPLY in module.TRANSFER_SCENARIOS
-    assert (
-        "include_callback_requester=args.transfer_scenario == SERVER_CALLBACK_REPLY"
-        in script_text
-    )
+    assert "include_callback_requester=args.transfer_scenario" in script_text
+    assert "in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK}" in script_text
     assert "server_callback_requester.request_callback(" in script_text
     assert 'for client in ("mfc", "rust"):' in script_text
     assert "callback_targets_from_login_evidence(" in script_text
@@ -1524,6 +1526,18 @@ def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() ->
         in script_text
     )
     assert "server_callback_evidence=server_callback_evidence" in script_text
+
+
+def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.DIRECT_CALLBACK in module.TRANSFER_SCENARIOS
+    assert "local_kad_seed=isolated_kad_seed" in script_text
+    assert '"client_direct_callback_kad_running"' in script_text
+    assert "direct_callback_probe.DirectCallbackProbe(" in script_text
+    assert 'for client, udp_port in (' in script_text
+    assert "callback_targets_from_login_evidence(" in script_text
 
 
 def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:
