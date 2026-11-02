@@ -253,6 +253,46 @@ def test_udp_source_v1_evidence_rejects_mismatched_rust_send_attempt() -> None:
     assert "rust.sendOutcome" in evidence["failures"]
 
 
+def test_udp_source_v1_evidence_ignores_later_request_for_another_hash() -> None:
+    rust_records = _records(rust=True)
+    rust_records.append(
+        _record(
+            sequence=14,
+            event="packet",
+            opcode=ed2k_wire.OP_GLOBGETSOURCES,
+            direction="send",
+            trace_id=0,
+            send_attempt_id=6,
+            payload=b"\xff" * 16,
+        )
+    )
+
+    evidence = _build(rust_records=rust_records)
+
+    require_server_udp_source_v1_diagnostic_evidence(evidence)
+    assert evidence["clients"]["rust"]["wire"]["request"]["packetCount"] == 1
+
+
+def test_udp_source_v1_evidence_rejects_duplicate_request_for_target_hash() -> None:
+    rust_records = _records(rust=True)
+    rust_records.append(
+        _record(
+            sequence=14,
+            event="packet",
+            opcode=ed2k_wire.OP_GLOBGETSOURCES,
+            direction="send",
+            trace_id=0,
+            send_attempt_id=6,
+            payload=bytes.fromhex(FILE_HASH),
+        )
+    )
+
+    evidence = _build(rust_records=rust_records)
+
+    assert evidence["ok"] is False
+    assert "rust.request" in evidence["failures"]
+
+
 def test_udp_source_v1_evidence_rejects_v2_request_even_with_valid_v1_trace() -> None:
     rust_records = _records(rust=True)
     rust_records.append(

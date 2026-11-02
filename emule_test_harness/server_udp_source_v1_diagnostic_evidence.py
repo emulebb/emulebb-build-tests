@@ -126,28 +126,38 @@ def _request_evidence(
         direction="send",
         opcode=ed2k_wire.OP_GLOBGETSOURCES,
     )
-    forbidden = _packet_candidates(
-        records,
-        udp_endpoint=udp_endpoint,
-        direction="send",
-        opcode=0x94,
-    )
+    matching_payload = [
+        record for record in candidates if _payload(record) == expected_payload
+    ]
+    forbidden = [
+        record
+        for record in _packet_candidates(
+            records,
+            udp_endpoint=udp_endpoint,
+            direction="send",
+            opcode=0x94,
+        )
+        if (_payload(record) or b"").startswith(expected_payload)
+    ]
     exact = [
         record
-        for record in candidates
-        if _payload(record) == expected_payload
-        and _body(record).get("outcome") == "attempted"
+        for record in matching_payload
+        if _body(record).get("outcome") == "attempted"
         and (
             _send_attempt_id(record) is not None
             if require_send_attempt_id
             else _trace_id(record) is not None
         )
     ]
-    request = exact[0] if len(candidates) == len(exact) == 1 and not forbidden else None
+    request = (
+        exact[0]
+        if len(matching_payload) == len(exact) == 1 and not forbidden
+        else None
+    )
     return (
         {
             "ok": request is not None,
-            "packetCount": len(candidates),
+            "packetCount": len(matching_payload),
             "exactPacketCount": len(exact),
             "forbiddenV2PacketCount": len(forbidden),
             "sequence": _sequence(request) or None,

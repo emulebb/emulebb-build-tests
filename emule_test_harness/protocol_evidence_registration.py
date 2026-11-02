@@ -126,6 +126,32 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
+    if type(left) is not type(right):
+        return path
+    if isinstance(left, dict):
+        if set(left) != set(right):
+            return path
+        for key in sorted(left):
+            difference = _first_difference(left[key], right[key], f"{path}.{key}")
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return path
+        for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
+            difference = _first_difference(
+                left_item,
+                right_item,
+                f"{path}[{index}]",
+            )
+            if difference is not None:
+                return difference
+        return None
+    return path if left != right else None
+
+
 def _path_within(value: Any, root: Path, field: str) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty path")
@@ -1358,8 +1384,10 @@ def _derived_server_udp_source_v1_coverage_ids(
         key: value for key, value in source.items() if key != "captures"
     }
     if rebuilt != retained_without_capture:
+        difference = _first_difference(rebuilt, retained_without_capture)
         raise ValueError(
-            "server UDP source v1 receipt does not match its immutable evidence"
+            "server UDP source v1 receipt does not match its immutable evidence at "
+            f"{difference}"
         )
     return expected_ids
 
