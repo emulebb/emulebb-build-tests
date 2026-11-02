@@ -244,6 +244,13 @@
   },
   "coverageEvidence": [
     {
+      "coverageId": "lowid.server-callback",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each started from an accepted LowID assignment, received and applied the exact server-routed callback at wire/application sequences 17/18 and 19/21, then connected to the HighID requester with a HELLO matching the assigned identity.",
+      "receiptIds": ["rust-mfc-transfer-20261102t020224z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "peer.startup.aich",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Matched one exact MD4+AICH hashset answer and persisted two exact AICH part hashes in Rust.",
@@ -1811,6 +1818,7 @@
       "artifactLocator": "output-root:reports/deterministic-two-client-transfer/20261102T020224Z-emulebb-main-release-12340/deterministic-two-client-transfer-result.json",
       "artifactSha256": "5f0e895b0b2b231f55531abb9cb813308de57de906f5e89424ebfddd0d08088c",
       "coverageIds": [
+        "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",

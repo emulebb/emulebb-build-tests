@@ -2350,9 +2350,10 @@ def test_build_transfer_registration_rejects_coverage_overclaim(tmp_path: Path) 
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
         "queue.rank-transition"
     )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="claims do not match"):
+    with pytest.raises(ValueError, match="claims exceed"):
         build_transfer_registration(report_path, output_root=output_root)
 
 
@@ -2615,11 +2616,16 @@ def write_server_callback_report(
 def test_build_transfer_registration_accepts_exact_server_callback(
     tmp_path: Path,
 ) -> None:
-    report_path, output_root, _, _ = write_server_callback_report(tmp_path)
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
 
     registration = build_transfer_registration(report_path, output_root=output_root)
 
+    assert (
+        "lowid.server-callback"
+        not in report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"]
+    )
     assert registration["evidenceReceipt"]["coverageIds"] == [
+        "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -2634,6 +2640,13 @@ def test_build_transfer_registration_accepts_exact_server_callback(
         if row["coverageId"] == "server.reply.callback"
     )
     assert "callback HELLO matching its accepted LowID login identity" in reason
+    lowid_reason = next(
+        row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] == "lowid.server-callback"
+    )
+    assert "started from an accepted LowID assignment" in lowid_reason
+    assert "connected to the HighID requester" in lowid_reason
 
 
 def test_build_transfer_registration_rejects_callback_wrong_trace(

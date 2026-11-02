@@ -86,6 +86,7 @@ SERVER_CALLBACK_FILE_HASH = "33445566778899001122AABBCCDDEEFF"
 SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
 SERVER_CALLBACK_FILE_SIZE = 23_456
 SERVER_CALLBACK_TIMEOUT_SECONDS = 20.0
+LOWID_SERVER_CALLBACK_COVERAGE_ID = "lowid.server-callback"
 SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
@@ -2621,7 +2622,10 @@ def _derived_server_callback_coverage_ids(
         raise ValueError(
             "server callback receipt does not match its immutable captures"
         )
-    return [server_callback_diagnostic_evidence.COVERAGE_ID]
+    return [
+        server_callback_diagnostic_evidence.COVERAGE_ID,
+        LOWID_SERVER_CALLBACK_COVERAGE_ID,
+    ]
 
 
 def _derived_server_login_coverage_ids(
@@ -3076,6 +3080,24 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == LOWID_SERVER_CALLBACK_COVERAGE_ID:
+        callback = _object(
+            diagnostics.get("serverCallback"),
+            "diagnostics.serverCallback",
+        )
+        clients = _object(
+            callback.get("clients"),
+            "diagnostics.serverCallback.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.serverCallback.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.serverCallback.clients.mfc")
+        return (
+            "Rust and MFC each started from an accepted LowID assignment, received and "
+            "applied the exact server-routed callback at wire/application sequences "
+            f"{rust['wire']['sequence']}/{rust['application']['sequence']} and "
+            f"{mfc['wire']['sequence']}/{mfc['application']['sequence']}, then connected "
+            "to the HighID requester with a HELLO matching the assigned identity."
+        )
     if coverage_id == server_callback_diagnostic_evidence.COVERAGE_ID:
         callback = _object(
             diagnostics.get("serverCallback"),
@@ -3446,9 +3468,19 @@ def build_transfer_registration(
             ),
         ]
     )
-    if claim_ids != expected_ids:
+    if not isinstance(claim_ids, list) or any(
+        not isinstance(coverage_id, str) for coverage_id in claim_ids
+    ):
+        raise ValueError("diagnostic coverage claims are not a string list")
+    if claim_ids != sorted(set(claim_ids)):
         raise ValueError(
-            "diagnostic coverage claims do not match the decisive wire evidence"
+            "diagnostic coverage claims are not a sorted unique string list"
+        )
+    overclaims = sorted(set(claim_ids) - set(expected_ids))
+    if overclaims:
+        raise ValueError(
+            "diagnostic coverage claims exceed the decisive wire evidence: "
+            f"{overclaims}"
         )
     expected_layers = list(transfer_diagnostic_evidence.EVIDENCE_LAYERS)
     if claims.get("evidenceLayers") != expected_layers:
