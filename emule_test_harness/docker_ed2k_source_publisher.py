@@ -493,6 +493,13 @@ def start_docker_ed2k_source_publisher(
         "--subnet",
         BENCHMARK_SUBNET,
     ]
+    if windows_routable:
+        network_arguments.extend(
+            (
+                "--opt",
+                "com.docker.network.bridge.trusted_host_interfaces=eth0",
+            )
+        )
     for option in labels:
         network_arguments.extend(option)
     network_arguments.append(network_name)

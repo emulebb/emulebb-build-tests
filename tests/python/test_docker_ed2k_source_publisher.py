@@ -770,6 +770,14 @@ def test_callback_fixture_owns_exact_windows_route_and_published_port(
     )
 
     container = next(row[0] for row in fake.calls if "run" in row[0])
+    network = next(
+        row[0]
+        for row in fake.calls
+        if "network" in row[0] and "create" in row[0]
+    )
+    assert network[network.index("--opt") + 1] == (
+        "com.docker.network.bridge.trusted_host_interfaces=eth0"
+    )
     assert container[container.index("--publish") + 1] == (
         f"{PUBLISHER_PORT}:{PUBLISHER_PORT}/tcp"
     )
