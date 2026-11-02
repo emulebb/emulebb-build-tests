@@ -8,9 +8,12 @@ import struct
 
 import pytest
 
+from emule_test_harness import direct_callback_diagnostic_evidence
+from emule_test_harness import direct_callback_probe
 from emule_test_harness import ed2k_wire
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
+from emule_test_harness import kad_nodes
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -1790,6 +1793,289 @@ def attach_server_udp_metadata(
     return evidence
 
 
+def _direct_callback_record(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    sequence: int,
+    source_port: int,
+) -> dict[str, object]:
+    raw = direct_callback_probe.encode_direct_callback_request(
+        tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+        user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+        connect_options=0x01,
+    )
+    return {
+        "schema": DIAG_EVENT_SCHEMA,
+        "client": client,
+        "runId": run_id,
+        "processId": process_id,
+        "segmentId": 0,
+        "seq": sequence,
+        "streamSeq": sequence,
+        "family": "ed2k_client_udp",
+        "event": "packet",
+        "keys": {
+            "peer": f"127.0.0.1:{source_port}",
+            "protocolMarker": direct_callback_probe.OP_EMULEPROT,
+            "opcode": direct_callback_probe.OP_DIRECTCALLBACKREQ,
+        },
+        "body": {
+            "direction": "recv",
+            "outcome": "accepted",
+            "stateId": "client_udp.direct_callback",
+            "stateLabel": "direct_callback",
+            "traceKey": f"client_udp:127.0.0.1:{source_port}",
+            "flow": "client_udp",
+            "phase": "direct_callback_request",
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "protocolMarker": direct_callback_probe.OP_EMULEPROT,
+            "protocolName": "emule",
+            "opcode": direct_callback_probe.OP_DIRECTCALLBACKREQ,
+            "opcodeName": "OP_DIRECTCALLBACKREQ",
+            "rawLen": len(raw),
+            "rawHex": raw.hex(),
+            "payloadLen": len(raw) - 2,
+            "payloadHex": raw[2:].hex(),
+            "payloadHexTruncated": False,
+            "note": "direct_callback_raised",
+        },
+    }
+
+
+def _direct_callback_result(
+    *,
+    client: str,
+    target: dict[str, object],
+    source_port: int,
+) -> dict[str, object]:
+    raw = direct_callback_probe.encode_direct_callback_request(
+        tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+        user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+        connect_options=0x01,
+    )
+    hello = (
+        b"\x10"
+        + bytes.fromhex(str(target["userHash"]))
+        + int(target["clientId"]).to_bytes(4, "little")
+        + int(target["tcpPort"]).to_bytes(2, "little")
+    )
+    return {
+        "schema": "emulebb.direct-callback-probe/1",
+        "status": "completed",
+        "targetLabel": client,
+        "source": {"host": "127.0.0.1", "udpPort": source_port},
+        "target": {"host": "127.0.0.1", "udpPort": target["udpPort"]},
+        "requester": {
+            "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+            "userHash": SERVER_CALLBACK_REQUESTER_HASH.hex().upper(),
+            "clientId": direct_callback_probe.high_id_for_ipv4("127.0.0.1"),
+            "connectOptions": 0x01,
+        },
+        "request": {
+            "protocol": direct_callback_probe.OP_EMULEPROT,
+            "opcode": direct_callback_probe.OP_DIRECTCALLBACKREQ,
+            "rawHex": raw.hex().upper(),
+            "payloadHex": raw[2:].hex().upper(),
+            "sentBytes": len(raw),
+            "sentAt": 1000.0,
+        },
+        "callbackConnection": {
+            "userHash": target["userHash"],
+            "clientId": target["clientId"],
+            "tcpPort": target["tcpPort"],
+            "payloadLength": len(hello),
+            "payloadHex": hello.hex().upper(),
+            "peerHost": "127.0.0.1",
+            "peerPort": 50_000 + int(target["clientId"]),
+            "observedAt": 1000.1,
+        },
+    }
+
+
+def attach_direct_callback(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+) -> dict[str, object]:
+    login = bilateral_login_evidence()
+    identities = {
+        "rust": {
+            "clientId": 4,
+            "tcpPort": 4662,
+            "udpPort": 4672,
+            "userHash": "11" * 16,
+        },
+        "mfc": {
+            "clientId": 2,
+            "tcpPort": 4663,
+            "udpPort": 4673,
+            "userHash": "22" * 16,
+        },
+    }
+    for client, identity in identities.items():
+        login["clients"][client]["decodedLogin"] = {
+            "client_id": 0,
+            "tcp_port": identity["tcpPort"],
+            "user_hash": identity["userHash"],
+        }
+        login["clients"][client]["decodedIdChange"] = {
+            "assigned_id": identity["clientId"],
+            "id_kind": "low-id",
+        }
+    attach_server_login(report, login, ("plaintext",))
+    report["transfer_scenario"] = "direct-callback"
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    report["network"].update(
+        {
+            "p2p_bind_interface_address": "127.0.0.1",
+            "directCallbackKadIsolation": {
+                "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": f"127.0.0.1:{SERVER_CALLBACK_REQUESTER_PORT}",
+                    "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+                },
+                "mfcBootstrapSeeds": [],
+            },
+        }
+    )
+    report["network"]["ports"].update(
+        {
+            "client1_udp": identities["rust"]["udpPort"],
+            "client2_udp": identities["mfc"]["udpPort"],
+            "callback_requester_tcp": SERVER_CALLBACK_REQUESTER_PORT,
+        }
+    )
+    rust_profile_dir = run_directory / "profiles" / "rust"
+    mfc_config_dir = run_directory / "profiles" / "mfc" / "config"
+    report["profiles"]["rust"]["profile_dir"] = str(rust_profile_dir)
+    report["profiles"]["mfc"]["config_dir"] = str(mfc_config_dir)
+    rust_nodes = kad_nodes.encode_nodes_dat(
+        [
+            kad_nodes.BootstrapContact(
+                "127.0.0.1",
+                SERVER_CALLBACK_REQUESTER_PORT,
+                SERVER_CALLBACK_REQUESTER_PORT,
+            )
+        ]
+    )
+    mfc_nodes = kad_nodes.encode_nodes_dat([])
+    (rust_profile_dir / "nodes.dat").parent.mkdir(parents=True, exist_ok=True)
+    (rust_profile_dir / "nodes.dat").write_bytes(rust_nodes)
+    (mfc_config_dir / "nodes.dat").parent.mkdir(parents=True, exist_ok=True)
+    (mfc_config_dir / "nodes.dat").write_bytes(mfc_nodes)
+    launch_inputs = run_directory / "launch-inputs" / "direct-callback-kad"
+    launch_inputs.mkdir(parents=True, exist_ok=True)
+    launch_receipts: dict[str, dict[str, object]] = {}
+    for label, name, payload in (
+        ("rustNodesDat", "rust-nodes.dat", rust_nodes),
+        ("mfcNodesDat", "mfc-nodes.dat", mfc_nodes),
+    ):
+        path = launch_inputs / name
+        path.write_bytes(payload)
+        launch_receipts[label] = {
+            "path": str(path),
+            "sizeBytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    report["network"]["directCallbackKadIsolation"]["launchInputs"] = (
+        launch_receipts
+    )
+    targets = {
+        client: {
+            "clientId": identity["clientId"],
+            "idKind": "low-id",
+            "tcpPort": identity["tcpPort"],
+            "udpPort": identity["udpPort"],
+            "userHash": identity["userHash"],
+        }
+        for client, identity in identities.items()
+    }
+    source_ports = {"rust": 31_001, "mfc": 31_002}
+    records = {
+        "rust": [
+            _direct_callback_record(
+                client="rust",
+                process_id=101,
+                run_id="rust-direct-run",
+                sequence=10,
+                source_port=source_ports["rust"],
+            )
+        ],
+        "mfc": [
+            _direct_callback_record(
+                client="mfc",
+                process_id=202,
+                run_id="mfc-direct-run",
+                sequence=20,
+                source_port=source_ports["mfc"],
+            )
+        ],
+    }
+    captures: dict[str, dict[str, object]] = {}
+    for client, process_id, run_id in (
+        ("rust", 101, "rust-direct-run"),
+        ("mfc", 202, "mfc-direct-run"),
+    ):
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{run_id}-000000.jsonl"
+        _write_server_source_segment(segment, records[client])
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+    results = {
+        client: _direct_callback_result(
+            client=client,
+            target=targets[client],
+            source_port=source_ports[client],
+        )
+        for client in ("rust", "mfc")
+    }
+    evidence = direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+        requester_host="127.0.0.1",
+        requester_tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+        requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+        target_host="127.0.0.1",
+        targets=targets,
+        requester_results=results,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+    )
+    evidence["captures"] = captures
+    report["checks"].update(
+        {
+            "client_direct_callback_kad_running": {
+                client: {
+                    "status": {"status": 200, "json": {"running": True}},
+                    "observations": [{"running": True, "observed_at": 999.0}],
+                }
+                for client in ("rust", "mfc")
+            },
+            "client_direct_callback_targets": targets,
+            "client_direct_callback_requests": results,
+            "client_direct_callback_diagnostics": evidence,
+            "mfc_diagnostics_shutdown": {"ok": True, "processId": 202},
+        }
+    )
+    report["diagnostics"]["directCallback"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: dict(capture) for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        direct_callback_diagnostic_evidence.COVERAGE_ID
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
 def _server_callback_records(
     *,
     client: str,
@@ -2611,6 +2897,125 @@ def write_server_callback_report(
     evidence = attach_server_callback(report, run_directory=report_path.parent)
     report_path.write_text(json.dumps(report), encoding="utf-8")
     return report_path, output_root, report, evidence
+
+
+def write_direct_callback_report(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_direct_callback(report, run_directory=report_path.parent)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, output_root, report, evidence
+
+
+def test_build_transfer_registration_accepts_exact_direct_callback(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, _, _ = write_direct_callback_report(tmp_path)
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "lowid.direct-callback",
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "transfer.block.uncompressed",
+    ]
+    reason = next(
+        row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] == "lowid.direct-callback"
+    )
+    assert "same exact direct UDP callback request" in reason
+    assert "HELLO matching the assigned identity" in reason
+
+
+def test_build_transfer_registration_rejects_direct_callback_without_evidence(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    del report["diagnostics"]["directCallback"]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_changed_direct_callback_target(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    report["checks"]["client_direct_callback_targets"]["rust"]["clientId"] = 7
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="do not derive exactly"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_public_direct_callback_seed(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    report["network"]["directCallbackKadIsolation"]["publicDiscovery"] = True
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Kad isolation is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_uses_retained_launch_input_after_mfc_shutdown_mutation(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    mfc_nodes = Path(report["profiles"]["mfc"]["config_dir"]) / "nodes.dat"
+    kad_nodes.write_nodes_dat(
+        mfc_nodes,
+        [kad_nodes.BootstrapContact("127.0.0.1", 4672, 4662)],
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert "lowid.direct-callback" in registration["evidenceReceipt"]["coverageIds"]
+
+
+def test_build_transfer_registration_rejects_mutated_mfc_kad_launch_input(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    retained = Path(
+        report["network"]["directCallbackKadIsolation"]["launchInputs"][
+            "mfcNodesDat"
+        ]["path"]
+    )
+    retained.write_bytes(
+        kad_nodes.encode_nodes_dat(
+            [kad_nodes.BootstrapContact("127.0.0.1", 4672, 4662)]
+        )
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mfcNodesDat launch input does not match"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_direct_callback_capture(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, evidence = write_direct_callback_report(tmp_path)
+    segment = Path(evidence["captures"]["mfc"]["selectedSegments"][0])
+    records = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
+    records[0]["body"]["note"] = "direct_callback_disabled"
+    _write_server_source_segment(segment, records)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
 
 
 def test_build_transfer_registration_accepts_exact_server_callback(

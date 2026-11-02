@@ -28,7 +28,10 @@ from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import ed2k_wire  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness import direct_callback_diagnostic_evidence  # noqa: E402
+from emule_test_harness import direct_callback_probe  # noqa: E402
 from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
+from emule_test_harness import kad_nodes  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
@@ -77,6 +80,7 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
+DIRECT_CALLBACK = "direct-callback"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_ADVANCED_SEARCH = "server-advanced-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
@@ -130,6 +134,7 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_CALLBACK_REPLY,
+    DIRECT_CALLBACK,
     SERVER_KEYWORD_SEARCH,
     SERVER_ADVANCED_SEARCH,
     SERVER_TCP_SOURCE,
@@ -216,6 +221,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             in {
                 SERVER_LOGIN_REQUEST,
                 SERVER_CALLBACK_REPLY,
+                DIRECT_CALLBACK,
                 *SERVER_SEARCH_VARIANTS,
                 SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
@@ -303,12 +309,12 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Server login proof requires a canonical plaintext, obfuscated, or fallback case."
             )
-    if args.transfer_scenario == SERVER_CALLBACK_REPLY:
+    if args.transfer_scenario in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK}:
         if args.client2_identity != "mfc_oracle":
-            raise ValueError("Server callback proof requires the MFC diagnostics oracle.")
+            raise ValueError("Callback proof requires the MFC diagnostics oracle.")
         if args.protocol_case != "plain-server-plain-clients":
             raise ValueError(
-                "Server callback proof uses the single canonical plaintext case."
+                "Callback proof uses the single canonical plaintext case."
             )
 
 
@@ -333,6 +339,7 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
+    direct_callback_evidence: dict[str, object] | None,
     server_callback_evidence: dict[str, object] | None,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
@@ -374,6 +381,14 @@ def collect_transfer_diagnostics(
         expected_source_user_hash=expected_source_user_hash,
     )
     extra_claims: set[str] = set()
+    if direct_callback_evidence is not None:
+        direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence(
+            direct_callback_evidence
+        )
+        evidence["directCallback"] = direct_callback_evidence
+        extra_claims.update(
+            direct_callback_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
     if server_callback_evidence is not None:
         server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
             server_callback_evidence
@@ -563,6 +578,58 @@ def collect_server_callback_diagnostics(
             server_endpoint=server_endpoint,
             requester_host=docker_ed2k_source_publisher.PUBLISHER_IP,
             requester_port=requester_port,
+            targets=targets,
+            requester_results=requester_results,
+            rust_records=rust_capture.records,
+            mfc_records=mfc_capture.records,
+        )
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_direct_callback_diagnostics(
+    *,
+    requester_host: str,
+    requester_port: int,
+    targets: dict[str, object],
+    requester_results: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots exact bilateral direct-callback evidence before transfer traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = (
+        direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+            requester_host=requester_host,
+            requester_tcp_port=requester_port,
+            requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+            target_host=requester_host,
             targets=targets,
             requester_results=requester_results,
             rust_records=rust_capture.records,
@@ -1323,6 +1390,19 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def retain_launch_input(source: Path, destination: Path) -> dict[str, object]:
+    """Retains one pre-launch input outside the client-mutated profile tree."""
+
+    payload = source.read_bytes()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    return {
+        "path": str(destination),
+        "sizeBytes": len(payload),
+        "sha256": file_sha256(destination),
+    }
+
+
 def wait_for_exported_link(path: Path, timeout_seconds: float) -> str:
     """Waits for client2 to export a non-empty eD2K link file."""
 
@@ -1709,6 +1789,7 @@ def configure_client_profile(
     crypt_layer_required: bool | None = None,
     crypt_tcp_padding_length: int | None = None,
     add_servers_from_server: bool = False,
+    network_kademlia: bool = False,
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
@@ -1723,7 +1804,7 @@ def configure_client_profile(
             ("Autoconnect", "1" if autoconnect else "0"),
             ("Reconnect", "0"),
             ("NetworkED2K", "1" if ed2k_enabled else "0"),
-            ("NetworkKademlia", "0"),
+            ("NetworkKademlia", "1" if network_kademlia else "0"),
             ("AutoConnectStaticOnly", "0"),
             ("AddServersFromServer", "1" if add_servers_from_server else "0"),
             ("SafeServerConnect", "0"),
@@ -2567,11 +2648,15 @@ def main(argv: list[str] | None = None) -> int:
     server_callback_requester: (
         docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
     ) = None
+    direct_callback_requester: direct_callback_probe.DirectCallbackProbe | None = None
+    rust_isolated_kad_seed: kad_nodes.BootstrapContact | None = None
+    direct_callback_kad_isolation: dict[str, object] | None = None
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     udp_source_fixture: scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer | None = None
     server_login_evidence: dict[str, object] | None = None
+    direct_callback_evidence: dict[str, object] | None = None
     server_callback_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
@@ -2590,7 +2675,8 @@ def main(argv: list[str] | None = None) -> int:
             args.lan_bind_addr,
             include_search_publisher=args.transfer_scenario in SERVER_SEARCH_VARIANTS,
             include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
-            include_callback_requester=args.transfer_scenario == SERVER_CALLBACK_REPLY,
+            include_callback_requester=args.transfer_scenario
+            in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK},
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
             include_udp_source_target=udp_source_request_version is not None,
         )
@@ -2643,6 +2729,24 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["p2p_bind_interface_address"] = p2p_address
         report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
+
+        if args.transfer_scenario == DIRECT_CALLBACK:
+            rust_isolated_kad_seed = kad_nodes.BootstrapContact(
+                p2p_address,
+                ports["callback_requester_tcp"],
+                ports["callback_requester_tcp"],
+            )
+            direct_callback_kad_isolation = {
+                "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": rust_isolated_kad_seed.endpoint,
+                    "tcpPort": rust_isolated_kad_seed.tcp_port,
+                },
+                "mfcBootstrapSeeds": [],
+            }
+            report["network"]["directCallbackKadIsolation"] = (
+                direct_callback_kad_isolation
+            )
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
             current_phase = "start_server_callback_requester"
@@ -2946,6 +3050,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
             else "deterministicservercallback-transfer.bin"
             if args.transfer_scenario == SERVER_CALLBACK_REPLY
+            else "deterministicdirectcallback-transfer.bin"
+            if args.transfer_scenario == DIRECT_CALLBACK
             else "deterministicserversearch-transfer.bin"
             if args.transfer_scenario in SERVER_SEARCH_VARIANTS
             else "deterministicserversource-transfer.bin"
@@ -3007,7 +3113,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_addr=args.lan_bind_addr,
             rest_port=ports["client1_rest"],
             api_key=args.api_key,
-            network_kademlia=False,
+            network_kademlia=(args.transfer_scenario == DIRECT_CALLBACK),
             p2p_bind_ip=p2p_address,
             ed2k_port=ports["client1_tcp"],
             ed2k_nickname=CLIENT01.nick,
@@ -3020,6 +3126,7 @@ def main(argv: list[str] | None = None) -> int:
                 else True
             ),
             local_only_discovery=True,
+            local_kad_seed=rust_isolated_kad_seed,
             add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -3114,6 +3221,7 @@ def main(argv: list[str] | None = None) -> int:
                 lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
+                network_kademlia=(args.transfer_scenario == DIRECT_CALLBACK),
                 crypt_layer_supported=(
                     protocol_case.client_crypt_supported
                     if protocol_case is not None
@@ -3136,6 +3244,29 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
             )
+            if args.transfer_scenario == DIRECT_CALLBACK:
+                # MFC treats a private-only Kad routing table as LAN mode, where
+                # stock deliberately reports TCP-open and rejects direct callbacks.
+                # An empty nodes.dat keeps Kad running, offline, and firewalled.
+                kad_nodes.write_nodes_dat(
+                    Path(client2["config_dir"]) / "nodes.dat",
+                    [],
+                )
+                if direct_callback_kad_isolation is None:
+                    raise RuntimeError("Direct callback Kad isolation was not initialized.")
+                launch_inputs = (
+                    paths.source_artifacts_dir / "launch-inputs" / "direct-callback-kad"
+                )
+                direct_callback_kad_isolation["launchInputs"] = {
+                    "rustNodesDat": retain_launch_input(
+                        rust_profile / "nodes.dat",
+                        launch_inputs / "rust-nodes.dat",
+                    ),
+                    "mfcNodesDat": retain_launch_input(
+                        Path(client2["config_dir"]) / "nodes.dat",
+                        launch_inputs / "mfc-nodes.dat",
+                    ),
+                }
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
                 Path(client2["config_dir"]) / "shareddir.dat",
@@ -3416,6 +3547,37 @@ def main(argv: list[str] | None = None) -> int:
             args.server_connect_timeout_seconds,
         )
 
+        if args.transfer_scenario == DIRECT_CALLBACK:
+            current_phase = "start_client1_isolated_kad_runtime"
+            report["checks"]["client1_direct_callback_kad_start"] = (
+                rust_local_ed2k.request_json(
+                    base_url,
+                    "POST",
+                    "/api/v1/kad/operations/start",
+                    args.api_key,
+                )
+            )
+            current_phase = "wait_for_isolated_kad_runtimes"
+            kad_running: dict[str, object] = {}
+            for client, kad_base_url in (
+                ("mfc", client2_base_url),
+                ("rust", base_url),
+            ):
+                try:
+                    kad_running[client] = rest_smoke.wait_for_kad_running(
+                        kad_base_url,
+                        args.api_key,
+                        args.server_connect_timeout_seconds,
+                    )
+                except Exception as exc:
+                    report["checks"]["client_direct_callback_kad_running"] = (
+                        kad_running
+                    )
+                    raise RuntimeError(
+                        f"{client} Kad runtime did not start for direct callback: {exc}"
+                    ) from exc
+            report["checks"]["client_direct_callback_kad_running"] = kad_running
+
         current_phase = "observe_client_id_classes"
         report["checks"]["client_id_classes"] = observe_client_id_classes(
             server_control,
@@ -3631,7 +3793,11 @@ def main(argv: list[str] | None = None) -> int:
                 server_udp_metadata_evidence
             )
 
-        if args.transfer_scenario in {SERVER_LOGIN_REQUEST, SERVER_CALLBACK_REPLY}:
+        if args.transfer_scenario in {
+            SERVER_LOGIN_REQUEST,
+            SERVER_CALLBACK_REPLY,
+            DIRECT_CALLBACK,
+        }:
             if client2_process_id is None:
                 raise RuntimeError(
                     "Bilateral server-login diagnostics require the MFC process identity."
@@ -3656,6 +3822,87 @@ def main(argv: list[str] | None = None) -> int:
             )
             server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(
                 server_login_evidence
+            )
+
+        if args.transfer_scenario == DIRECT_CALLBACK:
+            if client2_process_id is None or server_login_evidence is None:
+                raise RuntimeError(
+                    "Bilateral direct-callback proof requires MFC and server-login evidence."
+                )
+            current_phase = "derive_direct_callback_targets"
+            callback_targets = callback_targets_from_login_evidence(
+                server_login_evidence
+            )
+            callback_targets = {
+                "mfc": {
+                    **callback_targets["mfc"],
+                    "udpPort": ports["client2_udp"],
+                },
+                "rust": {
+                    **callback_targets["rust"],
+                    "udpPort": ports["client1_udp"],
+                },
+            }
+            report["checks"]["client_direct_callback_targets"] = callback_targets
+            direct_callback_requester = direct_callback_probe.DirectCallbackProbe(
+                bind_host=p2p_address,
+                tcp_port=ports["callback_requester_tcp"],
+                user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+            )
+            direct_callback_requester.start()
+            direct_callback_results: dict[str, object] = {}
+            for client, udp_port in (
+                ("mfc", ports["client2_udp"]),
+                ("rust", ports["client1_udp"]),
+            ):
+                current_phase = f"request_{client}_direct_callback"
+                result = direct_callback_requester.request(
+                    target_host=p2p_address,
+                    target_udp_port=udp_port,
+                    target_label=client,
+                    timeout_seconds=SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
+                )
+                target = callback_targets[client]
+                callback_connection = result.get("callbackConnection")
+                if not isinstance(callback_connection, dict):
+                    raise RuntimeError(
+                        f"{client} direct callback produced no HELLO observation: {result!r}"
+                    )
+                expected_identity = (
+                    str(target["userHash"]).upper(),
+                    target["clientId"],
+                    target["tcpPort"],
+                )
+                observed_identity = (
+                    callback_connection.get("userHash"),
+                    callback_connection.get("clientId"),
+                    callback_connection.get("tcpPort"),
+                )
+                if observed_identity != expected_identity:
+                    raise RuntimeError(
+                        f"{client} direct-callback HELLO identity differs: "
+                        f"expected={expected_identity!r} observed={observed_identity!r}"
+                    )
+                direct_callback_results[client] = result
+            report["checks"]["client_direct_callback_requests"] = (
+                direct_callback_results
+            )
+            current_phase = "collect_direct_callback_diagnostics"
+            direct_callback_evidence = collect_direct_callback_diagnostics(
+                requester_host=p2p_address,
+                requester_port=ports["callback_requester_tcp"],
+                targets=callback_targets,
+                requester_results=direct_callback_results,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_direct_callback_diagnostics"] = (
+                direct_callback_evidence
+            )
+            direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence(
+                direct_callback_evidence
             )
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
@@ -3955,6 +4202,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
+                direct_callback_evidence=direct_callback_evidence,
                 server_callback_evidence=server_callback_evidence,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
@@ -4013,6 +4261,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_login_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverLogin"] = server_login_evidence
+        if direct_callback_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["directCallback"] = direct_callback_evidence
         if server_callback_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverCallback"] = server_callback_evidence
@@ -4082,6 +4333,16 @@ def main(argv: list[str] | None = None) -> int:
                 close_results["server_callback_requester"] = {"ok": True}
             except Exception as exc:
                 close_results["server_callback_requester"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if direct_callback_requester is not None:
+            try:
+                direct_callback_requester.close()
+                close_results["direct_callback_requester"] = {"ok": True}
+            except Exception as exc:
+                close_results["direct_callback_requester"] = {
                     "ok": False,
                     "type": type(exc).__name__,
                     "message": str(exc),

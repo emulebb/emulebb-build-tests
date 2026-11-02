@@ -10,6 +10,7 @@ HTML page to non-browser clients).
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import struct
 import urllib.request
 from pathlib import Path
@@ -42,6 +43,32 @@ class BootstrapContact(NamedTuple):
     @property
     def endpoint(self) -> str:
         return f"{self.ip}:{self.udp_port}"
+
+
+def encode_nodes_dat(contacts: list[BootstrapContact]) -> bytes:
+    """Encodes deterministic stock-v1 records, including isolated local seeds."""
+
+    if len(contacts) > _MAX_CONTACTS:
+        raise ValueError(f"nodes.dat cannot contain more than {_MAX_CONTACTS} contacts")
+    records = bytearray()
+    for contact in contacts:
+        address = ipaddress.IPv4Address(contact.ip)
+        if not 1 <= contact.udp_port <= 0xFFFF:
+            raise ValueError("Kad bootstrap UDP port must be between 1 and 65535")
+        if not 1 <= contact.tcp_port <= 0xFFFF:
+            raise ValueError("Kad bootstrap TCP port must be between 1 and 65535")
+        node_id = hashlib.sha256(contact.endpoint.encode("ascii")).digest()[:16]
+        records.extend(node_id)
+        records.extend(struct.pack("<I", int.from_bytes(address.packed, "big")))
+        records.extend(struct.pack("<HHB", contact.udp_port, contact.tcp_port, 9))
+    return struct.pack("<III", 0, 1, len(contacts)) + records
+
+
+def write_nodes_dat(path: Path, contacts: list[BootstrapContact]) -> None:
+    """Writes one complete deterministic ``nodes.dat`` after creating its parent."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encode_nodes_dat(contacts))
 
 
 def download_nodes_dat(url: str = DEFAULT_NODES_DAT_URL, *, timeout_seconds: float = 30.0) -> bytes:

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import rust_client
+from emule_test_harness.kad_nodes import BootstrapContact
 
 
 def load_rust_live_wire_module():
@@ -190,6 +191,37 @@ def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_p
     assert len(nodes) == 12
     assert nodes != b""
     assert setting_value(profile_dir, "core", "networkKademlia") is False
+
+
+def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="127.0.0.1",
+        rest_port=4711,
+        api_key="key",
+        network_kademlia=True,
+        local_only_discovery=True,
+        local_kad_seed=BootstrapContact("127.0.0.1", 24672, 24662),
+    )
+
+    assert len((profile_dir / "nodes.dat").read_bytes()) == 37
+    assert setting_value(profile_dir, "core", "networkKademlia") is True
+
+
+def test_write_rust_profile_rejects_implicit_local_kad_enablement(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="network_kademlia=True"):
+        rust_client.write_rust_profile(
+            tmp_path / "profile",
+            rust_repo=rust_repo(),
+            rest_addr="127.0.0.1",
+            rest_port=4711,
+            api_key="key",
+            local_only_discovery=True,
+            local_kad_seed=BootstrapContact("127.0.0.1", 24672, 24662),
+        )
 
 
 def test_write_rust_profile_supports_incoming_dir(tmp_path: Path) -> None:

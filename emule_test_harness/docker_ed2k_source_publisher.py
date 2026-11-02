@@ -744,9 +744,18 @@ def answer_identity_probe(
 class PlainEd2kIdentityProbeListener:
     """Small multi-connection listener for bare and identity HighID probes."""
 
-    def __init__(self, tcp_port: int, user_hash: bytes) -> None:
+    def __init__(
+        self,
+        tcp_port: int,
+        user_hash: bytes,
+        *,
+        bind_host: str = "0.0.0.0",
+        client_id: int = PUBLISHER_HIGH_ID,
+    ) -> None:
         self.tcp_port = _validate_port(tcp_port, "tcp_port")
         self.user_hash = _parse_hash(user_hash, "user_hash")
+        self.bind_host = bind_host
+        self.client_id = client_id
         self.probe_answers = 0
         self._observations: list[dict[str, object]] = []
         self._connection_attempts: list[dict[str, object]] = []
@@ -761,7 +770,7 @@ class PlainEd2kIdentityProbeListener:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("0.0.0.0", self.tcp_port))
+            listener.bind((self.bind_host, self.tcp_port))
             listener.listen(8)
             listener.settimeout(0.2)
         except Exception:
@@ -796,7 +805,7 @@ class PlainEd2kIdentityProbeListener:
                 observation = _answer_identity_probe(
                     stream,
                     user_hash=self.user_hash,
-                    client_id=PUBLISHER_HIGH_ID,
+                    client_id=self.client_id,
                     tcp_port=self.tcp_port,
                 )
                 if observation is not None:
