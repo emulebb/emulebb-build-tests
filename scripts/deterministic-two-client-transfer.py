@@ -34,6 +34,8 @@ from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
 from emule_test_harness import kad_nodes  # noqa: E402
 from emule_test_harness import mfc_known_met  # noqa: E402
 from emule_test_harness import mfc_profile_import  # noqa: E402
+from emule_test_harness import relayed_reask_diagnostic_evidence  # noqa: E402
+from emule_test_harness import relayed_reask_probe  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
@@ -81,6 +83,7 @@ HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
 DIRECT_CALLBACK = "direct-callback"
+RELAYED_REASK = "relayed-reask"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_ADVANCED_SEARCH = "server-advanced-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
@@ -124,6 +127,14 @@ SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS = 20.0
 SERVER_CALLBACK_FILE_HASH = bytes.fromhex("33445566778899001122AABBCCDDEEFF")
 SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
 SERVER_CALLBACK_FILE_SIZE = 23_456
+RELAYED_REASK_FILE_HASH = bytes.fromhex("44556677889900112233AABBCCDDEEFF")
+RELAYED_REASK_FILE_NAME = "deterministic-relayed-reask.bin"
+RELAYED_REASK_FILE_SIZE = 34_567
+RELAYED_REASK_SOURCE_USER_HASH = bytes.fromhex(
+    "527496B8DAFC1E30527496B8DAFC7E10"
+)
+RELAYED_REASK_BUDDY_ID = bytes.fromhex("6385A7C9EB0D2F416385A7C9EB0D8F21")
+RELAYED_REASK_QUEUE_RANK = 37
 SERVER_UDP_METADATA_FILE_HASH = bytes.fromhex("11223344556677889900AABBCCDDEEFF")
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
@@ -135,6 +146,7 @@ TRANSFER_SCENARIOS = (
     SERVER_LOGIN_REQUEST,
     SERVER_CALLBACK_REPLY,
     DIRECT_CALLBACK,
+    RELAYED_REASK,
     SERVER_KEYWORD_SEARCH,
     SERVER_ADVANCED_SEARCH,
     SERVER_TCP_SOURCE,
@@ -222,6 +234,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                 SERVER_LOGIN_REQUEST,
                 SERVER_CALLBACK_REPLY,
                 DIRECT_CALLBACK,
+                RELAYED_REASK,
                 *SERVER_SEARCH_VARIANTS,
                 SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
@@ -309,7 +322,11 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Server login proof requires a canonical plaintext, obfuscated, or fallback case."
             )
-    if args.transfer_scenario in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK}:
+    if args.transfer_scenario in {
+        SERVER_CALLBACK_REPLY,
+        DIRECT_CALLBACK,
+        RELAYED_REASK,
+    }:
         if args.client2_identity != "mfc_oracle":
             raise ValueError("Callback proof requires the MFC diagnostics oracle.")
         if args.protocol_case != "plain-server-plain-clients":
@@ -340,6 +357,7 @@ def collect_transfer_diagnostics(
     expected_source_port: int,
     expected_source_user_hash: str,
     direct_callback_evidence: dict[str, object] | None,
+    relayed_reask_evidence: dict[str, object] | None,
     server_callback_evidence: dict[str, object] | None,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
@@ -388,6 +406,14 @@ def collect_transfer_diagnostics(
         evidence["directCallback"] = direct_callback_evidence
         extra_claims.update(
             direct_callback_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
+    if relayed_reask_evidence is not None:
+        relayed_reask_diagnostic_evidence.require_relayed_reask_diagnostic_evidence(
+            relayed_reask_evidence
+        )
+        evidence["relayedReask"] = relayed_reask_evidence
+        extra_claims.update(
+            relayed_reask_evidence["coverageClaims"]["eligibleCoverageIds"]
         )
     if server_callback_evidence is not None:
         server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
@@ -635,6 +661,67 @@ def collect_direct_callback_diagnostics(
             rust_records=rust_capture.records,
             mfc_records=mfc_capture.records,
         )
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_relayed_reask_diagnostics(
+    *,
+    source_host: str,
+    source_tcp_port: int,
+    source_udp_port: int,
+    buddy_host: str,
+    buddy_udp_port: int,
+    requester_udp_ports: dict[str, int],
+    controls: dict[str, object],
+    probe_results: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots exact bilateral relayed-reask evidence before transfer traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = relayed_reask_diagnostic_evidence.build_relayed_reask_diagnostic_evidence(
+        file_hash=RELAYED_REASK_FILE_HASH,
+        source_host=source_host,
+        source_tcp_port=source_tcp_port,
+        source_udp_port=source_udp_port,
+        source_user_hash=RELAYED_REASK_SOURCE_USER_HASH,
+        source_udp_version=4,
+        buddy_host=buddy_host,
+        buddy_udp_port=buddy_udp_port,
+        buddy_id=RELAYED_REASK_BUDDY_ID,
+        requester_udp_ports=requester_udp_ports,
+        queue_rank=RELAYED_REASK_QUEUE_RANK,
+        controls=controls,
+        probe_results=probe_results,
+        rust_records=rust_capture.records,
+        mfc_records=mfc_capture.records,
     )
     evidence["captures"] = {
         "rust": {
@@ -1153,6 +1240,7 @@ def choose_distinct_ports(
     include_search_publisher: bool = False,
     include_source_publisher: bool = False,
     include_callback_requester: bool = False,
+    include_relayed_reask_probe: bool = False,
     include_metadata_target: bool = False,
     include_udp_source_target: bool = False,
 ) -> dict[str, int]:
@@ -1196,6 +1284,15 @@ def choose_distinct_ports(
         *(("search_publisher_tcp",) if include_search_publisher else ()),
         *(("source_publisher_tcp",) if include_source_publisher else ()),
         *(("callback_requester_tcp",) if include_callback_requester else ()),
+        *(
+            (
+                "relayed_reask_source_tcp",
+                "relayed_reask_source_udp",
+                "relayed_reask_buddy_udp",
+            )
+            if include_relayed_reask_probe
+            else ()
+        ),
         *(("metadata_publisher_tcp",) if include_metadata_target else ()),
         *(("udp_source_peer_tcp",) if include_udp_source_target else ()),
     ):
@@ -2111,6 +2208,105 @@ def add_transfer(base_url: str, api_key: str, link: str, transfer_hash: str) -> 
     return {"response": summary, "item": item}
 
 
+def wait_for_transfer(
+    base_url: str,
+    api_key: str,
+    *,
+    transfer_hash: str,
+    expected_name: str,
+    expected_size: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for one exact queued transfer without requiring discovered sources."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve() -> dict[str, object] | None:
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        payload = response_payload(result, 200)
+        if not isinstance(payload, dict):
+            raise AssertionError(rest_smoke.compact_http_result(result))
+        row = dict(payload)
+        observations.append({**row, "observed_at": round(time.time(), 3)})
+        if (
+            str(row.get("hash") or "").casefold() == transfer_hash.casefold()
+            and row.get("displayName", row.get("name")) == expected_name
+            and row.get("sizeBytes", row.get("size")) == expected_size
+        ):
+            return {**row, "observations": observations[-20:]}
+        return None
+
+    return live_common.wait_for(
+        resolve,
+        timeout_seconds,
+        0.25,
+        f"queued transfer {transfer_hash}",
+    )
+
+
+def install_queued_lowid_source(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: bytes,
+    source_host: str,
+    source_tcp_port: int,
+    source_udp_port: int,
+    source_user_hash: bytes,
+    source_udp_version: int,
+    buddy_host: str,
+    buddy_udp_port: int,
+    buddy_id: bytes,
+) -> dict[str, object]:
+    """Installs one exact diagnostics-only queued LowID source and wakes reask."""
+
+    request = {
+        "fileHash": file_hash.hex(),
+        "sourceIp": source_host,
+        "sourceTcpPort": source_tcp_port,
+        "sourceUdpPort": source_udp_port,
+        "sourceUserHash": source_user_hash.hex(),
+        "sourceUdpVersion": source_udp_version,
+        "buddyIp": buddy_host,
+        "buddyUdpPort": buddy_udp_port,
+        "buddyId": buddy_id.hex(),
+    }
+    expected = {
+        "accepted": True,
+        "fileHash": file_hash.hex(),
+        "sourceEndpoint": f"{source_host}:{source_udp_port}",
+        "sourceTcpPort": source_tcp_port,
+        "sourceUserHash": source_user_hash.hex(),
+        "sourceUdpVersion": source_udp_version,
+        "buddyEndpoint": f"{buddy_host}:{buddy_udp_port}",
+        "buddyId": buddy_id.hex(),
+        "state": "queued-lowid-source",
+    }
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources",
+        method="POST",
+        api_key=api_key,
+        json_body=request,
+        request_timeout_seconds=30.0,
+    )
+    payload = response_payload(result, 200)
+    if payload != expected:
+        raise RuntimeError(
+            "Queued LowID source control returned a non-canonical receipt: "
+            f"expected={expected!r} actual={payload!r}"
+        )
+    return {
+        "request": request,
+        "response": rest_smoke.compact_http_result(result),
+    }
+
+
 def wait_for_transfer_sources(
     base_url: str,
     api_key: str,
@@ -2649,14 +2845,17 @@ def main(argv: list[str] | None = None) -> int:
         docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
     ) = None
     direct_callback_requester: direct_callback_probe.DirectCallbackProbe | None = None
+    relayed_reask_fixture: relayed_reask_probe.RelayedReaskProbe | None = None
     rust_isolated_kad_seed: kad_nodes.BootstrapContact | None = None
     direct_callback_kad_isolation: dict[str, object] | None = None
+    relayed_reask_kad_isolation: dict[str, object] | None = None
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     udp_source_fixture: scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer | None = None
     server_login_evidence: dict[str, object] | None = None
     direct_callback_evidence: dict[str, object] | None = None
+    relayed_reask_evidence: dict[str, object] | None = None
     server_callback_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
@@ -2677,6 +2876,7 @@ def main(argv: list[str] | None = None) -> int:
             include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
             include_callback_requester=args.transfer_scenario
             in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK},
+            include_relayed_reask_probe=args.transfer_scenario == RELAYED_REASK,
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
             include_udp_source_target=udp_source_request_version is not None,
         )
@@ -2746,6 +2946,23 @@ def main(argv: list[str] | None = None) -> int:
             }
             report["network"]["directCallbackKadIsolation"] = (
                 direct_callback_kad_isolation
+            )
+        elif args.transfer_scenario == RELAYED_REASK:
+            rust_isolated_kad_seed = kad_nodes.BootstrapContact(
+                p2p_address,
+                ports["relayed_reask_source_tcp"],
+                ports["relayed_reask_source_tcp"],
+            )
+            relayed_reask_kad_isolation = {
+                "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": rust_isolated_kad_seed.endpoint,
+                    "tcpPort": rust_isolated_kad_seed.tcp_port,
+                },
+                "mfcBootstrapSeeds": [],
+            }
+            report["network"]["relayedReaskKadIsolation"] = (
+                relayed_reask_kad_isolation
             )
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
@@ -3113,7 +3330,9 @@ def main(argv: list[str] | None = None) -> int:
             rest_addr=args.lan_bind_addr,
             rest_port=ports["client1_rest"],
             api_key=args.api_key,
-            network_kademlia=(args.transfer_scenario == DIRECT_CALLBACK),
+            network_kademlia=(
+                args.transfer_scenario in {DIRECT_CALLBACK, RELAYED_REASK}
+            ),
             p2p_bind_ip=p2p_address,
             ed2k_port=ports["client1_tcp"],
             ed2k_nickname=CLIENT01.nick,
@@ -3221,7 +3440,9 @@ def main(argv: list[str] | None = None) -> int:
                 lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
-                network_kademlia=(args.transfer_scenario == DIRECT_CALLBACK),
+                network_kademlia=(
+                    args.transfer_scenario in {DIRECT_CALLBACK, RELAYED_REASK}
+                ),
                 crypt_layer_supported=(
                     protocol_case.client_crypt_supported
                     if protocol_case is not None
@@ -3258,6 +3479,26 @@ def main(argv: list[str] | None = None) -> int:
                     paths.source_artifacts_dir / "launch-inputs" / "direct-callback-kad"
                 )
                 direct_callback_kad_isolation["launchInputs"] = {
+                    "rustNodesDat": retain_launch_input(
+                        rust_profile / "nodes.dat",
+                        launch_inputs / "rust-nodes.dat",
+                    ),
+                    "mfcNodesDat": retain_launch_input(
+                        Path(client2["config_dir"]) / "nodes.dat",
+                        launch_inputs / "mfc-nodes.dat",
+                    ),
+                }
+            elif args.transfer_scenario == RELAYED_REASK:
+                kad_nodes.write_nodes_dat(
+                    Path(client2["config_dir"]) / "nodes.dat",
+                    [],
+                )
+                if relayed_reask_kad_isolation is None:
+                    raise RuntimeError("Relayed reask Kad isolation was not initialized.")
+                launch_inputs = (
+                    paths.source_artifacts_dir / "launch-inputs" / "relayed-reask-kad"
+                )
+                relayed_reask_kad_isolation["launchInputs"] = {
                     "rustNodesDat": retain_launch_input(
                         rust_profile / "nodes.dat",
                         launch_inputs / "rust-nodes.dat",
@@ -3547,9 +3788,15 @@ def main(argv: list[str] | None = None) -> int:
             args.server_connect_timeout_seconds,
         )
 
-        if args.transfer_scenario == DIRECT_CALLBACK:
+        if args.transfer_scenario in {DIRECT_CALLBACK, RELAYED_REASK}:
+            if args.transfer_scenario == DIRECT_CALLBACK:
+                kad_start_key = "client1_direct_callback_kad_start"
+                kad_running_key = "client_direct_callback_kad_running"
+            else:
+                kad_start_key = "client1_relayed_reask_kad_start"
+                kad_running_key = "client_relayed_reask_kad_running"
             current_phase = "start_client1_isolated_kad_runtime"
-            report["checks"]["client1_direct_callback_kad_start"] = (
+            report["checks"][kad_start_key] = (
                 rust_local_ed2k.request_json(
                     base_url,
                     "POST",
@@ -3570,13 +3817,12 @@ def main(argv: list[str] | None = None) -> int:
                         args.server_connect_timeout_seconds,
                     )
                 except Exception as exc:
-                    report["checks"]["client_direct_callback_kad_running"] = (
-                        kad_running
-                    )
+                    report["checks"][kad_running_key] = kad_running
                     raise RuntimeError(
-                        f"{client} Kad runtime did not start for direct callback: {exc}"
+                        f"{client} Kad runtime did not start for "
+                        f"{args.transfer_scenario}: {exc}"
                     ) from exc
-            report["checks"]["client_direct_callback_kad_running"] = kad_running
+            report["checks"][kad_running_key] = kad_running
 
         current_phase = "observe_client_id_classes"
         report["checks"]["client_id_classes"] = observe_client_id_classes(
@@ -3905,6 +4151,140 @@ def main(argv: list[str] | None = None) -> int:
                 direct_callback_evidence
             )
 
+        if args.transfer_scenario == RELAYED_REASK:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral relayed-reask proof requires the MFC process identity."
+                )
+            relayed_link = (
+                "ed2k://|file|"
+                f"{urllib.parse.quote(RELAYED_REASK_FILE_NAME, safe='')}|"
+                f"{RELAYED_REASK_FILE_SIZE}|{RELAYED_REASK_FILE_HASH.hex()}|/"
+            )
+            report["checks"]["client_relayed_reask_stimulus"] = {
+                "mode": "source-free-ed2k-link-plus-diagnostic-lowid-source",
+                "link": relayed_link,
+                "hash": RELAYED_REASK_FILE_HASH.hex(),
+                "name": RELAYED_REASK_FILE_NAME,
+                "sizeBytes": RELAYED_REASK_FILE_SIZE,
+                "source": {
+                    "host": p2p_address,
+                    "tcpPort": ports["relayed_reask_source_tcp"],
+                    "udpPort": ports["relayed_reask_source_udp"],
+                    "userHash": RELAYED_REASK_SOURCE_USER_HASH.hex(),
+                    "udpVersion": 4,
+                },
+                "buddy": {
+                    "host": p2p_address,
+                    "udpPort": ports["relayed_reask_buddy_udp"],
+                    "id": RELAYED_REASK_BUDDY_ID.hex(),
+                },
+                "queueRank": RELAYED_REASK_QUEUE_RANK,
+            }
+            relayed_transfers: dict[str, object] = {}
+            for client, client_base_url in (
+                ("mfc", client2_base_url),
+                ("rust", base_url),
+            ):
+                current_phase = f"queue_{client}_relayed_reask_transfer"
+                add_receipt = add_transfer(
+                    client_base_url,
+                    args.api_key,
+                    relayed_link,
+                    RELAYED_REASK_FILE_HASH.hex(),
+                )
+                transfer_row = wait_for_transfer(
+                    client_base_url,
+                    args.api_key,
+                    transfer_hash=RELAYED_REASK_FILE_HASH.hex(),
+                    expected_name=RELAYED_REASK_FILE_NAME,
+                    expected_size=RELAYED_REASK_FILE_SIZE,
+                    timeout_seconds=args.server_publish_timeout_seconds,
+                )
+                relayed_transfers[client] = {
+                    "add": add_receipt,
+                    "transfer": transfer_row,
+                }
+            report["checks"]["client_relayed_reask_transfers"] = relayed_transfers
+
+            relayed_reask_fixture = relayed_reask_probe.RelayedReaskProbe(
+                buddy_host=p2p_address,
+                buddy_udp_port=ports["relayed_reask_buddy_udp"],
+                source_host=p2p_address,
+                source_udp_port=ports["relayed_reask_source_udp"],
+                buddy_id=RELAYED_REASK_BUDDY_ID,
+                file_hash=RELAYED_REASK_FILE_HASH,
+                source_udp_version=4,
+                requester_udp_version=4,
+                queue_rank=RELAYED_REASK_QUEUE_RANK,
+            )
+            relayed_reask_fixture.start()
+            controls: dict[str, object] = {}
+            probe_results: dict[str, object] = {}
+            for client, client_base_url, requester_udp_port in (
+                ("mfc", client2_base_url, ports["client2_udp"]),
+                ("rust", base_url, ports["client1_udp"]),
+            ):
+                current_phase = f"trigger_{client}_relayed_reask"
+                controls[client] = install_queued_lowid_source(
+                    client_base_url,
+                    args.api_key,
+                    file_hash=RELAYED_REASK_FILE_HASH,
+                    source_host=p2p_address,
+                    source_tcp_port=ports["relayed_reask_source_tcp"],
+                    source_udp_port=ports["relayed_reask_source_udp"],
+                    source_user_hash=RELAYED_REASK_SOURCE_USER_HASH,
+                    source_udp_version=4,
+                    buddy_host=p2p_address,
+                    buddy_udp_port=ports["relayed_reask_buddy_udp"],
+                    buddy_id=RELAYED_REASK_BUDDY_ID,
+                )
+                probe_results[client] = relayed_reask_fixture.receive_and_ack(
+                    target_label=client,
+                    expected_requester_host=p2p_address,
+                    expected_requester_udp_port=requester_udp_port,
+                    timeout_seconds=SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
+                )
+            report["checks"]["client_relayed_reask_controls"] = controls
+            report["checks"]["client_relayed_reask_probe"] = probe_results
+
+            current_phase = "collect_relayed_reask_diagnostics"
+
+            def resolve_relayed_reask_evidence() -> dict[str, object] | None:
+                candidate = collect_relayed_reask_diagnostics(
+                    source_host=p2p_address,
+                    source_tcp_port=ports["relayed_reask_source_tcp"],
+                    source_udp_port=ports["relayed_reask_source_udp"],
+                    buddy_host=p2p_address,
+                    buddy_udp_port=ports["relayed_reask_buddy_udp"],
+                    requester_udp_ports={
+                        "rust": ports["client1_udp"],
+                        "mfc": ports["client2_udp"],
+                    },
+                    controls=controls,
+                    probe_results=probe_results,
+                    rust_diagnostics_dir=rust_diagnostics_dir,
+                    rust_process_id=int(client1_process.pid),
+                    mfc_diagnostics_dir=Path(client2["log_dir"]),
+                    mfc_process_id=client2_process_id,
+                )
+                return candidate if candidate.get("ok") is True else None
+
+            relayed_reask_evidence = live_common.wait_for(
+                resolve_relayed_reask_evidence,
+                20.0,
+                0.2,
+                "bilateral relayed-reask causal diagnostics",
+            )
+            report["checks"]["client_relayed_reask_diagnostics"] = (
+                relayed_reask_evidence
+            )
+            relayed_reask_diagnostic_evidence.require_relayed_reask_diagnostic_evidence(
+                relayed_reask_evidence
+            )
+            relayed_reask_fixture.close()
+            relayed_reask_fixture = None
+
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
             if client2_process_id is None:
                 raise RuntimeError(
@@ -4203,6 +4583,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
                 direct_callback_evidence=direct_callback_evidence,
+                relayed_reask_evidence=relayed_reask_evidence,
                 server_callback_evidence=server_callback_evidence,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
@@ -4264,6 +4645,9 @@ def main(argv: list[str] | None = None) -> int:
         if direct_callback_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["directCallback"] = direct_callback_evidence
+        if relayed_reask_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["relayedReask"] = relayed_reask_evidence
         if server_callback_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverCallback"] = server_callback_evidence
@@ -4343,6 +4727,16 @@ def main(argv: list[str] | None = None) -> int:
                 close_results["direct_callback_requester"] = {"ok": True}
             except Exception as exc:
                 close_results["direct_callback_requester"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if relayed_reask_fixture is not None:
+            try:
+                relayed_reask_fixture.close()
+                close_results["relayed_reask_fixture"] = {"ok": True}
+            except Exception as exc:
+                close_results["relayed_reask_fixture"] = {
                     "ok": False,
                     "type": type(exc).__name__,
                     "message": str(exc),

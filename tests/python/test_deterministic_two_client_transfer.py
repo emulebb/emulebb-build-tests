@@ -766,7 +766,11 @@ def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None
 
 def test_callback_scenarios_accept_only_plaintext_mfc_oracle_lane() -> None:
     module = load_suite_module()
-    for scenario in (module.SERVER_CALLBACK_REPLY, module.DIRECT_CALLBACK):
+    for scenario in (
+        module.SERVER_CALLBACK_REPLY,
+        module.DIRECT_CALLBACK,
+        module.RELAYED_REASK,
+    ):
         wrong_client = module.parse_args(
             [
                 "--lan-bind-addr",
@@ -1178,6 +1182,25 @@ def test_choose_distinct_ports_adds_dedicated_callback_requester(monkeypatch) ->
     )
 
     assert ports["callback_requester_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_adds_relayed_reask_probe_endpoints(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6212)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_relayed_reask_probe=True,
+    )
+
+    assert ports["relayed_reask_source_tcp"] == 6210
+    assert ports["relayed_reask_source_udp"] == 6211
+    assert ports["relayed_reask_buddy_udp"] == 6212
     assert len(ports) == len(set(ports.values()))
 
 
@@ -2792,6 +2815,96 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
             {"link": "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/", "paused": False, "categoryId": 0},
         )
     ]
+
+
+def test_install_queued_lowid_source_requires_exact_normalized_receipt(monkeypatch) -> None:
+    module = load_suite_module()
+    expected = {
+        "accepted": True,
+        "fileHash": module.RELAYED_REASK_FILE_HASH.hex(),
+        "sourceEndpoint": "127.0.0.1:31002",
+        "sourceTcpPort": 31001,
+        "sourceUserHash": module.RELAYED_REASK_SOURCE_USER_HASH.hex(),
+        "sourceUdpVersion": 4,
+        "buddyEndpoint": "127.0.0.1:31003",
+        "buddyId": module.RELAYED_REASK_BUDDY_ID.hex(),
+        "state": "queued-lowid-source",
+    }
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def fake_http_request(_base_url, path, *, method="GET", json_body=None, **_kwargs):
+        calls.append((method, path, dict(json_body or {})))
+        return {
+            "status": 200,
+            "json": expected,
+            "raw_json": {"data": expected, "meta": {"apiVersion": "v1"}},
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"], "json": result["json"]},
+    )
+
+    receipt = module.install_queued_lowid_source(
+        "http://127.0.0.1:4711",
+        "key",
+        file_hash=module.RELAYED_REASK_FILE_HASH,
+        source_host="127.0.0.1",
+        source_tcp_port=31001,
+        source_udp_port=31002,
+        source_user_hash=module.RELAYED_REASK_SOURCE_USER_HASH,
+        source_udp_version=4,
+        buddy_host="127.0.0.1",
+        buddy_udp_port=31003,
+        buddy_id=module.RELAYED_REASK_BUDDY_ID,
+    )
+
+    assert receipt["response"] == {"status": 200, "json": expected}
+    assert calls == [
+        (
+            "POST",
+            "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources",
+            receipt["request"],
+        )
+    ]
+
+
+def test_install_queued_lowid_source_rejects_extra_response_fields(monkeypatch) -> None:
+    module = load_suite_module()
+
+    def fake_http_request(*_args, **_kwargs):
+        payload = {
+            "accepted": True,
+            "fileHash": module.RELAYED_REASK_FILE_HASH.hex(),
+            "sourceEndpoint": "127.0.0.1:31002",
+            "sourceTcpPort": 31001,
+            "sourceUserHash": module.RELAYED_REASK_SOURCE_USER_HASH.hex(),
+            "sourceUdpVersion": 4,
+            "buddyEndpoint": "127.0.0.1:31003",
+            "buddyId": module.RELAYED_REASK_BUDDY_ID.hex(),
+            "state": "queued-lowid-source",
+            "legacy": True,
+        }
+        return {"status": 200, "json": payload}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    with pytest.raises(RuntimeError, match="non-canonical receipt"):
+        module.install_queued_lowid_source(
+            "http://127.0.0.1:4711",
+            "key",
+            file_hash=module.RELAYED_REASK_FILE_HASH,
+            source_host="127.0.0.1",
+            source_tcp_port=31001,
+            source_udp_port=31002,
+            source_user_hash=module.RELAYED_REASK_SOURCE_USER_HASH,
+            source_udp_version=4,
+            buddy_host="127.0.0.1",
+            buddy_udp_port=31003,
+            buddy_id=module.RELAYED_REASK_BUDDY_ID,
+        )
 
 
 def test_wait_for_transfer_sources_requires_exact_metadata_and_positive_count(monkeypatch) -> None:
