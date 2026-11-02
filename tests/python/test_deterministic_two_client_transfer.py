@@ -2155,10 +2155,12 @@ def test_configure_client_profile_accepts_loopback_for_rest_control(
         rest_api_key="key",
         rest_port=4711,
         lan_bind_addr="127.0.0.1",
+        enable_diagnostic_rest_endpoints=True,
     )
 
     assert len(observed) == 1
     assert observed[0].lan_bind_addr == "127.0.0.1"
+    assert observed[0].enable_crash_test_endpoint is True
 
 
 def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(

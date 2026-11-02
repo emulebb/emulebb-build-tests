@@ -1998,6 +1998,7 @@ def configure_client_profile(
     rest_api_key: str | None = None,
     rest_port: int | None = None,
     lan_bind_addr: str = "",
+    enable_diagnostic_rest_endpoints: bool = False,
     p2p_bind_interface_name: str = "",
     p2p_bind_addr: str = "",
     crypt_layer_supported: bool | None = None,
@@ -2081,6 +2082,7 @@ def configure_client_profile(
                 api_key=rest_api_key,
                 port=rest_port,
                 lan_bind_addr=require_local_control_bind_addr(lan_bind_addr),
+                enable_crash_test_endpoint=enable_diagnostic_rest_endpoints,
             ),
         )
 
@@ -3627,6 +3629,9 @@ def main(argv: list[str] | None = None) -> int:
                 rest_api_key=args.api_key,
                 rest_port=ports["client2_rest"],
                 lan_bind_addr=args.lan_bind_addr,
+                enable_diagnostic_rest_endpoints=(
+                    args.client2_identity == "mfc_oracle"
+                ),
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
                 network_kademlia=(
