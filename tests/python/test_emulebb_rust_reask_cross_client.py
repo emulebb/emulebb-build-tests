@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -273,6 +274,17 @@ def test_authoritative_builds_clean_build_and_hash_every_campaign_binary(
     assert result.report["rustDiagnostics"]["build"]["sourceRevision"] == "1" * 40
     assert result.report["mfcDiagnostics"]["build"]["sourceRevision"] == "2" * 40
     assert result.report["ed2kServer"]["build"]["sourceRevision"] == "3" * 40
+
+
+def test_every_campaign_rust_process_uses_the_authoritative_diagnostics_binary() -> (
+    None
+):
+    module = _load_module()
+    source = inspect.getsource(module.start_rust)
+
+    assert "resolve_rust_diagnostics_exe" in source
+    assert "resolve_rust_regular_exe" not in source
+    assert "EMULEBB_RUST_LOG_DIR" in source
 
 
 @pytest.mark.parametrize(

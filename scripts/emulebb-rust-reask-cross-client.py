@@ -830,7 +830,6 @@ def start_rust(
     label,
     enable_reask,
     obfuscation_enabled,
-    diagnostics=False,
     upload_limit_kibps=None,
     base_upload_slots=None,
     upload_slot_elastic_percent=None,
@@ -864,24 +863,16 @@ def start_rust(
         upload_slot_elastic_percent=upload_slot_elastic_percent,
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
-    output_root = get_workspace_output_root()
-    executable = (
-        converged_live_wire.resolve_rust_diagnostics_exe(output_root)
-        if diagnostics
-        else converged_live_wire.resolve_rust_regular_exe(output_root)
+    executable = converged_live_wire.resolve_rust_diagnostics_exe(
+        get_workspace_output_root()
     )
-    packet_dir = None
-    if diagnostics:
-        packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
-        packet_dir.mkdir(parents=True, exist_ok=True)
+    packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
+    packet_dir.mkdir(parents=True, exist_ok=True)
     previous_rust_log = os.environ.get("RUST_LOG")
     previous_diagnostic_dir = os.environ.get("EMULEBB_RUST_LOG_DIR")
     try:
         os.environ["RUST_LOG"] = RUST_LOG
-        if packet_dir is not None:
-            os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
-        else:
-            os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
+        os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
         process = rust_client.start_rust_client_executable(
             executable, profile, out_path
         )
@@ -1689,7 +1680,6 @@ def run_rust_requester_phase(
             label=f"{scenario}-rust-requester",
             enable_reask=True,
             obfuscation_enabled=obfuscation_enabled,
-            diagnostics=True,
         )
         rust_clients.append(requester)
         rust_high_id_clients = [
@@ -1908,7 +1898,6 @@ def run_mfc_requester_phase(
             label=f"{scenario}-rust-responder",
             enable_reask=True,
             obfuscation_enabled=obfuscation_enabled,
-            diagnostics=True,
             upload_limit_kibps=4,
             base_upload_slots=1,
             upload_slot_elastic_percent=0,
