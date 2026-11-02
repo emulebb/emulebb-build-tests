@@ -259,7 +259,7 @@
       "coverageId": "client-udp.encrypted",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each selected the crypt client-UDP path, exchanged stock eight-byte obfuscated envelopes around identical clear V4 reask and ACK frames, and causally applied the same queue state.",
-      "receiptIds": ["rust-mfc-client-udp-encrypted-20261102t222336z"],
+      "receiptIds": ["rust-mfc-client-udp-encrypted-20261102t223823z"],
       "verdict": "parity"
     },
     {
@@ -2097,18 +2097,18 @@
       ]
     },
     {
-      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261102T222336Z-emulebb-main-release-12052/emulebb-rust-reask-cross-client-result.json",
-      "artifactSha256": "f37c36fb8ec0150d60e1e256c07b65cb58b6280db901074bea3ef32556b97be9",
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261102T223823Z-emulebb-main-release-7472/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "d7a35823b5e39a8d925ac6b3c7358348f6cdff7df832669aa1330d80d92c0471",
       "coverageIds": ["client-udp.encrypted"],
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "profileAuthority": "harness-generated-ephemeral-local-profiles",
-      "receiptId": "rust-mfc-client-udp-encrypted-20261102t222336z",
+      "receiptId": "rust-mfc-client-udp-encrypted-20261102t223823z",
       "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
-      "runnerRevision": "317f48b15d7f3c6fd7c6b44a61e2b82b45591de2",
+      "runnerRevision": "9f39f81d154e65976450ce51ece7d22ee8fd4ad7",
       "subjects": [
         {
           "authorityId": "mfc-oracle",
-          "executableSha256": "23f8177e9aadc4b5b22deb694db085f03085da834396d5c6b7c95b5753b3aef3",
+          "executableSha256": "7c08aa3461800d7924d751d0cd94d54e595c271a585b9c6fb65a777bbda7f299",
           "sourceRevision": "367747a17413d96229d20885b426a30afff85b35"
         },
         {
