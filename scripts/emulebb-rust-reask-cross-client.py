@@ -1212,6 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
             "mfcDiagnostics": {
                 "path": str(paths.app_exe),
                 "sha256": dtt.file_sha256(paths.app_exe),
+                "sourceRevision": dtt.git_head_revision(paths.app_root),
             },
             "runnerRevision": dtt.git_head_revision(REPO_ROOT),
         }
