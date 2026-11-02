@@ -24,7 +24,11 @@ def _hash16(value: bytes, field_name: str) -> bytes:
 
 
 def _port(value: int, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 0xFFFF:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= 0xFFFF
+    ):
         raise ValueError(f"{field_name} must be between 1 and 65535")
     return value
 

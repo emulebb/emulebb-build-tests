@@ -21,7 +21,9 @@ def load_suite_module():
 
     repo_root = Path(__file__).resolve().parents[2]
     module_path = repo_root / "scripts" / "deterministic-two-client-transfer.py"
-    spec = importlib.util.spec_from_file_location("deterministic_two_client_transfer_test_module", module_path)
+    spec = importlib.util.spec_from_file_location(
+        "deterministic_two_client_transfer_test_module", module_path
+    )
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -50,9 +52,13 @@ def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     repo = tmp_path / "repos" / "ed2k-server"
     workspace.mkdir(parents=True)
     repo.mkdir(parents=True)
-    (repo / "Cargo.toml").write_text("[package]\nname = 'ed2k-server'\n", encoding="utf-8")
+    (repo / "Cargo.toml").write_text(
+        "[package]\nname = 'ed2k-server'\n", encoding="utf-8"
+    )
     (workspace / "deps.json").write_text(
-        json.dumps({"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\ed2k-server"}}}),
+        json.dumps(
+            {"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\ed2k-server"}}}
+        ),
         encoding="utf-8",
     )
 
@@ -96,8 +102,16 @@ def test_ed2k_server_connect_address_defaults_to_p2p_and_accepts_override() -> N
     )
 
     assert defaults.ed2k_server_connect_address is None
-    assert module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address) is None
-    assert module.resolve_ed2k_server_connect_address(overridden.ed2k_server_connect_address) == "172.20.32.2"
+    assert (
+        module.resolve_ed2k_server_connect_address(defaults.ed2k_server_connect_address)
+        is None
+    )
+    assert (
+        module.resolve_ed2k_server_connect_address(
+            overridden.ed2k_server_connect_address
+        )
+        == "172.20.32.2"
+    )
 
 
 def test_server_login_collection_returns_failed_snapshot_with_capture_provenance(
@@ -112,11 +126,15 @@ def test_server_login_collection_returns_failed_snapshot_with_capture_provenance
         "failures": ["client.rust"],
     }
 
-    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+    def load_capture(
+        _directory: Path, *, side: str, **_kwargs: object
+    ) -> SimpleNamespace:
         segment = rust_segment if side == "rust" else mfc_segment
         return SimpleNamespace(records=[], selected_segments=[segment])
 
-    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.converged_live_wire, "load_current_diag_capture", load_capture
+    )
     monkeypatch.setattr(
         module.server_login_diagnostic_evidence,
         "build_server_login_diagnostic_evidence",
@@ -257,7 +275,9 @@ def test_server_tcp_metadata_collection_preserves_capture_provenance(
     }
     calls: list[dict[str, object]] = []
 
-    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+    def load_capture(
+        _directory: Path, *, side: str, **_kwargs: object
+    ) -> SimpleNamespace:
         segment = rust_segment if side == "rust" else mfc_segment
         return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
 
@@ -265,7 +285,9 @@ def test_server_tcp_metadata_collection_preserves_capture_provenance(
         calls.append(kwargs)
         return dict(built)
 
-    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.converged_live_wire, "load_current_diag_capture", load_capture
+    )
     monkeypatch.setattr(
         module.server_tcp_metadata_diagnostic_evidence,
         "build_server_tcp_metadata_diagnostic_evidence",
@@ -320,7 +342,9 @@ def test_server_udp_metadata_collection_preserves_capture_provenance(
     }
     calls: list[dict[str, object]] = []
 
-    def load_capture(_directory: Path, *, side: str, **_kwargs: object) -> SimpleNamespace:
+    def load_capture(
+        _directory: Path, *, side: str, **_kwargs: object
+    ) -> SimpleNamespace:
         segment = rust_segment if side == "rust" else mfc_segment
         return SimpleNamespace(records=[{"side": side}], selected_segments=[segment])
 
@@ -328,7 +352,9 @@ def test_server_udp_metadata_collection_preserves_capture_provenance(
         calls.append(kwargs)
         return dict(built)
 
-    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", load_capture)
+    monkeypatch.setattr(
+        module.converged_live_wire, "load_current_diag_capture", load_capture
+    )
     monkeypatch.setattr(
         module.server_udp_metadata_diagnostic_evidence,
         "build_server_udp_metadata_diagnostic_evidence",
@@ -519,7 +545,10 @@ def test_server_search_variants_use_one_canonical_oracle_case(
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
 def test_server_tcp_source_accepts_canonical_plaintext_and_obfuscated_cases() -> None:
@@ -571,7 +600,10 @@ def test_server_tcp_source_accepts_canonical_plaintext_and_obfuscated_cases() ->
         module.validate_args(wrong_case)
     module.validate_args(canonical)
     module.validate_args(obfuscated)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
 def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
@@ -612,7 +644,10 @@ def test_server_tcp_metadata_uses_one_canonical_oracle_case() -> None:
     with pytest.raises(ValueError, match="single canonical obfuscated-required"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
 def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
@@ -653,10 +688,15 @@ def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
     with pytest.raises(ValueError, match="single canonical plaintext"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
-@pytest.mark.parametrize("scenario_constant", ["SERVER_UDP_SOURCE_V1", "SERVER_UDP_SOURCE_V2"])
+@pytest.mark.parametrize(
+    "scenario_constant", ["SERVER_UDP_SOURCE_V1", "SERVER_UDP_SOURCE_V2"]
+)
 def test_server_udp_source_uses_one_canonical_plaintext_oracle_case(
     scenario_constant: str,
 ) -> None:
@@ -698,7 +738,10 @@ def test_server_udp_source_uses_one_canonical_plaintext_oracle_case(
     with pytest.raises(ValueError, match="single canonical plaintext"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
 def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None:
@@ -756,12 +799,17 @@ def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None
 
     with pytest.raises(ValueError, match="MFC diagnostics oracle"):
         module.validate_args(wrong_client)
-    with pytest.raises(ValueError, match="canonical plaintext, obfuscated, or fallback"):
+    with pytest.raises(
+        ValueError, match="canonical plaintext, obfuscated, or fallback"
+    ):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
     module.validate_args(obfuscated)
     module.validate_args(fallback)
-    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    assert (
+        canonical.fixture_size_bytes
+        == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+    )
 
 
 def test_callback_scenarios_accept_only_plaintext_mfc_oracle_lane() -> None:
@@ -898,7 +946,11 @@ def test_known_met_fixture_builds_stock_ed2k_link(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(
         module.mfc_known_met,
         "parse_known_met",
-        lambda path: [SimpleNamespace(name="other.bin", size_bytes=1), expected] if path == known_met else [],
+        lambda path: (
+            [SimpleNamespace(name="other.bin", size_bytes=1), expected]
+            if path == known_met
+            else []
+        ),
     )
 
     entry = module.require_known_met_fixture(
@@ -913,7 +965,9 @@ def test_known_met_fixture_builds_stock_ed2k_link(monkeypatch, tmp_path: Path) -
     )
 
 
-def test_require_known_met_fixture_rejects_missing_row(monkeypatch, tmp_path: Path) -> None:
+def test_require_known_met_fixture_rejects_missing_row(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module.mfc_known_met, "parse_known_met", lambda _path: [])
 
@@ -927,7 +981,12 @@ def test_require_known_met_fixture_rejects_missing_row(monkeypatch, tmp_path: Pa
 
 def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
-    assert ed2k_harness.env_ed2k_server_exe_override({ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}) is None
+    assert (
+        ed2k_harness.env_ed2k_server_exe_override(
+            {ed2k_harness.ED2K_SERVER_EXE_ENV: "  "}
+        )
+        is None
+    )
     assert (
         ed2k_harness.env_ed2k_server_exe_override(
             {ed2k_harness.ED2K_SERVER_EXE_ENV: "C:/tools/ed2k-server"}
@@ -949,14 +1008,18 @@ def test_with_ed2k_server_exe_env_returns_child_env_copy(tmp_path: Path) -> None
 
 def test_stop_server_processes_delegates_to_rust_runtime(monkeypatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(rust_ed2k, "stop_server_processes", lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        rust_ed2k, "stop_server_processes", lambda: calls.append("stop")
+    )
 
     ed2k_harness.stop_server_processes()
 
     assert calls == ["stop"]
 
 
-def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(
+    monkeypatch, tmp_path: Path
+) -> None:
     workspace = tmp_path / "workspace"
     server_exe = tmp_path / "tools" / "ed2k-server"
     calls: dict[str, object] = {}
@@ -964,7 +1027,9 @@ def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch
     def prepare_binary(workspace_root: Path, **kwargs: object) -> SimpleNamespace:
         calls["workspace_root"] = workspace_root
         calls.update(kwargs)
-        return SimpleNamespace(server_exe=server_exe.resolve(), build={"implementation": "rust"})
+        return SimpleNamespace(
+            server_exe=server_exe.resolve(), build={"implementation": "rust"}
+        )
 
     monkeypatch.setattr(rust_ed2k, "prepare_server_binary", prepare_binary)
 
@@ -1005,7 +1070,10 @@ def test_resolve_client2_app_exe_uses_canonical_external_build(
     client2_exe.write_bytes(b"")
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
-    assert module.resolve_client2_app_exe(workspace, "Release", None) == client2_exe.resolve()
+    assert (
+        module.resolve_client2_app_exe(workspace, "Release", None)
+        == client2_exe.resolve()
+    )
 
 
 def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
@@ -1014,18 +1082,34 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
     override.parent.mkdir()
     override.write_bytes(b"")
 
-    assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
+    assert (
+        module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override))
+        == override.resolve()
+    )
 
 
-def test_resolve_client2_app_exe_uses_stock_baseline_identity(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_client2_app_exe_uses_stock_baseline_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
     module = load_suite_module()
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
     workspace = tmp_path / "workspaces" / "workspace"
-    stock_exe = workspace / "app" / "emulebb-community-baseline" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    stock_exe = (
+        workspace
+        / "app"
+        / "emulebb-community-baseline"
+        / "srchybrid"
+        / "x64"
+        / "Release"
+        / "emule.exe"
+    )
     stock_exe.parent.mkdir(parents=True)
     stock_exe.write_bytes(b"")
 
-    assert module.resolve_client2_app_exe(workspace, "Release", None, "stock_emule") == stock_exe.resolve()
+    assert (
+        module.resolve_client2_app_exe(workspace, "Release", None, "stock_emule")
+        == stock_exe.resolve()
+    )
 
 
 def test_is_port_available_accepts_explicit_loopback() -> None:
@@ -1056,7 +1140,9 @@ def test_require_local_control_bind_addr_accepts_explicit_loopback() -> None:
 
 
 @pytest.mark.parametrize("host", ["", "0.0.0.0", "localhost", "::1"])
-def test_require_local_control_bind_addr_rejects_non_ipv4_unicast(host: str, monkeypatch) -> None:
+def test_require_local_control_bind_addr_rejects_non_ipv4_unicast(
+    host: str, monkeypatch
+) -> None:
     module = load_suite_module()
     monkeypatch.delenv("EMULEBB_LAN_BIND_ADDR", raising=False)
     monkeypatch.delenv("EMULEBB_LIVE_BIND_ADDR", raising=False)
@@ -1204,7 +1290,9 @@ def test_choose_distinct_ports_adds_relayed_reask_probe_endpoints(monkeypatch) -
     assert len(ports) == len(set(ports.values()))
 
 
-def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch) -> None:
+def test_choose_distinct_ports_reserves_second_complete_server_block(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     checks: list[tuple[int, bool]] = []
 
@@ -1252,25 +1340,39 @@ def test_choose_distinct_ports_reserves_scripted_udp_source_target(monkeypatch) 
 
 
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_port_bind_test"
+    )
     observed: dict[str, str | None] = {}
     availability_checks: list[tuple[int, str | None, bool]] = []
     next_port = iter(range(6300, 6310))
 
     def fake_choose_distinct_ports(host: str | None = None) -> dict[str, int]:
         observed["dtt_host"] = host
-        return {"ed2k_tcp": 4662, "ed2k_udp": 4672, "client1_tcp": 4663, "client1_udp": 4673, "client1_rest": 4711}
+        return {
+            "ed2k_tcp": 4662,
+            "ed2k_udp": 4672,
+            "client1_tcp": 4663,
+            "client1_udp": 4673,
+            "client1_rest": 4711,
+        }
 
     def fake_choose_listen_port(host: str | None = None) -> int:
         observed["extra_host"] = host
         return next(next_port)
 
-    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+    def fake_is_port_available(
+        port: int, *, host: str | None = None, udp: bool = False
+    ) -> bool:
         availability_checks.append((port, host, udp))
         return True
 
-    monkeypatch.setattr(godzilla.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
-    monkeypatch.setattr(godzilla.rest_smoke, "choose_listen_port", fake_choose_listen_port)
+    monkeypatch.setattr(
+        godzilla.dtt, "choose_distinct_ports", fake_choose_distinct_ports
+    )
+    monkeypatch.setattr(
+        godzilla.rest_smoke, "choose_listen_port", fake_choose_listen_port
+    )
     monkeypatch.setattr(godzilla.dtt, "is_port_available", fake_is_port_available)
 
     ports = godzilla.choose_ports(extra_emulebb_clients=1, lan_bind_addr="172.24.112.3")
@@ -1280,32 +1382,42 @@ def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert all(host == "172.24.112.3" for _port, host, _udp in availability_checks)
 
 
-def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(monkeypatch) -> None:
+def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module.os, "name", "nt")
     monkeypatch.setattr(
         module.windows_processes,
         "collect_adapter_ipv4_addresses",
-        lambda _interface_name="": (_ for _ in ()).throw(RuntimeError("wmi unavailable")),
+        lambda _interface_name="": (_ for _ in ()).throw(
+            RuntimeError("wmi unavailable")
+        ),
     )
     monkeypatch.setattr(module.socket, "gethostname", lambda: "host")
     monkeypatch.setattr(module.socket, "getfqdn", lambda: "host.local")
     monkeypatch.setattr(
         module.socket,
         "getaddrinfo",
-        lambda *_args, **_kwargs: [(module.socket.AF_INET, None, None, None, ("192.0.2.10", 0))],
+        lambda *_args, **_kwargs: [
+            (module.socket.AF_INET, None, None, None, ("192.0.2.10", 0))
+        ],
     )
 
     assert module.discover_interface_ipv4("") == "192.0.2.10"
 
 
-def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(monkeypatch) -> None:
+def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module.os, "name", "nt")
     monkeypatch.setattr(
         module.windows_processes,
         "collect_adapter_ipv4_addresses",
-        lambda _interface_name="": (_ for _ in ()).throw(RuntimeError("wmi unavailable")),
+        lambda _interface_name="": (_ for _ in ()).throw(
+            RuntimeError("wmi unavailable")
+        ),
     )
 
     with pytest.raises(RuntimeError, match="Ethernet"):
@@ -1322,35 +1434,50 @@ def test_resolve_local_p2p_bind_address_defaults_to_loopback(monkeypatch) -> Non
 def test_resolve_lan_p2p_bind_address_defaults_to_lan_bind() -> None:
     module = load_suite_module()
 
-    assert module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.10") == "192.0.2.10"
+    assert (
+        module.resolve_lan_p2p_bind_address(lan_bind_addr="192.0.2.10") == "192.0.2.10"
+    )
 
 
 def test_resolve_local_p2p_bind_address_honors_explicit_interface(monkeypatch) -> None:
     module = load_suite_module()
-    monkeypatch.setattr(module, "discover_interface_ipv4", lambda name: f"192.0.2.{len(name)}")
+    monkeypatch.setattr(
+        module, "discover_interface_ipv4", lambda name: f"192.0.2.{len(name)}"
+    )
 
-    assert module.resolve_local_p2p_bind_address(
-        p2p_bind_interface_name="Ethernet",
-    ) == "192.0.2.8"
+    assert (
+        module.resolve_local_p2p_bind_address(
+            p2p_bind_interface_name="Ethernet",
+        )
+        == "192.0.2.8"
+    )
 
 
 def test_resolve_local_p2p_bind_address_honors_explicit_address(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module, "discover_interface_ipv4", lambda _name: "192.0.2.99")
 
-    assert module.resolve_local_p2p_bind_address(
-        p2p_bind_interface_name="Ethernet",
-        p2p_bind_interface_address="192.0.2.44",
-    ) == "192.0.2.44"
+    assert (
+        module.resolve_local_p2p_bind_address(
+            p2p_bind_interface_name="Ethernet",
+            p2p_bind_interface_address="192.0.2.44",
+        )
+        == "192.0.2.44"
+    )
 
 
 def test_resolve_local_p2p_bind_address_accepts_explicit_loopback() -> None:
     module = load_suite_module()
 
-    assert module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1") == "127.0.0.1"
+    assert (
+        module.resolve_local_p2p_bind_address(p2p_bind_interface_address="127.0.0.1")
+        == "127.0.0.1"
+    )
 
 
-def test_resolve_managed_server_p2p_bind_address_uses_non_loopback_route(monkeypatch) -> None:
+def test_resolve_managed_server_p2p_bind_address_uses_non_loopback_route(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     calls: list[tuple[str, int]] = []
 
@@ -1389,7 +1516,9 @@ def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bin
     monkeypatch.setattr(
         module.ed2k_server,
         "resolve_route_bind_ip",
-        lambda *_args: pytest.fail("explicit and loopback binds must not resolve a route"),
+        lambda *_args: pytest.fail(
+            "explicit and loopback binds must not resolve a route"
+        ),
     )
 
     assert (
@@ -1408,7 +1537,9 @@ def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> 
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"
 
-    module.write_server_met(server_met, address="10.44.55.66", port=4711, name="local-ed2k")
+    module.write_server_met(
+        server_met, address="10.44.55.66", port=4711, name="local-ed2k"
+    )
 
     data = server_met.read_bytes()
     assert data[:5] == struct.pack("<BI", module.SERVER_MET_HEADER, 1)
@@ -1420,7 +1551,9 @@ def test_write_server_met_keeps_numeric_server_as_numeric_ip(tmp_path: Path) -> 
     assert b"10.44.55.66" not in data
 
 
-def test_write_server_met_entries_preserves_anchor_then_low_priority_target(tmp_path: Path) -> None:
+def test_write_server_met_entries_preserves_anchor_then_low_priority_target(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     server_met = tmp_path / "server.met"
 
@@ -1472,8 +1605,16 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "rust_client.start_rust_client_executable(" in script_text
     assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text
     assert "converged_live_wire.resolve_rust_regular_exe(" not in script_text
-    assert "transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(" in script_text
-    assert script_text.count("client2_process_id = live_common.resolve_app_process_id(client2_app)") == 2
+    assert (
+        "transfer_diagnostic_evidence.require_transfer_diagnostic_evidence("
+        in script_text
+    )
+    assert (
+        script_text.count(
+            "client2_process_id = live_common.resolve_app_process_id(client2_app)"
+        )
+        == 2
+    )
     assert 'current_phase = "stop_mfc_for_diagnostics"' in script_text
     assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
 
@@ -1506,17 +1647,31 @@ def test_server_search_variants_share_one_bilateral_neutral_fixture_lane() -> No
     assert "file_observer.wait_for_file(" in script_text
     assert "server_control.wait_for_file(" not in script_text
     assert script_text.count("except rust_local_ed2k.ServerSearchFailure as exc:") == 2
-    assert 'report["checks"]["client_server_search_failures"] = search_failures' in script_text
-    assert "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence(" in script_text
+    assert (
+        'report["checks"]["client_server_search_failures"] = search_failures'
+        in script_text
+    )
+    assert (
+        "server_search_diagnostic_evidence.require_server_search_diagnostic_evidence("
+        in script_text
+    )
 
 
-def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_gate() -> None:
+def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_gate() -> (
+    None
+):
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert module.SERVER_SOURCE_FILE_NAME != "deterministicserversource-transfer.bin"
-    assert "include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE" in script_text
-    assert "docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(" in script_text
+    assert (
+        "include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE"
+        in script_text
+    )
+    assert (
+        "docker_ed2k_source_publisher.start_docker_ed2k_source_publisher("
+        in script_text
+    )
     assert "docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS" in script_text
     assert "docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS" in script_text
     assert 'source_publisher_login.get("id_kind") != "high-id"' in script_text
@@ -1551,7 +1706,9 @@ def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() ->
     assert "server_callback_evidence=server_callback_evidence" in script_text
 
 
-def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe() -> None:
+def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe() -> (
+    None
+):
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
@@ -1559,7 +1716,10 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
     assert "local_kad_seed=rust_isolated_kad_seed" in script_text
     assert '"directCallbackKadIsolation"' in script_text
     assert '"mfcBootstrapSeeds": []' in script_text
-    assert 'Path(client2["config_dir"]) / "nodes.dat",\n                    [],' in script_text
+    assert (
+        'Path(client2["config_dir"]) / "nodes.dat",\n                    [],'
+        in script_text
+    )
     assert 'direct_callback_kad_isolation["launchInputs"]' in script_text
     assert 'launch_inputs / "rust-nodes.dat"' in script_text
     assert 'launch_inputs / "mfc-nodes.dat"' in script_text
@@ -1567,7 +1727,7 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
     assert '"/api/v1/kad/operations/start"' in script_text
     assert '"client_direct_callback_kad_running"' in script_text
     assert "direct_callback_probe.DirectCallbackProbe(" in script_text
-    assert 'for client, udp_port in (' in script_text
+    assert "for client, udp_port in (" in script_text
     assert "callback_targets_from_login_evidence(" in script_text
     assert "collect_direct_callback_diagnostics(" in script_text
     assert (
@@ -1600,14 +1760,19 @@ def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> N
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
     assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
-    assert script_text.count(
-        "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
-    ) == 2
-    assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 4
-    assert 'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots' in script_text
     assert (
-        'report["checks"]["client_server_tcp_metadata_diagnostics"] = ('
+        script_text.count(
+            "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
+        )
+        == 2
+    )
+    assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 4
+    assert (
+        'report["checks"]["client_server_tcp_metadata_rest"] = rest_snapshots'
         in script_text
+    )
+    assert (
+        'report["checks"]["client_server_tcp_metadata_diagnostics"] = (' in script_text
     )
     assert "collect_server_tcp_metadata_diagnostics(" in script_text
     assert (
@@ -1622,7 +1787,10 @@ def test_server_udp_metadata_uses_two_servers_and_causal_bilateral_gate() -> Non
 
     assert module.SERVER_METADATA_SEED_NAME != module.SERVER_IDENT_NAME
     assert module.SERVER_METADATA_SEED_DESCRIPTION != module.SERVER_IDENT_DESCRIPTION
-    assert "include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA" in script_text
+    assert (
+        "include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA"
+        in script_text
+    )
     assert script_text.count("ed2k_server.launch_ed2k_server(") == 2
     assert "metadata_server_publisher.offer_file(" in script_text
     assert '"serverPriority": "high"' in script_text
@@ -1669,7 +1837,9 @@ def test_rust_diagnostics_child_env_does_not_mutate_parent(
     child_env = module.rust_diagnostics_child_env(tmp_path / "diagnostics")
 
     assert os.environ["EMULEBB_RUST_LOG_DIR"] == parent_value
-    assert child_env["EMULEBB_RUST_LOG_DIR"] == str((tmp_path / "diagnostics").resolve())
+    assert child_env["EMULEBB_RUST_LOG_DIR"] == str(
+        (tmp_path / "diagnostics").resolve()
+    )
 
 
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
@@ -1686,7 +1856,9 @@ def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) 
             calls.append(args)
             return expected
 
-    monkeypatch.setattr(ed2k_harness, "ed2k_server_control", lambda *_args: FakeControl())
+    monkeypatch.setattr(
+        ed2k_harness, "ed2k_server_control", lambda *_args: FakeControl()
+    )
 
     row = ed2k_harness.wait_for_server_file_endpoint(
         "http://192.0.2.10:8080",
@@ -1731,10 +1903,19 @@ def test_wait_for_emule_shared_file_link_uses_explicit_pagination(monkeypatch) -
     def fake_http_request(_base_url, path, **_kwargs):
         calls.append(path)
         if path == "/api/v1/shared-files?offset=0&limit=100":
-            return {"status": 200, "json": {"items": [{"name": "fixture.bin", "hash": fixture_hash.upper()}]}}
-        return {"status": 200, "json": {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"}}
+            return {
+                "status": 200,
+                "json": {
+                    "items": [{"name": "fixture.bin", "hash": fixture_hash.upper()}]
+                },
+            }
+        return {
+            "status": 200,
+            "json": {"link": f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"},
+        }
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
     def fake_wait_for(resolve, *_args):
         return resolve() or resolve()
 
@@ -1758,10 +1939,17 @@ def test_wait_for_emule_shared_file_link_accepts_link_variants(monkeypatch) -> N
 
     def fake_http_request(_base_url, path, **_kwargs):
         if path == "/api/v1/shared-files?offset=0&limit=100":
-            return {"status": 200, "json": [{"name": "fixture.bin", "hash": fixture_hash}]}
-        return {"status": 200, "json": {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]}}
+            return {
+                "status": 200,
+                "json": [{"name": "fixture.bin", "hash": fixture_hash}],
+            }
+        return {
+            "status": 200,
+            "json": {"ed2kLinks": [f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"]},
+        }
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
     def fake_wait_for(resolve, *_args):
         return resolve() or resolve()
 
@@ -1777,7 +1965,9 @@ def test_wait_for_emule_shared_file_link_accepts_link_variants(monkeypatch) -> N
     assert result["link"] == f"ed2k://|file|fixture.bin|123|{fixture_hash}|/"
 
 
-def test_wait_for_emule_shared_file_link_falls_back_to_published_row(monkeypatch) -> None:
+def test_wait_for_emule_shared_file_link_falls_back_to_published_row(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     fixture_hash = "0123456789abcdef0123456789abcdef"
 
@@ -1802,8 +1992,14 @@ def test_wait_for_emule_shared_file_link_falls_back_to_published_row(monkeypatch
         return {"status": 404, "body_text": "missing"}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        module.live_common, "wait_for", lambda resolve, *_args: resolve()
+    )
 
     result = module.wait_for_emule_shared_file_link(
         "http://127.0.0.1:4711",
@@ -1829,8 +2025,14 @@ def test_wait_for_emule_shared_file_link_reports_list_failures(monkeypatch) -> N
         "require_json_array",
         lambda _result, _status: (_ for _ in ()).throw(AssertionError("not an array")),
     )
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        module.live_common, "wait_for", lambda resolve, *_args: resolve()
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         module.wait_for_emule_shared_file_link(
@@ -1870,7 +2072,9 @@ def test_write_fixture_file_seed_changes_bytes(tmp_path: Path) -> None:
     assert second_hash == module.file_sha256(second)
 
 
-def test_configure_client_profile_disables_private_server_filter(tmp_path: Path) -> None:
+def test_configure_client_profile_disables_private_server_filter(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"
     config_dir.mkdir(parents=True)
@@ -1893,9 +2097,17 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     emule_section = text.split("[WebServer]", 1)[0]
     assert "FilterBadIPs=0" in emule_section
     assert "IPFilterEnabled=0" in emule_section
-    assert f"DownloadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
-    assert f"UploadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
-    assert f"UploadCapacityNew={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
+    assert (
+        f"DownloadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}"
+        in emule_section
+    )
+    assert (
+        f"UploadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
+    )
+    assert (
+        f"UploadCapacityNew={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}"
+        in emule_section
+    )
     assert f"MaxUpload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
     assert f"MaxDownload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
     assert "MaxUploadClientsAllowed=32" in text
@@ -1916,13 +2128,21 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert "EnableUPnP=0" in text
 
 
-def test_configure_client_profile_accepts_loopback_for_rest_control(tmp_path: Path, monkeypatch) -> None:
+def test_configure_client_profile_accepts_loopback_for_rest_control(
+    tmp_path: Path, monkeypatch
+) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"
     config_dir.mkdir(parents=True)
-    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+    module.live_common.write_utf16_ini_text(
+        config_dir / "preferences.ini", "[eMule]\n[WebServer]\n"
+    )
     observed: list[object] = []
-    monkeypatch.setattr(module.live_common, "apply_webserver_profile", lambda _config, spec: observed.append(spec))
+    monkeypatch.setattr(
+        module.live_common,
+        "apply_webserver_profile",
+        lambda _config, spec: observed.append(spec),
+    )
 
     module.configure_client_profile(
         config_dir=config_dir,
@@ -1941,11 +2161,15 @@ def test_configure_client_profile_accepts_loopback_for_rest_control(tmp_path: Pa
     assert observed[0].lan_bind_addr == "127.0.0.1"
 
 
-def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp_path: Path) -> None:
+def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"
     config_dir.mkdir(parents=True)
-    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+    module.live_common.write_utf16_ini_text(
+        config_dir / "preferences.ini", "[eMule]\n[WebServer]\n"
+    )
 
     module.configure_client_profile(
         config_dir=config_dir,
@@ -1971,14 +2195,18 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
     assert "CryptTCPPaddingLength=128" in emule_section
 
 
-def test_configure_client_profiles_use_resolved_p2p_bind_address(tmp_path: Path) -> None:
+def test_configure_client_profiles_use_resolved_p2p_bind_address(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     resolved_address = module.resolve_local_p2p_bind_address()
 
     for profile_name in ("client1", "client2"):
         config_dir = tmp_path / profile_name / "config"
         config_dir.mkdir(parents=True)
-        module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+        module.live_common.write_utf16_ini_text(
+            config_dir / "preferences.ini", "[eMule]\n[WebServer]\n"
+        )
         module.configure_client_profile(
             config_dir=config_dir,
             app_exe=tmp_path / "app" / "emulebb.exe",
@@ -1995,11 +2223,15 @@ def test_configure_client_profiles_use_resolved_p2p_bind_address(tmp_path: Path)
         assert f"BindAddr={resolved_address}" in emule_section
 
 
-def test_configure_client_profile_prefers_p2p_interface_over_bind_address(tmp_path: Path) -> None:
+def test_configure_client_profile_prefers_p2p_interface_over_bind_address(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     config_dir = tmp_path / "profile" / "config"
     config_dir.mkdir(parents=True)
-    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+    module.live_common.write_utf16_ini_text(
+        config_dir / "preferences.ini", "[eMule]\n[WebServer]\n"
+    )
 
     module.configure_client_profile(
         config_dir=config_dir,
@@ -2021,8 +2253,12 @@ def test_configure_client_profile_prefers_p2p_interface_over_bind_address(tmp_pa
     assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
 
 
-def test_configure_client_profile_preserves_recursive_shared_directory_contract(tmp_path: Path) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_recursive_share_test")
+def test_configure_client_profile_preserves_recursive_shared_directory_contract(
+    tmp_path: Path,
+) -> None:
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_recursive_share_test"
+    )
     root = tmp_path / "library"
     (root / "000").mkdir(parents=True)
     (root / "001").mkdir()
@@ -2039,24 +2275,38 @@ def test_configure_client_profile_preserves_recursive_shared_directory_contract(
 
 
 def test_godzilla_runtime_root_is_drive_letter_only() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_runtime_root_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_runtime_root_test"
+    )
 
-    assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"]).vhd_runtime_root == "drive-letter"
+    assert (
+        godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"]).vhd_runtime_root
+        == "drive-letter"
+    )
     with pytest.raises(SystemExit):
-        godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--vhd-runtime-root", "folder-mount"])
+        godzilla.parse_args(
+            ["--lan-bind-addr", "192.0.2.10", "--vhd-runtime-root", "folder-mount"]
+        )
 
 
 def test_godzilla_stage_defaults_to_full_and_accepts_launch_scale() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_stage_test")
 
     assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"]).stage == "full"
-    assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--stage", "launch-scale"]).stage == "launch-scale"
+    assert (
+        godzilla.parse_args(
+            ["--lan-bind-addr", "192.0.2.10", "--stage", "launch-scale"]
+        ).stage
+        == "launch-scale"
+    )
     with pytest.raises(SystemExit):
         godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--stage", "unknown"])
 
 
 def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_env_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_lan_env_test"
+    )
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     args = godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"])
@@ -2068,8 +2318,12 @@ def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
     assert godzilla.resolve_lan_bind_addr(args, "192.0.2.10") == "192.0.2.10"
 
 
-def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Path) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_generate_library_error_test")
+def test_godzilla_generate_library_reports_failed_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_generate_library_error_test"
+    )
     args = godzilla.parse_args(
         [
             "--total-client-count",
@@ -2092,7 +2346,9 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(godzilla, "write_generated_file", fail_write)
 
     with pytest.raises(RuntimeError) as exc_info:
-        godzilla.generate_library(tmp_path / "library", owner_key="emulebb", count=1, args=args)
+        godzilla.generate_library(
+            tmp_path / "library", owner_key="emulebb", count=1, args=args
+        )
 
     message = str(exc_info.value)
     assert "owner='emulebb'" in message
@@ -2100,13 +2356,27 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
     assert "emulebb-godzilla-00000" in message
 
 
-def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_rest_spiral_test")
+def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(
+    monkeypatch,
+) -> None:
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_rest_spiral_test"
+    )
 
-    monkeypatch.setattr(godzilla, "server_telemetry_snapshot", lambda *_args: {"stats": {"clients": 2}})
+    monkeypatch.setattr(
+        godzilla, "server_telemetry_snapshot", lambda *_args: {"stats": {"clients": 2}}
+    )
     monkeypatch.setattr(godzilla.time, "sleep", lambda *_args: None)
-    monkeypatch.setattr(godzilla.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 200, "json": []})
-    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "http_request",
+        lambda *_args, **_kwargs: {"status": 200, "json": []},
+    )
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
 
     report = godzilla.run_spiral_hammer(
         base_url="http://127.0.0.1:1",
@@ -2118,13 +2388,21 @@ def test_godzilla_spiral_hammer_runs_rest_actions_without_optional_clients(monke
         sleep_seconds=0.0,
     )
 
-    assert {action["kind"] for action in report["waves"][0]["actions"]} == {"rest-search", "rest-add", "rest-churn"}
+    assert {action["kind"] for action in report["waves"][0]["actions"]} == {
+        "rest-search",
+        "rest-add",
+        "rest-churn",
+    }
 
 
 def test_godzilla_mixed_client_evidence_reports_mfc_peer_swarm() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_mfc_peer_evidence_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_mfc_peer_evidence_test"
+    )
 
-    evidence = godzilla.classify_godzilla_mixed_client_evidence(queued_transfer_counts={"mfc_oracle": 7})
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(
+        queued_transfer_counts={"mfc_oracle": 7}
+    )
 
     assert evidence["classification"] == "emulebb-mfc-peer-swarm"
     assert evidence["evidence_strength"] == "full"
@@ -2133,7 +2411,9 @@ def test_godzilla_mixed_client_evidence_reports_mfc_peer_swarm() -> None:
 
 
 def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_transfer_row_hash_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_transfer_row_hash_test"
+    )
 
     rows = [
         {"hash": "aaa"},
@@ -2146,45 +2426,73 @@ def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
 
 
 def test_godzilla_app_process_id_uses_live_common_resolver(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_app_process_id_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_app_process_id_test"
+    )
 
     class AppWithBrokenProcessMethod:
         def process(self):
             raise TypeError("'int' object is not callable")
 
-    monkeypatch.setattr(godzilla.live_common, "resolve_app_process_id", lambda _app: 4242)
+    monkeypatch.setattr(
+        godzilla.live_common, "resolve_app_process_id", lambda _app: 4242
+    )
 
     assert godzilla.app_process_id(AppWithBrokenProcessMethod()) == 4242
 
 
 def test_godzilla_queue_downloads_uses_retry_rest_request(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_queue_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_retry_queue_test"
+    )
     calls: list[tuple[str, str]] = []
 
     def fake_retry(_base_url, path, *, method="GET", **_kwargs):
         calls.append((method, path))
-        return {"status": 200, "json": {"queued": True}, "transient_errors": [{"type": "ConnectionResetError"}]}
+        return {
+            "status": 200,
+            "json": {"queued": True},
+            "transient_errors": [{"type": "ConnectionResetError"}],
+        }
 
     monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
-    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
 
-    rows = godzilla.queue_emulebb_downloads("http://127.0.0.1:4711", "key", ["ed2k://|file|a|1|0|/"])
+    rows = godzilla.queue_emulebb_downloads(
+        "http://127.0.0.1:4711", "key", ["ed2k://|file|a|1|0|/"]
+    )
 
     assert rows == [{"status": 200}]
     assert calls == [("POST", "/api/v1/transfers")]
 
 
 def test_godzilla_spiral_hammer_searches_use_retry_rest_request(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_spiral_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_retry_spiral_test"
+    )
     calls: list[tuple[str, str, dict[str, object]]] = []
 
     def fake_retry(_base_url, path, *, method="GET", json_body=None, **_kwargs):
         calls.append((method, path, dict(json_body or {})))
-        return {"status": 200, "json": {"id": "search-1"}, "transient_errors": [{"type": "ConnectionAbortedError"}]}
+        return {
+            "status": 200,
+            "json": {"id": "search-1"},
+            "transient_errors": [{"type": "ConnectionAbortedError"}],
+        }
 
     monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
-    monkeypatch.setattr(godzilla, "server_telemetry_snapshot", lambda *_args, **_kwargs: {"ok": True})
-    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(
+        godzilla, "server_telemetry_snapshot", lambda *_args, **_kwargs: {"ok": True}
+    )
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
 
     result = godzilla.run_spiral_hammer(
         base_url="http://127.0.0.1:4711",
@@ -2203,23 +2511,51 @@ def test_godzilla_spiral_hammer_searches_use_retry_rest_request(monkeypatch) -> 
     ]
     assert calls == [
         ("POST", "/api/v1/searches", {"query": "beta", "method": "server", "type": ""}),
-        ("POST", "/api/v1/searches", {"query": "gamma", "method": "server", "type": ""}),
-        ("POST", "/api/v1/searches", {"query": "alpha", "method": "server", "type": ""}),
+        (
+            "POST",
+            "/api/v1/searches",
+            {"query": "gamma", "method": "server", "type": ""},
+        ),
+        (
+            "POST",
+            "/api/v1/searches",
+            {"query": "alpha", "method": "server", "type": ""},
+        ),
     ]
 
 
-def test_godzilla_control_plane_search_hammer_uses_retry_rest_request(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_control_search_test")
+def test_godzilla_control_plane_search_hammer_uses_retry_rest_request(
+    monkeypatch,
+) -> None:
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_retry_control_search_test"
+    )
     calls: list[tuple[str, str, dict[str, object]]] = []
 
     def fake_retry(_base_url, path, *, method="GET", json_body=None, **_kwargs):
         calls.append((method, path, dict(json_body or {})))
-        return {"status": 200, "json": {"id": "search-1"}, "transient_errors": [{"type": "ConnectionAbortedError"}]}
+        return {
+            "status": 200,
+            "json": {"id": "search-1"},
+            "transient_errors": [{"type": "ConnectionAbortedError"}],
+        }
 
     monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
-    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(godzilla.rest_smoke, "wait_for_search_observation", lambda *_args, **_kwargs: {"observed": True})
-    monkeypatch.setattr(godzilla.rest_smoke, "delete_all_searches", lambda *_args, **_kwargs: {"status": 200})
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "wait_for_search_observation",
+        lambda *_args, **_kwargs: {"observed": True},
+    )
+    monkeypatch.setattr(
+        godzilla.rest_smoke,
+        "delete_all_searches",
+        lambda *_args, **_kwargs: {"status": 200},
+    )
 
     result = godzilla.run_emulebb_search_hammer(
         "http://127.0.0.1:4711",
@@ -2228,17 +2564,29 @@ def test_godzilla_control_plane_search_hammer_uses_retry_rest_request(monkeypatc
         rounds=2,
     )
 
-    assert [row["start"] for row in result["rounds"]] == [{"status": 200}, {"status": 200}]
-    assert [row["observation"] for row in result["rounds"]] == [{"observed": True}, {"observed": True}]
+    assert [row["start"] for row in result["rounds"]] == [
+        {"status": 200},
+        {"status": 200},
+    ]
+    assert [row["observation"] for row in result["rounds"]] == [
+        {"observed": True},
+        {"observed": True},
+    ]
     assert result["cleanup"] == {"status": 200}
     assert calls == [
-        ("POST", "/api/v1/searches", {"query": "alpha", "method": "server", "type": ""}),
+        (
+            "POST",
+            "/api/v1/searches",
+            {"query": "alpha", "method": "server", "type": ""},
+        ),
         ("POST", "/api/v1/searches", {"query": "beta", "method": "server", "type": ""}),
     ]
 
 
 def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test"
+    )
     log_path = tmp_path / "emulebb-verbose.log"
     log_path.write_text(
         "\n".join(
@@ -2254,7 +2602,13 @@ def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
 
     report = godzilla.scan_log_markers(
         {"primary": log_path},
-        ["Banned:", "Ban reason:", "Userhash changed", "Remote client cancelled transfer", "In buffer: 16777216.00 TB"],
+        [
+            "Banned:",
+            "Ban reason:",
+            "Userhash changed",
+            "Remote client cancelled transfer",
+            "In buffer: 16777216.00 TB",
+        ],
     )
 
     assert report["primary"]["counts"] == {
@@ -2268,7 +2622,9 @@ def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
 
 
 def test_godzilla_rejects_loopback_lan_bind(monkeypatch) -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_lan_loopback_test"
+    )
     args = godzilla.parse_args(
         [
             "--total-client-count",
@@ -2290,7 +2646,9 @@ def test_godzilla_rejects_loopback_lan_bind(monkeypatch) -> None:
 
 
 def test_godzilla_local_swarm_reuses_shared_ed2k_harness_launcher() -> None:
-    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_ed2k_harness_launcher_test")
+    godzilla = load_script_module(
+        "godzilla-local-swarm.py", "godzilla_for_ed2k_harness_launcher_test"
+    )
     script_text = Path(godzilla.__file__).read_text(encoding="utf-8")
 
     assert "ed2k_harness.launch_ed2k_server(" in script_text
@@ -2311,7 +2669,9 @@ def test_default_fixture_size_is_132_mib() -> None:
 
 def test_client2_identity_accepts_stock_baseline() -> None:
     module = load_suite_module()
-    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client2-identity", "stock_emule"])
+    args = module.parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--client2-identity", "stock_emule"]
+    )
 
     assert args.client2_identity == "stock_emule"
 
@@ -2333,7 +2693,9 @@ def test_client2_identity_accepts_amule_control() -> None:
     assert args.client2_control_exe == "amulecmd.exe"
 
 
-def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tmp_path: Path) -> None:
+def test_observe_amule_publisher_uses_ec_and_server_observations(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     fixture = tmp_path / "fixture.bin"
     fixture.write_bytes(b"fixture")
@@ -2349,19 +2711,27 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
             calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
-            calls.append(("source", file_hash, file_size, host, port, timeout, description))
+        def wait_for_source(
+            self, file_hash, file_size, host, port, timeout, description
+        ):
+            calls.append(
+                ("source", file_hash, file_size, host, port, timeout, description)
+            )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
         module.amule_client,
         "wait_for_control",
-        lambda control, **kwargs: calls.append(("control", control, kwargs)) or {"ready": True},
+        lambda control, **kwargs: (
+            calls.append(("control", control, kwargs)) or {"ready": True}
+        ),
     )
     monkeypatch.setattr(
         module.amule_client,
         "wait_for_shared_file_hash",
-        lambda control, **kwargs: calls.append(("shared", control, kwargs)) or {"hash": "ab" * 16},
+        lambda control, **kwargs: (
+            calls.append(("shared", control, kwargs)) or {"hash": "ab" * 16}
+        ),
     )
 
     link, observation = module.observe_amule_publisher(
@@ -2379,10 +2749,18 @@ def test_observe_amule_publisher_uses_ec_and_server_observations(monkeypatch, tm
     assert link == "ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/"
     assert observation["observed_host"] == "172.17.128.1"
     assert observation["published"]["sources"] == 1
-    assert [call[0] for call in calls] == ["control", "shared", "shared_files", "file", "source"]
+    assert [call[0] for call in calls] == [
+        "control",
+        "shared",
+        "shared_files",
+        "file",
+        "source",
+    ]
 
 
-def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
+def test_recycle_amule_publisher_proves_withdrawal_and_republication(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     old_app = object()
     new_app = object()
@@ -2410,20 +2788,31 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
             calls.append(("file", hash_value, file_size, timeout))
             return {"hash": hash_value, "sources": 1}
 
-        def wait_for_source(self, hash_value, file_size, host, port, timeout, description):
-            calls.append(("source", hash_value, file_size, host, port, timeout, description))
+        def wait_for_source(
+            self, hash_value, file_size, host, port, timeout, description
+        ):
+            calls.append(
+                ("source", hash_value, file_size, host, port, timeout, description)
+            )
             return {"hash": hash_value, "endpoints": [{"host": host, "port": port}]}
 
     monkeypatch.setattr(
         module,
         "observe_amule_publisher",
-        lambda **kwargs: calls.append(("observe", kwargs))
-        or ("ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/", initial),
+        lambda **kwargs: (
+            calls.append(("observe", kwargs))
+            or (
+                "ed2k://|file|fixture.bin|7|ABABABABABABABABABABABABABABABAB|/",
+                initial,
+            )
+        ),
     )
     monkeypatch.setattr(
         module.amule_client,
         "shutdown_daemon",
-        lambda app, control, **kwargs: calls.append(("shutdown", app, control, kwargs)) or {"return_code": 0},
+        lambda app, control, **kwargs: (
+            calls.append(("shutdown", app, control, kwargs)) or {"return_code": 0}
+        ),
     )
     monkeypatch.setattr(
         module.amule_client,
@@ -2433,7 +2822,9 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
     monkeypatch.setattr(
         module.amule_client,
         "wait_for_control",
-        lambda control, **kwargs: calls.append(("control", control, kwargs)) or {"ready": True},
+        lambda control, **kwargs: (
+            calls.append(("control", control, kwargs)) or {"ready": True}
+        ),
     )
 
     relaunched, link, report = module.recycle_amule_publisher(
@@ -2470,7 +2861,9 @@ def test_recycle_amule_publisher_proves_withdrawal_and_republication(monkeypatch
     ]
 
 
-def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_path: Path) -> None:
+def test_recycle_publisher_proves_withdrawal_and_republication(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     old_app = object()
     new_app = object()
@@ -2490,17 +2883,33 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
             calls.append(("source_absent", file_hash, file_size, host, port, timeout))
             return {"absent": True}
 
-        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+        def wait_for_source(
+            self, file_hash, file_size, host, port, timeout, description
+        ):
             calls.append(
-                ("source_present", file_hash, file_size, host, port, timeout, description)
+                (
+                    "source_present",
+                    file_hash,
+                    file_size,
+                    host,
+                    port,
+                    timeout,
+                    description,
+                )
             )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
-    monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
+    monkeypatch.setattr(
+        module.live_common,
+        "close_app_cleanly",
+        lambda app: calls.append(("close", app)),
+    )
     monkeypatch.setattr(
         module.live_common,
         "launch_app",
-        lambda exe, profile, **kwargs: calls.append(("launch", exe, profile, kwargs)) or new_app,
+        lambda exe, profile, **kwargs: (
+            calls.append(("launch", exe, profile, kwargs)) or new_app
+        ),
     )
     monkeypatch.setattr(
         module.rest_smoke,
@@ -2544,7 +2953,12 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
         ("close", old_app),
         ("client_absent", "publisher", 20.0),
         ("source_absent", "aa" * 16, 7, "192.0.2.10", 4662, 20.0),
-        ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
+        (
+            "launch",
+            tmp_path / "emule.exe",
+            tmp_path / "profile",
+            {"minimized_to_tray": True},
+        ),
         ("client_present", "publisher", 30.0),
         (
             "source_present",
@@ -2558,7 +2972,9 @@ def test_recycle_publisher_proves_withdrawal_and_republication(monkeypatch, tmp_
     ]
 
 
-def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_path: Path) -> None:
+def test_recycle_stock_publisher_uses_known_met_without_rest(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     old_app = object()
     new_app = object()
@@ -2589,19 +3005,37 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
             calls.append(("file", file_hash, file_size, timeout))
             return {"hash": file_hash, "sources": 1}
 
-        def wait_for_source(self, file_hash, file_size, host, port, timeout, description):
+        def wait_for_source(
+            self, file_hash, file_size, host, port, timeout, description
+        ):
             calls.append(
-                ("source_present", file_hash, file_size, host, port, timeout, description)
+                (
+                    "source_present",
+                    file_hash,
+                    file_size,
+                    host,
+                    port,
+                    timeout,
+                    description,
+                )
             )
             return {"hash": file_hash, "endpoints": [{"host": host, "port": port}]}
 
-    monkeypatch.setattr(module.live_common, "close_app_cleanly", lambda app: calls.append(("close", app)))
+    monkeypatch.setattr(
+        module.live_common,
+        "close_app_cleanly",
+        lambda app: calls.append(("close", app)),
+    )
     monkeypatch.setattr(
         module.live_common,
         "launch_app",
-        lambda exe, profile, **kwargs: calls.append(("launch", exe, profile, kwargs)) or new_app,
+        lambda exe, profile, **kwargs: (
+            calls.append(("launch", exe, profile, kwargs)) or new_app
+        ),
     )
-    monkeypatch.setattr(module, "require_known_met_fixture", lambda *_args, **_kwargs: known_entry)
+    monkeypatch.setattr(
+        module, "require_known_met_fixture", lambda *_args, **_kwargs: known_entry
+    )
 
     relaunched, link, report = module.recycle_stock_publisher(
         app=old_app,
@@ -2626,7 +3060,12 @@ def test_recycle_stock_publisher_uses_known_met_without_rest(monkeypatch, tmp_pa
         ("close", old_app),
         ("client_absent", "stock publisher", 20.0),
         ("source_absent", "cd" * 16, 7, "172.17.128.1", 4662, 20.0),
-        ("launch", tmp_path / "emule.exe", tmp_path / "profile", {"minimized_to_tray": True}),
+        (
+            "launch",
+            tmp_path / "emule.exe",
+            tmp_path / "profile",
+            {"minimized_to_tray": True},
+        ),
         ("shared_files", "stock publisher", 1, 30.0),
         ("file", "cd" * 16, 7, 30.0),
         (
@@ -2648,21 +3087,40 @@ def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
     def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
         calls.append((method, path))
         if path == "/api/v1/servers":
-            return {"status": 200, "json": {"items": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}}
+            return {
+                "status": 200,
+                "json": {
+                    "items": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]
+                },
+            }
         if path == "/api/v1/status":
             return {
                 "status": 200,
                 "json": {
                     "connected": True,
-                    "currentServer": {"address": "10.1.2.3", "port": 4661, "name": "local"},
+                    "currentServer": {
+                        "address": "10.1.2.3",
+                        "port": 4661,
+                        "name": "local",
+                    },
                 },
             }
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
-    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_object",
+        lambda result, _status: dict(result["json"]),
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+    monkeypatch.setattr(
+        module.live_common, "wait_for", lambda resolve, *_args: resolve()
+    )
 
     result = module.add_and_connect_server(
         "http://127.0.0.1:4711",
@@ -2677,7 +3135,9 @@ def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
     assert ("POST", "/api/v1/servers/10.1.2.3:4661/operations/connect") in calls
 
 
-def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch) -> None:
+def test_add_and_connect_server_retries_transient_rest_socket_abort(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     calls: list[tuple[str, str]] = []
     first_call = True
@@ -2689,20 +3149,36 @@ def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch)
             first_call = False
             raise ConnectionAbortedError(10053, "socket aborted")
         if path == "/api/v1/servers":
-            return {"status": 200, "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}
+            return {
+                "status": 200,
+                "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}],
+            }
         if path == "/api/v1/status":
             return {
                 "status": 200,
                 "json": {
                     "connected": True,
-                    "currentServer": {"address": "10.1.2.3", "port": 4661, "name": "local"},
+                    "currentServer": {
+                        "address": "10.1.2.3",
+                        "port": 4661,
+                        "name": "local",
+                    },
                 },
             }
         return {"status": 200, "json": {"connected": True}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "require_json_object",
+        lambda result, _status: dict(result["json"]),
+    )
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"]},
+    )
+
     def fake_wait_for(resolve, *_args):
         return resolve() or resolve()
 
@@ -2721,7 +3197,9 @@ def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch)
     assert ("POST", "/api/v1/servers/10.1.2.3:4661/operations/connect") in calls
 
 
-def test_add_and_connect_server_waits_past_transitional_connect_response(monkeypatch) -> None:
+def test_add_and_connect_server_waits_past_transitional_connect_response(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     calls: list[tuple[str, str]] = []
     status_payloads = [
@@ -2742,7 +3220,10 @@ def test_add_and_connect_server_waits_past_transitional_connect_response(monkeyp
     def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
         calls.append((method, path))
         if path == "/api/v1/servers":
-            return {"status": 200, "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}
+            return {
+                "status": 200,
+                "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}],
+            }
         if path == "/api/v1/servers/10.1.2.3:4661/operations/connect":
             payload = {
                 "connected": False,
@@ -2770,7 +3251,11 @@ def test_add_and_connect_server_waits_past_transitional_connect_response(monkeyp
         return resolve() or resolve()
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"], "json": result["json"]})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"], "json": result["json"]},
+    )
     monkeypatch.setattr(module.live_common, "wait_for", fake_wait_for)
 
     result = module.add_and_connect_server(
@@ -2786,10 +3271,16 @@ def test_add_and_connect_server_waits_past_transitional_connect_response(monkeyp
     assert calls.count(("GET", "/api/v1/status")) == 2
 
 
-def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypatch) -> None:
+def test_add_transfer_accepts_bulk_items_response_without_contract_gate(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     expected_hash = "9eced47df2edfbd72f29f93447d60b7b"
-    item = {"hash": expected_hash.upper(), "name": "deterministic-two-client-transfer.bin", "ok": True}
+    item = {
+        "hash": expected_hash.upper(),
+        "name": "deterministic-two-client-transfer.bin",
+        "ok": True,
+    }
     response = {
         "status": 200,
         "content_type": "application/json; charset=utf-8",
@@ -2803,21 +3294,36 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(monkeypa
         return response
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"], "json": result["json"]})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"], "json": result["json"]},
+    )
 
-    result = module.add_transfer("http://127.0.0.1:4711", "key", "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/", expected_hash)
+    result = module.add_transfer(
+        "http://127.0.0.1:4711",
+        "key",
+        "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/",
+        expected_hash,
+    )
 
     assert result["item"] == item
     assert calls == [
         (
             "POST",
             "/api/v1/transfers",
-            {"link": "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/", "paused": False, "categoryId": 0},
+            {
+                "link": "ed2k://|file|a|1|9ECED47DF2EDFBD72F29F93447D60B7B|/",
+                "paused": False,
+                "categoryId": 0,
+            },
         )
     ]
 
 
-def test_install_queued_lowid_source_requires_exact_normalized_receipt(monkeypatch) -> None:
+def test_install_queued_lowid_source_requires_exact_normalized_receipt(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     expected = {
         "accepted": True,
@@ -2907,7 +3413,9 @@ def test_install_queued_lowid_source_rejects_extra_response_fields(monkeypatch) 
         )
 
 
-def test_wait_for_transfer_sources_requires_exact_metadata_and_positive_count(monkeypatch) -> None:
+def test_wait_for_transfer_sources_requires_exact_metadata_and_positive_count(
+    monkeypatch,
+) -> None:
     module = load_suite_module()
     transfer_hash = module.SERVER_SOURCE_FILE_HASH.hex()
     payloads = [
@@ -2972,14 +3480,26 @@ def test_observe_client_id_classes_records_high_id_clients() -> None:
         "high_id_required_for_transfer": False,
         "all_high_id": True,
         "clients": {
-            "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": True},
-            "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
+            "client1": {
+                "name": "client-one",
+                "ip": "192.0.2.10",
+                "port": 4662,
+                "high_id": True,
+            },
+            "client2": {
+                "name": "client-two",
+                "ip": "192.0.2.11",
+                "port": 4663,
+                "high_id": True,
+            },
         },
         "server_highid_verification": {"available": False},
     }
 
 
-def test_observe_client_id_classes_records_low_id_server_evidence_without_gating() -> None:
+def test_observe_client_id_classes_records_low_id_server_evidence_without_gating() -> (
+    None
+):
     module = load_suite_module()
 
     class FakeControl:
@@ -3009,8 +3529,18 @@ def test_observe_client_id_classes_records_low_id_server_evidence_without_gating
         "high_id_required_for_transfer": False,
         "all_high_id": False,
         "clients": {
-            "client1": {"name": "client-one", "ip": "192.0.2.10", "port": 4662, "high_id": False},
-            "client2": {"name": "client-two", "ip": "192.0.2.11", "port": 4663, "high_id": True},
+            "client1": {
+                "name": "client-one",
+                "ip": "192.0.2.10",
+                "port": 4662,
+                "high_id": False,
+            },
+            "client2": {
+                "name": "client-two",
+                "ip": "192.0.2.11",
+                "port": 4663,
+                "high_id": True,
+            },
         },
         "server_highid_verification": {
             "available": True,
@@ -3024,7 +3554,9 @@ def test_observe_client_id_classes_records_low_id_server_evidence_without_gating
     }
 
 
-def test_wait_for_completed_file_timeout_carries_diagnostic_observations(tmp_path: Path) -> None:
+def test_wait_for_completed_file_timeout_carries_diagnostic_observations(
+    tmp_path: Path,
+) -> None:
     module = load_suite_module()
     snapshots = [{"transfer": {"status": 200, "json": {"state": "downloading"}}}]
 
@@ -3042,7 +3574,9 @@ def test_wait_for_completed_file_timeout_carries_diagnostic_observations(tmp_pat
         raise AssertionError("Expected TransferCompletionTimeout")
 
 
-def test_collect_client1_transfer_snapshot_records_rest_and_workspace_files(monkeypatch, tmp_path: Path) -> None:
+def test_collect_client1_transfer_snapshot_records_rest_and_workspace_files(
+    monkeypatch, tmp_path: Path
+) -> None:
     module = load_suite_module()
     incoming_dir = tmp_path / "incoming"
     temp_dir = tmp_path / "temp"
@@ -3054,7 +3588,11 @@ def test_collect_client1_transfer_snapshot_records_rest_and_workspace_files(monk
 
     def fake_http_request(_base_url, path, **_kwargs):
         requested_paths.append(path)
-        return {"status": 200, "content_type": "application/json", "json": {"path": path}}
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"path": path},
+        }
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 

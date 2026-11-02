@@ -183,8 +183,7 @@ def _sched_identity(
     keys = _keys(record)
     return bool(
         str(keys.get("fileHash") or "").casefold() == file_hash
-        and str(keys.get("peer") or "").casefold()
-        == source_tcp_endpoint.casefold()
+        and str(keys.get("peer") or "").casefold() == source_tcp_endpoint.casefold()
         and str(keys.get("peerHash") or "").casefold() == source_user_hash
     )
 
@@ -236,95 +235,110 @@ def _client_evidence(
     )
     request_raw_hex = probe.get("requestRawHex")
     response_raw_hex = probe.get("responseRawHex")
-    identity = lambda record: _sched_identity(
-        record,
-        file_hash=file_hash,
-        source_tcp_endpoint=source_tcp_endpoint,
-        source_user_hash=source_user_hash,
-    )
+
+    def identity(record: dict[str, Any]) -> bool:
+        return _sched_identity(
+            record,
+            file_hash=file_hash,
+            source_tcp_endpoint=source_tcp_endpoint,
+            source_user_hash=source_user_hash,
+        )
 
     registration, registration_count = _single(
         records,
-        lambda record: _event(record, "sched", "udp_reask_source_registered")
-        and identity(record)
-        and _body(record).get("outcome") == "accepted"
-        and _body(record).get("sourceUdpEndpoint") == source_udp_endpoint
-        and _body(record).get("sourceUdpVersion") == source_udp_version
-        and _body(record).get("lowId") is True
-        and _body(record).get("buddyEndpoint") == buddy_endpoint
-        and str(_body(record).get("buddyId") or "").casefold() == buddy_id,
+        lambda record: (
+            _event(record, "sched", "udp_reask_source_registered")
+            and identity(record)
+            and _body(record).get("outcome") == "accepted"
+            and _body(record).get("sourceUdpEndpoint") == source_udp_endpoint
+            and _body(record).get("sourceUdpVersion") == source_udp_version
+            and _body(record).get("lowId") is True
+            and _body(record).get("buddyEndpoint") == buddy_endpoint
+            and str(_body(record).get("buddyId") or "").casefold() == buddy_id
+        ),
     )
     schedule, schedule_count = _single(
         records,
-        lambda record: _event(record, "sched", "udp_reask_schedule_decision")
-        and identity(record)
-        and _body(record).get("outcome") == "eligible"
-        and _body(record).get("reason") == "eligible",
+        lambda record: (
+            _event(record, "sched", "udp_reask_schedule_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "eligible"
+            and _body(record).get("reason") == "eligible"
+        ),
     )
     decision, decision_count = _single(
         records,
-        lambda record: _event(record, "sched", "udp_reask_decision")
-        and identity(record)
-        and _body(record).get("outcome") == "sent"
-        and _body(record).get("transportEligible") is True
-        and _body(record).get("reason") == "callback_reask_sent"
-        and _body(record).get("path") == "callback",
+        lambda record: (
+            _event(record, "sched", "udp_reask_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "sent"
+            and _body(record).get("transportEligible") is True
+            and _body(record).get("reason") == "callback_reask_sent"
+            and _body(record).get("path") == "callback"
+        ),
     )
     outbound, outbound_count = _single(
         records,
-        lambda record: _event(record, "ed2k_client_udp", "packet")
-        and str(_keys(record).get("peer") or "").casefold()
-        == buddy_endpoint.casefold()
-        and str(_keys(record).get("fileHash") or "").casefold() == file_hash
-        and _keys(record).get("protocolMarker") == relayed_reask_probe.OP_EMULEPROT
-        and _keys(record).get("opcode")
-        == relayed_reask_probe.OP_REASKCALLBACKUDP
-        and _body(record).get("direction") == "send"
-        and _body(record).get("outcome") == "attempted"
-        and _body(record).get("role") == "buddy_relay_request"
-        and _body(record).get("transportMode") == "plaintext"
-        and _body(record).get("obfuscated") is False
-        and str(_body(record).get("rawHex") or "").casefold()
-        == str(request_raw_hex or "").casefold()
-        and _body(record).get("payloadHexTruncated") is False,
+        lambda record: (
+            _event(record, "ed2k_client_udp", "packet")
+            and str(_keys(record).get("peer") or "").casefold()
+            == buddy_endpoint.casefold()
+            and str(_keys(record).get("fileHash") or "").casefold() == file_hash
+            and _keys(record).get("protocolMarker") == relayed_reask_probe.OP_EMULEPROT
+            and _keys(record).get("opcode") == relayed_reask_probe.OP_REASKCALLBACKUDP
+            and _body(record).get("direction") == "send"
+            and _body(record).get("outcome") == "attempted"
+            and _body(record).get("role") == "buddy_relay_request"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and str(_body(record).get("rawHex") or "").casefold()
+            == str(request_raw_hex or "").casefold()
+            and _body(record).get("payloadHexTruncated") is False
+        ),
     )
     send_attempt_id = _keys(outbound).get("sendAttemptId") if outbound else None
     send_outcome, send_outcome_count = _single(
         records,
-        lambda record: _event(record, "ed2k_client_udp", "send_outcome")
-        and str(_keys(record).get("peer") or "").casefold()
-        == buddy_endpoint.casefold()
-        and _keys(record).get("sendAttemptId") == send_attempt_id
-        and _body(record).get("sendAttemptId") == send_attempt_id
-        and _body(record).get("outcome") == "send_succeeded"
-        and _body(record).get("deliveryKnown") is True
-        and _body(record).get("role") == "buddy_relay_request",
+        lambda record: (
+            _event(record, "ed2k_client_udp", "send_outcome")
+            and str(_keys(record).get("peer") or "").casefold()
+            == buddy_endpoint.casefold()
+            and _keys(record).get("sendAttemptId") == send_attempt_id
+            and _body(record).get("sendAttemptId") == send_attempt_id
+            and _body(record).get("outcome") == "send_succeeded"
+            and _body(record).get("deliveryKnown") is True
+            and _body(record).get("role") == "buddy_relay_request"
+        ),
     )
     inbound, inbound_count = _single(
         records,
-        lambda record: _event(record, "ed2k_client_udp", "packet")
-        and str(_keys(record).get("peer") or "").casefold()
-        == source_udp_endpoint.casefold()
-        and _keys(record).get("protocolMarker") == relayed_reask_probe.OP_EMULEPROT
-        and _keys(record).get("opcode") == relayed_reask_probe.OP_REASKACK
-        and _body(record).get("direction") == "recv"
-        and _body(record).get("outcome") == "accepted"
-        and _body(record).get("phase") == "reask_reply"
-        and _body(record).get("transportMode") == "plaintext"
-        and _body(record).get("obfuscated") is False
-        and str(_body(record).get("rawHex") or "").casefold()
-        == str(response_raw_hex or "").casefold()
-        and _body(record).get("payloadHexTruncated") is False,
+        lambda record: (
+            _event(record, "ed2k_client_udp", "packet")
+            and str(_keys(record).get("peer") or "").casefold()
+            == source_udp_endpoint.casefold()
+            and _keys(record).get("protocolMarker") == relayed_reask_probe.OP_EMULEPROT
+            and _keys(record).get("opcode") == relayed_reask_probe.OP_REASKACK
+            and _body(record).get("direction") == "recv"
+            and _body(record).get("outcome") == "accepted"
+            and _body(record).get("phase") == "reask_reply"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and str(_body(record).get("rawHex") or "").casefold()
+            == str(response_raw_hex or "").casefold()
+            and _body(record).get("payloadHexTruncated") is False
+        ),
     )
     applied, applied_count = _single(
         records,
-        lambda record: _event(record, "sched", "udp_reask_reply_applied")
-        and identity(record)
-        and _body(record).get("outcome") == "applied"
-        and _body(record).get("replyOpcode") == relayed_reask_probe.OP_REASKACK
-        and _body(record).get("queueRank") == queue_rank
-        and _body(record).get("requestPendingAfter") is False
-        and _body(record).get("remoteQueueFullAfter") is False,
+        lambda record: (
+            _event(record, "sched", "udp_reask_reply_applied")
+            and identity(record)
+            and _body(record).get("outcome") == "applied"
+            and _body(record).get("replyOpcode") == relayed_reask_probe.OP_REASKACK
+            and _body(record).get("queueRank") == queue_rank
+            and _body(record).get("requestPendingAfter") is False
+            and _body(record).get("remoteQueueFullAfter") is False
+        ),
     )
     sequences = {
         "registration": _sequence(registration),

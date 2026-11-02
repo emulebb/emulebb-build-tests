@@ -1990,9 +1990,7 @@ def attach_direct_callback(
             "sizeBytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
-    report["network"]["directCallbackKadIsolation"]["launchInputs"] = (
-        launch_receipts
-    )
+    report["network"]["directCallbackKadIsolation"]["launchInputs"] = launch_receipts
     targets = {
         client: {
             "clientId": identity["clientId"],
@@ -2047,15 +2045,17 @@ def attach_direct_callback(
         )
         for client in ("rust", "mfc")
     }
-    evidence = direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
-        requester_host="127.0.0.1",
-        requester_tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
-        requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
-        target_host="127.0.0.1",
-        targets=targets,
-        requester_results=results,
-        rust_records=records["rust"],
-        mfc_records=records["mfc"],
+    evidence = (
+        direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+            requester_host="127.0.0.1",
+            requester_tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+            requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+            target_host="127.0.0.1",
+            targets=targets,
+            requester_results=results,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
     )
     evidence["captures"] = captures
     report["checks"].update(
@@ -2718,25 +2718,27 @@ def attach_relayed_reask(
             "selectedSegments": [str(segment)],
         }
 
-    evidence = relayed_reask_diagnostic_evidence.build_relayed_reask_diagnostic_evidence(
-        file_hash=RELAYED_REASK_FILE_HASH,
-        source_host=host,
-        source_tcp_port=ports["relayed_reask_source_tcp"],
-        source_udp_port=ports["relayed_reask_source_udp"],
-        source_user_hash=RELAYED_REASK_SOURCE_HASH,
-        source_udp_version=4,
-        buddy_host=host,
-        buddy_udp_port=ports["relayed_reask_buddy_udp"],
-        buddy_id=RELAYED_REASK_BUDDY_ID,
-        requester_udp_ports={
-            "rust": ports["client1_udp"],
-            "mfc": ports["client2_udp"],
-        },
-        queue_rank=RELAYED_REASK_QUEUE_RANK,
-        controls=controls,
-        probe_results=probes,
-        rust_records=records_by_client["rust"],
-        mfc_records=records_by_client["mfc"],
+    evidence = (
+        relayed_reask_diagnostic_evidence.build_relayed_reask_diagnostic_evidence(
+            file_hash=RELAYED_REASK_FILE_HASH,
+            source_host=host,
+            source_tcp_port=ports["relayed_reask_source_tcp"],
+            source_udp_port=ports["relayed_reask_source_udp"],
+            source_user_hash=RELAYED_REASK_SOURCE_HASH,
+            source_udp_version=4,
+            buddy_host=host,
+            buddy_udp_port=ports["relayed_reask_buddy_udp"],
+            buddy_id=RELAYED_REASK_BUDDY_ID,
+            requester_udp_ports={
+                "rust": ports["client1_udp"],
+                "mfc": ports["client2_udp"],
+            },
+            queue_rank=RELAYED_REASK_QUEUE_RANK,
+            controls=controls,
+            probe_results=probes,
+            rust_records=records_by_client["rust"],
+            mfc_records=records_by_client["mfc"],
+        )
     )
     evidence["captures"] = captures
 
@@ -3383,9 +3385,9 @@ def test_build_transfer_registration_rejects_mutated_mfc_kad_launch_input(
 ) -> None:
     report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
     retained = Path(
-        report["network"]["directCallbackKadIsolation"]["launchInputs"][
-            "mfcNodesDat"
-        ]["path"]
+        report["network"]["directCallbackKadIsolation"]["launchInputs"]["mfcNodesDat"][
+            "path"
+        ]
     )
     retained.write_bytes(
         kad_nodes.encode_nodes_dat(

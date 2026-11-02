@@ -231,9 +231,7 @@ def test_bilateral_relayed_reask_is_claimable() -> None:
     report = passing_report()
 
     evidence.require_relayed_reask_diagnostic_evidence(report)
-    assert report["coverageClaims"]["eligibleCoverageIds"] == [
-        "lowid.relayed-reask"
-    ]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["lowid.relayed-reask"]
     assert report["comparison"]["requestBytesEqual"] is True
     assert report["clients"]["rust"]["diagnostics"]["sendAttemptId"] == 9
 

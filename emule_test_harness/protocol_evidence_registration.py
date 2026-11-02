@@ -2734,12 +2734,9 @@ def _derived_direct_callback_coverage_ids(
         },
         "mfcBootstrapSeeds": [],
     }
-    if (
-        set(kad_isolation) != {*expected_kad_isolation, "launchInputs"}
-        or any(
-            kad_isolation.get(field) != value
-            for field, value in expected_kad_isolation.items()
-        )
+    if set(kad_isolation) != {*expected_kad_isolation, "launchInputs"} or any(
+        kad_isolation.get(field) != value
+        for field, value in expected_kad_isolation.items()
     ):
         raise ValueError("direct callback Kad isolation is not exact")
 
@@ -2790,7 +2787,9 @@ def _derived_direct_callback_coverage_ids(
             or retained_path.read_bytes() != expected_payload
             or _file_sha256(retained_path) != retained_sha256
         ):
-            raise ValueError(f"{label} launch input does not match the isolated topology")
+            raise ValueError(
+                f"{label} launch input does not match the isolated topology"
+            )
 
     kad_runtimes = _object(
         checks.get("client_direct_callback_kad_running"),
@@ -2867,15 +2866,17 @@ def _derived_direct_callback_coverage_ids(
     ].get("processId"):
         raise ValueError("direct callback capture is not joined to the stopped oracle")
 
-    rebuilt = direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
-        requester_host=requester_host,
-        requester_tcp_port=requester_port,
-        requester_user_hash=bytes.fromhex(SERVER_CALLBACK_REQUESTER_HASH),
-        target_host=requester_host,
-        targets=expected_targets,
-        requester_results=requester_results,
-        rust_records=records["rust"],
-        mfc_records=records["mfc"],
+    rebuilt = (
+        direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+            requester_host=requester_host,
+            requester_tcp_port=requester_port,
+            requester_user_hash=bytes.fromhex(SERVER_CALLBACK_REQUESTER_HASH),
+            target_host=requester_host,
+            targets=expected_targets,
+            requester_results=requester_results,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
     )
     retained_without_capture = {
         key: value for key, value in callback.items() if key != "captures"
@@ -2956,12 +2957,9 @@ def _derived_relayed_reask_coverage_ids(
         },
         "mfcBootstrapSeeds": [],
     }
-    if (
-        set(kad_isolation) != {*expected_kad_isolation, "launchInputs"}
-        or any(
-            kad_isolation.get(field) != value
-            for field, value in expected_kad_isolation.items()
-        )
+    if set(kad_isolation) != {*expected_kad_isolation, "launchInputs"} or any(
+        kad_isolation.get(field) != value
+        for field, value in expected_kad_isolation.items()
     ):
         raise ValueError("relayed reask Kad isolation is not exact")
     launch_inputs = _object(
@@ -3102,8 +3100,7 @@ def _derived_relayed_reask_coverage_ids(
         if (
             item.get("ok") is not True
             or str(item.get("hash") or "").casefold() != RELAYED_REASK_FILE_HASH
-            or str(transfer.get("hash") or "").casefold()
-            != RELAYED_REASK_FILE_HASH
+            or str(transfer.get("hash") or "").casefold() != RELAYED_REASK_FILE_HASH
             or transfer.get("displayName", transfer.get("name"))
             != RELAYED_REASK_FILE_NAME
             or transfer.get("sizeBytes", transfer.get("size"))
