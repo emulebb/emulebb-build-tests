@@ -336,6 +336,126 @@ def test_mfc_queue_identity_requires_exact_onqueue_highid_source() -> None:
     )
 
 
+def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
+    module = _load_module()
+    rows = {
+        "data": {
+            "items": [
+                {
+                    "clientId": "wrong-port",
+                    "address": "127.0.0.20",
+                    "port": 4663,
+                    "requestedFileHash": FILE_HASH,
+                    "waitingQueue": True,
+                },
+                {
+                    "clientId": "exact-waiter",
+                    "address": "127.0.0.20",
+                    "port": 4662,
+                    "requestedFileHash": FILE_HASH.upper(),
+                    "waitingQueue": True,
+                },
+            ]
+        }
+    }
+
+    assert module.find_upload_waiter(
+        rows,
+        file_hash=FILE_HASH,
+        requester_tcp_endpoint="127.0.0.20:4662",
+    ) == {
+        "clientId": "exact-waiter",
+        "address": "127.0.0.20",
+        "requestedFileHash": FILE_HASH,
+        "waitingQueue": True,
+    }
+
+
+def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
+    module = _load_module()
+    calls: list[str] = []
+
+    def retry(_base_url, path, **_kwargs):
+        calls.append(path)
+        return {
+            "status": 200,
+            "raw_json": {"data": {"ok": True, "removed": "queue"}},
+        }
+
+    monkeypatch.setattr(module.dtt, "retry_rest_request", retry)
+    monkeypatch.setattr(
+        module.cc,
+        "request_json",
+        lambda *_args, **_kwargs: {"data": {"items": []}},
+    )
+    waiter = {
+        "clientId": "127.0.0.20:4662",
+        "address": "127.0.0.20",
+        "requestedFileHash": FILE_HASH,
+        "waitingQueue": True,
+    }
+
+    assert module.remove_upload_waiter(
+        "http://responder.test",
+        "secret",
+        waiter=waiter,
+        file_hash=FILE_HASH,
+        requester_tcp_endpoint="127.0.0.20:4662",
+        timeout=0.1,
+    ) == {
+        "waiter": waiter,
+        "response": {
+            "status": 200,
+            "json": {"ok": True, "removed": "queue"},
+        },
+        "verifiedAbsent": True,
+    }
+    assert calls == [
+        "/api/v1/upload-queue/127.0.0.20%3A4662/operations/remove"
+    ]
+
+
+def test_queue_pressure_receipt_uses_exact_requester_udp_endpoint(monkeypatch) -> None:
+    module = _load_module()
+    request = module.queue_pressure_request(
+        file_hash=FILE_HASH.upper(),
+        requester_udp_endpoint="127.0.0.20:4672",
+    )
+    payload = {
+        "accepted": True,
+        "fixtureId": 7,
+        "fileHash": FILE_HASH,
+        "sourceEndpoint": "127.0.0.20:4672",
+        "actualWaitingUserCount": 0,
+        "effectiveWaitingUserCount": 1951,
+        "queueSize": 2000,
+        "expiresAfterMillis": 30000,
+        "state": "client-udp-queue-pressure-armed",
+    }
+    monkeypatch.setattr(
+        module.dtt,
+        "retry_rest_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "raw_json": {"data": payload},
+        },
+    )
+
+    assert request == {
+        "fileHash": FILE_HASH,
+        "sourceIp": "127.0.0.20",
+        "sourceUdpPort": 4672,
+    }
+    assert module.arm_queue_pressure(
+        "http://responder.test",
+        "secret",
+        request,
+    ) == {
+        "request": request,
+        "response": {"status": 200, "json": payload},
+    }
+
+
 def test_control_receipt_unwraps_only_the_api_data_envelope() -> None:
     module = _load_module()
     request = module.queued_source_reask_request(

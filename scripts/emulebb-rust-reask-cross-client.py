@@ -1,4 +1,4 @@
-"""Prove the bilateral direct client-UDP V4 reask transition locally.
+"""Prove one bilateral direct client-UDP reask scenario locally.
 
 The canonical campaign runs both production directions against one deterministic
 fixture and one upstream-clean local eD2K server:
@@ -8,6 +8,11 @@ fixture and one upstream-clean local eD2K server:
 
 Each requester must queue and detach naturally. The harness then wakes exactly
 that already queued source once through the diagnostics-only scheduler control.
+For queue-full, the exact requester is removed from the responder's real upload
+queue before one exact, expiring queue-pressure prerequisite is armed. The
+ordinary scheduler and production packet path remain responsible for the
+request, response, and state transition.
+
 The verdict comes only from complete ``diag_event_v2`` causal evidence, exact
 wire bytes, the accepted stock corpus, and matching applied state. Process exit,
 daemon log strings, elapsed time, and public traffic are never verdicts.
@@ -23,6 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -47,6 +53,9 @@ harness_cli_common = cc.harness_cli_common
 SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
+QUEUE_PRESSURE_PATH = (
+    "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
+)
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
@@ -244,6 +253,188 @@ def find_mfc_queued_source(
         ),
         "queueRank": int(source["queueRank"]),
     }
+
+
+def find_upload_waiter(
+    payload: object,
+    *,
+    file_hash: str,
+    requester_tcp_endpoint: str,
+) -> dict[str, object] | None:
+    """Resolve one exact requester in a responder's production upload queue."""
+
+    normalized_hash = _canonical_hash(file_hash, field="upload waiter file hash")
+    requester_host, requester_port = _split_endpoint(
+        requester_tcp_endpoint,
+        field="requester_tcp_endpoint",
+    )
+    matches = [
+        row
+        for row in _api_items(payload)
+        if str(row.get("address") or "").casefold() == requester_host.casefold()
+        and row.get("port") == requester_port
+        and str(row.get("requestedFileHash") or "").casefold() == normalized_hash
+        and row.get("waitingQueue") is True
+        and isinstance(row.get("clientId"), str)
+        and bool(str(row["clientId"]).strip())
+    ]
+    if len(matches) > 1:
+        raise RuntimeError("multiple exact upload waiters matched the requester")
+    if not matches:
+        return None
+    waiter = matches[0]
+    return {
+        "clientId": waiter["clientId"],
+        "address": requester_host,
+        "requestedFileHash": normalized_hash,
+        "waitingQueue": True,
+    }
+
+
+def wait_for_upload_waiter(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: str,
+    requester_tcp_endpoint: str,
+    timeout: float,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = cc.request_json(
+            base_url,
+            "GET",
+            "/api/v1/upload-queue",
+            api_key,
+        )
+        waiter = find_upload_waiter(
+            payload,
+            file_hash=file_hash,
+            requester_tcp_endpoint=requester_tcp_endpoint,
+        )
+        if waiter is not None:
+            return waiter
+        time.sleep(1.0)
+    raise RuntimeError("responder never exposed the exact requester upload waiter")
+
+
+def wait_for_upload_waiter_absent(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: str,
+    requester_tcp_endpoint: str,
+    timeout: float,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = cc.request_json(
+            base_url,
+            "GET",
+            "/api/v1/upload-queue",
+            api_key,
+        )
+        waiter = find_upload_waiter(
+            payload,
+            file_hash=file_hash,
+            requester_tcp_endpoint=requester_tcp_endpoint,
+        )
+        if waiter is None:
+            return
+        time.sleep(0.25)
+    raise RuntimeError("exact requester remained in the responder upload queue")
+
+
+def remove_upload_waiter(
+    base_url: str,
+    api_key: str,
+    *,
+    waiter: dict[str, object],
+    file_hash: str,
+    requester_tcp_endpoint: str,
+    timeout: float,
+) -> dict[str, object]:
+    client_id = str(waiter.get("clientId") or "")
+    if not client_id:
+        raise RuntimeError("upload waiter clientId is missing")
+    response = dtt.retry_rest_request(
+        base_url,
+        f"/api/v1/upload-queue/{quote(client_id, safe='')}/operations/remove",
+        method="POST",
+        api_key=api_key,
+        timeout_seconds=30.0,
+    )
+    payload = _api_data(response.get("raw_json"))
+    receipt = {
+        "waiter": waiter,
+        "response": {
+            "status": int(response.get("status") or 0),
+            "json": payload if isinstance(payload, dict) else None,
+        },
+        "verifiedAbsent": False,
+    }
+    if receipt["response"] != {
+        "status": 200,
+        "json": {"ok": True, "removed": "queue"},
+    }:
+        raise RuntimeError(
+            "exact upload waiter removal failed: "
+            f"{dtt.rest_smoke.compact_http_result(response)!r}"
+        )
+    wait_for_upload_waiter_absent(
+        base_url,
+        api_key,
+        file_hash=file_hash,
+        requester_tcp_endpoint=requester_tcp_endpoint,
+        timeout=timeout,
+    )
+    receipt["verifiedAbsent"] = True
+    return receipt
+
+
+def queue_pressure_request(
+    *,
+    file_hash: str,
+    requester_udp_endpoint: str,
+) -> dict[str, object]:
+    requester_host, requester_port = _split_endpoint(
+        requester_udp_endpoint,
+        field="requester_udp_endpoint",
+    )
+    return {
+        "fileHash": _canonical_hash(file_hash, field="file_hash"),
+        "sourceIp": requester_host,
+        "sourceUdpPort": requester_port,
+    }
+
+
+def arm_queue_pressure(
+    base_url: str,
+    api_key: str,
+    request: dict[str, object],
+) -> dict[str, object]:
+    response = dtt.retry_rest_request(
+        base_url,
+        QUEUE_PRESSURE_PATH,
+        method="POST",
+        api_key=api_key,
+        json_body=request,
+        timeout_seconds=30.0,
+    )
+    payload = _api_data(response.get("raw_json"))
+    receipt = {
+        "request": request,
+        "response": {
+            "status": int(response.get("status") or 0),
+            "json": payload if isinstance(payload, dict) else None,
+        },
+    }
+    if receipt["response"]["status"] != 200:
+        raise RuntimeError(
+            "exact client-UDP queue pressure prerequisite failed: "
+            f"{dtt.rest_smoke.compact_http_result(response)!r}"
+        )
+    return receipt
 
 
 def queued_source_reask_request(
