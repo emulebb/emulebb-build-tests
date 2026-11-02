@@ -22,6 +22,7 @@ REQUEST_RAW = (
 )
 ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0))
 QUEUE_FULL_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_QUEUEFULL))
+FILE_NOT_FOUND_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_FILENOTFOUND))
 STOCK_RECORD = {
     "coverageIds": [
         "client-udp.v1",
@@ -535,6 +536,197 @@ def passing_queue_full_report(
     )
 
 
+def file_not_found_requester_records(requester: str) -> list[dict[str, Any]]:
+    records = requester_records(requester)
+    endpoints = ENDPOINTS[requester]
+    records[-2] = {
+        "schema": "diag_event_v2",
+        "seq": 6,
+        "family": "ed2k_client_udp",
+        "event": "packet",
+        "keys": {
+            "peer": endpoints["sourceUdp"],
+            "protocolMarker": evidence.OP_EMULEPROT,
+            "opcode": evidence.OP_FILENOTFOUND,
+        },
+        "body": {
+            "direction": "recv",
+            "outcome": "accepted",
+            "phase": "reask_reply",
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "rawHex": FILE_NOT_FOUND_RAW.hex(),
+            "payloadHexTruncated": False,
+        },
+    }
+    records[-1] = sched_record(
+        7,
+        "udp_reask_reply_applied",
+        {
+            "replyOpcode": evidence.OP_FILENOTFOUND,
+            "queueRank": None,
+            "requestPendingAfter": False,
+            "remoteQueueFullAfter": False,
+            "sourceUdpEndpoint": endpoints["sourceUdp"],
+            "sourceUdpVersion": 4,
+            "queueRankApplied": False,
+            "partStatusIncluded": False,
+            "wirePartCount": None,
+            "partStatusApplied": False,
+            "partCountAfter": None,
+            "availablePartsAfter": None,
+            "partStatusBitsAfter": None,
+            "noNeededPartsAfter": None,
+            "outcome": "applied",
+        },
+        requester=requester,
+    )
+    records.extend(
+        [
+            sched_record(
+                8,
+                "source_dead_listed",
+                {
+                    "outcome": "dead_listed",
+                    "reason": "udp_fnf",
+                    "blockSecs": 2700,
+                },
+                requester=requester,
+            ),
+            sched_record(
+                9,
+                "source_dropped",
+                {"outcome": "dropped"},
+                requester=requester,
+            ),
+        ]
+    )
+    return records
+
+
+def file_not_found_responder_records(requester: str) -> list[dict[str, Any]]:
+    requester_endpoint = str(ENDPOINTS[requester]["requesterUdp"])
+    return [
+        {
+            "schema": "diag_event_v2",
+            "seq": 20,
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {
+                "peer": requester_endpoint,
+                "protocolMarker": evidence.OP_EMULEPROT,
+                "opcode": evidence.OP_REASKFILEPING,
+            },
+            "body": {
+                "direction": "recv",
+                "outcome": "accepted",
+                "phase": "reask_request",
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "rawHex": REQUEST_RAW.hex(),
+                "payloadHexTruncated": False,
+            },
+        },
+        {
+            "schema": "diag_event_v2",
+            "seq": 21,
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {
+                "peer": requester_endpoint,
+                "protocolMarker": evidence.OP_EMULEPROT,
+                "opcode": evidence.OP_FILENOTFOUND,
+                "sendAttemptId": 11,
+            },
+            "body": {
+                "direction": "send",
+                "outcome": "attempted",
+                "sendAttemptId": 11,
+                "role": "reciprocity_reply",
+                "phase": "reciprocity_reply",
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "rawHex": FILE_NOT_FOUND_RAW.hex(),
+                "payloadHexTruncated": False,
+            },
+        },
+        {
+            "schema": "diag_event_v2",
+            "seq": 22,
+            "family": "ed2k_client_udp",
+            "event": "send_outcome",
+            "keys": {
+                "peer": requester_endpoint,
+                "sendAttemptId": 11,
+            },
+            "body": {
+                "sendAttemptId": 11,
+                "outcome": "send_succeeded",
+                "deliveryKnown": True,
+                "role": "reciprocity_reply",
+            },
+        },
+    ]
+
+
+def shared_withdrawal() -> dict[str, object]:
+    return {
+        "fileHash": FILE_HASH.hex(),
+        "sharedPath": "C:/campaign/fixture/client-udp-v4.bin",
+        "withdrawnPath": "C:/campaign/withdrawn/client-udp-v4.bin",
+        "presentBefore": True,
+        "movedOutsideSharedRoot": True,
+        "reloadResponse": {"status": 200, "json": {"ok": True}},
+        "absentAfter": True,
+    }
+
+
+def source_absence(requester: str) -> dict[str, object]:
+    endpoints = ENDPOINTS[requester]
+    return {
+        "fileHash": FILE_HASH.hex(),
+        "sourceTcpEndpoint": endpoints["sourceTcp"],
+        "sourceUserHash": endpoints["sourceHash"].hex(),
+        "verifiedAbsent": True,
+    }
+
+
+def file_not_found_transition(
+    requester: str,
+) -> evidence.ClientUdpFileNotFoundTransition:
+    endpoints = ENDPOINTS[requester]
+    responder = "mfc" if requester == "rust" else "rust"
+    return evidence.ClientUdpFileNotFoundTransition(
+        requester=requester,
+        responder=responder,
+        source_tcp_endpoint=str(endpoints["sourceTcp"]),
+        source_udp_endpoint=str(endpoints["sourceUdp"]),
+        source_user_hash=endpoints["sourceHash"],
+        requester_udp_endpoint=str(endpoints["requesterUdp"]),
+        control_receipt=control(requester),
+        shared_withdrawal_receipt=shared_withdrawal(),
+        source_absence_receipt=source_absence(requester),
+        requester_records=file_not_found_requester_records(requester),
+        responder_records=file_not_found_responder_records(requester),
+    )
+
+
+def passing_file_not_found_report(
+    *,
+    rust_transition: evidence.ClientUdpFileNotFoundTransition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_file_not_found_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[
+            rust_transition or file_not_found_transition("rust"),
+            file_not_found_transition("mfc"),
+        ],
+    )
+
+
 def passing_report(
     *,
     rust_transition: evidence.ClientUdpV4Transition | None = None,
@@ -694,11 +886,7 @@ def immutable_queue_full_campaign_report(
     mfc = diagnostics["clients"]["mfc"]
 
     def raw_receipt(client: dict[str, Any], field: str) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in client[field].items()
-            if key != "ok"
-        }
+        return {key: value for key, value in client[field].items() if key != "ok"}
 
     report = {
         "schema": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
@@ -941,6 +1129,104 @@ def test_queue_full_application_must_retain_healthy_source() -> None:
 
 
 @pytest.mark.unit
+def test_bilateral_client_udp_file_not_found_is_claimable() -> None:
+    report = passing_file_not_found_report()
+
+    evidence.require_client_udp_file_not_found_diagnostic_evidence(report)
+    assert report["coverageClaims"]["eligibleCoverageIds"] == [
+        "client-udp.file-not-found"
+    ]
+    assert report["stockAuthority"]["ok"] is True
+    assert report["comparison"] == {
+        "requestBytesEqual": True,
+        "fileNotFoundBytesEqual": True,
+        "applicationEqual": True,
+        "deadListEqual": True,
+        "bothDropped": True,
+        "ok": True,
+    }
+    assert report["clients"]["rust"]["wire"]["fileNotFound"] == {
+        "ok": True,
+        "rawHex": "c592",
+        "payloadLength": 0,
+    }
+
+
+@pytest.mark.unit
+def test_file_not_found_requires_exact_shared_withdrawal() -> None:
+    original = file_not_found_transition("rust")
+    receipt = copy.deepcopy(original.shared_withdrawal_receipt)
+    receipt["absentAfter"] = False
+    wrong = evidence.ClientUdpFileNotFoundTransition(
+        **{**original.__dict__, "shared_withdrawal_receipt": receipt}
+    )
+
+    report = passing_file_not_found_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["sharedWithdrawal"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_file_not_found_rejects_alternate_reply_opcode() -> None:
+    original = file_not_found_transition("rust")
+    records = copy.deepcopy(list(original.responder_records))
+    records[1]["keys"]["opcode"] = evidence.OP_REASKACK
+    records[1]["body"]["rawHex"] = ACK_RAW.hex()
+    wrong = evidence.ClientUdpFileNotFoundTransition(
+        **{**original.__dict__, "responder_records": records}
+    )
+
+    report = passing_file_not_found_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    counts = report["clients"]["rust"]["diagnostics"]["counts"]
+    assert counts["fileNotFoundOut"] == 0
+    assert counts["forbiddenResponderReply"] == 1
+
+
+@pytest.mark.unit
+def test_file_not_found_requires_exact_dead_list_semantics() -> None:
+    original = file_not_found_transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[-2]["body"]["blockSecs"] = 2699
+    wrong = evidence.ClientUdpFileNotFoundTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_file_not_found_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["deadListed"] == 0
+
+
+@pytest.mark.unit
+def test_file_not_found_requires_source_removal_without_swap() -> None:
+    original = file_not_found_transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[-1]["event"] = "source_swapped"
+    records[-1]["body"] = {"outcome": "swapped"}
+    absence = copy.deepcopy(original.source_absence_receipt)
+    absence["verifiedAbsent"] = False
+    wrong = evidence.ClientUdpFileNotFoundTransition(
+        **{
+            **original.__dict__,
+            "requester_records": records,
+            "source_absence_receipt": absence,
+        }
+    )
+
+    report = passing_file_not_found_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    client = report["clients"]["rust"]
+    assert client["sourceAbsence"]["ok"] is False
+    assert client["diagnostics"]["counts"]["dropped"] == 0
+    assert client["diagnostics"]["counts"]["forbiddenSwap"] == 1
+
+
+@pytest.mark.unit
 def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
     tmp_path: Path,
 ) -> None:
@@ -975,9 +1261,7 @@ def test_immutable_queue_full_campaign_builds_exact_catalog_registration(
     )
 
     receipt = result["evidenceReceipt"]
-    assert receipt["receiptId"] == (
-        "rust-mfc-client-udp-queue-full-20261102t150409z"
-    )
+    assert receipt["receiptId"] == ("rust-mfc-client-udp-queue-full-20261102t150409z")
     assert receipt["coverageIds"] == ["client-udp.queue-full"]
     assert receipt["runnerPath"] == "scripts/emulebb-rust-reask-cross-client.py"
     assert result["coverageEvidence"] == [
@@ -993,9 +1277,7 @@ def test_immutable_queue_full_campaign_builds_exact_catalog_registration(
                 "queue-full reply after exact real-waiter removal and one causally "
                 "consumed stock queue-pressure prerequisite."
             ),
-            "receiptIds": [
-                "rust-mfc-client-udp-queue-full-20261102t150409z"
-            ],
+            "receiptIds": ["rust-mfc-client-udp-queue-full-20261102t150409z"],
             "verdict": "parity",
         }
     ]
@@ -1025,9 +1307,7 @@ def test_queue_full_registration_rejects_unconfirmed_waiter_removal(
     tmp_path: Path,
 ) -> None:
     output_root, report_path, report = immutable_queue_full_campaign_report(tmp_path)
-    report["evidence"]["clients"]["mfc"]["waiterRemoval"][
-        "verifiedAbsent"
-    ] = False
+    report["evidence"]["clients"]["mfc"]["waiterRemoval"]["verifiedAbsent"] = False
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"waiterRemoval differs"):

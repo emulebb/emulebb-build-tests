@@ -10,9 +10,11 @@ from typing import Any, Callable, Iterable
 
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
 QUEUE_FULL_SCHEMA = "emulebb-build-tests.client-udp-queue-full-diagnostics.v1"
+FILE_NOT_FOUND_SCHEMA = "emulebb-build-tests.client-udp-file-not-found-diagnostics.v1"
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 COVERAGE_ID = "client-udp.v4"
 QUEUE_FULL_COVERAGE_ID = "client-udp.queue-full"
+FILE_NOT_FOUND_COVERAGE_ID = "client-udp.file-not-found"
 CLIENTS = ("rust", "mfc")
 EVIDENCE_LAYERS = (
     "codec-transcript",
@@ -53,6 +55,21 @@ class ClientUdpQueueFullTransition:
     control_receipt: object
     waiter_removal_receipt: object
     queue_pressure_receipt: object
+    requester_records: Iterable[dict[str, Any]]
+    responder_records: Iterable[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ClientUdpFileNotFoundTransition:
+    requester: str
+    responder: str
+    source_tcp_endpoint: str
+    source_udp_endpoint: str
+    source_user_hash: bytes
+    requester_udp_endpoint: str
+    control_receipt: object
+    shared_withdrawal_receipt: object
+    source_absence_receipt: object
     requester_records: Iterable[dict[str, Any]]
     responder_records: Iterable[dict[str, Any]]
 
@@ -191,6 +208,16 @@ def _decode_queue_full(raw_hex: object) -> dict[str, Any]:
         raw = bytes.fromhex(str(raw_hex))
         if raw != bytes((OP_EMULEPROT, OP_QUEUEFULL)):
             raise ValueError("not an exact clear OP_QUEUEFULL frame")
+        return {"ok": True, "rawHex": raw.hex(), "payloadLength": 0}
+    except (TypeError, ValueError) as error:
+        return {"ok": False, "error": str(error)}
+
+
+def _decode_file_not_found(raw_hex: object) -> dict[str, Any]:
+    try:
+        raw = bytes.fromhex(str(raw_hex))
+        if raw != bytes((OP_EMULEPROT, OP_FILENOTFOUND)):
+            raise ValueError("not an exact clear OP_FILENOTFOUND frame")
         return {"ok": True, "rawHex": raw.hex(), "payloadLength": 0}
     except (TypeError, ValueError) as error:
         return {"ok": False, "error": str(error)}
@@ -417,6 +444,70 @@ def _queue_pressure_evidence(
         "effectiveWaitingUserCount": effective_count if integers_ok else None,
         "queueSize": queue_size if integers_ok else None,
         "queueFullMargin": 50,
+    }
+
+
+def _shared_withdrawal_evidence(
+    value: object,
+    *,
+    file_hash: str,
+) -> dict[str, Any]:
+    receipt = value if isinstance(value, dict) else {}
+    reload_response = (
+        receipt.get("reloadResponse")
+        if isinstance(receipt.get("reloadResponse"), dict)
+        else {}
+    )
+    shared_path = receipt.get("sharedPath")
+    withdrawn_path = receipt.get("withdrawnPath")
+    paths_ok = bool(
+        isinstance(shared_path, str)
+        and shared_path.strip()
+        and isinstance(withdrawn_path, str)
+        and withdrawn_path.strip()
+        and shared_path.casefold() != withdrawn_path.casefold()
+    )
+    return {
+        "ok": bool(
+            receipt.get("fileHash") == file_hash
+            and paths_ok
+            and receipt.get("presentBefore") is True
+            and receipt.get("movedOutsideSharedRoot") is True
+            and reload_response.get("status") == 200
+            and receipt.get("absentAfter") is True
+        ),
+        "fileHash": receipt.get("fileHash"),
+        "sharedPath": shared_path,
+        "withdrawnPath": withdrawn_path,
+        "presentBefore": receipt.get("presentBefore") is True,
+        "movedOutsideSharedRoot": receipt.get("movedOutsideSharedRoot") is True,
+        "reloadResponse": reload_response or None,
+        "absentAfter": receipt.get("absentAfter") is True,
+    }
+
+
+def _source_absence_evidence(
+    value: object,
+    *,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+) -> dict[str, Any]:
+    receipt = value if isinstance(value, dict) else {}
+    return {
+        "ok": bool(
+            receipt
+            == {
+                "fileHash": file_hash,
+                "sourceTcpEndpoint": source_tcp_endpoint,
+                "sourceUserHash": source_user_hash,
+                "verifiedAbsent": True,
+            }
+        ),
+        "fileHash": receipt.get("fileHash"),
+        "sourceTcpEndpoint": receipt.get("sourceTcpEndpoint"),
+        "sourceUserHash": receipt.get("sourceUserHash"),
+        "verifiedAbsent": receipt.get("verifiedAbsent") is True,
     }
 
 
@@ -1106,6 +1197,380 @@ def _queue_full_transition_evidence(
     }
 
 
+def _file_not_found_transition_evidence(
+    transition: ClientUdpFileNotFoundTransition,
+    *,
+    file_hash: str,
+    part_count: int,
+) -> dict[str, Any]:
+    requester_records = list(transition.requester_records)
+    responder_records = list(transition.responder_records)
+    source_hash = transition.source_user_hash.hex()
+    control = _control_evidence(
+        transition.control_receipt,
+        file_hash=file_hash,
+        source_tcp_endpoint=transition.source_tcp_endpoint,
+        source_udp_endpoint=transition.source_udp_endpoint,
+        source_user_hash=source_hash,
+    )
+    withdrawal = _shared_withdrawal_evidence(
+        transition.shared_withdrawal_receipt,
+        file_hash=file_hash,
+    )
+    source_absence = _source_absence_evidence(
+        transition.source_absence_receipt,
+        file_hash=file_hash,
+        source_tcp_endpoint=transition.source_tcp_endpoint,
+        source_user_hash=source_hash,
+    )
+
+    def identity(record: dict[str, Any]) -> bool:
+        return _sched_identity(
+            record,
+            file_hash=file_hash,
+            source_tcp_endpoint=transition.source_tcp_endpoint,
+            source_user_hash=source_hash,
+        )
+
+    def requester_packet(record: dict[str, Any], opcode: int, direction: str) -> bool:
+        return bool(
+            _event(record, "ed2k_client_udp", "packet")
+            and str(_keys(record).get("peer") or "").casefold()
+            == transition.source_udp_endpoint.casefold()
+            and _keys(record).get("protocolMarker") == OP_EMULEPROT
+            and _keys(record).get("opcode") == opcode
+            and _body(record).get("direction") == direction
+        )
+
+    def responder_packet(record: dict[str, Any], opcode: int, direction: str) -> bool:
+        return bool(
+            _event(record, "ed2k_client_udp", "packet")
+            and str(_keys(record).get("peer") or "").casefold()
+            == transition.requester_udp_endpoint.casefold()
+            and _keys(record).get("protocolMarker") == OP_EMULEPROT
+            and _keys(record).get("opcode") == opcode
+            and _body(record).get("direction") == direction
+        )
+
+    registration, registration_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "udp_reask_source_registered")
+            and identity(record)
+            and _body(record).get("outcome") == "accepted"
+            and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
+            and _body(record).get("sourceUdpVersion") == 4
+            and _body(record).get("lowId") is False
+            and _body(record).get("buddyEndpoint") is None
+            and _body(record).get("buddyId") is None
+        ),
+    )
+    schedule, schedule_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "udp_reask_schedule_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "eligible"
+            and _body(record).get("reason") == "eligible"
+        ),
+    )
+    decision, decision_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "udp_reask_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "sent"
+            and _body(record).get("transportEligible") is True
+            and _body(record).get("reason") == "udp_reask_sent"
+            and _body(record).get("path") == "direct"
+        ),
+    )
+    request_out, request_out_count = _single(
+        requester_records,
+        lambda record: (
+            requester_packet(record, OP_REASKFILEPING, "send")
+            and str(_keys(record).get("fileHash") or "").casefold() == file_hash
+            and _body(record).get("outcome") == "attempted"
+            and _body(record).get("role") == "reask_request"
+            and _body(record).get("phase") == "reask_request"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and _body(record).get("payloadHexTruncated") is False
+        ),
+    )
+    request_attempt_id = (
+        _keys(request_out).get("sendAttemptId") if request_out else None
+    )
+    request_terminal, request_terminal_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "ed2k_client_udp", "send_outcome")
+            and str(_keys(record).get("peer") or "").casefold()
+            == transition.source_udp_endpoint.casefold()
+            and _keys(record).get("sendAttemptId") == request_attempt_id
+            and _body(record).get("sendAttemptId") == request_attempt_id
+            and _body(record).get("outcome") == "send_succeeded"
+            and _body(record).get("deliveryKnown") is True
+            and _body(record).get("role") == "reask_request"
+        ),
+    )
+    request_in, request_in_count = _single(
+        responder_records,
+        lambda record: (
+            responder_packet(record, OP_REASKFILEPING, "recv")
+            and _body(record).get("outcome") == "accepted"
+            and _body(record).get("phase") == "reask_request"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and _body(record).get("payloadHexTruncated") is False
+        ),
+    )
+    file_not_found_out, file_not_found_out_count = _single(
+        responder_records,
+        lambda record: (
+            responder_packet(record, OP_FILENOTFOUND, "send")
+            and _body(record).get("outcome") == "attempted"
+            and _body(record).get("role") == "reciprocity_reply"
+            and _body(record).get("phase") == "reciprocity_reply"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and _body(record).get("payloadHexTruncated") is False
+        ),
+    )
+    file_not_found_attempt_id = (
+        _keys(file_not_found_out).get("sendAttemptId") if file_not_found_out else None
+    )
+    file_not_found_terminal, file_not_found_terminal_count = _single(
+        responder_records,
+        lambda record: (
+            _event(record, "ed2k_client_udp", "send_outcome")
+            and str(_keys(record).get("peer") or "").casefold()
+            == transition.requester_udp_endpoint.casefold()
+            and _keys(record).get("sendAttemptId") == file_not_found_attempt_id
+            and _body(record).get("sendAttemptId") == file_not_found_attempt_id
+            and _body(record).get("outcome") == "send_succeeded"
+            and _body(record).get("deliveryKnown") is True
+            and _body(record).get("role") == "reciprocity_reply"
+        ),
+    )
+    file_not_found_in, file_not_found_in_count = _single(
+        requester_records,
+        lambda record: (
+            requester_packet(record, OP_FILENOTFOUND, "recv")
+            and _body(record).get("outcome") == "accepted"
+            and _body(record).get("phase") == "reask_reply"
+            and _body(record).get("transportMode") == "plaintext"
+            and _body(record).get("obfuscated") is False
+            and _body(record).get("payloadHexTruncated") is False
+        ),
+    )
+    forbidden_responder_reply_count = sum(
+        1
+        for record in responder_records
+        if any(
+            responder_packet(record, opcode, "send")
+            for opcode in (OP_REASKACK, OP_QUEUEFULL)
+        )
+    )
+    forbidden_requester_reply_count = sum(
+        1
+        for record in requester_records
+        if any(
+            requester_packet(record, opcode, "recv")
+            for opcode in (OP_REASKACK, OP_QUEUEFULL)
+        )
+    )
+    applied, applied_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "udp_reask_reply_applied")
+            and identity(record)
+            and _body(record).get("outcome") == "applied"
+            and _body(record).get("replyOpcode") == OP_FILENOTFOUND
+            and _body(record).get("queueRank") is None
+            and _body(record).get("requestPendingAfter") is False
+            and _body(record).get("remoteQueueFullAfter") is False
+            and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
+            and _body(record).get("sourceUdpVersion") == 4
+            and _body(record).get("queueRankApplied") is False
+            and _body(record).get("partStatusIncluded") is False
+            and _body(record).get("wirePartCount") is None
+            and _body(record).get("partStatusApplied") is False
+            and _body(record).get("partCountAfter") is None
+            and _body(record).get("availablePartsAfter") is None
+            and _body(record).get("partStatusBitsAfter") is None
+            and _body(record).get("noNeededPartsAfter") is None
+        ),
+    )
+    dead_listed, dead_listed_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "source_dead_listed")
+            and identity(record)
+            and _body(record)
+            == {
+                "outcome": "dead_listed",
+                "reason": "udp_fnf",
+                "blockSecs": 45 * 60,
+            }
+        ),
+    )
+    dropped, dropped_count = _single(
+        requester_records,
+        lambda record: (
+            _event(record, "sched", "source_dropped")
+            and identity(record)
+            and _body(record) == {"outcome": "dropped"}
+        ),
+    )
+    forbidden_swap_count = sum(
+        1
+        for record in requester_records
+        if _event(record, "sched", "source_swapped") and identity(record)
+    )
+
+    request = _decode_request(_body(request_out).get("rawHex") if request_out else None)
+    responder_request = _decode_request(
+        _body(request_in).get("rawHex") if request_in else None
+    )
+    file_not_found = _decode_file_not_found(
+        _body(file_not_found_out).get("rawHex") if file_not_found_out else None
+    )
+    requester_file_not_found = _decode_file_not_found(
+        _body(file_not_found_in).get("rawHex") if file_not_found_in else None
+    )
+    requester_sequences = {
+        "registration": _sequence(registration),
+        "schedule": _sequence(schedule),
+        "decision": _sequence(decision),
+        "requestOut": _sequence(request_out),
+        "requestTerminal": _sequence(request_terminal),
+        "fileNotFoundIn": _sequence(file_not_found_in),
+        "applied": _sequence(applied),
+        "deadListed": _sequence(dead_listed),
+        "dropped": _sequence(dropped),
+    }
+    responder_sequences = {
+        "requestIn": _sequence(request_in),
+        "fileNotFoundOut": _sequence(file_not_found_out),
+        "fileNotFoundTerminal": _sequence(file_not_found_terminal),
+    }
+    requester_ordered = bool(
+        all(requester_sequences.values())
+        and requester_sequences["registration"]
+        < requester_sequences["schedule"]
+        < requester_sequences["decision"]
+        < requester_sequences["requestOut"]
+        < requester_sequences["requestTerminal"]
+        < requester_sequences["fileNotFoundIn"]
+        < requester_sequences["applied"]
+        < requester_sequences["deadListed"]
+        < requester_sequences["dropped"]
+    )
+    responder_ordered = bool(
+        all(responder_sequences.values())
+        and responder_sequences["requestIn"]
+        < responder_sequences["fileNotFoundOut"]
+        < responder_sequences["fileNotFoundTerminal"]
+    )
+    counts = {
+        "registration": registration_count,
+        "schedule": schedule_count,
+        "decision": decision_count,
+        "requestOut": request_out_count,
+        "requestTerminal": request_terminal_count,
+        "requestIn": request_in_count,
+        "fileNotFoundOut": file_not_found_out_count,
+        "fileNotFoundTerminal": file_not_found_terminal_count,
+        "fileNotFoundIn": file_not_found_in_count,
+        "applied": applied_count,
+        "deadListed": dead_listed_count,
+        "dropped": dropped_count,
+        "forbiddenResponderReply": forbidden_responder_reply_count,
+        "forbiddenRequesterReply": forbidden_requester_reply_count,
+        "forbiddenSwap": forbidden_swap_count,
+    }
+    expected_request = (
+        bytes((OP_EMULEPROT, OP_REASKFILEPING))
+        + bytes.fromhex(file_hash)
+        + _encode_part_status("0" * part_count)
+        + int(request.get("completeSourceCount") or 0).to_bytes(2, "little")
+        if request.get("ok") is True
+        else b""
+    )
+    wire_ok = bool(
+        request.get("ok") is True
+        and request.get("fileHash") == file_hash
+        and request.get("partStatus", {}).get("wirePartCount") == part_count
+        and request.get("partStatus", {}).get("partStatusBits") == "0" * part_count
+        and request.get("rawHex") == expected_request.hex()
+        and responder_request == request
+        and file_not_found.get("ok") is True
+        and file_not_found.get("rawHex") == bytes((OP_EMULEPROT, OP_FILENOTFOUND)).hex()
+        and file_not_found.get("payloadLength") == 0
+        and requester_file_not_found == file_not_found
+    )
+    required_counts_ok = all(
+        count == 1 for name, count in counts.items() if not name.startswith("forbidden")
+    )
+    forbidden_counts_ok = all(
+        count == 0 for name, count in counts.items() if name.startswith("forbidden")
+    )
+    diagnostics_ok = bool(
+        required_counts_ok
+        and forbidden_counts_ok
+        and requester_ordered
+        and responder_ordered
+    )
+    ok = bool(
+        transition.requester in CLIENTS
+        and transition.responder in CLIENTS
+        and transition.requester != transition.responder
+        and control["ok"]
+        and withdrawal["ok"]
+        and source_absence["ok"]
+        and isinstance(request_attempt_id, int)
+        and not isinstance(request_attempt_id, bool)
+        and request_attempt_id > 0
+        and isinstance(file_not_found_attempt_id, int)
+        and not isinstance(file_not_found_attempt_id, bool)
+        and file_not_found_attempt_id > 0
+        and diagnostics_ok
+        and wire_ok
+    )
+    return {
+        "ok": ok,
+        "requester": transition.requester,
+        "responder": transition.responder,
+        "sourceTcpEndpoint": transition.source_tcp_endpoint,
+        "sourceUdpEndpoint": transition.source_udp_endpoint,
+        "sourceUserHash": source_hash,
+        "requesterUdpEndpoint": transition.requester_udp_endpoint,
+        "control": control,
+        "sharedWithdrawal": withdrawal,
+        "sourceAbsence": source_absence,
+        "wire": {
+            "ok": wire_ok,
+            "request": request,
+            "fileNotFound": file_not_found,
+            "expectedRequestRawHex": expected_request.hex() or None,
+            "expectedFileNotFoundRawHex": bytes((OP_EMULEPROT, OP_FILENOTFOUND)).hex(),
+        },
+        "diagnostics": {
+            "ok": diagnostics_ok,
+            "counts": counts,
+            "requesterSequences": requester_sequences,
+            "responderSequences": responder_sequences,
+            "requesterOrdered": requester_ordered,
+            "responderOrdered": responder_ordered,
+            "requestSendAttemptId": request_attempt_id,
+            "fileNotFoundSendAttemptId": file_not_found_attempt_id,
+        },
+        "application": _body(applied) if applied is not None else None,
+        "deadList": _body(dead_listed) if dead_listed is not None else None,
+    }
+
+
 def build_client_udp_v4_diagnostic_evidence(
     *,
     file_hash: bytes,
@@ -1328,3 +1793,126 @@ def require_client_udp_queue_full_diagnostic_evidence(
         QUEUE_FULL_COVERAGE_ID
     ]:
         raise RuntimeError("Client-UDP queue-full coverage claims are invalid")
+
+
+def build_client_udp_file_not_found_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpFileNotFoundTransition],
+) -> dict[str, Any]:
+    """Prove both clients answer and apply one exact file-not-found reask."""
+
+    file_hash_hex = file_hash.hex()
+    stock = _stock_authority(
+        stock_record,
+        coverage_id=FILE_NOT_FOUND_COVERAGE_ID,
+    )
+    transition_list = list(transitions)
+    clients: dict[str, dict[str, Any]] = {}
+    duplicate_requesters: list[str] = []
+    for transition in transition_list:
+        if transition.requester in clients:
+            duplicate_requesters.append(transition.requester)
+            continue
+        clients[transition.requester] = _file_not_found_transition_evidence(
+            transition,
+            file_hash=file_hash_hex,
+            part_count=part_count,
+        )
+    exact_clients = set(clients) == set(CLIENTS) and not duplicate_requesters
+    ordered_clients = [clients[client] for client in CLIENTS if client in clients]
+    requests = [
+        client.get("wire", {}).get("request", {}).get("rawHex")
+        for client in ordered_clients
+    ]
+    replies = [
+        client.get("wire", {}).get("fileNotFound", {}).get("rawHex")
+        for client in ordered_clients
+    ]
+    application_fields = (
+        "replyOpcode",
+        "queueRank",
+        "requestPendingAfter",
+        "remoteQueueFullAfter",
+        "sourceUdpVersion",
+        "queueRankApplied",
+        "partStatusIncluded",
+        "wirePartCount",
+        "partStatusApplied",
+        "partCountAfter",
+        "availablePartsAfter",
+        "partStatusBitsAfter",
+        "noNeededPartsAfter",
+        "outcome",
+    )
+    applications = [
+        {field: application.get(field) for field in application_fields}
+        for client in ordered_clients
+        if isinstance((application := client.get("application")), dict)
+    ]
+    dead_lists = [
+        client.get("deadList")
+        for client in ordered_clients
+        if isinstance(client.get("deadList"), dict)
+    ]
+    comparison = {
+        "requestBytesEqual": len(requests) == 2 and requests[0] == requests[1],
+        "fileNotFoundBytesEqual": len(replies) == 2 and replies[0] == replies[1],
+        "applicationEqual": len(applications) == 2
+        and applications[0] == applications[1],
+        "deadListEqual": len(dead_lists) == 2 and dead_lists[0] == dead_lists[1],
+        "bothDropped": exact_clients
+        and all(client.get("ok") is True for client in ordered_clients),
+    }
+    comparison["ok"] = all(comparison.values())
+    shape_ok = len(file_hash) == 16 and part_count > 0
+    failures = [
+        *([] if shape_ok else ["fixtureShape"]),
+        *([] if stock["ok"] else ["stockAuthority"]),
+        *([] if exact_clients else ["transitionSet"]),
+        *[
+            f"client.{client}"
+            for client, client_evidence in clients.items()
+            if client_evidence.get("ok") is not True
+        ],
+        *([] if comparison["ok"] else ["comparison"]),
+    ]
+    return {
+        "schema": FILE_NOT_FOUND_SCHEMA,
+        "ok": not failures,
+        "fileHash": file_hash_hex,
+        "partCount": part_count,
+        "stockAuthority": stock,
+        "failures": failures,
+        "clients": clients,
+        "comparison": comparison,
+        "coverageClaims": {
+            "eligibleCoverageIds": (
+                [FILE_NOT_FOUND_COVERAGE_ID] if not failures else []
+            ),
+            "evidenceLayers": list(EVIDENCE_LAYERS),
+        },
+    }
+
+
+def require_client_udp_file_not_found_diagnostic_evidence(
+    report: dict[str, Any],
+) -> None:
+    """Raise unless both clients causally completed file-not-found handling."""
+
+    if report.get("schema") != FILE_NOT_FOUND_SCHEMA:
+        raise RuntimeError(
+            "Client-UDP file-not-found diagnostics have an unexpected schema"
+        )
+    if report.get("ok") is not True:
+        raise RuntimeError(
+            "Client-UDP file-not-found diagnostics are incomplete: "
+            f"{report.get('failures')!r}"
+        )
+    claims = report.get("coverageClaims")
+    if not isinstance(claims, dict) or claims.get("eligibleCoverageIds") != [
+        FILE_NOT_FOUND_COVERAGE_ID
+    ]:
+        raise RuntimeError("Client-UDP file-not-found coverage claims are invalid")
