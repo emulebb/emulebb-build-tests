@@ -116,6 +116,25 @@ def test_write_rust_profile_persists_connection_cap(tmp_path: Path) -> None:
     assert setting_value(profile_dir, "core", "networkKademlia") is False
 
 
+def test_write_rust_profile_persists_production_upload_policy(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        upload_limit_kibps=4,
+        base_upload_slots=1,
+        upload_slot_elastic_percent=0,
+    )
+
+    assert setting_value(profile_dir, "core", "uploadLimitKiBps") == 4
+    assert setting_value(profile_dir, "core", "baseUploadSlots") == 1
+    assert setting_value(profile_dir, "core", "uploadSlotElasticPercent") == 0
+
+
 def test_write_rust_profile_persists_kad_passive_replay_switch(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
