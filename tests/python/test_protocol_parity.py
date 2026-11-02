@@ -52,7 +52,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 3,
-        "coveredIdCount": 21,
+        "coveredIdCount": 22,
         "groupVerdictCounts": {
             "parity": 3,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 21,
+            "parity": 22,
             "divergence": 0,
-            "evidence-incomplete": 79,
+            "evidence-incomplete": 78,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -105,6 +105,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.reply.tcp-status",
         "server.reply.udp-description",
         "server.reply.udp-status",
+        "server.search.advanced",
         "server.search.keyword",
         "server.source.tcp-obfuscated",
         "server.source.tcp-plain",
@@ -169,19 +170,11 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
-        "server.reply.search",
-        "server.search.keyword",
-        "transfer.block.uncompressed",
-    ]
-    assert payload["evidenceReceipts"][9]["coverageIds"] == [
-        "peer.startup.aich",
-        "peer.startup.multipacket-ext2",
-        "queue.admission",
         "server.reply.tcp-ident",
         "server.reply.tcp-status",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][10]["coverageIds"] == [
+    assert payload["evidenceReceipts"][9]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -189,7 +182,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.reply.udp-status",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][11]["coverageIds"] == [
+    assert payload["evidenceReceipts"][10]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -197,7 +190,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.tcp-plain",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][12]["coverageIds"] == [
+    assert payload["evidenceReceipts"][11]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -205,7 +198,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.tcp-obfuscated",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][13]["coverageIds"] == [
+    assert payload["evidenceReceipts"][12]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
@@ -213,12 +206,28 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.source.udp-v1",
         "transfer.block.uncompressed",
     ]
-    assert payload["evidenceReceipts"][14]["coverageIds"] == [
+    assert payload["evidenceReceipts"][13]["coverageIds"] == [
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
         "server.reply.sources",
         "server.source.udp-v2",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][14]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.keyword",
+        "transfer.block.uncompressed",
+    ]
+    assert payload["evidenceReceipts"][15]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.advanced",
         "transfer.block.uncompressed",
     ]
 
