@@ -64,6 +64,9 @@ def test_scripted_udp_server_advertises_v1_only_and_returns_exact_source(tmp_pat
         assert status[:2] == bytes((OP_EDONKEYPROT, OP_GLOBSERVSTATRES))
         assert int.from_bytes(status[2:6], "little") == challenge
         assert int.from_bytes(status[26:30], "little") == SERVER_UDP_FLAG_EXT_GETSOURCES
+        readiness = server.wait_for_status_clients(1, 0.5)
+        assert readiness["distinctClientCount"] == 1
+        assert readiness["udpFlags"] == SERVER_UDP_FLAG_EXT_GETSOURCES
 
         client.sendto(bytes((OP_EDONKEYPROT, OP_GLOBGETSOURCES)) + file_hash, target)
         reply = _recv(client)

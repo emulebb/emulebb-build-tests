@@ -555,6 +555,47 @@ def test_server_udp_metadata_uses_one_canonical_plaintext_oracle_case() -> None:
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
+def test_server_udp_source_v1_uses_one_canonical_plaintext_oracle_case() -> None:
+    module = load_suite_module()
+    wrong_client = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--client2-identity",
+            "stock_emule",
+            "--transfer-scenario",
+            module.SERVER_UDP_SOURCE_V1,
+        ]
+    )
+    wrong_case = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_UDP_SOURCE_V1,
+        ]
+    )
+    canonical = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "plain-server-plain-clients",
+            "--transfer-scenario",
+            module.SERVER_UDP_SOURCE_V1,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="MFC diagnostics oracle"):
+        module.validate_args(wrong_client)
+    with pytest.raises(ValueError, match="single canonical plaintext"):
+        module.validate_args(wrong_case)
+    module.validate_args(canonical)
+    assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+
+
 def test_server_login_accepts_only_canonical_bilateral_transport_plans() -> None:
     module = load_suite_module()
     wrong_client = module.parse_args(
@@ -1000,6 +1041,26 @@ def test_choose_distinct_ports_reserves_second_complete_server_block(monkeypatch
     assert len(ports) == len(set(ports.values()))
 
 
+def test_choose_distinct_ports_reserves_scripted_udp_source_target(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6240)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_udp_source_target=True,
+    )
+
+    target = ports["udp_source_target_tcp"]
+    assert target not in {6200, 6204, 6208, 6212, 6214}
+    assert ports["udp_source_target_udp"] == target + 4
+    assert "udp_source_peer_tcp" in ports
+    assert len(ports) == len(set(ports.values()))
+
+
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
     observed: dict[str, str | None] = {}
@@ -1261,7 +1322,7 @@ def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_ga
     assert "if len(source_transport_plan) != 1:" in script_text
     assert "expected_transport_mode=source_server_transport_mode" in script_text
     assert '"mode": "source-free-ed2k-link"' in script_text
-    assert script_text.count("wait_for_transfer_sources(") == 3
+    assert script_text.count("wait_for_transfer_sources(") == 5
     assert "collect_server_source_diagnostics(" in script_text
     assert (
         "server_source_diagnostic_evidence.require_server_source_diagnostic_evidence("
@@ -1310,6 +1371,26 @@ def test_server_udp_metadata_uses_two_servers_and_causal_bilateral_gate() -> Non
         in script_text
     )
     assert "ed2k_server.stop_process(metadata_server_process)" in script_text
+
+
+def test_server_udp_source_v1_uses_scripted_target_and_causal_bilateral_gate() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert (
+        "include_udp_source_target=args.transfer_scenario == SERVER_UDP_SOURCE_V1"
+        in script_text
+    )
+    assert "scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer(" in script_text
+    assert "udp_source_fixture.wait_for_status_clients(" in script_text
+    assert '"udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES' in script_text
+    assert '"priority": SERVER_PRIORITY_LOW' in script_text
+    assert '"mode": "source-free-ed2k-link"' in script_text
+    assert "collect_server_udp_source_v1_diagnostics(" in script_text
+    assert (
+        "server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence("
+        in script_text
+    )
 
 
 def test_rust_diagnostics_child_env_does_not_mutate_parent(

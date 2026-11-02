@@ -39,6 +39,8 @@ from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_udp_metadata_diagnostic_evidence  # noqa: E402
+from emule_test_harness import server_udp_source_v1_diagnostic_evidence  # noqa: E402
+from emule_test_harness import scripted_ed2k_udp_source  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
@@ -77,6 +79,7 @@ SERVER_KEYWORD_SEARCH = "server-keyword-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
 SERVER_TCP_METADATA = "server-tcp-metadata"
 SERVER_UDP_METADATA = "server-udp-metadata"
+SERVER_UDP_SOURCE_V1 = "server-udp-source-v1"
 SERVER_METADATA_SEED_NAME = "seed-before-server-ident"
 SERVER_METADATA_SEED_DESCRIPTION = "seed metadata before server reply"
 SERVER_IDENT_NAME = "emulebb-local-e2e"
@@ -105,6 +108,7 @@ TRANSFER_SCENARIOS = (
     SERVER_TCP_SOURCE,
     SERVER_TCP_METADATA,
     SERVER_UDP_METADATA,
+    SERVER_UDP_SOURCE_V1,
 )
 
 SERVER_MET_HEADER = 0xE0
@@ -187,6 +191,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                 SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
                 SERVER_UDP_METADATA,
+                SERVER_UDP_SOURCE_V1,
             }
             else DEFAULT_FIXTURE_SIZE_BYTES
         )
@@ -247,6 +252,13 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.protocol_case != "plain-server-plain-clients":
             raise ValueError(
                 "UDP server metadata proof uses the single canonical plaintext case."
+            )
+    if args.transfer_scenario == SERVER_UDP_SOURCE_V1:
+        if args.client2_identity != "mfc_oracle":
+            raise ValueError("UDP v1 server-source proof requires the MFC diagnostics oracle.")
+        if args.protocol_case != "plain-server-plain-clients":
+            raise ValueError(
+                "UDP v1 server-source proof uses the single canonical plaintext case."
             )
     if args.transfer_scenario == SERVER_LOGIN_REQUEST:
         if args.client2_identity != "mfc_oracle":
@@ -528,6 +540,66 @@ def collect_server_source_diagnostics(
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
         transfer_rows=transfer_rows,
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_server_udp_source_v1_diagnostics(
+    *,
+    expected_file_hash: str,
+    expected_file_name: str,
+    expected_file_size: int,
+    target_server_endpoint: str,
+    target_udp_endpoint: str,
+    source_host: str,
+    source_tcp_port: int,
+    transfer_rows: dict[str, dict[str, object]],
+    fixture_transcript: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots bilateral UDP-v1 source evidence before later transfer traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = (
+        server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+            expected_file_hash=expected_file_hash,
+            expected_file_name=expected_file_name,
+            expected_file_size=expected_file_size,
+            target_server_endpoint=target_server_endpoint,
+            target_udp_endpoint=target_udp_endpoint,
+            source_host=source_host,
+            source_tcp_port=source_tcp_port,
+            rust_records=rust_capture.records,
+            mfc_records=mfc_capture.records,
+            transfer_rows=transfer_rows,
+            fixture_transcript=fixture_transcript,
+        )
     )
     evidence["captures"] = {
         "rust": {
@@ -868,6 +940,7 @@ def choose_distinct_ports(
     include_search_publisher: bool = False,
     include_source_publisher: bool = False,
     include_metadata_target: bool = False,
+    include_udp_source_target: bool = False,
 ) -> dict[str, int]:
     """Allocates the suite's local ports without intentional reuse."""
 
@@ -884,14 +957,18 @@ def choose_distinct_ports(
     ed2k_tcp = choose_tcp_port_with_udp_offset(lan_bind_addr)
     add("ed2k_tcp", ed2k_tcp)
     add("ed2k_udp", ed2k_tcp + 4)
-    if include_metadata_target:
+    if include_metadata_target or include_udp_source_target:
         # The upstream server also owns +8/+12/+14. Reserve the anchor's full
         # block before choosing a second server even though callers consume
         # only its TCP and primary UDP ports directly.
         used.update(ed2k_tcp + offset for offset in (8, 12, 14))
-        metadata_tcp = choose_server_port_block(lan_bind_addr, used)
-        ports["metadata_ed2k_tcp"] = metadata_tcp
-        ports["metadata_ed2k_udp"] = metadata_tcp + 4
+        target_tcp = choose_server_port_block(lan_bind_addr, used)
+        if include_metadata_target:
+            ports["metadata_ed2k_tcp"] = target_tcp
+            ports["metadata_ed2k_udp"] = target_tcp + 4
+        else:
+            ports["udp_source_target_tcp"] = target_tcp
+            ports["udp_source_target_udp"] = target_tcp + 4
     for name in (
         "ed2k_admin",
         *(("metadata_ed2k_admin",) if include_metadata_target else ()),
@@ -905,6 +982,7 @@ def choose_distinct_ports(
         *(("search_publisher_tcp",) if include_search_publisher else ()),
         *(("source_publisher_tcp",) if include_source_publisher else ()),
         *(("metadata_publisher_tcp",) if include_metadata_target else ()),
+        *(("udp_source_peer_tcp",) if include_udp_source_target else ()),
     ):
         try:
             availability_host = "127.0.0.1" if name == "client2_ec" else lan_bind_addr
@@ -2323,11 +2401,13 @@ def main(argv: list[str] | None = None) -> int:
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
+    udp_source_fixture: scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer | None = None
     server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
     server_tcp_metadata_evidence: dict[str, object] | None = None
     server_udp_metadata_evidence: dict[str, object] | None = None
+    server_udp_source_v1_evidence: dict[str, object] | None = None
     current_phase = "initializing"
 
     try:
@@ -2341,6 +2421,7 @@ def main(argv: list[str] | None = None) -> int:
             include_search_publisher=args.transfer_scenario == SERVER_KEYWORD_SEARCH,
             include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
+            include_udp_source_target=args.transfer_scenario == SERVER_UDP_SOURCE_V1,
         )
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
@@ -2391,6 +2472,21 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["p2p_bind_interface_address"] = p2p_address
         report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
+
+        if args.transfer_scenario == SERVER_UDP_SOURCE_V1:
+            current_phase = "start_udp_source_v1_target"
+            udp_source_fixture = scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer(
+                bind_host=p2p_address,
+                server_tcp_port=ports["udp_source_target_tcp"],
+                file_hash=SERVER_SOURCE_FILE_HASH,
+                source_host=docker_ed2k_source_publisher.PUBLISHER_IP,
+                source_tcp_port=ports["udp_source_peer_tcp"],
+                transcript_path=(
+                    paths.source_artifacts_dir / "server-udp-source-v1-transcript.json"
+                ),
+            )
+            udp_source_fixture.start()
+            report["server_udp_source_v1_target"] = udp_source_fixture.snapshot()
 
         if args.transfer_scenario == SERVER_UDP_METADATA:
             current_phase = "start_udp_metadata_target_server"
@@ -2621,6 +2717,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.transfer_scenario == SERVER_TCP_METADATA
             else "deterministicserverudpmetadata-transfer.bin"
             if args.transfer_scenario == SERVER_UDP_METADATA
+            else "deterministicserverudpsourcev1-transfer.bin"
+            if args.transfer_scenario == SERVER_UDP_SOURCE_V1
             else "deterministic-two-client-transfer.bin"
         )
         fixture_file = fixture_dir / fixture_name
@@ -2658,7 +2756,7 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         if rust_server_entry is not None:
-            if args.transfer_scenario == SERVER_UDP_METADATA:
+            if args.transfer_scenario in {SERVER_UDP_METADATA, SERVER_UDP_SOURCE_V1}:
                 rust_server_entry = {**rust_server_entry, "serverPriority": "high"}
             if args.transfer_scenario == SERVER_TCP_METADATA:
                 rust_server_entry = {
@@ -2701,6 +2799,21 @@ def main(argv: list[str] | None = None) -> int:
                     "staticServer": True,
                     "enabled": True,
                     "udpFlags": 0,
+                    "obfuscationPortTcp": 0,
+                },
+            )
+        if args.transfer_scenario == SERVER_UDP_SOURCE_V1:
+            rust_metadata.seed_server(
+                rust_profile / rust_client.RUST_PROFILE_METADATA_FILE,
+                {
+                    "host": p2p_address,
+                    "port": ports["udp_source_target_tcp"],
+                    "name": "scripted-udp-source-v1-target",
+                    "description": "Harness-owned v1-only UDP source target",
+                    "serverPriority": "low",
+                    "staticServer": True,
+                    "enabled": True,
+                    "udpFlags": scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES,
                     "obfuscationPortTcp": 0,
                 },
             )
@@ -2788,9 +2901,19 @@ def main(argv: list[str] | None = None) -> int:
                 [live_common.win_path(fixture_dir, trailing_slash=True)],
             )
         client2_server_met = Path(client2["config_dir"]) / "server.met"
-        if args.transfer_scenario == SERVER_UDP_METADATA:
-            if metadata_server_address is None:
-                raise RuntimeError("UDP metadata target server address was not initialized.")
+        if args.transfer_scenario in {SERVER_UDP_METADATA, SERVER_UDP_SOURCE_V1}:
+            if args.transfer_scenario == SERVER_UDP_METADATA:
+                if metadata_server_address is None:
+                    raise RuntimeError("UDP metadata target server address was not initialized.")
+                target_address = metadata_server_address
+                target_port = ports["metadata_ed2k_tcp"]
+                target_name = SERVER_METADATA_SEED_NAME
+                target_description = SERVER_METADATA_SEED_DESCRIPTION
+            else:
+                target_address = p2p_address
+                target_port = ports["udp_source_target_tcp"]
+                target_name = "scripted-udp-source-v1-target"
+                target_description = "Harness-owned v1-only UDP source target"
             write_server_met_entries(
                 client2_server_met,
                 [
@@ -2802,10 +2925,10 @@ def main(argv: list[str] | None = None) -> int:
                         "priority": SERVER_PRIORITY_HIGH,
                     },
                     {
-                        "address": metadata_server_address,
-                        "port": ports["metadata_ed2k_tcp"],
-                        "name": SERVER_METADATA_SEED_NAME,
-                        "description": SERVER_METADATA_SEED_DESCRIPTION,
+                        "address": target_address,
+                        "port": target_port,
+                        "name": target_name,
+                        "description": target_description,
                         "priority": SERVER_PRIORITY_LOW,
                     },
                 ],
@@ -3058,6 +3181,92 @@ def main(argv: list[str] | None = None) -> int:
             client2=report["checks"]["client2_server_client"],
             client2_port=ports["client2_tcp"],
         )
+
+        if args.transfer_scenario == SERVER_UDP_SOURCE_V1:
+            if client2_process_id is None:
+                raise RuntimeError(
+                    "Bilateral UDP v1 server-source diagnostics require the MFC process identity."
+                )
+            if udp_source_fixture is None:
+                raise RuntimeError("UDP v1 source target was not initialized.")
+            current_phase = "wait_for_udp_source_v1_capabilities"
+            report["checks"]["server_udp_source_v1_capabilities"] = (
+                udp_source_fixture.wait_for_status_clients(
+                    2,
+                    args.server_connect_timeout_seconds,
+                )
+            )
+            source_link = (
+                "ed2k://|file|"
+                f"{urllib.parse.quote(SERVER_SOURCE_FILE_NAME, safe='')}|"
+                f"{SERVER_SOURCE_FILE_SIZE}|{SERVER_SOURCE_FILE_HASH.hex()}|/"
+            )
+            report["checks"]["client_server_udp_source_v1_stimulus"] = {
+                "mode": "source-free-ed2k-link",
+                "link": source_link,
+                "hash": SERVER_SOURCE_FILE_HASH.hex(),
+                "name": SERVER_SOURCE_FILE_NAME,
+                "sizeBytes": SERVER_SOURCE_FILE_SIZE,
+            }
+            source_transfer_rows: dict[str, dict[str, object]] = {}
+            current_phase = "mfc_server_udp_source_v1_transfer"
+            report["checks"]["mfc_server_udp_source_v1_transfer_add"] = add_transfer(
+                client2_base_url,
+                args.api_key,
+                source_link,
+                SERVER_SOURCE_FILE_HASH.hex(),
+            )
+            source_transfer_rows["mfc"] = wait_for_transfer_sources(
+                client2_base_url,
+                args.api_key,
+                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_name=SERVER_SOURCE_FILE_NAME,
+                expected_size=SERVER_SOURCE_FILE_SIZE,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            current_phase = "rust_server_udp_source_v1_transfer"
+            report["checks"]["rust_server_udp_source_v1_transfer_add"] = add_transfer(
+                base_url,
+                args.api_key,
+                source_link,
+                SERVER_SOURCE_FILE_HASH.hex(),
+            )
+            source_transfer_rows["rust"] = wait_for_transfer_sources(
+                base_url,
+                args.api_key,
+                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_name=SERVER_SOURCE_FILE_NAME,
+                expected_size=SERVER_SOURCE_FILE_SIZE,
+                timeout_seconds=args.server_publish_timeout_seconds,
+            )
+            report["checks"]["client_server_udp_source_v1_transfers"] = source_transfer_rows
+            current_phase = "collect_server_udp_source_v1_diagnostics"
+            fixture_transcript = udp_source_fixture.snapshot()
+            report["server_udp_source_v1_target"] = fixture_transcript
+            server_udp_source_v1_evidence = collect_server_udp_source_v1_diagnostics(
+                expected_file_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                expected_file_name=SERVER_SOURCE_FILE_NAME,
+                expected_file_size=SERVER_SOURCE_FILE_SIZE,
+                target_server_endpoint=(
+                    f"{p2p_address}:{ports['udp_source_target_tcp']}"
+                ),
+                target_udp_endpoint=f"{p2p_address}:{ports['udp_source_target_udp']}",
+                source_host=docker_ed2k_source_publisher.PUBLISHER_IP,
+                source_tcp_port=ports["udp_source_peer_tcp"],
+                transfer_rows=source_transfer_rows,
+                fixture_transcript=fixture_transcript,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_server_udp_source_v1_diagnostics"] = (
+                server_udp_source_v1_evidence
+            )
+            server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
+                server_udp_source_v1_evidence
+            )
+            udp_source_fixture.stop()
 
         if args.transfer_scenario == SERVER_TCP_METADATA:
             if client2_process_id is None:
@@ -3456,6 +3665,18 @@ def main(argv: list[str] | None = None) -> int:
                 "transferStimulus": report["checks"]["client1_transfer_stimulus"],
                 "completedFile": report["checks"]["client1_transfer_completed_file"],
             }
+            if server_udp_source_v1_evidence is not None:
+                server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
+                    server_udp_source_v1_evidence
+                )
+                diagnostics["serverUdpSourceV1"] = server_udp_source_v1_evidence
+                coverage_ids = diagnostics["coverageClaims"]["eligibleCoverageIds"]
+                diagnostics["coverageClaims"]["eligibleCoverageIds"] = sorted(
+                    {
+                        *coverage_ids,
+                        *server_udp_source_v1_evidence["eligibleCoverageIds"],
+                    }
+                )
             report["diagnostics"] = diagnostics
             transfer_diagnostic_evidence.require_transfer_diagnostic_evidence(diagnostics)
         else:
@@ -3492,6 +3713,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_udp_metadata_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverUdpMetadata"] = server_udp_metadata_evidence
+        if server_udp_source_v1_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["serverUdpSourceV1"] = server_udp_source_v1_evidence
         if isinstance(exc, TransferCompletionTimeout):
             report["checks"]["client1_transfer_completion_timeout"] = {"observations": exc.observations}
         return 1
@@ -3502,6 +3726,17 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     finally:
         close_results: dict[str, object] = {}
+        if udp_source_fixture is not None:
+            try:
+                udp_source_fixture.stop()
+                report["server_udp_source_v1_target"] = udp_source_fixture.snapshot()
+                close_results["server_udp_source_v1_target"] = {"ok": True}
+            except Exception as exc:
+                close_results["server_udp_source_v1_target"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         if server_search_publisher is not None:
             try:
                 server_search_publisher.close()

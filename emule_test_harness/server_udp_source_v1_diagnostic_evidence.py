@@ -360,7 +360,24 @@ def _transcript_evidence(
         and event.get("direction") == "recv"
         and event.get("opcode") == 0x94
     ]
+    status_requests = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("direction") == "recv"
+        and event.get("opcode") == ed2k_wire.OP_GLOBSERVSTATREQ
+        and event.get("accepted") is True
+    ]
+    status_replies = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("direction") == "send"
+        and event.get("opcode") == ed2k_wire.OP_GLOBSERVSTATRES
+        and event.get("accepted") is True
+    ]
     peers = {str(event.get("peer") or "") for event in requests}
+    status_peers = {str(event.get("peer") or "") for event in status_requests}
     paired = all(
         any(
             str(reply.get("peer") or "") == str(request.get("peer") or "")
@@ -381,6 +398,16 @@ def _transcript_evidence(
         for event in replies
         if event.get("accepted") is True and event.get("frameHex") == reply_hex
     ]
+    status_paired = all(
+        any(
+            str(reply.get("peer") or "") == str(request.get("peer") or "")
+            and _positive_int(reply.get("sequence")) is not None
+            and _positive_int(request.get("sequence")) is not None
+            and int(reply["sequence"]) > int(request["sequence"])
+            for reply in status_replies
+        )
+        for request in status_requests
+    )
     ok = bool(
         value.get("schema") == TRANSCRIPT_SCHEMA
         and str(value.get("serverEndpoint") or "").casefold()
@@ -388,6 +415,9 @@ def _transcript_evidence(
         and str(value.get("udpEndpoint") or "").casefold() == target_udp_endpoint.casefold()
         and value.get("udpFlags") == 1
         and str(value.get("fileHash") or "").casefold() == expected_hash
+        and len(status_requests) == len(status_replies) == 2
+        and len(status_peers) == 2
+        and status_paired
         and len(requests) == len(exact_requests) == 2
         and len(replies) == len(exact_replies) == 2
         and len(peers) == 2
@@ -402,6 +432,10 @@ def _transcript_evidence(
         "replyCount": len(replies),
         "exactReplyCount": len(exact_replies),
         "forbiddenV2RequestCount": len(forbidden),
+        "statusRequestCount": len(status_requests),
+        "statusReplyCount": len(status_replies),
+        "distinctStatusPeerCount": len(status_peers),
+        "statusPaired": status_paired,
         "distinctRequestPeerCount": len(peers),
         "paired": paired,
     }

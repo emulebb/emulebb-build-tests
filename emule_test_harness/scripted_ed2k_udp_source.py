@@ -118,6 +118,39 @@ class ScriptedEd2kUdpSourceServer:
             "events": events,
         }
 
+    def wait_for_status_clients(
+        self,
+        expected_clients: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Waits until distinct UDP peers have accepted the v1-only flags."""
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            self.raise_if_failed()
+            snapshot = self.snapshot()
+            peers = {
+                str(event.get("peer") or "")
+                for event in snapshot["events"]
+                if event.get("direction") == "recv"
+                and event.get("opcode") == OP_GLOBSERVSTATREQ
+                and event.get("accepted") is True
+            }
+            if len(peers) >= expected_clients:
+                return {
+                    "ok": True,
+                    "expectedClients": expected_clients,
+                    "distinctClientCount": len(peers),
+                    "peers": sorted(peers),
+                    "udpFlags": SERVER_UDP_FLAG_EXT_GETSOURCES,
+                }
+            time.sleep(0.05)
+        snapshot = self.snapshot()
+        raise TimeoutError(
+            "Timed out waiting for scripted ED2K UDP status requests: "
+            f"expected={expected_clients} events={snapshot['events']!r}"
+        )
+
     def _serve(self) -> None:
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket = udp_socket

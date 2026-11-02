@@ -140,10 +140,28 @@ def _transcript() -> dict[str, object]:
     )
     events = []
     for index, peer in enumerate(("192.0.2.20:41000", "192.0.2.21:41001")):
+        status_request_sequence = index * 4 + 1
+        status_reply_sequence = status_request_sequence + 1
+        source_request_sequence = status_request_sequence + 2
+        source_reply_sequence = status_request_sequence + 3
         events.extend(
             [
                 {
-                    "sequence": index * 2 + 1,
+                    "sequence": status_request_sequence,
+                    "direction": "recv",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBSERVSTATREQ,
+                    "accepted": True,
+                },
+                {
+                    "sequence": status_reply_sequence,
+                    "direction": "send",
+                    "peer": peer,
+                    "opcode": ed2k_wire.OP_GLOBSERVSTATRES,
+                    "accepted": True,
+                },
+                {
+                    "sequence": source_request_sequence,
                     "direction": "recv",
                     "peer": peer,
                     "opcode": ed2k_wire.OP_GLOBGETSOURCES,
@@ -151,7 +169,7 @@ def _transcript() -> dict[str, object]:
                     "accepted": True,
                 },
                 {
-                    "sequence": index * 2 + 2,
+                    "sequence": source_reply_sequence,
                     "direction": "send",
                     "peer": peer,
                     "opcode": ed2k_wire.OP_GLOBFOUNDSOURCES,
@@ -235,7 +253,12 @@ def test_udp_source_v1_evidence_rejects_v2_request_even_with_valid_v1_trace() ->
 
 def test_udp_source_v1_evidence_rejects_fixture_transcript_mutation() -> None:
     transcript = deepcopy(_transcript())
-    transcript["events"][0]["frameHex"] += "00"
+    source_request = next(
+        event
+        for event in transcript["events"]
+        if event.get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
+    )
+    source_request["frameHex"] += "00"
 
     evidence = _build(fixture_transcript=transcript)
 
