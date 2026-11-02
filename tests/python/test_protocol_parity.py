@@ -52,7 +52,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 4,
-        "coveredIdCount": 23,
+        "coveredIdCount": 24,
         "groupVerdictCounts": {
             "parity": 4,
             "divergence": 0,
@@ -61,9 +61,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 23,
+            "parity": 24,
             "divergence": 0,
-            "evidence-incomplete": 77,
+            "evidence-incomplete": 76,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -91,6 +91,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     )
     assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
     assert [row["coverageId"] for row in payload["coverageEvidence"]] == [
+        "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.metadata-recovery",
         "peer.startup.multipacket-ext2",
@@ -232,6 +233,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "transfer.block.uncompressed",
     ]
     assert payload["evidenceReceipts"][16]["coverageIds"] == [
+        "lowid.server-callback",
         "peer.startup.aich",
         "peer.startup.multipacket-ext2",
         "queue.admission",
