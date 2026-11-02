@@ -19,7 +19,7 @@ from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
-from emule_test_harness import server_udp_source_v1_diagnostic_evidence
+from emule_test_harness import server_udp_source_diagnostic_evidence
 from emule_test_harness import scripted_ed2k_udp_source
 from emule_test_harness import transfer_diagnostic_evidence
 
@@ -1142,19 +1142,20 @@ def _derived_server_udp_source_v1_coverage_ids(
         raise ValueError("server UDP source v1 evidence requires its dedicated scenario")
 
     source = _object(source_value, "diagnostics.serverUdpSourceV1")
-    if source.get("schema") != server_udp_source_v1_diagnostic_evidence.SCHEMA:
+    if source.get("schema") != server_udp_source_diagnostic_evidence.SCHEMAS[1]:
         raise ValueError("server UDP source v1 diagnostics use an unexpected schema")
     try:
-        server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
-            source
+        server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence(
+            source,
+            source_request_version=1,
         )
     except RuntimeError as exc:
         raise ValueError("server UDP source v1 diagnostics are not complete") from exc
     expected_ids = list(
-        server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        server_udp_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS[1]
     )
     if source.get("evidenceLayers") != list(
-        server_udp_source_v1_diagnostic_evidence.EVIDENCE_LAYERS
+        server_udp_source_diagnostic_evidence.EVIDENCE_LAYERS
     ):
         raise ValueError("server UDP source v1 evidence layers are not canonical")
 
@@ -1367,7 +1368,8 @@ def _derived_server_udp_source_v1_coverage_ids(
             "server UDP source v1 capture is not joined to the stopped oracle process"
         )
 
-    rebuilt = server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+    rebuilt = server_udp_source_diagnostic_evidence.build_server_udp_source_diagnostic_evidence(
+        source_request_version=1,
         expected_file_hash=SERVER_SOURCE_FILE_HASH,
         expected_file_name=SERVER_SOURCE_FILE_NAME,
         expected_file_size=SERVER_SOURCE_FILE_SIZE,
@@ -2344,7 +2346,7 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
     if (
         diagnostics.get("serverUdpSourceV1") is not None
         and coverage_id
-        in server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        in server_udp_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS[1]
     ):
         source = _object(
             diagnostics.get("serverUdpSourceV1"),

@@ -39,7 +39,7 @@ from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_udp_metadata_diagnostic_evidence  # noqa: E402
-from emule_test_harness import server_udp_source_v1_diagnostic_evidence  # noqa: E402
+from emule_test_harness import server_udp_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import scripted_ed2k_udp_source  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
@@ -587,7 +587,8 @@ def collect_server_udp_source_v1_diagnostics(
         allow_incomplete_active_tail=True,
     )
     evidence = (
-        server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+        server_udp_source_diagnostic_evidence.build_server_udp_source_diagnostic_evidence(
+            source_request_version=1,
             expected_file_hash=expected_file_hash,
             expected_file_name=expected_file_name,
             expected_file_size=expected_file_size,
@@ -3264,8 +3265,9 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["client_server_udp_source_v1_diagnostics"] = (
                 server_udp_source_v1_evidence
             )
-            server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
-                server_udp_source_v1_evidence
+            server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence(
+                server_udp_source_v1_evidence,
+                source_request_version=1,
             )
             udp_source_fixture.stop()
 
@@ -3667,8 +3669,9 @@ def main(argv: list[str] | None = None) -> int:
                 "completedFile": report["checks"]["client1_transfer_completed_file"],
             }
             if server_udp_source_v1_evidence is not None:
-                server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence(
-                    server_udp_source_v1_evidence
+                server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence(
+                    server_udp_source_v1_evidence,
+                    source_request_version=1,
                 )
                 diagnostics["serverUdpSourceV1"] = server_udp_source_v1_evidence
                 coverage_ids = diagnostics["coverageClaims"]["eligibleCoverageIds"]

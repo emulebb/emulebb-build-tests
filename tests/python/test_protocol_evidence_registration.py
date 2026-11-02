@@ -15,7 +15,7 @@ from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
-from emule_test_harness import server_udp_source_v1_diagnostic_evidence
+from emule_test_harness import server_udp_source_diagnostic_evidence
 from emule_test_harness import scripted_ed2k_udp_source
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
 from emule_test_harness.protocol_evidence_registration import build_transfer_registration
@@ -1225,7 +1225,8 @@ def attach_server_udp_source_v1(
             "sources": 1,
         },
     }
-    evidence = server_udp_source_v1_diagnostic_evidence.build_server_udp_source_v1_diagnostic_evidence(
+    evidence = server_udp_source_diagnostic_evidence.build_server_udp_source_diagnostic_evidence(
+        source_request_version=1,
         expected_file_hash=SERVER_SOURCE_FILE_HASH,
         expected_file_name=SERVER_SOURCE_FILE_NAME,
         expected_file_size=SERVER_SOURCE_FILE_SIZE,
@@ -1300,7 +1301,7 @@ def attach_server_udp_source_v1(
         for client, capture in captures.items()
     }
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        server_udp_source_v1_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        server_udp_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS[1]
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
     return evidence

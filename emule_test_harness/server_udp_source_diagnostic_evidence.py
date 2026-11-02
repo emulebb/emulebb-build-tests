@@ -1,4 +1,4 @@
-"""Strict bilateral evidence gate for one deterministic server UDP v1 source lookup."""
+"""Strict bilateral evidence gate for deterministic server UDP source lookups."""
 
 from __future__ import annotations
 
@@ -6,13 +6,24 @@ import ipaddress
 from typing import Any, Iterable
 
 from emule_test_harness import ed2k_wire
-from emule_test_harness.scripted_ed2k_udp_source import V1_TRANSCRIPT_SCHEMA
+from emule_test_harness.scripted_ed2k_udp_source import (
+    SERVER_UDP_FLAG_EXT_GETSOURCES,
+    SERVER_UDP_FLAG_EXT_GETSOURCES2,
+    V1_TRANSCRIPT_SCHEMA,
+    V2_TRANSCRIPT_SCHEMA,
+)
 
 
-SCHEMA = "emulebb-build-tests.deterministic-server-udp-source-v1-diagnostics.v1"
+SCHEMAS = {
+    1: "emulebb-build-tests.deterministic-server-udp-source-v1-diagnostics.v1",
+    2: "emulebb-build-tests.deterministic-server-udp-source-v2-diagnostics.v1",
+}
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 CLIENTS = ("rust", "mfc")
-ELIGIBLE_COVERAGE_IDS = ("server.source.udp-v1", "server.reply.sources")
+ELIGIBLE_COVERAGE_IDS = {
+    1: ("server.source.udp-v1", "server.reply.sources"),
+    2: ("server.source.udp-v2", "server.reply.sources"),
+}
 EVIDENCE_LAYERS = (
     "codec-transcript",
     "deterministic-state-machine",
@@ -117,6 +128,9 @@ def _request_evidence(
     records: list[dict[str, Any]],
     *,
     udp_endpoint: str,
+    request_opcode: int,
+    opposite_opcode: int,
+    opposite_version: int,
     expected_payload: bytes,
     require_send_attempt_id: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -124,7 +138,7 @@ def _request_evidence(
         records,
         udp_endpoint=udp_endpoint,
         direction="send",
-        opcode=ed2k_wire.OP_GLOBGETSOURCES,
+        opcode=request_opcode,
     )
     matching_payload = [
         record for record in candidates if _payload(record) == expected_payload
@@ -135,9 +149,9 @@ def _request_evidence(
             records,
             udp_endpoint=udp_endpoint,
             direction="send",
-            opcode=0x94,
+            opcode=opposite_opcode,
         )
-        if (_payload(record) or b"").startswith(expected_payload)
+        if (_payload(record) or b"").startswith(expected_payload[:16])
     ]
     exact = [
         record
@@ -154,26 +168,25 @@ def _request_evidence(
         if len(matching_payload) == len(exact) == 1 and not forbidden
         else None
     )
-    return (
-        {
-            "ok": request is not None,
-            "packetCount": len(matching_payload),
-            "exactPacketCount": len(exact),
-            "forbiddenV2PacketCount": len(forbidden),
-            "sequence": _sequence(request) or None,
-            "traceId": _trace_id(request),
-            "sendAttemptId": _send_attempt_id(request),
-            "payloadHex": _payload(request).hex() if _payload(request) is not None else None,
-            "expectedPayloadHex": expected_payload.hex(),
-        },
-        request,
-    )
+    summary = {
+        "ok": request is not None,
+        "packetCount": len(matching_payload),
+        "exactPacketCount": len(exact),
+        "sequence": _sequence(request) or None,
+        "traceId": _trace_id(request),
+        "sendAttemptId": _send_attempt_id(request),
+        "payloadHex": _payload(request).hex() if _payload(request) is not None else None,
+        "expectedPayloadHex": expected_payload.hex(),
+    }
+    summary[f"forbiddenV{opposite_version}PacketCount"] = len(forbidden)
+    return summary, request
 
 
 def _send_outcome_evidence(
     records: list[dict[str, Any]],
     *,
     udp_endpoint: str,
+    request_opcode: int,
     request: dict[str, Any] | None,
     required: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -186,8 +199,8 @@ def _send_outcome_evidence(
         and record.get("event") == "send_outcome"
         and str(_keys(record).get("peer") or "").casefold() == udp_endpoint.casefold()
         and _send_attempt_id(record) == send_attempt_id
-        and _keys(record).get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
-        and _body(record).get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
+        and _keys(record).get("opcode") == request_opcode
+        and _body(record).get("opcode") == request_opcode
     ]
     exact = [
         record
@@ -276,6 +289,8 @@ def _application_evidence(
     target_server_endpoint: str,
     target_udp_endpoint: str,
     expected_hash: str,
+    request_opcode: int,
+    request_opcode_name: str,
     reply: dict[str, Any] | None,
 ) -> dict[str, Any]:
     trace_id = _trace_id(reply)
@@ -296,11 +311,11 @@ def _application_evidence(
         if (
             keys.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
             and keys.get("opcode") == ed2k_wire.OP_GLOBFOUNDSOURCES
-            and keys.get("requestOpcode") == ed2k_wire.OP_GLOBGETSOURCES
+            and keys.get("requestOpcode") == request_opcode
             and body.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
             and body.get("opcode") == ed2k_wire.OP_GLOBFOUNDSOURCES
-            and body.get("requestOpcode") == ed2k_wire.OP_GLOBGETSOURCES
-            and body.get("requestOpcodeName") == "OP_GLOBGETSOURCES"
+            and body.get("requestOpcode") == request_opcode
+            and body.get("requestOpcodeName") == request_opcode_name
             and body.get("flow") == "server"
             and body.get("phase") == "source_search"
             and body.get("direction") == "recv"
@@ -367,6 +382,8 @@ def _transcript_evidence(
     target_server_endpoint: str,
     target_udp_endpoint: str,
     expected_hash: str,
+    expected_size: int,
+    source_request_version: int,
     expected_request_datagram: bytes,
     expected_reply_datagram: bytes,
 ) -> dict[str, Any]:
@@ -374,12 +391,31 @@ def _transcript_evidence(
     events = value.get("events") if isinstance(value.get("events"), list) else []
     request_hex = expected_request_datagram.hex().upper()
     reply_hex = expected_reply_datagram.hex().upper()
+    request_opcode = (
+        ed2k_wire.OP_GLOBGETSOURCES
+        if source_request_version == 1
+        else ed2k_wire.OP_GLOBGETSOURCES2
+    )
+    opposite_opcode = (
+        ed2k_wire.OP_GLOBGETSOURCES2
+        if source_request_version == 1
+        else ed2k_wire.OP_GLOBGETSOURCES
+    )
+    opposite_version = 2 if source_request_version == 1 else 1
+    expected_schema = (
+        V1_TRANSCRIPT_SCHEMA
+        if source_request_version == 1
+        else V2_TRANSCRIPT_SCHEMA
+    )
+    expected_flags = SERVER_UDP_FLAG_EXT_GETSOURCES
+    if source_request_version == 2:
+        expected_flags |= SERVER_UDP_FLAG_EXT_GETSOURCES2
     requests = [
         event
         for event in events
         if isinstance(event, dict)
         and event.get("direction") == "recv"
-        and event.get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
+        and event.get("opcode") == request_opcode
     ]
     replies = [
         event
@@ -393,7 +429,7 @@ def _transcript_evidence(
         for event in events
         if isinstance(event, dict)
         and event.get("direction") == "recv"
-        and event.get("opcode") == 0x94
+        and event.get("opcode") == opposite_opcode
     ]
     status_requests = [
         event
@@ -443,13 +479,30 @@ def _transcript_evidence(
         )
         for request in status_requests
     )
+    expected_keys = {
+        "schema",
+        "serverEndpoint",
+        "udpEndpoint",
+        "udpFlags",
+        "fileHash",
+        "source",
+        "events",
+    }
+    if source_request_version == 2:
+        expected_keys.add("fileSize")
     ok = bool(
-        value.get("schema") == V1_TRANSCRIPT_SCHEMA
+        set(value) == expected_keys
+        and value.get("schema") == expected_schema
         and str(value.get("serverEndpoint") or "").casefold()
         == target_server_endpoint.casefold()
         and str(value.get("udpEndpoint") or "").casefold() == target_udp_endpoint.casefold()
-        and value.get("udpFlags") == 1
+        and value.get("udpFlags") == expected_flags
         and str(value.get("fileHash") or "").casefold() == expected_hash
+        and (
+            value.get("fileSize") == expected_size
+            if source_request_version == 2
+            else "fileSize" not in value
+        )
         and len(status_requests) == len(status_replies) == 2
         and len(status_peers) == 2
         and status_paired
@@ -459,14 +512,13 @@ def _transcript_evidence(
         and not forbidden
         and paired
     )
-    return {
+    summary = {
         "ok": ok,
         "schema": value.get("schema"),
         "requestCount": len(requests),
         "exactRequestCount": len(exact_requests),
         "replyCount": len(replies),
         "exactReplyCount": len(exact_replies),
-        "forbiddenV2RequestCount": len(forbidden),
         "statusRequestCount": len(status_requests),
         "statusReplyCount": len(status_replies),
         "distinctStatusPeerCount": len(status_peers),
@@ -474,10 +526,13 @@ def _transcript_evidence(
         "distinctRequestPeerCount": len(peers),
         "paired": paired,
     }
+    summary[f"forbiddenV{opposite_version}RequestCount"] = len(forbidden)
+    return summary
 
 
-def build_server_udp_source_v1_diagnostic_evidence(
+def build_server_udp_source_diagnostic_evidence(
     *,
+    source_request_version: int,
     expected_file_hash: str,
     expected_file_name: str,
     expected_file_size: int,
@@ -490,8 +545,10 @@ def build_server_udp_source_v1_diagnostic_evidence(
     transfer_rows: dict[str, dict[str, Any]],
     fixture_transcript: dict[str, Any],
 ) -> dict[str, Any]:
-    """Builds fail-closed Rust/MFC/fixture proof for the UDP v1 source state."""
+    """Builds fail-closed Rust/MFC/fixture proof for one UDP source version."""
 
+    if source_request_version not in SCHEMAS:
+        raise ValueError("Server UDP source request version must be 1 or 2.")
     normalized_hash = expected_file_hash.casefold()
     if len(normalized_hash) != 32 or any(value not in "0123456789abcdef" for value in normalized_hash):
         raise ValueError("Expected file hash must be 32 hexadecimal characters.")
@@ -506,9 +563,30 @@ def build_server_udp_source_v1_diagnostic_evidence(
         raise ValueError("Transfer REST rows must contain exactly rust and mfc.")
 
     source_id = int.from_bytes(source_address.packed, "little")
-    request_datagram = ed2k_wire.encode_server_udp_source_v1_request(
-        [bytes.fromhex(normalized_hash)]
+    request_opcode = (
+        ed2k_wire.OP_GLOBGETSOURCES
+        if source_request_version == 1
+        else ed2k_wire.OP_GLOBGETSOURCES2
     )
+    request_opcode_name = (
+        "OP_GLOBGETSOURCES"
+        if source_request_version == 1
+        else "OP_GLOBGETSOURCES2"
+    )
+    opposite_opcode = (
+        ed2k_wire.OP_GLOBGETSOURCES2
+        if source_request_version == 1
+        else ed2k_wire.OP_GLOBGETSOURCES
+    )
+    opposite_version = 2 if source_request_version == 1 else 1
+    if source_request_version == 1:
+        request_datagram = ed2k_wire.encode_server_udp_source_v1_request(
+            [bytes.fromhex(normalized_hash)]
+        )
+    else:
+        request_datagram = ed2k_wire.encode_server_udp_source_v2_request(
+            [(bytes.fromhex(normalized_hash), expected_file_size)]
+        )
     reply_datagram = ed2k_wire.encode_server_udp_source_reply(
         file_hash=bytes.fromhex(normalized_hash),
         sources=[(source_id, source_tcp_port)],
@@ -522,12 +600,16 @@ def build_server_udp_source_v1_diagnostic_evidence(
         request_summary, request = _request_evidence(
             records_by_client[client],
             udp_endpoint=target_udp_endpoint,
+            request_opcode=request_opcode,
+            opposite_opcode=opposite_opcode,
+            opposite_version=opposite_version,
             expected_payload=expected_request_payload,
             require_send_attempt_id=client == "rust",
         )
         outcome_summary, outcome = _send_outcome_evidence(
             records_by_client[client],
             udp_endpoint=target_udp_endpoint,
+            request_opcode=request_opcode,
             request=request,
             required=client == "rust",
         )
@@ -543,6 +625,8 @@ def build_server_udp_source_v1_diagnostic_evidence(
             target_server_endpoint=target_server_endpoint,
             target_udp_endpoint=target_udp_endpoint,
             expected_hash=normalized_hash,
+            request_opcode=request_opcode,
+            request_opcode_name=request_opcode_name,
             reply=reply,
         )
         rest = _rest_evidence(
@@ -573,6 +657,8 @@ def build_server_udp_source_v1_diagnostic_evidence(
         target_server_endpoint=target_server_endpoint,
         target_udp_endpoint=target_udp_endpoint,
         expected_hash=normalized_hash,
+        expected_size=expected_file_size,
+        source_request_version=source_request_version,
         expected_request_datagram=request_datagram,
         expected_reply_datagram=reply_datagram,
     )
@@ -612,37 +698,55 @@ def build_server_udp_source_v1_diagnostic_evidence(
     comparison_failures = [name for name, value in comparison.items() if value is not True]
     failures.extend(f"comparison.{name}" for name in comparison_failures)
     ok = not failures
+    fixture = {
+        "fileHash": normalized_hash,
+        "fileName": expected_file_name,
+        "fileSize": expected_file_size,
+        "targetServerEndpoint": target_server_endpoint,
+        "targetUdpEndpoint": target_udp_endpoint,
+        "sourceHost": str(source_address),
+        "sourceClientId": source_id,
+        "sourceTcpPort": source_tcp_port,
+        "requestDatagramHex": request_datagram.hex(),
+        "replyDatagramHex": reply_datagram.hex(),
+    }
+    if source_request_version == 2:
+        fixture["sourceRequestVersion"] = source_request_version
     return {
-        "schema": SCHEMA,
+        "schema": SCHEMAS[source_request_version],
         "ok": ok,
         "failures": failures,
         "evidenceLayers": list(EVIDENCE_LAYERS),
-        "eligibleCoverageIds": list(ELIGIBLE_COVERAGE_IDS) if ok else [],
-        "fixture": {
-            "fileHash": normalized_hash,
-            "fileName": expected_file_name,
-            "fileSize": expected_file_size,
-            "targetServerEndpoint": target_server_endpoint,
-            "targetUdpEndpoint": target_udp_endpoint,
-            "sourceHost": str(source_address),
-            "sourceClientId": source_id,
-            "sourceTcpPort": source_tcp_port,
-            "requestDatagramHex": request_datagram.hex(),
-            "replyDatagramHex": reply_datagram.hex(),
-        },
+        "eligibleCoverageIds": (
+            list(ELIGIBLE_COVERAGE_IDS[source_request_version]) if ok else []
+        ),
+        "fixture": fixture,
         "clients": clients,
         "fixtureTranscript": transcript,
         "comparison": {"ok": not comparison_failures, "failures": comparison_failures, **comparison},
     }
 
 
-def require_server_udp_source_v1_diagnostic_evidence(evidence: dict[str, Any]) -> None:
-    """Raises unless all bilateral UDP-v1 source proof layers are complete."""
+def require_server_udp_source_diagnostic_evidence(
+    evidence: dict[str, Any],
+    *,
+    source_request_version: int,
+) -> None:
+    """Raises unless all bilateral UDP source proof layers are complete."""
 
-    if evidence.get("schema") != SCHEMA or evidence.get("ok") is not True:
+    if source_request_version not in SCHEMAS:
+        raise ValueError("Server UDP source request version must be 1 or 2.")
+    if (
+        evidence.get("schema") != SCHEMAS[source_request_version]
+        or evidence.get("ok") is not True
+    ):
         raise RuntimeError(
-            "Deterministic server UDP source v1 evidence is incomplete: "
+            f"Deterministic server UDP source v{source_request_version} evidence is incomplete: "
             f"{evidence.get('failures')!r}"
         )
-    if evidence.get("eligibleCoverageIds") != list(ELIGIBLE_COVERAGE_IDS):
-        raise RuntimeError("Server UDP source v1 evidence has an invalid coverage claim.")
+    if evidence.get("eligibleCoverageIds") != list(
+        ELIGIBLE_COVERAGE_IDS[source_request_version]
+    ):
+        raise RuntimeError(
+            f"Server UDP source v{source_request_version} evidence has an invalid coverage claim."
+        )

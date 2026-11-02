@@ -1388,7 +1388,7 @@ def test_server_udp_source_v1_uses_scripted_target_and_causal_bilateral_gate() -
     assert '"mode": "source-free-ed2k-link"' in script_text
     assert "collect_server_udp_source_v1_diagnostics(" in script_text
     assert (
-        "server_udp_source_v1_diagnostic_evidence.require_server_udp_source_v1_diagnostic_evidence("
+        "server_udp_source_diagnostic_evidence.require_server_udp_source_diagnostic_evidence("
         in script_text
     )
 
