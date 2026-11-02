@@ -331,9 +331,11 @@ def _waiter_removal_evidence(
             and waiter == expected_waiter
             and response.get("status") == 200
             and response.get("json") == {"ok": True, "removed": "queue"}
+            and receipt.get("verifiedAbsent") is True
         ),
         "waiter": waiter or None,
         "response": response or None,
+        "verifiedAbsent": receipt.get("verifiedAbsent") is True,
     }
 
 

@@ -410,6 +410,7 @@ def waiter_removal(requester: str) -> dict[str, object]:
             "status": 200,
             "json": {"ok": True, "removed": "queue"},
         },
+        "verifiedAbsent": True,
     }
 
 
@@ -730,6 +731,23 @@ def test_queue_full_requires_real_waiter_removal() -> None:
     assert report["ok"] is False
     assert report["clients"]["rust"]["waiterRemoval"]["ok"] is False
     assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_queue_full_requires_waiter_absence_after_removal() -> None:
+    original = queue_full_transition("rust")
+    receipt = copy.deepcopy(original.waiter_removal_receipt)
+    receipt["verifiedAbsent"] = False
+    wrong = evidence.ClientUdpQueueFullTransition(
+        **{**original.__dict__, "waiter_removal_receipt": receipt}
+    )
+
+    report = passing_queue_full_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    waiter = report["clients"]["rust"]["waiterRemoval"]
+    assert waiter["ok"] is False
+    assert waiter["verifiedAbsent"] is False
 
 
 @pytest.mark.unit
