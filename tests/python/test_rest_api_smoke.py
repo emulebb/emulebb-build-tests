@@ -14,7 +14,12 @@ import pytest
 from emule_test_harness.diag_event_runs import DIAGNOSTIC_WRITER_HEALTH_FIELDS
 
 PRIVATE_NATIVE_ONLY_ROUTES = {
+    ("POST", "/diagnostics/protocol-fixtures/buddy-relay-eligibility"),
     ("POST", "/diagnostics/protocol-fixtures/queued-lowid-sources"),
+}
+
+PRIVATE_NATIVE_ONLY_ERROR_CODES = {
+    "FIXTURE_PRECONDITION_FAILED",
 }
 
 
@@ -2759,12 +2764,14 @@ def _openapi_operation_contracts(openapi_path: Path) -> dict[tuple[str, str], di
 
 def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
     module = load_rest_api_smoke_module()
+    all_native_contracts = _native_route_contracts()
+    assert PRIVATE_NATIVE_ONLY_ROUTES <= all_native_contracts.keys()
     native_contracts = {
         route_key: {
             "body": contract["body"],
             "query": contract["query"],
         }
-        for route_key, contract in _native_route_contracts().items()
+        for route_key, contract in all_native_contracts.items()
         if route_key not in PRIVATE_NATIVE_ONLY_ROUTES
     }
     openapi_contracts = _openapi_operation_contracts(module.OPENAPI_CONTRACT_PATH)
@@ -3067,7 +3074,8 @@ def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
     documented_codes = set(re.findall(r"- ([A-Z_]+)", enum_match.group("values")))
     native_codes = set(re.findall(r'(?:strCode\s*=\s*|strErrorCode\s*=\s*|rCode == )"([A-Z_]+)"', native_text))
 
-    assert native_codes <= documented_codes
+    assert PRIVATE_NATIVE_ONLY_ERROR_CODES <= native_codes
+    assert native_codes - PRIVATE_NATIVE_ONLY_ERROR_CODES <= documented_codes
 
 
 def test_openapi_response_dtos_require_core_implementation_fields() -> None:

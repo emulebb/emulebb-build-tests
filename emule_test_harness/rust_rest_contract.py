@@ -10,6 +10,7 @@ REST_CONTRACT_VERSION_HEADER = "X-Contract-Version"
 # from the public product OpenAPI document.
 RUST_PRIVATE_DIAGNOSTICS_ROUTES = frozenset(
     {
+        ("POST", "/api/v1/diagnostics/protocol-fixtures/buddy-relay-eligibility"),
         ("POST", "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources"),
     }
 )
