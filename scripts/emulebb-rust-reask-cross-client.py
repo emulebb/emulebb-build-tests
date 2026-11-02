@@ -13,6 +13,12 @@ queue before one exact, expiring queue-pressure prerequisite is armed. The
 ordinary scheduler and production packet path remain responsible for the
 request, response, and state transition.
 
+For file-not-found, the harness-owned fixture is moved outside the responder's
+shared root after the requester has registered the real queued source. The
+production shared catalog is reloaded and must prove the exact hash absent
+before the ordinary scheduler sends one reask. The fixture is restored only
+after the responder stops.
+
 The verdict comes only from complete ``diag_event_v2`` causal evidence, exact
 wire bytes, the accepted stock corpus, and matching applied state. Process exit,
 daemon log strings, elapsed time, and public traffic are never verdicts.
@@ -53,9 +59,9 @@ harness_cli_common = cc.harness_cli_common
 SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
-QUEUE_PRESSURE_PATH = (
-    "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
-)
+QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
+MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
+RUST_SHARED_RELOAD_PATH = "/api/v1/shared-directories/operations/reload"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
@@ -67,6 +73,36 @@ RUST_LOG = (
     ",emulebb_ed2k::ed2k_tcp=debug,emulebb_ed2k::ed2k_transfer=debug"
     ",emulebb_ed2k::ed2k_client_udp=trace"
 )
+
+SCENARIO_COVERAGE_IDS = {
+    "v4": udp_evidence.COVERAGE_ID,
+    "queue-full": udp_evidence.QUEUE_FULL_COVERAGE_ID,
+    "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
+}
+SCENARIO_CAMPAIGN_SCHEMAS = {
+    "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
+    "queue-full": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
+    "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
+}
+SCENARIO_REPLY_OPCODES = {
+    "v4": udp_evidence.OP_REASKACK,
+    "queue-full": udp_evidence.OP_QUEUEFULL,
+    "file-not-found": udp_evidence.OP_FILENOTFOUND,
+}
+SCENARIO_EVIDENCE_BUILDERS = {
+    "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
+    "queue-full": udp_evidence.build_client_udp_queue_full_diagnostic_evidence,
+    "file-not-found": (
+        udp_evidence.build_client_udp_file_not_found_diagnostic_evidence
+    ),
+}
+SCENARIO_EVIDENCE_REQUIREMENTS = {
+    "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
+    "queue-full": udp_evidence.require_client_udp_queue_full_diagnostic_evidence,
+    "file-not-found": (
+        udp_evidence.require_client_udp_file_not_found_diagnostic_evidence
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -511,6 +547,87 @@ def find_udp_reask_applied(
     return matches[0] if matches else None
 
 
+def find_file_not_found_completion(
+    records: list[dict[str, Any]],
+    *,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+) -> dict[str, dict[str, Any]] | None:
+    """Resolve one ordered FNF application, dead-list, and source drop."""
+
+    normalized_file_hash = _canonical_hash(file_hash, field="file_hash")
+    normalized_user_hash = _canonical_hash(
+        source_user_hash,
+        field="source_user_hash",
+    )
+
+    def identity(record: dict[str, Any]) -> bool:
+        keys = record.get("keys") if isinstance(record.get("keys"), dict) else {}
+        return bool(
+            record.get("schema") == udp_evidence.DIAGNOSTIC_SCHEMA
+            and record.get("family") == "sched"
+            and str(keys.get("fileHash") or "").casefold() == normalized_file_hash
+            and str(keys.get("peer") or "").casefold() == source_tcp_endpoint.casefold()
+            and str(keys.get("peerHash") or "").casefold() == normalized_user_hash
+        )
+
+    applied = find_udp_reask_applied(
+        records,
+        file_hash=normalized_file_hash,
+        source_tcp_endpoint=source_tcp_endpoint,
+        source_user_hash=normalized_user_hash,
+        reply_opcode=udp_evidence.OP_FILENOTFOUND,
+    )
+    dead_listed = [
+        record
+        for record in records
+        if identity(record)
+        and record.get("event") == "source_dead_listed"
+        and record.get("body")
+        == {
+            "outcome": "dead_listed",
+            "reason": "udp_fnf",
+            "blockSecs": 2700,
+        }
+    ]
+    dropped = [
+        record
+        for record in records
+        if identity(record)
+        and record.get("event") == "source_dropped"
+        and record.get("body") == {"outcome": "dropped"}
+    ]
+    swapped = [
+        record
+        for record in records
+        if identity(record) and record.get("event") == "source_swapped"
+    ]
+    if swapped:
+        raise RuntimeError("file-not-found source was swapped instead of dropped")
+    if len(dead_listed) > 1 or len(dropped) > 1:
+        raise RuntimeError(
+            "multiple exact file-not-found terminal events were recorded"
+        )
+    if applied is None or not dead_listed or not dropped:
+        return None
+    sequences = [
+        applied.get("seq"),
+        dead_listed[0].get("seq"),
+        dropped[0].get("seq"),
+    ]
+    if not all(
+        isinstance(sequence, int) and not isinstance(sequence, bool) and sequence > 0
+        for sequence in sequences
+    ) or not (sequences[0] < sequences[1] < sequences[2]):
+        raise RuntimeError("file-not-found terminal events were not causally ordered")
+    return {
+        "applied": applied,
+        "deadListed": dead_listed[0],
+        "dropped": dropped[0],
+    }
+
+
 def load_stock_client_udp_record(
     path: Path = PROTOCOL_CATALOG_PATH,
 ) -> dict[str, object]:
@@ -531,7 +648,11 @@ def load_stock_client_udp_record(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["v4", "queue-full"], required=True)
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIO_COVERAGE_IDS),
+        required=True,
+    )
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -703,6 +824,220 @@ def rust_shared_file_link(base_url, api_key, *, file_name, timeout):
     raise RuntimeError(f"Rust never published shared file {file_name!r}")
 
 
+def find_shared_file_by_hash(
+    payload: object,
+    *,
+    file_hash: str,
+) -> dict[str, object] | None:
+    """Resolve one exact shared-catalog row by ED2K hash."""
+
+    normalized_hash = _canonical_hash(file_hash, field="shared file hash")
+    matches = [
+        row
+        for row in _api_items(payload)
+        if str(row.get("hash") or "").casefold() == normalized_hash
+    ]
+    if len(matches) > 1:
+        raise RuntimeError("shared catalog exposed the exact hash more than once")
+    return matches[0] if matches else None
+
+
+def wait_for_shared_file_presence(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: str,
+    present: bool,
+    timeout: float,
+) -> dict[str, object] | None:
+    """Wait for the production shared catalog to contain or omit one hash."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = cc.request_json(
+            base_url,
+            "GET",
+            "/api/v1/shared-files?offset=0&limit=100",
+            api_key,
+        )
+        row = find_shared_file_by_hash(payload, file_hash=file_hash)
+        if (row is not None) is present:
+            return row
+        time.sleep(0.25)
+    state = "present" if present else "absent"
+    raise RuntimeError(f"shared catalog never proved exact hash {state}")
+
+
+def reload_shared_catalog(
+    base_url: str,
+    api_key: str,
+    *,
+    reload_path: str,
+) -> dict[str, object]:
+    """Invoke one client's production shared-catalog reload operation."""
+
+    response = dtt.retry_rest_request(
+        base_url,
+        reload_path,
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        timeout_seconds=30.0,
+    )
+    status = int(response.get("status") or 0)
+    payload = _api_data(response.get("raw_json"))
+    receipt = {
+        "status": status,
+        "json": payload if isinstance(payload, dict) else None,
+    }
+    if status != 200:
+        raise RuntimeError(
+            "shared-catalog reload failed: "
+            f"{dtt.rest_smoke.compact_http_result(response)!r}"
+        )
+    return receipt
+
+
+def restore_shared_fixture(shared_path: Path, withdrawn_path: Path) -> None:
+    """Restore one harness-owned fixture without overwriting another file."""
+
+    if shared_path.exists():
+        if withdrawn_path.exists():
+            raise RuntimeError(
+                "both shared and withdrawn fixture paths exist; refusing overwrite"
+            )
+        return
+    if not withdrawn_path.is_file():
+        raise RuntimeError("withdrawn fixture is missing and cannot be restored")
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    withdrawn_path.replace(shared_path)
+
+
+def withdraw_shared_fixture(
+    base_url: str,
+    api_key: str,
+    *,
+    fixture_path: Path,
+    file_hash: str,
+    reload_path: str,
+    timeout: float,
+) -> tuple[dict[str, object], Path]:
+    """Withdraw one real fixture and prove its exact catalog hash disappeared."""
+
+    wait_for_shared_file_presence(
+        base_url,
+        api_key,
+        file_hash=file_hash,
+        present=True,
+        timeout=timeout,
+    )
+    shared_path = fixture_path.resolve()
+    shared_root = shared_path.parent
+    withdrawn_path = (shared_root.parent / "withdrawn" / shared_path.name).resolve()
+    if withdrawn_path.is_relative_to(shared_root):
+        raise RuntimeError("withdrawn fixture path remained inside the shared root")
+    if withdrawn_path.exists():
+        raise RuntimeError("withdrawn fixture target already exists")
+    withdrawn_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_path.replace(withdrawn_path)
+    try:
+        reload_response = reload_shared_catalog(
+            base_url,
+            api_key,
+            reload_path=reload_path,
+        )
+        wait_for_shared_file_presence(
+            base_url,
+            api_key,
+            file_hash=file_hash,
+            present=False,
+            timeout=timeout,
+        )
+    except Exception:
+        restore_shared_fixture(shared_path, withdrawn_path)
+        raise
+    return (
+        {
+            "fileHash": _canonical_hash(file_hash, field="file_hash"),
+            "sharedPath": str(shared_path),
+            "withdrawnPath": str(withdrawn_path),
+            "presentBefore": True,
+            "movedOutsideSharedRoot": True,
+            "reloadResponse": reload_response,
+            "absentAfter": True,
+        },
+        withdrawn_path,
+    )
+
+
+def find_transfer_source(
+    payload: object,
+    *,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+) -> dict[str, object] | None:
+    """Resolve one exact transfer source identity from a REST source list."""
+
+    host, port = _split_endpoint(
+        source_tcp_endpoint,
+        field="source_tcp_endpoint",
+    )
+    normalized_hash = _canonical_hash(
+        source_user_hash,
+        field="source_user_hash",
+    )
+    matches = [
+        row
+        for row in _api_items(payload)
+        if str(row.get("address") or "").casefold() == host.casefold()
+        and row.get("port") == port
+        and str(row.get("userHash") or "").casefold() == normalized_hash
+    ]
+    if len(matches) > 1:
+        raise RuntimeError("transfer source list exposed the exact source twice")
+    return matches[0] if matches else None
+
+
+def wait_for_transfer_source_absent(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+    timeout: float,
+) -> dict[str, object]:
+    """Require the requester REST model to omit one exact dropped source."""
+
+    normalized_file_hash = _canonical_hash(file_hash, field="file_hash")
+    normalized_user_hash = _canonical_hash(
+        source_user_hash,
+        field="source_user_hash",
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = cc.request_json(
+            base_url,
+            "GET",
+            f"/api/v1/transfers/{normalized_file_hash}/sources",
+            api_key,
+        )
+        source = find_transfer_source(
+            payload,
+            source_tcp_endpoint=source_tcp_endpoint,
+            source_user_hash=normalized_user_hash,
+        )
+        if source is None:
+            return {
+                "fileHash": normalized_file_hash,
+                "sourceTcpEndpoint": source_tcp_endpoint,
+                "sourceUserHash": normalized_user_hash,
+                "verifiedAbsent": True,
+            }
+        time.sleep(0.25)
+    raise RuntimeError("requester retained the exact file-not-found source")
+
+
 def _mfc_capacity_snapshots(log_dir: Path) -> list[dict]:
     return [
         event
@@ -763,9 +1098,7 @@ def wait_for_rust_occupied_upload_slot(
         if policy is not None:
             body = policy["body"]
             if body.get("baseSlots") != 1:
-                raise RuntimeError(
-                    f"Rust base upload slot count is not 1: {body}"
-                )
+                raise RuntimeError(f"Rust base upload slot count is not 1: {body}")
             if body.get("elasticSlots") != 0 or body.get("effectiveSlotCap") != 1:
                 raise RuntimeError(f"Rust upload slot cap is not fixed: {body}")
             opened = [
@@ -776,8 +1109,7 @@ def wait_for_rust_occupied_upload_slot(
                 and record.get("event") == "upload_slot_opened"
                 and isinstance(record.get("keys"), dict)
                 and isinstance(record.get("body"), dict)
-                and str(record["keys"].get("fileHash") or "").lower()
-                == normalized_hash
+                and str(record["keys"].get("fileHash") or "").lower() == normalized_hash
                 and record["keys"].get("peer") == peer_endpoint
                 and record["body"].get("outcome") == "opened"
                 and int(record.get("seq") or 0) > int(policy.get("seq") or 0)
@@ -794,7 +1126,9 @@ def wait_for_rust_occupied_upload_slot(
                     "peer": peer_endpoint,
                 }
         time.sleep(1.0)
-    raise RuntimeError("Rust never opened its fixed production slot for the exact occupier")
+    raise RuntimeError(
+        "Rust never opened its fixed production slot for the exact occupier"
+    )
 
 
 def current_diag_records(log_dir: Path, *, side: str) -> list[dict[str, Any]]:
@@ -921,6 +1255,40 @@ def wait_for_udp_reask_applied(
     )
 
 
+def wait_for_file_not_found_completion(
+    log_dir: Path,
+    *,
+    side: str,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+    timeout: float,
+    process: object | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """Wait for the complete ordered requester-side FNF state transition."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                f"{side} requester exited before completing file-not-found"
+            )
+        try:
+            records = current_diag_records(log_dir, side=side)
+        except ValueError:
+            records = []
+        completion = find_file_not_found_completion(
+            records,
+            file_hash=file_hash,
+            source_tcp_endpoint=source_tcp_endpoint,
+            source_user_hash=source_user_hash,
+        )
+        if completion is not None:
+            return completion, records
+        time.sleep(0.25)
+    raise RuntimeError(f"{side} requester never completed file-not-found handling")
+
+
 def start_mfc(
     *,
     args: argparse.Namespace,
@@ -1036,11 +1404,13 @@ def run_rust_requester_phase(
     fixture_path: Path,
 ) -> tuple[
     udp_evidence.ClientUdpV4Transition
-    | udp_evidence.ClientUdpQueueFullTransition,
+    | udp_evidence.ClientUdpQueueFullTransition
+    | udp_evidence.ClientUdpFileNotFoundTransition,
     dict[str, object],
 ]:
     mfc = None
     rust_clients: list[RustRuntime] = []
+    withdrawn_fixture_path = None
     try:
         mfc = start_mfc(
             args=args,
@@ -1140,6 +1510,8 @@ def run_rust_requester_phase(
         )
         waiter_removal_receipt = None
         queue_pressure_receipt = None
+        shared_withdrawal_receipt = None
+        source_absence_receipt = None
         if scenario == "queue-full":
             waiter = wait_for_upload_waiter(
                 mfc["baseUrl"],
@@ -1165,6 +1537,18 @@ def run_rust_requester_phase(
                 args.api_key,
                 pressure_request,
             )
+        elif scenario == "file-not-found":
+            (
+                shared_withdrawal_receipt,
+                withdrawn_fixture_path,
+            ) = withdraw_shared_fixture(
+                mfc["baseUrl"],
+                args.api_key,
+                fixture_path=fixture_path,
+                file_hash=file_hash,
+                reload_path=MFC_SHARED_RELOAD_PATH,
+                timeout=args.reask_observe_timeout_seconds,
+            )
         control_request = queued_source_reask_request(
             file_hash=file_hash,
             source_tcp_endpoint=registration["sourceTcpEndpoint"],
@@ -1176,20 +1560,36 @@ def run_rust_requester_phase(
             args.api_key,
             control_request,
         )
-        applied, requester_records = wait_for_udp_reask_applied(
-            requester.diagnostics_dir,
-            side="rust",
-            file_hash=file_hash,
-            source_tcp_endpoint=mfc["tcpEndpoint"],
-            source_user_hash=registration["sourceUserHash"],
-            reply_opcode=(
-                udp_evidence.OP_QUEUEFULL
-                if scenario == "queue-full"
-                else udp_evidence.OP_REASKACK
-            ),
-            timeout=args.reask_observe_timeout_seconds,
-            process=requester.process,
-        )
+        if scenario == "file-not-found":
+            completion, requester_records = wait_for_file_not_found_completion(
+                requester.diagnostics_dir,
+                side="rust",
+                file_hash=file_hash,
+                source_tcp_endpoint=mfc["tcpEndpoint"],
+                source_user_hash=registration["sourceUserHash"],
+                timeout=args.reask_observe_timeout_seconds,
+                process=requester.process,
+            )
+            applied = completion["applied"]
+            source_absence_receipt = wait_for_transfer_source_absent(
+                requester.base_url,
+                args.api_key,
+                file_hash=file_hash,
+                source_tcp_endpoint=mfc["tcpEndpoint"],
+                source_user_hash=registration["sourceUserHash"],
+                timeout=args.reask_observe_timeout_seconds,
+            )
+        else:
+            applied, requester_records = wait_for_udp_reask_applied(
+                requester.diagnostics_dir,
+                side="rust",
+                file_hash=file_hash,
+                source_tcp_endpoint=mfc["tcpEndpoint"],
+                source_user_hash=registration["sourceUserHash"],
+                reply_opcode=SCENARIO_REPLY_OPCODES[scenario],
+                timeout=args.reask_observe_timeout_seconds,
+                process=requester.process,
+            )
         responder_records = current_diag_records(mfc["diagnosticsDir"], side="emule")
         transition_arguments = {
             "requester": "rust",
@@ -1208,6 +1608,12 @@ def run_rust_requester_phase(
                 waiter_removal_receipt=waiter_removal_receipt,
                 queue_pressure_receipt=queue_pressure_receipt,
             )
+        elif scenario == "file-not-found":
+            transition = udp_evidence.ClientUdpFileNotFoundTransition(
+                **transition_arguments,
+                shared_withdrawal_receipt=shared_withdrawal_receipt,
+                source_absence_receipt=source_absence_receipt,
+            )
         else:
             transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
         check = {
@@ -1222,6 +1628,11 @@ def run_rust_requester_phase(
         if scenario == "queue-full":
             check["waiterRemoval"] = waiter_removal_receipt
             check["queuePressure"] = queue_pressure_receipt
+        elif scenario == "file-not-found":
+            check["sharedWithdrawal"] = shared_withdrawal_receipt
+            check["sourceAbsence"] = source_absence_receipt
+            check["deadListedSequence"] = completion["deadListed"].get("seq")
+            check["droppedSequence"] = completion["dropped"].get("seq")
         return (
             transition,
             check,
@@ -1230,6 +1641,8 @@ def run_rust_requester_phase(
         stop_mfc(mfc)
         for runtime in rust_clients:
             rust_client.stop_process_tree(runtime.process)
+        if withdrawn_fixture_path is not None:
+            restore_shared_fixture(fixture_path.resolve(), withdrawn_fixture_path)
 
 
 def run_mfc_requester_phase(
@@ -1251,12 +1664,14 @@ def run_mfc_requester_phase(
     expected_file_hash: str,
 ) -> tuple[
     udp_evidence.ClientUdpV4Transition
-    | udp_evidence.ClientUdpQueueFullTransition,
+    | udp_evidence.ClientUdpQueueFullTransition
+    | udp_evidence.ClientUdpFileNotFoundTransition,
     dict[str, object],
 ]:
     mfc = None
     uploader = None
     occupier = None
+    withdrawn_fixture_path = None
     try:
         uploader = start_rust(
             repo=rust_repo,
@@ -1352,6 +1767,8 @@ def run_mfc_requester_phase(
         )
         waiter_removal_receipt = None
         queue_pressure_receipt = None
+        shared_withdrawal_receipt = None
+        source_absence_receipt = None
         if scenario == "queue-full":
             waiter = wait_for_upload_waiter(
                 uploader.base_url,
@@ -1377,6 +1794,18 @@ def run_mfc_requester_phase(
                 args.api_key,
                 pressure_request,
             )
+        elif scenario == "file-not-found":
+            (
+                shared_withdrawal_receipt,
+                withdrawn_fixture_path,
+            ) = withdraw_shared_fixture(
+                uploader.base_url,
+                args.api_key,
+                fixture_path=fixture_path,
+                file_hash=file_hash,
+                reload_path=RUST_SHARED_RELOAD_PATH,
+                timeout=args.reask_observe_timeout_seconds,
+            )
         control_request = queued_source_reask_request(
             file_hash=file_hash,
             source_tcp_endpoint=uploader.tcp_endpoint,
@@ -1388,19 +1817,34 @@ def run_mfc_requester_phase(
             args.api_key,
             control_request,
         )
-        applied, requester_records = wait_for_udp_reask_applied(
-            mfc["diagnosticsDir"],
-            side="emule",
-            file_hash=file_hash,
-            source_tcp_endpoint=uploader.tcp_endpoint,
-            source_user_hash=source["sourceUserHash"],
-            reply_opcode=(
-                udp_evidence.OP_QUEUEFULL
-                if scenario == "queue-full"
-                else udp_evidence.OP_REASKACK
-            ),
-            timeout=args.reask_observe_timeout_seconds,
-        )
+        if scenario == "file-not-found":
+            completion, requester_records = wait_for_file_not_found_completion(
+                mfc["diagnosticsDir"],
+                side="emule",
+                file_hash=file_hash,
+                source_tcp_endpoint=uploader.tcp_endpoint,
+                source_user_hash=source["sourceUserHash"],
+                timeout=args.reask_observe_timeout_seconds,
+            )
+            applied = completion["applied"]
+            source_absence_receipt = wait_for_transfer_source_absent(
+                mfc["baseUrl"],
+                args.api_key,
+                file_hash=file_hash,
+                source_tcp_endpoint=uploader.tcp_endpoint,
+                source_user_hash=source["sourceUserHash"],
+                timeout=args.reask_observe_timeout_seconds,
+            )
+        else:
+            applied, requester_records = wait_for_udp_reask_applied(
+                mfc["diagnosticsDir"],
+                side="emule",
+                file_hash=file_hash,
+                source_tcp_endpoint=uploader.tcp_endpoint,
+                source_user_hash=source["sourceUserHash"],
+                reply_opcode=SCENARIO_REPLY_OPCODES[scenario],
+                timeout=args.reask_observe_timeout_seconds,
+            )
         responder_records = current_diag_records(
             uploader.diagnostics_dir,
             side="rust",
@@ -1422,6 +1866,12 @@ def run_mfc_requester_phase(
                 waiter_removal_receipt=waiter_removal_receipt,
                 queue_pressure_receipt=queue_pressure_receipt,
             )
+        elif scenario == "file-not-found":
+            transition = udp_evidence.ClientUdpFileNotFoundTransition(
+                **transition_arguments,
+                shared_withdrawal_receipt=shared_withdrawal_receipt,
+                source_absence_receipt=source_absence_receipt,
+            )
         else:
             transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
         check = {
@@ -1437,6 +1887,11 @@ def run_mfc_requester_phase(
         if scenario == "queue-full":
             check["waiterRemoval"] = waiter_removal_receipt
             check["queuePressure"] = queue_pressure_receipt
+        elif scenario == "file-not-found":
+            check["sharedWithdrawal"] = shared_withdrawal_receipt
+            check["sourceAbsence"] = source_absence_receipt
+            check["deadListedSequence"] = completion["deadListed"].get("seq")
+            check["droppedSequence"] = completion["dropped"].get("seq")
         return (
             transition,
             check,
@@ -1447,6 +1902,8 @@ def run_mfc_requester_phase(
             rust_client.stop_process_tree(occupier.process)
         if uploader is not None:
             rust_client.stop_process_tree(uploader.process)
+        if withdrawn_fixture_path is not None:
+            restore_shared_fixture(fixture_path.resolve(), withdrawn_fixture_path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1474,16 +1931,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile_seed_dir
         else paths.seed_config_dir
     )
-    coverage_id = (
-        udp_evidence.QUEUE_FULL_COVERAGE_ID
-        if args.scenario == "queue-full"
-        else udp_evidence.COVERAGE_ID
-    )
-    campaign_schema = (
-        "emulebb-build-tests.client-udp-queue-full-campaign.v1"
-        if args.scenario == "queue-full"
-        else "emulebb-build-tests.client-udp-v4-campaign.v1"
-    )
+    coverage_id = SCENARIO_COVERAGE_IDS[args.scenario]
+    campaign_schema = SCENARIO_CAMPAIGN_SCHEMAS[args.scenario]
     report: dict[str, object] = {
         "schema": campaign_schema,
         "suite": SUITE_NAME,
@@ -1557,9 +2006,7 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         fixture_path = (
-            paths.source_artifacts_dir
-            / "fixture"
-            / f"client-udp-{args.scenario}.bin"
+            paths.source_artifacts_dir / "fixture" / f"client-udp-{args.scenario}.bin"
         )
         dtt.write_fixture_file(
             fixture_path,
@@ -1616,11 +2063,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["mfcRequesterRustResponder"] = mfc_check
 
         report["currentPhase"] = "causal-evidence"
-        evidence_builder = (
-            udp_evidence.build_client_udp_queue_full_diagnostic_evidence
-            if args.scenario == "queue-full"
-            else udp_evidence.build_client_udp_v4_diagnostic_evidence
-        )
+        evidence_builder = SCENARIO_EVIDENCE_BUILDERS[args.scenario]
         evidence = evidence_builder(
             file_hash=bytes.fromhex(rust_check["fileHash"]),
             part_count=part_count,
@@ -1628,10 +2071,7 @@ def main(argv: list[str] | None = None) -> int:
             transitions=[rust_transition, mfc_transition],
         )
         report["evidence"] = evidence
-        if args.scenario == "queue-full":
-            udp_evidence.require_client_udp_queue_full_diagnostic_evidence(evidence)
-        else:
-            udp_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
+        SCENARIO_EVIDENCE_REQUIREMENTS[args.scenario](evidence)
         report["currentPhase"] = "complete"
         report["status"] = "passed"
         return 0
