@@ -25,6 +25,7 @@
     {
       "authorityId": "ed2k-server-dependency",
       "path": "repos/ed2k-server",
+      "revision": "d6a6dd672815a13265393ff22622c7fd97b58eee",
       "role": "upstream-clean-deterministic-dependency"
     },
     {
