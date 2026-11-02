@@ -46,9 +46,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
+from emule_test_harness import build_provenance  # noqa: E402
 from emule_test_harness import client_udp_diagnostic_evidence as udp_evidence  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_ed2k  # noqa: E402
+from emule_test_harness import soak_build_refresh  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -179,6 +182,16 @@ class RustRuntime:
     udp_endpoint: str
     diagnostics_dir: Path | None
     executable: Path
+
+
+@dataclass(frozen=True)
+class AuthoritativeBuilds:
+    """Exact canonical binaries and causal build receipts for one campaign."""
+
+    rust_repo: Path
+    rust_exe: Path
+    server_exe: Path
+    report: dict[str, object]
 
 
 def _api_data(payload: object) -> object:
@@ -716,14 +729,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=sorted(SCENARIO_COVERAGE_IDS),
         required=True,
     )
-    parser.add_argument("--app-root")
-    parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
-    parser.add_argument(
-        "--configuration", choices=["Debug", "Release"], default="Release"
-    )
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
@@ -735,9 +743,79 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reask-observe-timeout-seconds", type=float, default=180.0)
     # Large enough that the slow eMuleBB slot stays busy for a few reask ticks.
     parser.add_argument("--fixture-size-bytes", type=int, default=8 * 1024 * 1024)
-    parser.add_argument("--ed2k-server-repo")
-    parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
+
+
+def prepare_authoritative_builds(paths) -> AuthoritativeBuilds:
+    """Clean-build every campaign executable from clean, unchanged sources."""
+
+    workspace_root = paths.workspace_root
+    build_repo = resolve_manifest_repo(workspace_root, "build")
+    rust_repo = resolve_manifest_repo(workspace_root, "emulebb_rust")
+    server_repo = resolve_manifest_repo(workspace_root, "ed2k_server")
+    runner_state = build_provenance.require_clean_git_source(
+        REPO_ROOT,
+        label="client-UDP campaign runner",
+    )
+    rust_build = build_provenance.run_canonical_source_build(
+        soak_build_refresh.diagnostics_build_command("rust", clean=True),
+        build_repo=build_repo,
+        source_repo=rust_repo,
+        label="Rust diagnostics",
+    )
+    mfc_build = build_provenance.run_canonical_source_build(
+        soak_build_refresh.diagnostics_build_command("mfc", clean=True),
+        build_repo=build_repo,
+        source_repo=paths.app_root,
+        label="MFC diagnostics oracle",
+    )
+    server_build = build_provenance.run_canonical_source_build(
+        rust_ed2k.server_build_command(clean=True),
+        build_repo=build_repo,
+        source_repo=server_repo,
+        label="ed2k-server dependency",
+        timeout_seconds=900.0,
+    )
+
+    rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(
+        get_workspace_output_root()
+    )
+    mfc_exe = paths.app_exe.resolve()
+    server_exe = rust_ed2k.resolve_server_exe(None)
+    for label, executable in (
+        ("Rust diagnostics", rust_exe),
+        ("MFC diagnostics oracle", mfc_exe),
+        ("ed2k-server dependency", server_exe),
+    ):
+        if not executable.is_file():
+            raise RuntimeError(f"{label} clean build did not stage {executable}.")
+
+    return AuthoritativeBuilds(
+        rust_repo=rust_repo,
+        rust_exe=rust_exe,
+        server_exe=server_exe,
+        report={
+            "runner": {
+                "sourceRevision": runner_state.revision,
+                "sourceClean": runner_state.clean,
+            },
+            "rustDiagnostics": {
+                "path": str(rust_exe),
+                "sha256": dtt.file_sha256(rust_exe),
+                "build": rust_build,
+            },
+            "mfcDiagnostics": {
+                "path": str(mfc_exe),
+                "sha256": dtt.file_sha256(mfc_exe),
+                "build": mfc_build,
+            },
+            "ed2kServer": {
+                "path": str(server_exe),
+                "sha256": dtt.file_sha256(server_exe),
+                "build": server_build,
+            },
+        },
+    )
 
 
 def start_rust(
@@ -2055,18 +2133,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.fixture_size_bytes <= 0:
         raise ValueError("--fixture-size-bytes must be greater than zero")
-    app_exe = args.app_exe or str(
+    app_exe = str(
         converged_live_wire.resolve_mfc_diagnostics_exe(
             get_workspace_output_root(),
-            configuration=args.configuration,
+            configuration="Release",
         )
     )
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
-        configuration=args.configuration,
+        configuration="Release",
         workspace_root=None,
-        app_root=args.app_root,
+        app_root=None,
         app_exe=app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
@@ -2094,6 +2172,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"{coverage_id} owns its deterministic HighID route; "
                 "do not pass a P2P bind override"
             )
+        builds = prepare_authoritative_builds(paths)
+        report["builds"] = builds.report
         (
             high_id_pool,
             high_id_address,
@@ -2102,24 +2182,6 @@ def main(argv: list[str] | None = None) -> int:
         peer_ips = high_id_pool.acquire(3)
         ports = dtt.choose_distinct_ports(args.lan_bind_addr)
         used_ports = set(ports.values())
-        rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_diagnostics_exe = converged_live_wire.resolve_rust_diagnostics_exe(
-            get_workspace_output_root()
-        )
-        report["builds"] = {
-            "rustDiagnostics": {
-                "path": str(rust_diagnostics_exe),
-                "sha256": dtt.file_sha256(rust_diagnostics_exe),
-                "sourceRevision": dtt.git_head_revision(rust_repo),
-            },
-            "mfcDiagnostics": {
-                "path": str(paths.app_exe),
-                "sha256": dtt.file_sha256(paths.app_exe),
-                "sourceRevision": dtt.git_head_revision(paths.app_root),
-            },
-            "runnerRevision": dtt.git_head_revision(REPO_ROOT),
-        }
-
         ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=paths.source_artifacts_dir / "ed2k-server",
@@ -2128,8 +2190,7 @@ def main(argv: list[str] | None = None) -> int:
             token=args.api_key,
             admin_address=args.lan_bind_addr,
             ed2k_address=high_id_address,
-            repo_override=args.ed2k_server_repo,
-            exe_override=args.ed2k_server_exe,
+            exe_override=str(builds.server_exe),
             advertised_address_override=high_id_address,
             hairpin_lan_clients=True,
         )
@@ -2146,11 +2207,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "publicTraffic": False,
         }
-        report["builds"]["ed2kServer"] = {
-            "path": str(ed2k_server.server_exe),
-            "sha256": dtt.file_sha256(ed2k_server.server_exe),
-            "build": ed2k_server.build,
-        }
+        if ed2k_server.server_exe.resolve() != builds.server_exe:
+            raise RuntimeError(
+                "ed2k-server launch did not use the clean-built executable"
+            )
 
         fixture_path = (
             paths.source_artifacts_dir / "fixture" / f"client-udp-{args.scenario}.bin"
@@ -2177,7 +2237,7 @@ def main(argv: list[str] | None = None) -> int:
             scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
-            rust_repo=rust_repo,
+            rust_repo=builds.rust_repo,
             mfc_responder_ip=high_id_address,
             server_address=server_address,
             peer_ips=peer_ips,
@@ -2195,7 +2255,7 @@ def main(argv: list[str] | None = None) -> int:
             scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
-            rust_repo=rust_repo,
+            rust_repo=builds.rust_repo,
             uploader_ip=high_id_address,
             occupier_ip=peer_ips[0],
             p2p_address=peer_ips[1],
@@ -2239,6 +2299,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["evidence"] = evidence
         SCENARIO_EVIDENCE_REQUIREMENTS[args.scenario](evidence)
+        runner_after = build_provenance.require_clean_git_source(
+            REPO_ROOT,
+            label="client-UDP campaign runner",
+        )
+        if runner_after.revision != report["builds"]["runner"]["sourceRevision"]:
+            raise RuntimeError(
+                "client-UDP campaign runner revision changed during the run"
+            )
         report["currentPhase"] = "complete"
         report["status"] = "passed"
         return 0
