@@ -33,8 +33,8 @@ from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
 TRANSFER_RUNNER_PATH = "scripts/deterministic-two-client-transfer.py"
-CLIENT_UDP_V4_SUITE = "emulebb-rust-reask-cross-client"
-CLIENT_UDP_V4_RUNNER_PATH = "scripts/emulebb-rust-reask-cross-client.py"
+CLIENT_UDP_SUITE = "emulebb-rust-reask-cross-client"
+CLIENT_UDP_RUNNER_PATH = "scripts/emulebb-rust-reask-cross-client.py"
 PROFILE_AUTHORITY = "harness-generated-ephemeral-local-profiles"
 RUN_DIRECTORY_PATTERN = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)-")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -4291,7 +4291,11 @@ def _require_exact_value(value: Any, expected: Any, field: str) -> None:
         raise ValueError(f"{field} differs at {difference}")
 
 
-def _client_udp_v4_stock_authority(catalog_path: Path) -> dict[str, Any]:
+def _client_udp_stock_authority(
+    catalog_path: Path,
+    *,
+    coverage_id: str,
+) -> dict[str, Any]:
     payload = _json_object_file(catalog_path.resolve(), "protocol parity catalog")
     records = payload.get("records")
     matches = [
@@ -4316,8 +4320,7 @@ def _client_udp_v4_stock_authority(catalog_path: Path) -> dict[str, Any]:
         or record.get("recordType") != "udp-packet"
         or record.get("direction") != "both"
         or record.get("transport") != "udp"
-        or client_udp_diagnostic_evidence.COVERAGE_ID
-        not in (record.get("coverageIds") or [])
+        or coverage_id not in (record.get("coverageIds") or [])
         or record.get("fixtureEncoding") != "concatenated-client-udp-corpus"
         or record.get("fixtureLength") != len(fixture)
         or len(fixture) != 64
@@ -4590,6 +4593,352 @@ def _validate_client_udp_v4_client(
     }
 
 
+def _validate_client_udp_queue_full_client(
+    client_id: str,
+    value: Any,
+    *,
+    file_hash: str,
+    part_count: int,
+) -> dict[str, Any]:
+    client = _object(value, f"evidence.clients.{client_id}")
+    responder = "mfc" if client_id == "rust" else "rust"
+    if client.get("ok") is not True:
+        raise ValueError(f"evidence.clients.{client_id} is not green")
+    if client.get("requester") != client_id or client.get("responder") != responder:
+        raise ValueError(f"evidence.clients.{client_id} direction is invalid")
+
+    source_tcp_endpoint = str(client.get("sourceTcpEndpoint") or "")
+    source_udp_endpoint = str(client.get("sourceUdpEndpoint") or "")
+    requester_udp_endpoint = str(client.get("requesterUdpEndpoint") or "")
+    source_tcp_host, source_tcp_port = _canonical_ipv4_endpoint(
+        source_tcp_endpoint,
+        f"evidence.clients.{client_id}.sourceTcpEndpoint",
+    )
+    source_udp_host, source_udp_port = _canonical_ipv4_endpoint(
+        source_udp_endpoint,
+        f"evidence.clients.{client_id}.sourceUdpEndpoint",
+    )
+    requester_udp_host, requester_udp_port = _canonical_ipv4_endpoint(
+        requester_udp_endpoint,
+        f"evidence.clients.{client_id}.requesterUdpEndpoint",
+    )
+    if source_tcp_host != source_udp_host:
+        raise ValueError(f"evidence.clients.{client_id} source endpoints disagree")
+    source_user_hash = _lower_hex(
+        client.get("sourceUserHash"),
+        ED2K_HASH_PATTERN,
+        f"evidence.clients.{client_id}.sourceUserHash",
+    )
+
+    expected_control_request = {
+        "fileHash": file_hash,
+        "sourceIp": source_tcp_host,
+        "sourceTcpPort": source_tcp_port,
+        "sourceUdpPort": source_udp_port,
+        "sourceUserHash": source_user_hash,
+        "sourceUdpVersion": 4,
+    }
+    expected_control_response = {
+        "status": 200,
+        "json": {
+            "accepted": True,
+            "fileHash": file_hash,
+            "sourceEndpoint": source_udp_endpoint,
+            "sourceTcpPort": source_tcp_port,
+            "sourceUserHash": source_user_hash,
+            "sourceUdpVersion": 4,
+            "state": "queued-source-reask-pending",
+        },
+    }
+    control = {
+        "request": expected_control_request,
+        "response": expected_control_response,
+    }
+    _require_exact_value(
+        client.get("control"),
+        {"ok": True, **control},
+        f"evidence.clients.{client_id}.control",
+    )
+
+    waiter_removal = _object(
+        client.get("waiterRemoval"),
+        f"evidence.clients.{client_id}.waiterRemoval",
+    )
+    waiter = _object(
+        waiter_removal.get("waiter"),
+        f"evidence.clients.{client_id}.waiterRemoval.waiter",
+    )
+    waiter_client_id = str(waiter.get("clientId") or "")
+    if not waiter_client_id.strip():
+        raise ValueError(f"evidence.clients.{client_id} waiter clientId is empty")
+    waiter_receipt = {
+        "waiter": {
+            "clientId": waiter_client_id,
+            "address": requester_udp_host,
+            "requestedFileHash": file_hash,
+            "waitingQueue": True,
+        },
+        "response": {
+            "status": 200,
+            "json": {"ok": True, "removed": "queue"},
+        },
+        "verifiedAbsent": True,
+    }
+    _require_exact_value(
+        waiter_removal,
+        {"ok": True, **waiter_receipt},
+        f"evidence.clients.{client_id}.waiterRemoval",
+    )
+
+    pressure = _object(
+        client.get("queuePressure"),
+        f"evidence.clients.{client_id}.queuePressure",
+    )
+    fixture_id = _positive_int(
+        pressure.get("fixtureId"),
+        f"evidence.clients.{client_id}.queuePressure.fixtureId",
+    )
+    actual_count = _nonnegative_int(
+        pressure.get("actualWaitingUserCount"),
+        f"evidence.clients.{client_id}.queuePressure.actualWaitingUserCount",
+    )
+    effective_count = _nonnegative_int(
+        pressure.get("effectiveWaitingUserCount"),
+        f"evidence.clients.{client_id}.queuePressure.effectiveWaitingUserCount",
+    )
+    queue_size = _positive_int(
+        pressure.get("queueSize"),
+        f"evidence.clients.{client_id}.queuePressure.queueSize",
+    )
+    if effective_count <= actual_count or effective_count + 50 != queue_size + 1:
+        raise ValueError(
+            f"evidence.clients.{client_id} queue pressure does not cross the stock margin"
+        )
+    pressure_request = {
+        "fileHash": file_hash,
+        "sourceIp": requester_udp_host,
+        "sourceUdpPort": requester_udp_port,
+    }
+    pressure_response = {
+        "status": 200,
+        "json": {
+            "accepted": True,
+            "fixtureId": fixture_id,
+            "fileHash": file_hash,
+            "sourceEndpoint": requester_udp_endpoint,
+            "actualWaitingUserCount": actual_count,
+            "effectiveWaitingUserCount": effective_count,
+            "queueSize": queue_size,
+            "expiresAfterMillis": 30000,
+            "state": "client-udp-queue-pressure-armed",
+        },
+    }
+    pressure_receipt = {
+        "request": pressure_request,
+        "response": pressure_response,
+    }
+    _require_exact_value(
+        pressure,
+        {
+            "ok": True,
+            **pressure_receipt,
+            "fixtureId": fixture_id,
+            "actualWaitingUserCount": actual_count,
+            "effectiveWaitingUserCount": effective_count,
+            "queueSize": queue_size,
+            "queueFullMargin": 50,
+        },
+        f"evidence.clients.{client_id}.queuePressure",
+    )
+
+    request_raw = (
+        bytes(
+            (
+                client_udp_diagnostic_evidence.OP_EMULEPROT,
+                client_udp_diagnostic_evidence.OP_REASKFILEPING,
+            )
+        )
+        + bytes.fromhex(file_hash)
+        + part_count.to_bytes(2, "little")
+        + bytes((0,))
+        + bytes((1, 0))
+    )
+    queue_full_raw = bytes(
+        (
+            client_udp_diagnostic_evidence.OP_EMULEPROT,
+            client_udp_diagnostic_evidence.OP_QUEUEFULL,
+        )
+    )
+    expected_request = {
+        "ok": True,
+        "rawHex": request_raw.hex(),
+        "fileHash": file_hash,
+        "partStatus": {
+            "wirePartCount": part_count,
+            "partStatusBits": "0" * part_count,
+            "completeSource": False,
+            "rawHex": (part_count.to_bytes(2, "little") + bytes((0,))).hex(),
+        },
+        "completeSourceCount": 1,
+    }
+    expected_queue_full = {
+        "ok": True,
+        "rawHex": queue_full_raw.hex(),
+        "payloadLength": 0,
+    }
+    wire = _object(client.get("wire"), f"evidence.clients.{client_id}.wire")
+    _require_exact_value(
+        wire,
+        {
+            "ok": True,
+            "request": expected_request,
+            "queueFull": expected_queue_full,
+            "expectedRequestRawHex": request_raw.hex(),
+            "expectedQueueFullRawHex": queue_full_raw.hex(),
+        },
+        f"evidence.clients.{client_id}.wire",
+    )
+
+    diagnostics = _object(
+        client.get("diagnostics"),
+        f"evidence.clients.{client_id}.diagnostics",
+    )
+    expected_counts = {
+        "registration": 1,
+        "schedule": 1,
+        "decision": 1,
+        "requestOut": 1,
+        "requestTerminal": 1,
+        "requestIn": 1,
+        "fixtureConsumed": 1,
+        "queueFullOut": 1,
+        "queueFullTerminal": 1,
+        "queueFullIn": 1,
+        "applied": 1,
+        "forbiddenResponderReply": 0,
+        "forbiddenRequesterReply": 0,
+    }
+    _require_exact_value(
+        diagnostics.get("counts"),
+        expected_counts,
+        f"evidence.clients.{client_id}.diagnostics.counts",
+    )
+    requester_sequences = _object(
+        diagnostics.get("requesterSequences"),
+        f"evidence.clients.{client_id}.diagnostics.requesterSequences",
+    )
+    responder_sequences = _object(
+        diagnostics.get("responderSequences"),
+        f"evidence.clients.{client_id}.diagnostics.responderSequences",
+    )
+    requester_order = (
+        "registration",
+        "schedule",
+        "decision",
+        "requestOut",
+        "requestTerminal",
+        "queueFullIn",
+        "applied",
+    )
+    requester_values = [
+        _positive_sequence(
+            requester_sequences.get(name),
+            f"evidence.clients.{client_id}.diagnostics.requesterSequences.{name}",
+        )
+        for name in requester_order
+    ]
+    if requester_values != sorted(set(requester_values)):
+        raise ValueError(
+            f"evidence.clients.{client_id} requester sequence is not causal"
+        )
+    responder_values = {
+        name: _positive_sequence(
+            responder_sequences.get(name),
+            f"evidence.clients.{client_id}.diagnostics.responderSequences.{name}",
+        )
+        for name in (
+            "requestIn",
+            "fixtureConsumed",
+            "queueFullOut",
+            "queueFullTerminal",
+        )
+    }
+    if len(set(responder_values.values())) != len(responder_values) or not (
+        responder_values["requestIn"] < responder_values["queueFullOut"]
+        and responder_values["fixtureConsumed"] < responder_values["queueFullOut"]
+        < responder_values["queueFullTerminal"]
+    ):
+        raise ValueError(
+            f"evidence.clients.{client_id} responder sequence is not causal"
+        )
+    if (
+        diagnostics.get("ok") is not True
+        or diagnostics.get("requesterOrdered") is not True
+        or diagnostics.get("responderOrdered") is not True
+    ):
+        raise ValueError(f"evidence.clients.{client_id} diagnostics are not ordered")
+    _positive_int(
+        diagnostics.get("requestSendAttemptId"),
+        f"evidence.clients.{client_id}.diagnostics.requestSendAttemptId",
+    )
+    _positive_int(
+        diagnostics.get("queueFullSendAttemptId"),
+        f"evidence.clients.{client_id}.diagnostics.queueFullSendAttemptId",
+    )
+
+    recorded_application = _object(
+        client.get("application"),
+        f"evidence.clients.{client_id}.application",
+    )
+    udp_total_after = _positive_int(
+        recorded_application.get("udpTotalAfter"),
+        f"evidence.clients.{client_id}.application.udpTotalAfter",
+    )
+    application = {
+        "availablePartsAfter": None,
+        "nextReaskScheduled": True,
+        "noNeededPartsAfter": None,
+        "outcome": "applied",
+        "partCountAfter": None,
+        "partStatusApplied": False,
+        "partStatusBitsAfter": None,
+        "partStatusIncluded": False,
+        "queueRank": 0,
+        "queueRankApplied": True,
+        "remoteQueueFullAfter": True,
+        "replyOpcode": client_udp_diagnostic_evidence.OP_QUEUEFULL,
+        "requestPendingAfter": False,
+        "sourceRetainedAfter": True,
+        "sourceUdpEndpoint": source_udp_endpoint,
+        "sourceUdpVersion": 4,
+        "udpFailedAfter": 0,
+        "udpTotalAfter": udp_total_after,
+        "wirePartCount": None,
+    }
+    _require_exact_value(
+        recorded_application,
+        application,
+        f"evidence.clients.{client_id}.application",
+    )
+    return {
+        "control": control,
+        "waiterRemoval": waiter_receipt,
+        "queuePressure": pressure_receipt,
+        "requestRawHex": request_raw.hex(),
+        "queueFullRawHex": queue_full_raw.hex(),
+        "application": application,
+        "comparableApplication": {
+            key: value
+            for key, value in application.items()
+            if key not in {"sourceUdpEndpoint", "udpTotalAfter"}
+        },
+        "appliedSequence": requester_sequences["applied"],
+        "sourceTcpEndpoint": source_tcp_endpoint,
+        "sourceUdpEndpoint": source_udp_endpoint,
+        "sourceUserHash": source_user_hash,
+    }
+
+
 def _validate_high_id_observation(
     value: Any,
     field: str,
@@ -4608,7 +4957,7 @@ def _validate_high_id_observation(
         raise ValueError(f"{field} did not publish the required shared file")
 
 
-def build_client_udp_v4_registration(
+def _build_client_udp_v4_registration(
     report_path: Path,
     *,
     output_root: Path,
@@ -4638,7 +4987,8 @@ def build_client_udp_v4_registration(
     report = _json_object_file(resolved_report, "client-UDP campaign report")
     if (
         report.get("schema") != "emulebb-build-tests.client-udp-v4-campaign.v1"
-        or report.get("suite") != CLIENT_UDP_V4_SUITE
+        or report.get("suite") != CLIENT_UDP_SUITE
+        or report.get("scenario") != "v4"
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
         or report.get("coverageId") != client_udp_diagnostic_evidence.COVERAGE_ID
@@ -4677,7 +5027,10 @@ def build_client_udp_v4_registration(
         / "manifests"
         / "protocol-parity-catalog.json"
     )
-    stock_authority = _client_udp_v4_stock_authority(selected_catalog)
+    stock_authority = _client_udp_stock_authority(
+        selected_catalog,
+        coverage_id=client_udp_diagnostic_evidence.COVERAGE_ID,
+    )
     _require_exact_value(
         evidence.get("stockAuthority"), stock_authority, "evidence.stockAuthority"
     )
@@ -4861,7 +5214,7 @@ def build_client_udp_v4_registration(
         "evidenceLayers": evidence_layers,
         "profileAuthority": PROFILE_AUTHORITY,
         "receiptId": receipt_id,
-        "runnerPath": CLIENT_UDP_V4_RUNNER_PATH,
+        "runnerPath": CLIENT_UDP_RUNNER_PATH,
         "runnerRevision": runner_revision,
         "subjects": subjects,
     }
@@ -4877,6 +5230,323 @@ def build_client_udp_v4_registration(
         "verdict": "parity",
     }
     return {"coverageEvidence": [coverage_evidence], "evidenceReceipt": receipt}
+
+
+def _build_client_udp_queue_full_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral queue-full receipt."""
+
+    resolved_output = output_root.resolve()
+    resolved_report = report_path.resolve()
+    if (
+        not resolved_report.is_relative_to(resolved_output)
+        or not resolved_report.is_file()
+    ):
+        raise ValueError(
+            "report must be an existing file under EMULEBB_WORKSPACE_OUTPUT_ROOT"
+        )
+    relative_report = resolved_report.relative_to(resolved_output)
+    if "latest" in relative_report.parts:
+        raise ValueError(
+            "report must use an immutable timestamped run path, not latest"
+        )
+    run_directory = resolved_report.parent
+    stamp_match = RUN_DIRECTORY_PATTERN.match(run_directory.name)
+    if stamp_match is None:
+        raise ValueError("report parent must be a timestamped client-UDP run directory")
+
+    report = _json_object_file(resolved_report, "client-UDP campaign report")
+    coverage_id = client_udp_diagnostic_evidence.QUEUE_FULL_COVERAGE_ID
+    if (
+        report.get("schema")
+        != "emulebb-build-tests.client-udp-queue-full-campaign.v1"
+        or report.get("suite") != CLIENT_UDP_SUITE
+        or report.get("scenario") != "queue-full"
+        or report.get("status") != "passed"
+        or report.get("currentPhase") != "complete"
+        or report.get("coverageId") != coverage_id
+    ):
+        raise ValueError("report is not a completed client-UDP queue-full campaign")
+
+    network = _object(report.get("network"), "network")
+    if (
+        network.get("publicTraffic") is not False
+        or network.get("transportMode") != "plaintext"
+    ):
+        raise ValueError(
+            "client-UDP queue-full campaign must be local plaintext traffic"
+        )
+
+    fixture = _object(report.get("fixture"), "fixture")
+    fixture_path = _path_within(fixture.get("path"), run_directory, "fixture.path")
+    fixture_size = _positive_int(fixture.get("sizeBytes"), "fixture.sizeBytes")
+    part_count = _positive_int(fixture.get("partCount"), "fixture.partCount")
+    if fixture_path.stat().st_size != fixture_size or part_count != 1:
+        raise ValueError(
+            "client-UDP queue-full fixture is not the recorded one-part file"
+        )
+
+    evidence = _object(report.get("evidence"), "evidence")
+    if (
+        evidence.get("schema") != client_udp_diagnostic_evidence.QUEUE_FULL_SCHEMA
+        or evidence.get("ok") is not True
+        or evidence.get("failures") != []
+        or evidence.get("partCount") != part_count
+    ):
+        raise ValueError("client-UDP queue-full evidence envelope is invalid")
+    file_hash = _lower_hex(
+        evidence.get("fileHash"), ED2K_HASH_PATTERN, "evidence.fileHash"
+    )
+    selected_catalog = (
+        catalog_path.resolve()
+        if catalog_path is not None
+        else Path(__file__).resolve().parent.parent
+        / "manifests"
+        / "protocol-parity-catalog.json"
+    )
+    stock_authority = _client_udp_stock_authority(
+        selected_catalog,
+        coverage_id=coverage_id,
+    )
+    _require_exact_value(
+        evidence.get("stockAuthority"), stock_authority, "evidence.stockAuthority"
+    )
+    evidence_layers = list(client_udp_diagnostic_evidence.EVIDENCE_LAYERS)
+    _require_exact_value(
+        evidence.get("coverageClaims"),
+        {
+            "eligibleCoverageIds": [coverage_id],
+            "evidenceLayers": evidence_layers,
+        },
+        "evidence.coverageClaims",
+    )
+
+    clients = _object(evidence.get("clients"), "evidence.clients")
+    if set(clients) != {"rust", "mfc"}:
+        raise ValueError(
+            "client-UDP queue-full evidence must contain exactly Rust and MFC"
+        )
+    validated = {
+        client_id: _validate_client_udp_queue_full_client(
+            client_id,
+            clients[client_id],
+            file_hash=file_hash,
+            part_count=part_count,
+        )
+        for client_id in ("rust", "mfc")
+    }
+    comparison = {
+        "requestBytesEqual": validated["rust"]["requestRawHex"]
+        == validated["mfc"]["requestRawHex"],
+        "queueFullBytesEqual": validated["rust"]["queueFullRawHex"]
+        == validated["mfc"]["queueFullRawHex"],
+        "applicationEqual": validated["rust"]["comparableApplication"]
+        == validated["mfc"]["comparableApplication"],
+        "bothApplied": True,
+    }
+    comparison["ok"] = all(comparison.values())
+    _require_exact_value(evidence.get("comparison"), comparison, "evidence.comparison")
+    if comparison["ok"] is not True:
+        raise ValueError("client-UDP queue-full bilateral comparison is not exact")
+
+    checks = _object(report.get("checks"), "checks")
+    direction_checks = {
+        "rust": _object(
+            checks.get("rustRequesterMfcResponder"),
+            "checks.rustRequesterMfcResponder",
+        ),
+        "mfc": _object(
+            checks.get("mfcRequesterRustResponder"),
+            "checks.mfcRequesterRustResponder",
+        ),
+    }
+    for client_id, check in direction_checks.items():
+        if check.get("fileHash") != file_hash:
+            raise ValueError(f"{client_id} direction check has the wrong file hash")
+        _require_exact_value(
+            check.get("control"),
+            validated[client_id]["control"],
+            f"checks.{client_id}.control",
+        )
+        _require_exact_value(
+            check.get("waiterRemoval"),
+            validated[client_id]["waiterRemoval"],
+            f"checks.{client_id}.waiterRemoval",
+        )
+        _require_exact_value(
+            check.get("queuePressure"),
+            validated[client_id]["queuePressure"],
+            f"checks.{client_id}.queuePressure",
+        )
+        if check.get("applicationSequence") != validated[client_id]["appliedSequence"]:
+            raise ValueError(f"{client_id} direction application sequence disagrees")
+
+    rust_check = direction_checks["rust"]
+    capacity = _object(rust_check.get("capacity"), "checks.rust.capacity")
+    if (
+        capacity.get("baseSlots") != 2
+        or capacity.get("elasticSlots") != 0
+        or capacity.get("effectiveSlotCap") != 2
+        or capacity.get("activeSlots") != 2
+    ):
+        raise ValueError(
+            "MFC responder upload slots were not deterministically occupied"
+        )
+    _validate_high_id_observation(
+        rust_check.get("publication"),
+        "checks.rust.publication",
+        minimum_shared_files=1,
+    )
+    rust_high_id_clients = rust_check.get("rustHighIdClients")
+    if not isinstance(rust_high_id_clients, list) or len(rust_high_id_clients) != 3:
+        raise ValueError("Rust requester phase must observe three exact HighID clients")
+    for index, observation in enumerate(rust_high_id_clients):
+        _validate_high_id_observation(
+            observation,
+            f"checks.rust.rustHighIdClients[{index}]",
+        )
+    registration = _object(rust_check.get("registration"), "checks.rust.registration")
+    _require_exact_value(
+        registration,
+        {
+            "fileHash": file_hash,
+            "sourceTcpEndpoint": validated["rust"]["sourceTcpEndpoint"],
+            "sourceUdpEndpoint": validated["rust"]["sourceUdpEndpoint"],
+            "sourceUserHash": validated["rust"]["sourceUserHash"],
+            "sourceUdpVersion": 4,
+        },
+        "checks.rust.registration",
+    )
+
+    mfc_check = direction_checks["mfc"]
+    _validate_high_id_observation(
+        mfc_check.get("publication"),
+        "checks.mfc.publication",
+        minimum_shared_files=1,
+    )
+    _validate_high_id_observation(
+        mfc_check.get("occupierHighIdClient"),
+        "checks.mfc.occupierHighIdClient",
+    )
+    _validate_high_id_observation(
+        mfc_check.get("mfcHighIdClient"),
+        "checks.mfc.mfcHighIdClient",
+    )
+    occupied_slot = _object(mfc_check.get("occupiedSlot"), "checks.mfc.occupiedSlot")
+    occupied_policy = _object(
+        occupied_slot.get("policy"),
+        "checks.mfc.occupiedSlot.policy",
+    )
+    if (
+        occupied_slot.get("fileHash") != file_hash
+        or _positive_int(
+            occupied_slot.get("slotOpenedSequence"),
+            "checks.mfc.occupiedSlot.slotOpenedSequence",
+        )
+        <= 0
+        or occupied_policy.get("baseSlots") != 1
+        or occupied_policy.get("elasticSlots") != 0
+        or occupied_policy.get("effectiveSlotCap") != 1
+    ):
+        raise ValueError("Rust responder production upload slot was not occupied")
+    queue_source = _object(mfc_check.get("queueSource"), "checks.mfc.queueSource")
+    source_host, source_port = _canonical_ipv4_endpoint(
+        validated["mfc"]["sourceTcpEndpoint"],
+        "validated MFC source endpoint",
+    )
+    _positive_int(queue_source.get("queueRank"), "checks.mfc.queueSource.queueRank")
+    _require_exact_value(
+        {
+            key: queue_source.get(key)
+            for key in ("sourceIp", "sourceTcpPort", "sourceUserHash")
+        },
+        {
+            "sourceIp": source_host,
+            "sourceTcpPort": source_port,
+            "sourceUserHash": validated["mfc"]["sourceUserHash"],
+        },
+        "checks.mfc.queueSource",
+    )
+
+    builds = _object(report.get("builds"), "builds")
+    runner_revision = _lower_hex(
+        builds.get("runnerRevision"), GIT_REVISION_PATTERN, "builds.runnerRevision"
+    )
+    subjects = []
+    for build_key, authority_id in (
+        ("mfcDiagnostics", "mfc-oracle"),
+        ("rustDiagnostics", "rust-product"),
+    ):
+        build = _object(builds.get(build_key), f"builds.{build_key}")
+        subjects.append(
+            {
+                "authorityId": authority_id,
+                "executableSha256": _lower_hex(
+                    build.get("sha256"),
+                    SHA256_PATTERN,
+                    f"builds.{build_key}.sha256",
+                ),
+                "sourceRevision": _lower_hex(
+                    build.get("sourceRevision"),
+                    GIT_REVISION_PATTERN,
+                    f"builds.{build_key}.sourceRevision",
+                ),
+            }
+        )
+
+    stamp = stamp_match.group("stamp").lower()
+    receipt_id = f"rust-mfc-client-udp-queue-full-{stamp}"
+    receipt = {
+        "artifactLocator": f"output-root:{relative_report.as_posix()}",
+        "artifactSha256": _file_sha256(resolved_report),
+        "coverageIds": [coverage_id],
+        "evidenceLayers": evidence_layers,
+        "profileAuthority": PROFILE_AUTHORITY,
+        "receiptId": receipt_id,
+        "runnerPath": CLIENT_UDP_RUNNER_PATH,
+        "runnerRevision": runner_revision,
+        "subjects": subjects,
+    }
+    coverage_evidence = {
+        "coverageId": coverage_id,
+        "evidenceLayers": evidence_layers,
+        "reason": (
+            "Rust and MFC each produced and applied the same clear zero-payload "
+            "queue-full reply after exact real-waiter removal and one causally "
+            "consumed stock queue-pressure prerequisite."
+        ),
+        "receiptIds": [receipt_id],
+        "verdict": "parity",
+    }
+    return {"coverageEvidence": [coverage_evidence], "evidenceReceipt": receipt}
+
+
+def build_client_udp_registration(
+    report_path: Path,
+    *,
+    scenario: str,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one explicit canonical client-UDP scenario."""
+
+    if scenario == "v4":
+        return _build_client_udp_v4_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
+    if scenario == "queue-full":
+        return _build_client_udp_queue_full_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
+    raise ValueError(f"unsupported client-UDP scenario: {scenario!r}")
 
 
 def build_transfer_registration(
@@ -5126,12 +5796,13 @@ def run_transfer_registration_cli(argv: list[str] | None = None) -> int:
     return 0
 
 
-def run_client_udp_v4_registration_cli(argv: list[str] | None = None) -> int:
-    """Validates a bilateral V4 receipt and prints its catalog registration."""
+def run_client_udp_registration_cli(argv: list[str] | None = None) -> int:
+    """Validates one bilateral client-UDP receipt and prints its registration."""
 
     parser = argparse.ArgumentParser(
-        description="Build protocol catalog rows from one client-UDP V4 campaign receipt."
+        description="Build protocol catalog rows from one client-UDP campaign receipt."
     )
+    parser.add_argument("--scenario", choices=["v4", "queue-full"], required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--catalog", type=Path)
@@ -5142,8 +5813,9 @@ def run_client_udp_v4_registration_cli(argv: list[str] | None = None) -> int:
         if not inherited:
             parser.error("EMULEBB_WORKSPACE_OUTPUT_ROOT is required")
         output_root = Path(inherited)
-    registration = build_client_udp_v4_registration(
+    registration = build_client_udp_registration(
         args.report,
+        scenario=args.scenario,
         output_root=output_root,
         catalog_path=args.catalog,
     )
