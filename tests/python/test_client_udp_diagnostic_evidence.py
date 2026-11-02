@@ -21,6 +21,7 @@ REQUEST_RAW = (
     + bytes.fromhex("0100")
 )
 ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0))
+QUEUE_FULL_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_QUEUEFULL))
 STOCK_RECORD = {
     "coverageIds": [
         "client-udp.v1",
@@ -317,6 +318,222 @@ def transition(requester: str) -> evidence.ClientUdpV4Transition:
     )
 
 
+def queue_full_requester_records(requester: str) -> list[dict[str, Any]]:
+    records = requester_records(requester)
+    endpoints = ENDPOINTS[requester]
+    records[-2] = {
+        "schema": "diag_event_v2",
+        "seq": 6,
+        "family": "ed2k_client_udp",
+        "event": "packet",
+        "keys": {
+            "peer": endpoints["sourceUdp"],
+            "protocolMarker": evidence.OP_EMULEPROT,
+            "opcode": evidence.OP_QUEUEFULL,
+        },
+        "body": {
+            "direction": "recv",
+            "outcome": "accepted",
+            "phase": "reask_reply",
+            "transportMode": "plaintext",
+            "obfuscated": False,
+            "rawHex": QUEUE_FULL_RAW.hex(),
+            "payloadHexTruncated": False,
+        },
+    }
+    records[-1] = sched_record(
+        7,
+        "udp_reask_reply_applied",
+        {
+            "replyOpcode": evidence.OP_QUEUEFULL,
+            "queueRank": 0,
+            "requestPendingAfter": False,
+            "remoteQueueFullAfter": True,
+            "sourceUdpEndpoint": endpoints["sourceUdp"],
+            "sourceUdpVersion": 4,
+            "queueRankApplied": True,
+            "partStatusIncluded": False,
+            "wirePartCount": None,
+            "partStatusApplied": False,
+            "partCountAfter": None,
+            "availablePartsAfter": None,
+            "partStatusBitsAfter": None,
+            "noNeededPartsAfter": None,
+            "udpTotalAfter": 1 if requester == "rust" else 2,
+            "udpFailedAfter": 0,
+            "nextReaskScheduled": True,
+            "sourceRetainedAfter": True,
+            "outcome": "applied",
+        },
+        requester=requester,
+    )
+    return records
+
+
+def queue_pressure(requester: str) -> dict[str, object]:
+    requester_udp = str(ENDPOINTS[requester]["requesterUdp"])
+    host, raw_port = requester_udp.split(":")
+    fixture_id = 31 if requester == "rust" else 32
+    return {
+        "request": {
+            "fileHash": FILE_HASH.hex(),
+            "sourceIp": host,
+            "sourceUdpPort": int(raw_port),
+        },
+        "response": {
+            "status": 200,
+            "json": {
+                "accepted": True,
+                "fixtureId": fixture_id,
+                "fileHash": FILE_HASH.hex(),
+                "sourceEndpoint": requester_udp,
+                "actualWaitingUserCount": 0,
+                "effectiveWaitingUserCount": 1951,
+                "queueSize": 2000,
+                "expiresAfterMillis": 30000,
+                "state": "client-udp-queue-pressure-armed",
+            },
+        },
+    }
+
+
+def waiter_removal(requester: str) -> dict[str, object]:
+    host, _raw_port = str(ENDPOINTS[requester]["requesterUdp"]).split(":")
+    return {
+        "waiter": {
+            "clientId": f"{requester}-waiting-client",
+            "address": host,
+            "requestedFileHash": FILE_HASH.hex(),
+            "waitingQueue": True,
+        },
+        "response": {
+            "status": 200,
+            "json": {"ok": True, "removed": "queue"},
+        },
+    }
+
+
+def queue_full_responder_records(requester: str) -> list[dict[str, Any]]:
+    requester_endpoint = str(ENDPOINTS[requester]["requesterUdp"])
+    fixture_id = 31 if requester == "rust" else 32
+    responder = "mfc" if requester == "rust" else "rust"
+    request_sequence = 20
+    fixture_sequence = 19 if responder == "mfc" else 21
+    return [
+        {
+            "schema": "diag_event_v2",
+            "seq": request_sequence,
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {
+                "peer": requester_endpoint,
+                "protocolMarker": evidence.OP_EMULEPROT,
+                "opcode": evidence.OP_REASKFILEPING,
+            },
+            "body": {
+                "direction": "recv",
+                "outcome": "accepted",
+                "phase": "reask_request",
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "rawHex": REQUEST_RAW.hex(),
+                "payloadHexTruncated": False,
+            },
+        },
+        {
+            "schema": "diag_event_v2",
+            "seq": fixture_sequence,
+            "family": "sched",
+            "event": "client_udp_queue_pressure_fixture_consumed",
+            "keys": {
+                "fileHash": FILE_HASH.hex(),
+                "peer": requester_endpoint,
+            },
+            "body": {
+                "outcome": "consumed",
+                "fixtureId": fixture_id,
+                "actualWaitingUserCount": 0,
+                "effectiveWaitingUserCount": 1951,
+                "queueSize": 2000,
+                "queueFullMargin": 50,
+            },
+        },
+        {
+            "schema": "diag_event_v2",
+            "seq": 22,
+            "family": "ed2k_client_udp",
+            "event": "packet",
+            "keys": {
+                "peer": requester_endpoint,
+                "protocolMarker": evidence.OP_EMULEPROT,
+                "opcode": evidence.OP_QUEUEFULL,
+                "sendAttemptId": 11,
+            },
+            "body": {
+                "direction": "send",
+                "outcome": "attempted",
+                "sendAttemptId": 11,
+                "role": "reciprocity_reply",
+                "phase": "reciprocity_reply",
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                "rawHex": QUEUE_FULL_RAW.hex(),
+                "payloadHexTruncated": False,
+            },
+        },
+        {
+            "schema": "diag_event_v2",
+            "seq": 23,
+            "family": "ed2k_client_udp",
+            "event": "send_outcome",
+            "keys": {
+                "peer": requester_endpoint,
+                "sendAttemptId": 11,
+            },
+            "body": {
+                "sendAttemptId": 11,
+                "outcome": "send_succeeded",
+                "deliveryKnown": True,
+                "role": "reciprocity_reply",
+            },
+        },
+    ]
+
+
+def queue_full_transition(requester: str) -> evidence.ClientUdpQueueFullTransition:
+    endpoints = ENDPOINTS[requester]
+    responder = "mfc" if requester == "rust" else "rust"
+    return evidence.ClientUdpQueueFullTransition(
+        requester=requester,
+        responder=responder,
+        source_tcp_endpoint=str(endpoints["sourceTcp"]),
+        source_udp_endpoint=str(endpoints["sourceUdp"]),
+        source_user_hash=endpoints["sourceHash"],
+        requester_udp_endpoint=str(endpoints["requesterUdp"]),
+        control_receipt=control(requester),
+        waiter_removal_receipt=waiter_removal(requester),
+        queue_pressure_receipt=queue_pressure(requester),
+        requester_records=queue_full_requester_records(requester),
+        responder_records=queue_full_responder_records(requester),
+    )
+
+
+def passing_queue_full_report(
+    *,
+    rust_transition: evidence.ClientUdpQueueFullTransition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_queue_full_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[
+            rust_transition or queue_full_transition("rust"),
+            queue_full_transition("mfc"),
+        ],
+    )
+
+
 def passing_report(
     *,
     rust_transition: evidence.ClientUdpV4Transition | None = None,
@@ -470,6 +687,96 @@ def test_bilateral_client_udp_v4_is_claimable() -> None:
         report["clients"]["rust"]["wire"]["request"]["partStatus"]["partStatusBits"]
         == "0"
     )
+
+
+@pytest.mark.unit
+def test_bilateral_client_udp_queue_full_is_claimable() -> None:
+    report = passing_queue_full_report()
+
+    evidence.require_client_udp_queue_full_diagnostic_evidence(report)
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["client-udp.queue-full"]
+    assert report["stockAuthority"]["ok"] is True
+    assert report["comparison"] == {
+        "requestBytesEqual": True,
+        "queueFullBytesEqual": True,
+        "applicationEqual": True,
+        "bothApplied": True,
+        "ok": True,
+    }
+    assert report["clients"]["rust"]["wire"]["queueFull"] == {
+        "ok": True,
+        "rawHex": "c593",
+        "payloadLength": 0,
+    }
+    assert (
+        report["clients"]["rust"]["diagnostics"]["responderSequences"][
+            "fixtureConsumed"
+        ]
+        < report["clients"]["rust"]["diagnostics"]["responderSequences"]["requestIn"]
+    )
+
+
+@pytest.mark.unit
+def test_queue_full_requires_real_waiter_removal() -> None:
+    original = queue_full_transition("rust")
+    receipt = copy.deepcopy(original.waiter_removal_receipt)
+    receipt["response"]["json"]["removed"] = "none"
+    wrong = evidence.ClientUdpQueueFullTransition(
+        **{**original.__dict__, "waiter_removal_receipt": receipt}
+    )
+
+    report = passing_queue_full_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["waiterRemoval"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_queue_full_requires_exact_pressure_consumption() -> None:
+    original = queue_full_transition("rust")
+    records = copy.deepcopy(list(original.responder_records))
+    records[1]["body"]["fixtureId"] = 999
+    wrong = evidence.ClientUdpQueueFullTransition(
+        **{**original.__dict__, "responder_records": records}
+    )
+
+    report = passing_queue_full_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["fixtureConsumed"] == 0
+
+
+@pytest.mark.unit
+def test_queue_full_rejects_alternate_reply_opcode() -> None:
+    original = queue_full_transition("rust")
+    records = copy.deepcopy(list(original.responder_records))
+    records[2]["keys"]["opcode"] = evidence.OP_REASKACK
+    wrong = evidence.ClientUdpQueueFullTransition(
+        **{**original.__dict__, "responder_records": records}
+    )
+
+    report = passing_queue_full_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    counts = report["clients"]["rust"]["diagnostics"]["counts"]
+    assert counts["queueFullOut"] == 0
+    assert counts["forbiddenResponderReply"] == 1
+
+
+@pytest.mark.unit
+def test_queue_full_application_must_retain_healthy_source() -> None:
+    original = queue_full_transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[-1]["body"]["sourceRetainedAfter"] = False
+    wrong = evidence.ClientUdpQueueFullTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_queue_full_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 0
 
 
 @pytest.mark.unit
