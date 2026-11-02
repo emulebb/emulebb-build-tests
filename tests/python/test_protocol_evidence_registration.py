@@ -8,6 +8,7 @@ import struct
 
 import pytest
 
+from emule_test_harness import buddy_callback_diagnostic_evidence
 from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import direct_callback_probe
 from emule_test_harness import ed2k_wire
@@ -16,6 +17,7 @@ from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import kad_nodes
 from emule_test_harness import relayed_reask_diagnostic_evidence
 from emule_test_harness import relayed_reask_probe
+from emule_test_harness import protocol_evidence_registration as registration
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -59,6 +61,11 @@ RELAYED_REASK_FILE_SIZE = 34_567
 RELAYED_REASK_SOURCE_HASH = bytes.fromhex("527496B8DAFC1E30527496B8DAFC7E10")
 RELAYED_REASK_BUDDY_ID = bytes.fromhex("6385A7C9EB0D2F416385A7C9EB0D8F21")
 RELAYED_REASK_QUEUE_RANK = 37
+BUDDY_CALLBACK_FILE_HASH = bytes.fromhex("557799BBDDFF1133557799BBDDFFB133")
+BUDDY_CALLBACK_BUDDY_HASH = bytes.fromhex("6486A8CAEC0E20426486A8CAEC0E7E10")
+BUDDY_CALLBACK_BUDDY_ID = bytes.fromhex("7597B9DBFD1F31537597B9DBFD1F9131")
+BUDDY_CALLBACK_REQUESTER_HASH = bytes.fromhex("86A8CAEC0E20426486A8CAEC0E20A242")
+BUDDY_CALLBACK_BUDDY_CLIENT_ID = 7
 SERVER_UDP_SOURCE_TARGET_PORT = 4_761
 SERVER_UDP_SOURCE_TARGET_UDP_PORT = SERVER_UDP_SOURCE_TARGET_PORT + 4
 SERVER_CALLBACK_REQUESTER_HASH = bytes.fromhex("426486A8CAEC0E20426486A8CAEC6E00")
@@ -2084,6 +2091,196 @@ def attach_direct_callback(
     return evidence
 
 
+def attach_stubbed_buddy_callback(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    login = bilateral_login_evidence()
+    identities = {
+        "rust": {
+            "clientId": 4,
+            "tcpPort": 4662,
+            "udpPort": 4672,
+            "userHash": "11" * 16,
+        },
+        "mfc": {
+            "clientId": 2,
+            "tcpPort": 4663,
+            "udpPort": 4673,
+            "userHash": "22" * 16,
+        },
+    }
+    for client, identity in identities.items():
+        login["clients"][client]["decodedLogin"] = {
+            "client_id": 0,
+            "tcp_port": identity["tcpPort"],
+            "user_hash": identity["userHash"],
+        }
+        login["clients"][client]["decodedIdChange"] = {
+            "assigned_id": identity["clientId"],
+            "id_kind": "low-id",
+        }
+    attach_server_login(report, login, ("plaintext",))
+    report["transfer_scenario"] = "buddy-callback"
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    host = "127.0.0.1"
+    ports = {
+        "ed2k_tcp": 4661,
+        "client1_tcp": identities["rust"]["tcpPort"],
+        "client2_tcp": identities["mfc"]["tcpPort"],
+        "client1_udp": identities["rust"]["udpPort"],
+        "client2_udp": identities["mfc"]["udpPort"],
+        "buddy_callback_buddy_tcp": 35_101,
+        "buddy_callback_buddy_udp": 35_102,
+        "callback_requester_tcp": 35_103,
+    }
+    rust_nodes = kad_nodes.encode_nodes_dat(
+        [
+            kad_nodes.BootstrapContact(
+                host,
+                ports["buddy_callback_buddy_tcp"],
+                ports["buddy_callback_buddy_tcp"],
+            )
+        ]
+    )
+    mfc_nodes = kad_nodes.encode_nodes_dat([])
+    launch_dir = run_directory / "launch-inputs" / "buddy-callback-kad"
+    launch_dir.mkdir(parents=True)
+    launch_receipts: dict[str, object] = {}
+    for label, name, payload in (
+        ("rustNodesDat", "rust-nodes.dat", rust_nodes),
+        ("mfcNodesDat", "mfc-nodes.dat", mfc_nodes),
+    ):
+        path = launch_dir / name
+        path.write_bytes(payload)
+        launch_receipts[label] = {
+            "path": str(path),
+            "sizeBytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    report["network"].update(
+        {
+            "p2p_bind_interface_address": host,
+            "ports": ports,
+            "buddyCallbackKadIsolation": {
+                "publicDiscovery": False,
+                "rustBootstrapSeed": {
+                    "endpoint": f"{host}:{ports['buddy_callback_buddy_tcp']}",
+                    "tcpPort": ports["buddy_callback_buddy_tcp"],
+                },
+                "mfcBootstrapSeeds": [],
+                "launchInputs": launch_receipts,
+            },
+        }
+    )
+    targets = {
+        client: {
+            "clientId": identity["clientId"],
+            "peerHelloClientId": 0,
+            "idKind": "low-id",
+            "tcpPort": identity["tcpPort"],
+            "udpPort": identity["udpPort"],
+            "userHash": identity["userHash"].upper(),
+        }
+        for client, identity in identities.items()
+    }
+    controls = {client: {"client": client} for client in ("rust", "mfc")}
+    probes = {client: {"client": client} for client in ("rust", "mfc")}
+    captures = {
+        "rust": {
+            "diagnosticsDir": str(run_directory / "diagnostics" / "rust"),
+            "processId": 101,
+            "selectedSegments": [str(run_directory / "diagnostics" / "rust.jsonl")],
+        },
+        "mfc": {
+            "diagnosticsDir": str(run_directory / "diagnostics" / "mfc"),
+            "processId": 202,
+            "selectedSegments": [str(run_directory / "diagnostics" / "mfc.jsonl")],
+        },
+    }
+    retained = {
+        "schema": buddy_callback_diagnostic_evidence.SCHEMA,
+        "ok": True,
+        "clients": {
+            "rust": {"causalChain": {"callbackRelayed": {"sequence": 27}}},
+            "mfc": {"causalChain": {"callbackRelayed": {"sequence": 29}}},
+        },
+        "coverageClaims": {
+            "eligibleCoverageIds": [buddy_callback_diagnostic_evidence.COVERAGE_ID],
+            "evidenceLayers": list(buddy_callback_diagnostic_evidence.EVIDENCE_LAYERS),
+        },
+    }
+    evidence = {**retained, "captures": captures}
+    monkeypatch.setattr(
+        buddy_callback_diagnostic_evidence,
+        "require_buddy_callback_diagnostic_evidence",
+        lambda value: None,
+    )
+
+    def rebuild(**kwargs: object) -> dict[str, object]:
+        assert kwargs["targets"] == targets
+        assert kwargs["buddy_id"] == BUDDY_CALLBACK_BUDDY_ID
+        assert kwargs["file_hash"] == BUDDY_CALLBACK_FILE_HASH
+        return retained
+
+    monkeypatch.setattr(
+        buddy_callback_diagnostic_evidence,
+        "build_buddy_callback_diagnostic_evidence",
+        rebuild,
+    )
+    monkeypatch.setattr(
+        registration,
+        "_load_final_capture_subset",
+        lambda *args, **kwargs: [],
+    )
+    report["checks"].update(
+        {
+            "client_buddy_callback_kad_running": {
+                client: {
+                    "status": {"status": 200, "json": {"running": True}},
+                    "observations": [{"running": True, "observed_at": 999.0}],
+                }
+                for client in ("rust", "mfc")
+            },
+            "client_buddy_callback_targets": targets,
+            "client_buddy_callback_stimulus": {
+                "mode": "real-kad-request-held-buddy-socket-relay",
+                "buddy": {
+                    "host": host,
+                    "tcpPort": ports["buddy_callback_buddy_tcp"],
+                    "udpPort": ports["buddy_callback_buddy_udp"],
+                    "userHash": BUDDY_CALLBACK_BUDDY_HASH.hex(),
+                    "clientId": BUDDY_CALLBACK_BUDDY_CLIENT_ID,
+                    "id": BUDDY_CALLBACK_BUDDY_ID.hex(),
+                },
+                "requester": {
+                    "host": host,
+                    "tcpPort": ports["callback_requester_tcp"],
+                    "userHash": BUDDY_CALLBACK_REQUESTER_HASH.hex(),
+                },
+                "fileHash": BUDDY_CALLBACK_FILE_HASH.hex(),
+            },
+            "client_buddy_callback_controls": controls,
+            "client_buddy_callback_probe": probes,
+            "client_buddy_callback_diagnostics": evidence,
+            "mfc_diagnostics_shutdown": {"ok": True, "processId": 202},
+        }
+    )
+    report["diagnostics"]["buddyCallback"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: dict(capture) for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        buddy_callback_diagnostic_evidence.COVERAGE_ID
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
 def _server_callback_records(
     *,
     client: str,
@@ -3304,6 +3501,89 @@ def write_direct_callback_report(
     evidence = attach_direct_callback(report, run_directory=report_path.parent)
     report_path.write_text(json.dumps(report), encoding="utf-8")
     return report_path, output_root, report, evidence
+
+
+def write_stubbed_buddy_callback_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_stubbed_buddy_callback(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, output_root, report, evidence
+
+
+def test_build_transfer_registration_accepts_exact_buddy_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, _, _ = write_stubbed_buddy_callback_report(
+        tmp_path,
+        monkeypatch,
+    )
+
+    registered = build_transfer_registration(report_path, output_root=output_root)
+
+    assert (
+        buddy_callback_diagnostic_evidence.COVERAGE_ID
+        in registered["evidenceReceipt"]["coverageIds"]
+    )
+    reason = next(
+        row["reason"]
+        for row in registered["coverageEvidence"]
+        if row["coverageId"] == buddy_callback_diagnostic_evidence.COVERAGE_ID
+    )
+    assert "same FINDBUDDY identity" in reason
+    assert "byte-identical OP_CALLBACK relays" in reason
+
+
+def test_build_transfer_registration_rejects_buddy_callback_without_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report, _ = write_stubbed_buddy_callback_report(
+        tmp_path,
+        monkeypatch,
+    )
+    del report["diagnostics"]["buddyCallback"]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has no diagnostic evidence"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_public_buddy_callback_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report, _ = write_stubbed_buddy_callback_report(
+        tmp_path,
+        monkeypatch,
+    )
+    report["network"]["buddyCallbackKadIsolation"]["publicDiscovery"] = True
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Kad isolation is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_changed_buddy_callback_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report, _ = write_stubbed_buddy_callback_report(
+        tmp_path,
+        monkeypatch,
+    )
+    report["checks"]["client_buddy_callback_targets"]["rust"]["clientId"] = 7
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="do not derive exactly"):
+        build_transfer_registration(report_path, output_root=output_root)
 
 
 def test_build_transfer_registration_accepts_exact_direct_callback(

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from emule_test_harness import diag_event_runs
+from emule_test_harness import buddy_callback_diagnostic_evidence
 from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
@@ -39,6 +40,7 @@ COMMAND_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_CALLBACK_SCENARIO = "server-callback-reply"
 DIRECT_CALLBACK_SCENARIO = "direct-callback"
+BUDDY_CALLBACK_SCENARIO = "buddy-callback"
 RELAYED_REASK_SCENARIO = "relayed-reask"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_ADVANCED_SEARCH_SCENARIO = "server-advanced-search"
@@ -85,6 +87,12 @@ RELAYED_REASK_FILE_SIZE = 34_567
 RELAYED_REASK_SOURCE_USER_HASH = "527496b8dafc1e30527496b8dafc7e10"
 RELAYED_REASK_BUDDY_ID = "6385a7c9eb0d2f416385a7c9eb0d8f21"
 RELAYED_REASK_QUEUE_RANK = 37
+BUDDY_CALLBACK_FILE_HASH = "557799bbddff1133557799bbddffb133"
+BUDDY_CALLBACK_BUDDY_USER_HASH = "6486a8caec0e20426486a8caec0e7e10"
+BUDDY_CALLBACK_BUDDY_ID = "7597b9dbfd1f31537597b9dbfd1f9131"
+BUDDY_CALLBACK_REQUESTER_USER_HASH = "86a8caec0e20426486a8caec0e20a242"
+BUDDY_CALLBACK_BUDDY_CLIENT_ID = 7
+BUDDY_CALLBACK_TARGET_PEER_HELLO_CLIENT_ID = 0
 SERVER_IDENT_NAME = "emulebb-local-e2e"
 SERVER_IDENT_DESCRIPTION = "Workspace deterministic eMuleBB live E2E server"
 SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
@@ -2888,6 +2896,277 @@ def _derived_direct_callback_coverage_ids(
     return [direct_callback_diagnostic_evidence.COVERAGE_ID]
 
 
+def _derived_buddy_callback_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    callback_value = diagnostics.get("buddyCallback")
+    scenario = report.get("transfer_scenario")
+    if callback_value is None:
+        if scenario == BUDDY_CALLBACK_SCENARIO:
+            raise ValueError("buddy callback scenario has no diagnostic evidence")
+        return []
+    if scenario != BUDDY_CALLBACK_SCENARIO:
+        raise ValueError("buddy callback evidence requires its dedicated scenario")
+
+    callback = _object(callback_value, "diagnostics.buddyCallback")
+    if callback.get("schema") != buddy_callback_diagnostic_evidence.SCHEMA:
+        raise ValueError("buddy callback diagnostics use an unexpected schema")
+    try:
+        buddy_callback_diagnostic_evidence.require_buddy_callback_diagnostic_evidence(
+            callback
+        )
+    except RuntimeError as exc:
+        raise ValueError("buddy callback diagnostics are not complete") from exc
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError(
+            "buddy callback scenario requires the canonical plaintext case"
+        )
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_buddy_callback_diagnostics") != callback:
+        raise ValueError(
+            "buddy callback diagnostics do not match the retained snapshot"
+        )
+    login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
+    if checks.get("client_server_login_diagnostics") != login:
+        raise ValueError(
+            "buddy callback login evidence does not match its retained snapshot"
+        )
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    try:
+        host = str(ipaddress.IPv4Address(network.get("p2p_bind_interface_address")))
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("buddy callback bind address is not canonical IPv4") from exc
+    port_names = (
+        "client1_udp",
+        "client2_udp",
+        "buddy_callback_buddy_tcp",
+        "buddy_callback_buddy_udp",
+        "callback_requester_tcp",
+    )
+    topology_ports = {
+        name: _positive_int(ports.get(name), f"network.ports.{name}")
+        for name in port_names
+    }
+    if any(port > 0xFFFF for port in topology_ports.values()) or len(
+        set(topology_ports.values())
+    ) != len(topology_ports):
+        raise ValueError("buddy callback topology contains invalid or duplicate ports")
+
+    kad_isolation = _object(
+        network.get("buddyCallbackKadIsolation"),
+        "network.buddyCallbackKadIsolation",
+    )
+    expected_kad_isolation = {
+        "publicDiscovery": False,
+        "rustBootstrapSeed": {
+            "endpoint": f"{host}:{topology_ports['buddy_callback_buddy_tcp']}",
+            "tcpPort": topology_ports["buddy_callback_buddy_tcp"],
+        },
+        "mfcBootstrapSeeds": [],
+    }
+    if set(kad_isolation) != {*expected_kad_isolation, "launchInputs"} or any(
+        kad_isolation.get(field) != value
+        for field, value in expected_kad_isolation.items()
+    ):
+        raise ValueError("buddy callback Kad isolation is not exact")
+    launch_inputs = _object(
+        kad_isolation.get("launchInputs"),
+        "network.buddyCallbackKadIsolation.launchInputs",
+    )
+    expected_launch_inputs = {
+        "rustNodesDat": (
+            run_directory / "launch-inputs" / "buddy-callback-kad" / "rust-nodes.dat",
+            kad_nodes.encode_nodes_dat(
+                [
+                    kad_nodes.BootstrapContact(
+                        host,
+                        topology_ports["buddy_callback_buddy_tcp"],
+                        topology_ports["buddy_callback_buddy_tcp"],
+                    )
+                ]
+            ),
+        ),
+        "mfcNodesDat": (
+            run_directory / "launch-inputs" / "buddy-callback-kad" / "mfc-nodes.dat",
+            kad_nodes.encode_nodes_dat([]),
+        ),
+    }
+    if set(launch_inputs) != set(expected_launch_inputs):
+        raise ValueError("buddy callback Kad launch inputs are incomplete")
+    for label, (expected_path, expected_payload) in expected_launch_inputs.items():
+        receipt = _object(
+            launch_inputs.get(label),
+            f"network.buddyCallbackKadIsolation.launchInputs.{label}",
+        )
+        if set(receipt) != {"path", "sizeBytes", "sha256"}:
+            raise ValueError(
+                f"{label} buddy-callback launch-input receipt is not exact"
+            )
+        retained_path = _path_within(
+            receipt.get("path"),
+            run_directory,
+            f"{label} buddy-callback launch-input path",
+        )
+        retained_sha256 = _lower_hex(
+            receipt.get("sha256"),
+            SHA256_PATTERN,
+            f"{label} buddy-callback launch-input SHA-256",
+        )
+        if (
+            retained_path != expected_path.resolve()
+            or receipt.get("sizeBytes") != len(expected_payload)
+            or retained_path.read_bytes() != expected_payload
+            or _file_sha256(retained_path) != retained_sha256
+        ):
+            raise ValueError(
+                f"{label} buddy callback launch input does not match the isolated topology"
+            )
+
+    kad_runtimes = _object(
+        checks.get("client_buddy_callback_kad_running"),
+        "checks.client_buddy_callback_kad_running",
+    )
+    if set(kad_runtimes) != {"rust", "mfc"}:
+        raise ValueError("buddy callback Kad runtimes must contain rust and mfc")
+    for client in ("rust", "mfc"):
+        runtime = _object(
+            kad_runtimes.get(client),
+            f"checks.client_buddy_callback_kad_running.{client}",
+        )
+        status = _object(
+            runtime.get("status"),
+            f"checks.client_buddy_callback_kad_running.{client}.status",
+        )
+        payload = _object(
+            status.get("json"),
+            f"checks.client_buddy_callback_kad_running.{client}.status.json",
+        )
+        observations = runtime.get("observations")
+        if (
+            status.get("status") != 200
+            or payload.get("running") is not True
+            or not isinstance(observations, list)
+            or not observations
+            or not isinstance(observations[-1], dict)
+            or observations[-1].get("running") is not True
+        ):
+            raise ValueError(f"{client} buddy callback Kad runtime is not running")
+
+    targets = _object(
+        checks.get("client_buddy_callback_targets"),
+        "checks.client_buddy_callback_targets",
+    )
+    if set(targets) != {"rust", "mfc"}:
+        raise ValueError("buddy callback targets must contain exactly rust and mfc")
+    expected_targets = _accepted_lowid_targets(
+        login,
+        udp_ports={
+            "rust": topology_ports["client1_udp"],
+            "mfc": topology_ports["client2_udp"],
+        },
+    )
+    for target in expected_targets.values():
+        target["peerHelloClientId"] = BUDDY_CALLBACK_TARGET_PEER_HELLO_CLIENT_ID
+    if targets != expected_targets:
+        raise ValueError(
+            "buddy callback targets do not derive exactly from accepted logins"
+        )
+
+    expected_stimulus = {
+        "mode": "real-kad-request-held-buddy-socket-relay",
+        "buddy": {
+            "host": host,
+            "tcpPort": topology_ports["buddy_callback_buddy_tcp"],
+            "udpPort": topology_ports["buddy_callback_buddy_udp"],
+            "userHash": BUDDY_CALLBACK_BUDDY_USER_HASH,
+            "clientId": BUDDY_CALLBACK_BUDDY_CLIENT_ID,
+            "id": BUDDY_CALLBACK_BUDDY_ID,
+        },
+        "requester": {
+            "host": host,
+            "tcpPort": topology_ports["callback_requester_tcp"],
+            "userHash": BUDDY_CALLBACK_REQUESTER_USER_HASH,
+        },
+        "fileHash": BUDDY_CALLBACK_FILE_HASH,
+    }
+    if checks.get("client_buddy_callback_stimulus") != expected_stimulus:
+        raise ValueError("buddy callback stimulus is not the canonical local topology")
+
+    controls = _object(
+        checks.get("client_buddy_callback_controls"),
+        "checks.client_buddy_callback_controls",
+    )
+    probe_results = _object(
+        checks.get("client_buddy_callback_probe"),
+        "checks.client_buddy_callback_probe",
+    )
+    if set(controls) != {"rust", "mfc"} or set(probe_results) != {"rust", "mfc"}:
+        raise ValueError("buddy callback controls and probes must contain rust and mfc")
+
+    captures = _object(
+        callback.get("captures"),
+        "diagnostics.buddyCallback.captures",
+    )
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("buddy callback captures must contain exactly rust and mfc")
+    records = {
+        client: _load_final_capture_subset(
+            captures.get(client),
+            final_captures.get(client),
+            evidence_name="buddy callback",
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
+        raise ValueError("buddy callback capture is not joined to the stopped oracle")
+
+    rebuilt = (
+        buddy_callback_diagnostic_evidence.build_buddy_callback_diagnostic_evidence(
+            target_host=host,
+            targets=expected_targets,
+            controls=controls,
+            probe_results=probe_results,
+            buddy_host=host,
+            buddy_tcp_port=topology_ports["buddy_callback_buddy_tcp"],
+            buddy_udp_port=topology_ports["buddy_callback_buddy_udp"],
+            buddy_user_hash=bytes.fromhex(BUDDY_CALLBACK_BUDDY_USER_HASH),
+            buddy_client_id=BUDDY_CALLBACK_BUDDY_CLIENT_ID,
+            buddy_id=bytes.fromhex(BUDDY_CALLBACK_BUDDY_ID),
+            file_hash=bytes.fromhex(BUDDY_CALLBACK_FILE_HASH),
+            requester_tcp_port=topology_ports["callback_requester_tcp"],
+            requester_user_hash=bytes.fromhex(BUDDY_CALLBACK_REQUESTER_USER_HASH),
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
+    )
+    retained_without_capture = {
+        key: value for key, value in callback.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError("buddy callback receipt does not match its immutable captures")
+    return [buddy_callback_diagnostic_evidence.COVERAGE_ID]
+
+
 def _derived_relayed_reask_coverage_ids(
     report: dict[str, Any],
     diagnostics: dict[str, Any],
@@ -3179,6 +3458,7 @@ def _derived_server_login_coverage_ids(
             SERVER_LOGIN_SCENARIO,
             SERVER_CALLBACK_SCENARIO,
             DIRECT_CALLBACK_SCENARIO,
+            BUDDY_CALLBACK_SCENARIO,
         }:
             raise ValueError(
                 "server login scenario has no bilateral diagnostic evidence"
@@ -3188,6 +3468,7 @@ def _derived_server_login_coverage_ids(
         SERVER_LOGIN_SCENARIO,
         SERVER_CALLBACK_SCENARIO,
         DIRECT_CALLBACK_SCENARIO,
+        BUDDY_CALLBACK_SCENARIO,
     }:
         raise ValueError(
             "server login evidence requires a server login or callback scenario"
@@ -3624,6 +3905,26 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == buddy_callback_diagnostic_evidence.COVERAGE_ID:
+        callback = _object(
+            diagnostics.get("buddyCallback"),
+            "diagnostics.buddyCallback",
+        )
+        clients = _object(
+            callback.get("clients"),
+            "diagnostics.buddyCallback.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.buddyCallback.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.buddyCallback.clients.mfc")
+        rust_chain = _object(rust.get("causalChain"), "Rust buddy callback chain")
+        mfc_chain = _object(mfc.get("causalChain"), "MFC buddy callback chain")
+        return (
+            "Rust and MFC each accepted the same FINDBUDDY identity, attached the "
+            "matching held buddy socket, received byte-identical KADEMLIA_CALLBACK_REQ "
+            "traffic, and emitted byte-identical OP_CALLBACK relays at diagnostic "
+            f"sequences {rust_chain['callbackRelayed']['sequence']}/"
+            f"{mfc_chain['callbackRelayed']['sequence']}."
+        )
     if coverage_id == relayed_reask_diagnostic_evidence.COVERAGE_ID:
         reask = _object(
             diagnostics.get("relayedReask"),
@@ -4048,6 +4349,11 @@ def build_transfer_registration(
                 run_directory=run_directory,
             ),
             *_derived_direct_callback_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
+            *_derived_buddy_callback_coverage_ids(
                 report,
                 diagnostics,
                 run_directory=run_directory,
