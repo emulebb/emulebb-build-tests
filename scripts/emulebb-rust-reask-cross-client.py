@@ -60,7 +60,9 @@ SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
 QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
+MFC_SHARED_FILES_PATH = "/api/v1/shared-files?offset=0&limit=100"
 MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
+RUST_SHARED_FILES_PATH = "/api/v1/shared-files"
 RUST_SHARED_RELOAD_PATH = "/api/v1/shared-directories/operations/reload"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
@@ -848,6 +850,7 @@ def wait_for_shared_file_presence(
     *,
     file_hash: str,
     present: bool,
+    shared_files_path: str,
     timeout: float,
 ) -> dict[str, object] | None:
     """Wait for the production shared catalog to contain or omit one hash."""
@@ -857,7 +860,7 @@ def wait_for_shared_file_presence(
         payload = cc.request_json(
             base_url,
             "GET",
-            "/api/v1/shared-files?offset=0&limit=100",
+            shared_files_path,
             api_key,
         )
         row = find_shared_file_by_hash(payload, file_hash=file_hash)
@@ -920,6 +923,7 @@ def withdraw_shared_fixture(
     fixture_path: Path,
     file_hash: str,
     reload_path: str,
+    shared_files_path: str,
     timeout: float,
 ) -> tuple[dict[str, object], Path]:
     """Withdraw one real fixture and prove its exact catalog hash disappeared."""
@@ -929,6 +933,7 @@ def withdraw_shared_fixture(
         api_key,
         file_hash=file_hash,
         present=True,
+        shared_files_path=shared_files_path,
         timeout=timeout,
     )
     shared_path = fixture_path.resolve()
@@ -951,6 +956,7 @@ def withdraw_shared_fixture(
             api_key,
             file_hash=file_hash,
             present=False,
+            shared_files_path=shared_files_path,
             timeout=timeout,
         )
     except Exception:
@@ -1547,6 +1553,7 @@ def run_rust_requester_phase(
                 fixture_path=fixture_path,
                 file_hash=file_hash,
                 reload_path=MFC_SHARED_RELOAD_PATH,
+                shared_files_path=MFC_SHARED_FILES_PATH,
                 timeout=args.reask_observe_timeout_seconds,
             )
         control_request = queued_source_reask_request(
@@ -1804,6 +1811,7 @@ def run_mfc_requester_phase(
                 fixture_path=fixture_path,
                 file_hash=file_hash,
                 reload_path=RUST_SHARED_RELOAD_PATH,
+                shared_files_path=RUST_SHARED_FILES_PATH,
                 timeout=args.reask_observe_timeout_seconds,
             )
         control_request = queued_source_reask_request(
