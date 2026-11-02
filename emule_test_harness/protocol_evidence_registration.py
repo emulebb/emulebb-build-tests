@@ -775,11 +775,24 @@ def _derived_server_source_coverage_ids(
         )
     except RuntimeError as exc:
         raise ValueError("server source diagnostics are not complete") from exc
-    expected_ids = list(server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS)
-
     protocol_case = _object(report.get("protocol_case"), "protocol_case")
-    if protocol_case.get("name") != "plain-server-plain-clients":
-        raise ValueError("server source scenario requires the canonical plaintext case")
+    transport_by_case = {
+        "plain-server-plain-clients": "plaintext",
+        "obfuscated-required": "obfuscated",
+    }
+    expected_transport_mode = transport_by_case.get(protocol_case.get("name"))
+    if expected_transport_mode is None:
+        raise ValueError(
+            "server source scenario requires the canonical plaintext or obfuscated-required case"
+        )
+    if source.get("transportMode") != expected_transport_mode:
+        raise ValueError("server source diagnostics do not match the selected server transport")
+    expected_ids = [
+        server_source_diagnostic_evidence.SOURCE_COVERAGE_BY_TRANSPORT[
+            expected_transport_mode
+        ],
+        server_source_diagnostic_evidence.REPLY_COVERAGE_ID,
+    ]
 
     fixture = _object(report.get("server_source_fixture"), "server_source_fixture")
     if (
@@ -1043,6 +1056,7 @@ def _derived_server_source_coverage_ids(
         publisher_client_id=publisher_id,
         publisher_host=publisher_host,
         publisher_tcp_port=publisher_port,
+        expected_transport_mode=expected_transport_mode,
         rust_records=records["rust"],
         mfc_records=records["mfc"],
         transfer_rows=transfer_rows,
@@ -2015,13 +2029,14 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             )
             for client in ("rust", "mfc")
         }
-        if coverage_id == "server.source.tcp-plain":
+        if coverage_id in server_source_diagnostic_evidence.SOURCE_COVERAGE_BY_TRANSPORT.values():
             requests = {
                 client: _object(wire.get("request"), f"server source {client} request")
                 for client, wire in wires.items()
             }
+            transport_mode = source.get("transportMode")
             return (
-                "Rust and MFC each emitted one identical plaintext GETSOURCES request and "
+                f"Rust and MFC each emitted one identical {transport_mode} GETSOURCES request and "
                 f"confirmed delivery at sequences {requests['rust']['sequence']}/"
                 f"{requests['mfc']['sequence']}."
             )

@@ -578,7 +578,12 @@ def attach_server_tcp_metadata(report: dict[str, object]) -> dict[str, object]:
 
 
 def _server_source_records(
-    *, client: str, process_id: int, run_id: str, trace_id: int
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    trace_id: int,
+    transport_mode: str = "plaintext",
 ) -> list[dict[str, object]]:
     endpoint = "127.0.0.1:4661"
     request_payload = ed2k_wire.encode_source_request(
@@ -630,8 +635,8 @@ def _server_source_records(
             "outcome": "attempted",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
             "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
             "payloadLen": len(request_payload),
             "payloadHex": request_payload.hex(),
@@ -652,8 +657,8 @@ def _server_source_records(
             "deliveryKnown": True,
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
             "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
         },
     )
@@ -671,8 +676,8 @@ def _server_source_records(
             "outcome": "accepted",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
             "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
             "payloadLen": len(reply_payload),
             "payloadHex": reply_payload.hex(),
@@ -695,8 +700,8 @@ def _server_source_records(
             "outcome": "applied",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
             "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
-            "transportMode": "plaintext",
-            "obfuscated": False,
+            "transportMode": transport_mode,
+            "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
             "stateId": "server.source.result_applied",
             "milestone": "result_applied",
@@ -726,6 +731,7 @@ def attach_server_source(
     *,
     run_directory: Path,
     monkeypatch: pytest.MonkeyPatch,
+    transport_mode: str = "plaintext",
 ) -> dict[str, object]:
     del monkeypatch
     endpoint = "127.0.0.1:4661"
@@ -735,12 +741,14 @@ def attach_server_source(
             process_id=101,
             run_id="rust-source-run",
             trace_id=101,
+            transport_mode=transport_mode,
         ),
         "mfc": _server_source_records(
             client="mfc",
             process_id=202,
             run_id="mfc-source-run",
             trace_id=202,
+            transport_mode=transport_mode,
         ),
     }
     captures: dict[str, dict[str, object]] = {}
@@ -781,6 +789,7 @@ def attach_server_source(
         publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
         publisher_host=SERVER_SOURCE_PUBLISHER_HOST,
         publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+        expected_transport_mode=transport_mode,
         rust_records=records["rust"],
         mfc_records=records["mfc"],
         transfer_rows=transfer_rows,
@@ -796,7 +805,13 @@ def attach_server_source(
         "user_hash": None,
     }
     report["transfer_scenario"] = "server-tcp-source"
-    report["protocol_case"] = {"name": "plain-server-plain-clients"}
+    report["protocol_case"] = {
+        "name": (
+            "plain-server-plain-clients"
+            if transport_mode == "plaintext"
+            else "obfuscated-required"
+        )
+    }
     report["network"] = {
         "ed2k_server_address": "127.0.0.1",
         "ports": {
@@ -925,7 +940,7 @@ def attach_server_source(
         for client, capture in captures.items()
     }
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].extend(
-        server_source_diagnostic_evidence.ELIGIBLE_COVERAGE_IDS
+        evidence["coverageClaims"]["eligibleCoverageIds"]
     )
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
 
@@ -2055,6 +2070,31 @@ def test_build_transfer_registration_accepts_exact_server_tcp_source(
     }
     assert "singular HighID source" in reasons["server.reply.sources"]
     assert "plaintext GETSOURCES" in reasons["server.source.tcp-plain"]
+
+
+def test_build_transfer_registration_accepts_obfuscated_server_tcp_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+        transport_mode="obfuscated",
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert "server.source.tcp-obfuscated" in registration["evidenceReceipt"][
+        "coverageIds"
+    ]
+    reasons = {
+        row["coverageId"]: row["reason"]
+        for row in registration["coverageEvidence"]
+    }
+    assert "obfuscated GETSOURCES" in reasons["server.source.tcp-obfuscated"]
 
 
 def test_build_transfer_registration_rejects_source_scenario_without_evidence(

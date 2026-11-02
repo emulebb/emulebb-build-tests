@@ -227,9 +227,12 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.transfer_scenario == SERVER_TCP_SOURCE:
         if args.client2_identity != "mfc_oracle":
             raise ValueError("TCP server-source proof requires the MFC diagnostics oracle.")
-        if args.protocol_case != "plain-server-plain-clients":
+        if args.protocol_case not in {
+            "plain-server-plain-clients",
+            "obfuscated-required",
+        }:
             raise ValueError(
-                "TCP server-source proof uses the single canonical plaintext case."
+                "TCP server-source proof requires the canonical plaintext or obfuscated-required case."
             )
     if args.transfer_scenario == SERVER_TCP_METADATA:
         if args.client2_identity != "mfc_oracle":
@@ -490,6 +493,7 @@ def collect_server_source_diagnostics(
     publisher_client_id: int,
     publisher_host: str,
     publisher_tcp_port: int,
+    expected_transport_mode: str,
     transfer_rows: dict[str, dict[str, object]],
     rust_diagnostics_dir: Path,
     rust_process_id: int,
@@ -518,6 +522,7 @@ def collect_server_source_diagnostics(
         publisher_client_id=publisher_client_id,
         publisher_host=publisher_host,
         publisher_tcp_port=publisher_tcp_port,
+        expected_transport_mode=expected_transport_mode,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
         transfer_rows=transfer_rows,
@@ -3302,6 +3307,9 @@ def main(argv: list[str] | None = None) -> int:
                 publisher_client_id=publisher_client_id,
                 publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP,
                 publisher_tcp_port=ports["source_publisher_tcp"],
+                expected_transport_mode=ed2k_protocol_cases.required_server_transport_plan(
+                    protocol_case
+                )[0],
                 transfer_rows=source_transfer_rows,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),

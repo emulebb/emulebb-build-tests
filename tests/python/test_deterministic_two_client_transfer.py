@@ -421,7 +421,7 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
-def test_server_tcp_source_uses_one_canonical_plaintext_oracle_case() -> None:
+def test_server_tcp_source_accepts_canonical_plaintext_and_obfuscated_cases() -> None:
     module = load_suite_module()
     wrong_client = module.parse_args(
         [
@@ -438,7 +438,7 @@ def test_server_tcp_source_uses_one_canonical_plaintext_oracle_case() -> None:
             "--lan-bind-addr",
             "192.0.2.10",
             "--protocol-case",
-            "obfuscated-required",
+            "obfuscated-preferred",
             "--transfer-scenario",
             module.SERVER_TCP_SOURCE,
         ]
@@ -453,12 +453,23 @@ def test_server_tcp_source_uses_one_canonical_plaintext_oracle_case() -> None:
             module.SERVER_TCP_SOURCE,
         ]
     )
+    obfuscated = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--protocol-case",
+            "obfuscated-required",
+            "--transfer-scenario",
+            module.SERVER_TCP_SOURCE,
+        ]
+    )
 
     with pytest.raises(ValueError, match="MFC diagnostics oracle"):
         module.validate_args(wrong_client)
-    with pytest.raises(ValueError, match="single canonical plaintext"):
+    with pytest.raises(ValueError, match="canonical plaintext or obfuscated-required"):
         module.validate_args(wrong_case)
     module.validate_args(canonical)
+    module.validate_args(obfuscated)
     assert canonical.fixture_size_bytes == module.DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
 
 
@@ -1245,6 +1256,7 @@ def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_ga
     assert 'source_publisher_login.get("id_kind") != "high-id"' in script_text
     assert "!= docker_ed2k_source_publisher.PUBLISHER_HIGH_ID" in script_text
     assert "publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP" in script_text
+    assert "expected_transport_mode=ed2k_protocol_cases.required_server_transport_plan(" in script_text
     assert '"mode": "plain-ed2k-link-without-source-hints"' in script_text
     assert script_text.count("wait_for_transfer_sources(") == 3
     assert "collect_server_source_diagnostics(" in script_text

@@ -15,7 +15,12 @@ EVIDENCE_LAYERS = (
     "deterministic-state-machine",
     "local-cross-client",
 )
-ELIGIBLE_COVERAGE_IDS = ("server.source.tcp-plain", "server.reply.sources")
+SOURCE_COVERAGE_BY_TRANSPORT = {
+    "plaintext": "server.source.tcp-plain",
+    "obfuscated": "server.source.tcp-obfuscated",
+}
+REPLY_COVERAGE_ID = "server.reply.sources"
+ELIGIBLE_COVERAGE_IDS = (*SOURCE_COVERAGE_BY_TRANSPORT.values(), REPLY_COVERAGE_ID)
 SOURCE_PROTOCOL_MARKER = ed2k_wire.PROTO_EDONKEY
 SOURCE_REQUEST_OPCODE = ed2k_wire.OP_GETSOURCES
 SOURCE_REPLY_OPCODE = ed2k_wire.OP_FOUNDSOURCES
@@ -98,9 +103,12 @@ def _packet_shape(
     )
 
 
-def _is_plaintext(record: dict[str, Any] | None) -> bool:
+def _matches_transport(record: dict[str, Any] | None, expected_transport_mode: str) -> bool:
     body = _body(record) if record is not None else {}
-    return body.get("transportMode") == "plaintext" and body.get("obfuscated") is False
+    return bool(
+        body.get("transportMode") == expected_transport_mode
+        and body.get("obfuscated") is (expected_transport_mode == "obfuscated")
+    )
 
 
 def _request_evidence(
@@ -108,6 +116,7 @@ def _request_evidence(
     *,
     endpoint: str,
     expected_payload: bytes,
+    expected_transport_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
         record
@@ -123,7 +132,7 @@ def _request_evidence(
         record
         for record in candidates
         if _payload(record) == expected_payload
-        and _is_plaintext(record)
+        and _matches_transport(record, expected_transport_mode)
         and _body(record).get("outcome") == "attempted"
     ]
     request = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
@@ -154,6 +163,7 @@ def _send_outcome_evidence(
     trace_id: int | None,
     request_sequence: int | None,
     required: bool,
+    expected_transport_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
         record
@@ -175,7 +185,7 @@ def _send_outcome_evidence(
         for record in candidates
         if _body(record).get("outcome") == "send_succeeded"
         and _body(record).get("deliveryKnown") is True
-        and _is_plaintext(record)
+        and _matches_transport(record, expected_transport_mode)
     ]
     outcome = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
     sequence = _sequence(outcome)
@@ -217,6 +227,7 @@ def _reply_evidence(
     expected_client_id: int,
     expected_host: str,
     expected_tcp_port: int,
+    expected_transport_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
         record
@@ -255,7 +266,7 @@ def _reply_evidence(
         (record, decoded)
         for record, decoded in decoded_rows
         if _body(record).get("outcome") == "accepted"
-        and _is_plaintext(record)
+        and _matches_transport(record, expected_transport_mode)
         and str(decoded.get("hash") or "").casefold() == expected_hash
         and decoded.get("source_count") == 1
         and decoded.get("sources") == [expected_source]
@@ -295,6 +306,7 @@ def _application_evidence(
     trace_id: int | None,
     reply_sequence: int | None,
     expected_hash: str,
+    expected_transport_mode: str,
 ) -> dict[str, Any]:
     endpoint_hash_events = [
         record
@@ -318,7 +330,7 @@ def _application_evidence(
             and body.get("direction") == "recv"
             and body.get("protocolMarker") == SOURCE_PROTOCOL_MARKER
             and body.get("opcode") == SOURCE_REPLY_OPCODE
-            and _is_plaintext(record)
+            and _matches_transport(record, expected_transport_mode)
             and body.get("stateId") == "server.source.result_applied"
             and body.get("milestone") == "result_applied"
             and _positive_int(body.get("wireSourceCount")) == 1
@@ -391,13 +403,16 @@ def build_server_source_diagnostic_evidence(
     publisher_client_id: int,
     publisher_host: str,
     publisher_tcp_port: int,
+    expected_transport_mode: str,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
     transfer_rows: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Proves one exact plaintext source lookup and source-state upsert per client."""
+    """Proves one exact source lookup and source-state upsert per client."""
 
     normalized_hash = expected_file_hash.casefold()
+    if expected_transport_mode not in SOURCE_COVERAGE_BY_TRANSPORT:
+        raise ValueError("Expected server-source transport must be plaintext or obfuscated.")
     if len(normalized_hash) != 32 or any(value not in "0123456789abcdef" for value in normalized_hash):
         raise ValueError("Expected source file hash must be 32 hexadecimal characters.")
     if not expected_file_name:
@@ -444,6 +459,7 @@ def build_server_source_diagnostic_evidence(
             records_by_client[client],
             endpoint=server_endpoint,
             expected_payload=expected_payload,
+            expected_transport_mode=expected_transport_mode,
         )
         send_outcome, _ = _send_outcome_evidence(
             records_by_client[client],
@@ -451,6 +467,7 @@ def build_server_source_diagnostic_evidence(
             trace_id=request.get("traceId"),
             request_sequence=request.get("sequence"),
             required=client == "rust",
+            expected_transport_mode=expected_transport_mode,
         )
         reply_predecessor = send_outcome if client == "rust" else request
         reply, _ = _reply_evidence(
@@ -463,6 +480,7 @@ def build_server_source_diagnostic_evidence(
             expected_client_id=publisher_client_id,
             expected_host=str(publisher_address),
             expected_tcp_port=publisher_tcp_port,
+            expected_transport_mode=expected_transport_mode,
         )
         application = _application_evidence(
             records_by_client[client],
@@ -470,6 +488,7 @@ def build_server_source_diagnostic_evidence(
             trace_id=request.get("traceId"),
             reply_sequence=reply.get("sequence"),
             expected_hash=normalized_hash,
+            expected_transport_mode=expected_transport_mode,
         )
         rest = _rest_evidence(
             transfer_rows[client],
@@ -533,7 +552,8 @@ def build_server_source_diagnostic_evidence(
             ]
         ),
         "transportModeEqual": all(
-            part.get("transportMode") == "plaintext" and part.get("obfuscated") is False
+            part.get("transportMode") == expected_transport_mode
+            and part.get("obfuscated") is (expected_transport_mode == "obfuscated")
             for part in (
                 rust_wire["request"],
                 rust_wire["sendOutcome"],
@@ -560,11 +580,16 @@ def build_server_source_diagnostic_evidence(
     if not comparison_ok:
         failures.extend(f"comparison.{name}" for name, value in comparison.items() if value is not True)
 
-    eligible_ids = list(ELIGIBLE_COVERAGE_IDS) if not failures else []
+    eligible_ids = (
+        [SOURCE_COVERAGE_BY_TRANSPORT[expected_transport_mode], REPLY_COVERAGE_ID]
+        if not failures
+        else []
+    )
     return {
         "schema": SCHEMA,
         "ok": not failures,
         "serverEndpoint": server_endpoint.casefold(),
+        "transportMode": expected_transport_mode,
         "expectedFile": {
             "hash": normalized_hash,
             "name": expected_file_name,
