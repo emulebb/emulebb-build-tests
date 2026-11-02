@@ -101,10 +101,28 @@ def _applied_record() -> dict[str, object]:
         },
         "body": {
             "outcome": "applied",
+            "replyOpcode": 0x91,
             "sourceUdpVersion": 4,
             "requestPendingAfter": False,
         },
     }
+
+
+def test_runner_requires_one_explicit_supported_scenario() -> None:
+    module = _load_module()
+
+    with pytest.raises(SystemExit):
+        module.parse_args(["--lan-bind-addr", "127.0.0.1"])
+
+    args = module.parse_args(
+        [
+            "--scenario",
+            "queue-full",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert args.scenario == "queue-full"
 
 
 def test_capacity_precondition_reads_health_validated_segments(tmp_path: Path) -> None:
@@ -492,16 +510,29 @@ def test_exact_v4_application_is_required_once() -> None:
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            reply_opcode=0x91,
         )
         == _applied_record()
     )
 
-    with pytest.raises(RuntimeError, match="multiple exact V4"):
+    assert (
+        module.find_udp_reask_applied(
+            [_applied_record()],
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+            reply_opcode=0x93,
+        )
+        is None
+    )
+
+    with pytest.raises(RuntimeError, match="multiple exact client-UDP"):
         module.find_udp_reask_applied(
             [_applied_record(), _applied_record()],
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            reply_opcode=0x91,
         )
 
 

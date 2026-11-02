@@ -485,6 +485,7 @@ def find_udp_reask_applied(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    reply_opcode: int,
 ) -> dict[str, Any] | None:
     normalized_file_hash = _canonical_hash(file_hash, field="file_hash")
     normalized_user_hash = _canonical_hash(source_user_hash, field="source_user_hash")
@@ -500,12 +501,13 @@ def find_udp_reask_applied(
             and str(keys.get("peer") or "").lower() == source_tcp_endpoint.lower()
             and str(keys.get("peerHash") or "").lower() == normalized_user_hash
             and body.get("outcome") == "applied"
+            and body.get("replyOpcode") == reply_opcode
             and body.get("sourceUdpVersion") == 4
             and body.get("requestPendingAfter") is False
         ):
             matches.append(record)
     if len(matches) > 1:
-        raise RuntimeError("multiple exact V4 reask application events were recorded")
+        raise RuntimeError("multiple exact client-UDP application events were recorded")
     return matches[0] if matches else None
 
 
@@ -529,6 +531,7 @@ def load_stock_client_udp_record(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scenario", choices=["v4", "queue-full"], required=True)
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -891,6 +894,7 @@ def wait_for_udp_reask_applied(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    reply_opcode: int,
     timeout: float,
     process: object | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -907,11 +911,14 @@ def wait_for_udp_reask_applied(
             file_hash=file_hash,
             source_tcp_endpoint=source_tcp_endpoint,
             source_user_hash=source_user_hash,
+            reply_opcode=reply_opcode,
         )
         if applied is not None:
             return applied, records
         time.sleep(1.0)
-    raise RuntimeError(f"{side} requester never applied the exact V4 reask reply")
+    raise RuntimeError(
+        f"{side} requester never applied client-UDP opcode {reply_opcode:#04x}"
+    )
 
 
 def start_mfc(
@@ -968,7 +975,7 @@ def start_mfc(
         config_dir / "server.met",
         address=server_address,
         port=ports["ed2k_tcp"],
-        name="client-udp-v4-local",
+        name="client-udp-local",
     )
     app = live_common.launch_app(
         paths.app_exe,
@@ -1015,6 +1022,7 @@ def stop_mfc(runtime: dict[str, object] | None) -> None:
 def run_rust_requester_phase(
     *,
     args: argparse.Namespace,
+    scenario: str,
     paths,
     profile_seed_dir: Path,
     rust_repo: Path,
@@ -1026,7 +1034,11 @@ def run_rust_requester_phase(
     server_endpoint: str,
     admin_base_url: str,
     fixture_path: Path,
-) -> tuple[udp_evidence.ClientUdpV4Transition, dict[str, object]]:
+) -> tuple[
+    udp_evidence.ClientUdpV4Transition
+    | udp_evidence.ClientUdpQueueFullTransition,
+    dict[str, object],
+]:
     mfc = None
     rust_clients: list[RustRuntime] = []
     try:
@@ -1069,7 +1081,7 @@ def run_rust_requester_phase(
                 p2p_address=peer_ips[index],
                 server_endpoint=server_endpoint,
                 used_ports=used_ports,
-                label=f"v4-occupier-{index + 1}",
+                label=f"{scenario}-occupier-{index + 1}",
                 enable_reask=False,
             )
             for index in range(2)
@@ -1083,7 +1095,7 @@ def run_rust_requester_phase(
             p2p_address=peer_ips[2],
             server_endpoint=server_endpoint,
             used_ports=used_ports,
-            label="v4-rust-requester",
+            label=f"{scenario}-rust-requester",
             enable_reask=True,
             diagnostics=True,
         )
@@ -1126,6 +1138,33 @@ def run_rust_requester_phase(
             timeout=args.reask_observe_timeout_seconds,
             process=requester.process,
         )
+        waiter_removal_receipt = None
+        queue_pressure_receipt = None
+        if scenario == "queue-full":
+            waiter = wait_for_upload_waiter(
+                mfc["baseUrl"],
+                args.api_key,
+                file_hash=file_hash,
+                requester_tcp_endpoint=requester.tcp_endpoint,
+                timeout=args.reask_observe_timeout_seconds,
+            )
+            waiter_removal_receipt = remove_upload_waiter(
+                mfc["baseUrl"],
+                args.api_key,
+                waiter=waiter,
+                file_hash=file_hash,
+                requester_tcp_endpoint=requester.tcp_endpoint,
+                timeout=args.reask_observe_timeout_seconds,
+            )
+            pressure_request = queue_pressure_request(
+                file_hash=file_hash,
+                requester_udp_endpoint=requester.udp_endpoint,
+            )
+            queue_pressure_receipt = arm_queue_pressure(
+                mfc["baseUrl"],
+                args.api_key,
+                pressure_request,
+            )
         control_request = queued_source_reask_request(
             file_hash=file_hash,
             source_tcp_endpoint=registration["sourceTcpEndpoint"],
@@ -1143,31 +1182,49 @@ def run_rust_requester_phase(
             file_hash=file_hash,
             source_tcp_endpoint=mfc["tcpEndpoint"],
             source_user_hash=registration["sourceUserHash"],
+            reply_opcode=(
+                udp_evidence.OP_QUEUEFULL
+                if scenario == "queue-full"
+                else udp_evidence.OP_REASKACK
+            ),
             timeout=args.reask_observe_timeout_seconds,
             process=requester.process,
         )
         responder_records = current_diag_records(mfc["diagnosticsDir"], side="emule")
+        transition_arguments = {
+            "requester": "rust",
+            "responder": "mfc",
+            "source_tcp_endpoint": mfc["tcpEndpoint"],
+            "source_udp_endpoint": mfc["udpEndpoint"],
+            "source_user_hash": bytes.fromhex(registration["sourceUserHash"]),
+            "requester_udp_endpoint": requester.udp_endpoint,
+            "control_receipt": control_receipt,
+            "requester_records": requester_records,
+            "responder_records": responder_records,
+        }
+        if scenario == "queue-full":
+            transition = udp_evidence.ClientUdpQueueFullTransition(
+                **transition_arguments,
+                waiter_removal_receipt=waiter_removal_receipt,
+                queue_pressure_receipt=queue_pressure_receipt,
+            )
+        else:
+            transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
+        check = {
+            "fileHash": file_hash,
+            "publication": publication,
+            "rustHighIdClients": rust_high_id_clients,
+            "capacity": capacity,
+            "registration": registration,
+            "control": control_receipt,
+            "applicationSequence": applied.get("seq"),
+        }
+        if scenario == "queue-full":
+            check["waiterRemoval"] = waiter_removal_receipt
+            check["queuePressure"] = queue_pressure_receipt
         return (
-            udp_evidence.ClientUdpV4Transition(
-                requester="rust",
-                responder="mfc",
-                source_tcp_endpoint=mfc["tcpEndpoint"],
-                source_udp_endpoint=mfc["udpEndpoint"],
-                source_user_hash=bytes.fromhex(registration["sourceUserHash"]),
-                requester_udp_endpoint=requester.udp_endpoint,
-                control_receipt=control_receipt,
-                requester_records=requester_records,
-                responder_records=responder_records,
-            ),
-            {
-                "fileHash": file_hash,
-                "publication": publication,
-                "rustHighIdClients": rust_high_id_clients,
-                "capacity": capacity,
-                "registration": registration,
-                "control": control_receipt,
-                "applicationSequence": applied.get("seq"),
-            },
+            transition,
+            check,
         )
     finally:
         stop_mfc(mfc)
@@ -1178,6 +1235,7 @@ def run_rust_requester_phase(
 def run_mfc_requester_phase(
     *,
     args: argparse.Namespace,
+    scenario: str,
     paths,
     profile_seed_dir: Path,
     rust_repo: Path,
@@ -1191,7 +1249,11 @@ def run_mfc_requester_phase(
     admin_base_url: str,
     fixture_path: Path,
     expected_file_hash: str,
-) -> tuple[udp_evidence.ClientUdpV4Transition, dict[str, object]]:
+) -> tuple[
+    udp_evidence.ClientUdpV4Transition
+    | udp_evidence.ClientUdpQueueFullTransition,
+    dict[str, object],
+]:
     mfc = None
     uploader = None
     occupier = None
@@ -1204,7 +1266,7 @@ def run_mfc_requester_phase(
             p2p_address=uploader_ip,
             server_endpoint=server_endpoint,
             used_ports=used_ports,
-            label="v4-rust-responder",
+            label=f"{scenario}-rust-responder",
             enable_reask=True,
             diagnostics=True,
             upload_limit_kibps=4,
@@ -1241,7 +1303,7 @@ def run_mfc_requester_phase(
             p2p_address=occupier_ip,
             server_endpoint=server_endpoint,
             used_ports=used_ports,
-            label="v4-responder-occupier",
+            label=f"{scenario}-responder-occupier",
             enable_reask=False,
         )
         occupier_high_id_client = wait_for_server_high_id_client(
@@ -1288,6 +1350,33 @@ def run_mfc_requester_phase(
             source_tcp_port=uploader_tcp_port,
             timeout=args.reask_observe_timeout_seconds,
         )
+        waiter_removal_receipt = None
+        queue_pressure_receipt = None
+        if scenario == "queue-full":
+            waiter = wait_for_upload_waiter(
+                uploader.base_url,
+                args.api_key,
+                file_hash=file_hash,
+                requester_tcp_endpoint=mfc["tcpEndpoint"],
+                timeout=args.reask_observe_timeout_seconds,
+            )
+            waiter_removal_receipt = remove_upload_waiter(
+                uploader.base_url,
+                args.api_key,
+                waiter=waiter,
+                file_hash=file_hash,
+                requester_tcp_endpoint=mfc["tcpEndpoint"],
+                timeout=args.reask_observe_timeout_seconds,
+            )
+            pressure_request = queue_pressure_request(
+                file_hash=file_hash,
+                requester_udp_endpoint=mfc["udpEndpoint"],
+            )
+            queue_pressure_receipt = arm_queue_pressure(
+                uploader.base_url,
+                args.api_key,
+                pressure_request,
+            )
         control_request = queued_source_reask_request(
             file_hash=file_hash,
             source_tcp_endpoint=uploader.tcp_endpoint,
@@ -1305,34 +1394,52 @@ def run_mfc_requester_phase(
             file_hash=file_hash,
             source_tcp_endpoint=uploader.tcp_endpoint,
             source_user_hash=source["sourceUserHash"],
+            reply_opcode=(
+                udp_evidence.OP_QUEUEFULL
+                if scenario == "queue-full"
+                else udp_evidence.OP_REASKACK
+            ),
             timeout=args.reask_observe_timeout_seconds,
         )
         responder_records = current_diag_records(
             uploader.diagnostics_dir,
             side="rust",
         )
+        transition_arguments = {
+            "requester": "mfc",
+            "responder": "rust",
+            "source_tcp_endpoint": uploader.tcp_endpoint,
+            "source_udp_endpoint": uploader.udp_endpoint,
+            "source_user_hash": bytes.fromhex(source["sourceUserHash"]),
+            "requester_udp_endpoint": mfc["udpEndpoint"],
+            "control_receipt": control_receipt,
+            "requester_records": requester_records,
+            "responder_records": responder_records,
+        }
+        if scenario == "queue-full":
+            transition = udp_evidence.ClientUdpQueueFullTransition(
+                **transition_arguments,
+                waiter_removal_receipt=waiter_removal_receipt,
+                queue_pressure_receipt=queue_pressure_receipt,
+            )
+        else:
+            transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
+        check = {
+            "fileHash": file_hash,
+            "publication": publication,
+            "occupierHighIdClient": occupier_high_id_client,
+            "occupiedSlot": occupied_slot,
+            "mfcHighIdClient": mfc_high_id_client,
+            "queueSource": source,
+            "control": control_receipt,
+            "applicationSequence": applied.get("seq"),
+        }
+        if scenario == "queue-full":
+            check["waiterRemoval"] = waiter_removal_receipt
+            check["queuePressure"] = queue_pressure_receipt
         return (
-            udp_evidence.ClientUdpV4Transition(
-                requester="mfc",
-                responder="rust",
-                source_tcp_endpoint=uploader.tcp_endpoint,
-                source_udp_endpoint=uploader.udp_endpoint,
-                source_user_hash=bytes.fromhex(source["sourceUserHash"]),
-                requester_udp_endpoint=mfc["udpEndpoint"],
-                control_receipt=control_receipt,
-                requester_records=requester_records,
-                responder_records=responder_records,
-            ),
-            {
-                "fileHash": file_hash,
-                "publication": publication,
-                "occupierHighIdClient": occupier_high_id_client,
-                "occupiedSlot": occupied_slot,
-                "mfcHighIdClient": mfc_high_id_client,
-                "queueSource": source,
-                "control": control_receipt,
-                "applicationSequence": applied.get("seq"),
-            },
+            transition,
+            check,
         )
     finally:
         stop_mfc(mfc)
@@ -1367,10 +1474,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile_seed_dir
         else paths.seed_config_dir
     )
+    coverage_id = (
+        udp_evidence.QUEUE_FULL_COVERAGE_ID
+        if args.scenario == "queue-full"
+        else udp_evidence.COVERAGE_ID
+    )
+    campaign_schema = (
+        "emulebb-build-tests.client-udp-queue-full-campaign.v1"
+        if args.scenario == "queue-full"
+        else "emulebb-build-tests.client-udp-v4-campaign.v1"
+    )
     report: dict[str, object] = {
-        "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
+        "schema": campaign_schema,
         "suite": SUITE_NAME,
-        "coverageId": udp_evidence.COVERAGE_ID,
+        "scenario": args.scenario,
+        "coverageId": coverage_id,
         "status": "running",
         "checks": {},
     }
@@ -1379,7 +1497,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
             raise ValueError(
-                "client-udp.v4 owns its deterministic HighID route; "
+                f"{coverage_id} owns its deterministic HighID route; "
                 "do not pass a P2P bind override"
             )
         (
@@ -1438,7 +1556,11 @@ def main(argv: list[str] | None = None) -> int:
             "build": ed2k_server.build,
         }
 
-        fixture_path = paths.source_artifacts_dir / "fixture" / "client-udp-v4.bin"
+        fixture_path = (
+            paths.source_artifacts_dir
+            / "fixture"
+            / f"client-udp-{args.scenario}.bin"
+        )
         dtt.write_fixture_file(
             fixture_path,
             args.fixture_size_bytes,
@@ -1458,6 +1580,7 @@ def main(argv: list[str] | None = None) -> int:
         report["currentPhase"] = "rust-requester-mfc-responder"
         rust_transition, rust_check = run_rust_requester_phase(
             args=args,
+            scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
             rust_repo=rust_repo,
@@ -1475,6 +1598,7 @@ def main(argv: list[str] | None = None) -> int:
         report["currentPhase"] = "mfc-requester-rust-responder"
         mfc_transition, mfc_check = run_mfc_requester_phase(
             args=args,
+            scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
             rust_repo=rust_repo,
@@ -1492,14 +1616,22 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["mfcRequesterRustResponder"] = mfc_check
 
         report["currentPhase"] = "causal-evidence"
-        evidence = udp_evidence.build_client_udp_v4_diagnostic_evidence(
+        evidence_builder = (
+            udp_evidence.build_client_udp_queue_full_diagnostic_evidence
+            if args.scenario == "queue-full"
+            else udp_evidence.build_client_udp_v4_diagnostic_evidence
+        )
+        evidence = evidence_builder(
             file_hash=bytes.fromhex(rust_check["fileHash"]),
             part_count=part_count,
             stock_record=load_stock_client_udp_record(),
             transitions=[rust_transition, mfc_transition],
         )
         report["evidence"] = evidence
-        udp_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
+        if args.scenario == "queue-full":
+            udp_evidence.require_client_udp_queue_full_diagnostic_evidence(evidence)
+        else:
+            udp_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
         report["currentPhase"] = "complete"
         report["status"] = "passed"
         return 0
