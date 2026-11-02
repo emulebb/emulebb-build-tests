@@ -15,6 +15,7 @@ from emule_test_harness import diag_event_runs
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
+from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -31,7 +32,9 @@ RUN_DIRECTORY_PATTERN = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)-")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+COMMAND_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
+SERVER_CALLBACK_SCENARIO = "server-callback-reply"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_ADVANCED_SEARCH_SCENARIO = "server-advanced-search"
 SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
@@ -77,6 +80,12 @@ SERVER_UDP_METADATA_FILE_HASH = "11223344556677889900AABBCCDDEEFF"
 SERVER_UDP_METADATA_FILE_NAME = "deterministic-udp-metadata-file.bin"
 SERVER_UDP_METADATA_FILE_SIZE = 54_321
 SERVER_UDP_METADATA_PUBLISHER_NICK = "emulebb-harness-udp-metadata-publisher"
+SERVER_CALLBACK_REQUESTER_HASH = "426486A8CAEC0E20426486A8CAEC6E00"
+SERVER_CALLBACK_REQUESTER_NICK = "emulebb-harness-callback-requester"
+SERVER_CALLBACK_FILE_HASH = "33445566778899001122AABBCCDDEEFF"
+SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
+SERVER_CALLBACK_FILE_SIZE = 23_456
+SERVER_CALLBACK_TIMEOUT_SECONDS = 20.0
 SERVER_LOGIN_CASE_AUTHORITY = {
     "plain-server-plain-clients": {
         "transportPlan": ("plaintext",),
@@ -191,6 +200,14 @@ def _directory_within(value: Any, root: Path, field: str) -> Path:
             f"{field} must resolve to a directory under the immutable run directory"
         )
     return path
+
+
+def _json_object_file(path: Path, field: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field} is not a readable JSON file") from exc
+    return _object(value, field)
 
 
 def _profile_by_client_key(profiles: dict[str, Any], client_key: str) -> dict[str, Any]:
@@ -814,17 +831,18 @@ def _derived_server_search_coverage_ids(
     return expected_ids
 
 
-def _load_server_source_capture(
+def _load_final_capture_subset(
     capture_value: Any,
     final_capture_value: Any,
     *,
+    evidence_name: str,
     client: str,
     run_directory: Path,
 ) -> list[dict[str, Any]]:
-    field = f"server source {client}"
+    field = f"{evidence_name} {client}"
     capture = _object(
         capture_value,
-        f"diagnostics.serverSource.captures.{client}",
+        f"{evidence_name} capture",
     )
     final_capture = _object(
         final_capture_value,
@@ -1228,9 +1246,10 @@ def _derived_server_source_coverage_ids(
     if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
         raise ValueError("server source captures must contain exactly rust and mfc")
     records = {
-        client: _load_server_source_capture(
+        client: _load_final_capture_subset(
             captures.get(client),
             final_captures.get(client),
+            evidence_name="server source",
             client=client,
             run_directory=run_directory,
         )
@@ -1519,9 +1538,10 @@ def _derived_server_udp_source_version_coverage_ids(
     if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
         raise ValueError(f"{context} captures must contain exactly rust and mfc")
     records = {
-        client: _load_server_source_capture(
+        client: _load_final_capture_subset(
             captures.get(client),
             final_captures.get(client),
+            evidence_name=context,
             client=client,
             run_directory=run_directory,
         )
@@ -2170,19 +2190,459 @@ def _derived_server_udp_metadata_coverage_ids(
     return expected_ids
 
 
+def _derived_server_callback_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    callback_value = diagnostics.get("serverCallback")
+    scenario = report.get("transfer_scenario")
+    if callback_value is None:
+        if scenario == SERVER_CALLBACK_SCENARIO:
+            raise ValueError("server callback scenario has no diagnostic evidence")
+        return []
+    if scenario != SERVER_CALLBACK_SCENARIO:
+        raise ValueError("server callback evidence requires its dedicated scenario")
+
+    callback = _object(callback_value, "diagnostics.serverCallback")
+    if callback.get("schema") != server_callback_diagnostic_evidence.SCHEMA:
+        raise ValueError("server callback diagnostics use an unexpected schema")
+    try:
+        server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
+            callback
+        )
+    except RuntimeError as exc:
+        raise ValueError("server callback diagnostics are not complete") from exc
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError(
+            "server callback scenario requires the canonical plaintext case"
+        )
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_server_callback_diagnostics") != callback:
+        raise ValueError(
+            "server callback diagnostics do not match the retained snapshot"
+        )
+    login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
+    if checks.get("client_server_login_diagnostics") != login:
+        raise ValueError(
+            "server callback login evidence does not match its retained snapshot"
+        )
+    login_clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
+    expected_clients = _object(
+        login.get("expectedClients"),
+        "diagnostics.serverLogin.expectedClients",
+    )
+    targets = _object(
+        checks.get("client_server_callback_targets"),
+        "checks.client_server_callback_targets",
+    )
+    if set(targets) != {"rust", "mfc"}:
+        raise ValueError("server callback targets must contain exactly rust and mfc")
+    expected_targets: dict[str, dict[str, object]] = {}
+    for client in ("rust", "mfc"):
+        login_row = _object(
+            login_clients.get(client),
+            f"diagnostics.serverLogin.clients.{client}",
+        )
+        expected_client = _object(
+            expected_clients.get(client),
+            f"diagnostics.serverLogin.expectedClients.{client}",
+        )
+        decoded_login = _object(
+            login_row.get("decodedLogin"),
+            f"diagnostics.serverLogin.clients.{client}.decodedLogin",
+        )
+        decoded_id = _object(
+            login_row.get("decodedIdChange"),
+            f"diagnostics.serverLogin.clients.{client}.decodedIdChange",
+        )
+        target_id = _positive_int(
+            decoded_id.get("assigned_id"),
+            f"{client} callback target ID",
+        )
+        target_port = _positive_int(
+            expected_client.get("tcpPort"),
+            f"{client} callback target TCP port",
+        )
+        target_hash = str(decoded_login.get("user_hash") or "").upper()
+        if (
+            target_id >= ed2k_wire.LOW_ID_CEILING
+            or target_port > 0xFFFF
+            or decoded_id.get("id_kind") != "low-id"
+            or decoded_login.get("tcp_port") != target_port
+            or len(target_hash) != 32
+            or any(character not in "0123456789ABCDEF" for character in target_hash)
+        ):
+            raise ValueError(
+                f"{client} callback target is not an exact accepted LowID login"
+            )
+        expected_targets[client] = {
+            "clientId": target_id,
+            "idKind": "low-id",
+            "tcpPort": target_port,
+            "userHash": target_hash,
+        }
+    if targets != expected_targets:
+        raise ValueError(
+            "server callback targets do not derive exactly from accepted logins"
+        )
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    server_port = _positive_int(ports.get("ed2k_tcp"), "network.ports.ed2k_tcp")
+    requester_port = _positive_int(
+        ports.get("callback_requester_tcp"),
+        "network.ports.callback_requester_tcp",
+    )
+    if server_port > 0xFFFF or requester_port > 0xFFFF:
+        raise ValueError("server callback topology contains an invalid TCP port")
+    server_host, callback_server_port = _canonical_ipv4_endpoint(
+        callback.get("serverEndpoint"),
+        "server callback endpoint",
+    )
+    expected_server_endpoint = f"{server_host}:{server_port}"
+    expected_requester_endpoint = (
+        f"{docker_ed2k_source_publisher.PUBLISHER_IP}:{requester_port}"
+    )
+    if (
+        network.get("ed2k_server_address") != server_host
+        or callback_server_port != server_port
+        or callback.get("serverEndpoint") != expected_server_endpoint
+        or callback.get("requesterEndpoint") != expected_requester_endpoint
+    ):
+        raise ValueError("server callback endpoints do not match the managed topology")
+
+    requester = _object(
+        report.get("server_callback_requester"),
+        "server_callback_requester",
+    )
+    requester_shape = {
+        "nickname",
+        "ip",
+        "tcpPort",
+        "userHash",
+        "serverFlags",
+        "login",
+        "client",
+        "publication",
+        "runtime",
+        "windowsRoute",
+    }
+    if set(requester) != requester_shape:
+        raise ValueError("server callback requester has an unexpected shape")
+    requester_login = _object(
+        requester.get("login"),
+        "server_callback_requester.login",
+    )
+    requester_client = _object(
+        requester.get("client"),
+        "server_callback_requester.client",
+    )
+    requester_id = docker_ed2k_source_publisher.PUBLISHER_HIGH_ID
+    if (
+        requester.get("nickname") != SERVER_CALLBACK_REQUESTER_NICK
+        or requester.get("ip") != docker_ed2k_source_publisher.PUBLISHER_IP
+        or requester.get("tcpPort") != requester_port
+        or requester.get("userHash") != SERVER_CALLBACK_REQUESTER_HASH
+        or requester.get("serverFlags")
+        != docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS
+        or requester_login.get("assigned_id") != requester_id
+        or requester_login.get("id_kind") != "high-id"
+        or requester_client.get("client_name") != SERVER_CALLBACK_REQUESTER_NICK
+        or requester_client.get("nick") != SERVER_CALLBACK_REQUESTER_NICK
+        or requester_client.get("ip") != docker_ed2k_source_publisher.PUBLISHER_IP
+        or requester_client.get("high_id") is not True
+        or requester_client.get("shared_files") != 1
+    ):
+        raise ValueError(
+            "server callback requester is not the canonical HighID fixture"
+        )
+
+    runtime = _object(
+        requester.get("runtime"),
+        "server_callback_requester.runtime",
+    )
+    runtime_run_id = runtime.get("runId")
+    if (
+        not isinstance(runtime_run_id, str)
+        or COMMAND_ID_PATTERN.fullmatch(runtime_run_id) is None
+    ):
+        raise ValueError("server callback requester runtime runId is malformed")
+    runtime_transcript = runtime.get("transcript")
+    if not isinstance(runtime_transcript, list):
+        raise ValueError("server callback requester runtime transcript is not a list")
+    login_payload = ed2k_wire.encode_login_request(
+        user_hash=bytes.fromhex(SERVER_CALLBACK_REQUESTER_HASH),
+        tcp_port=requester_port,
+        nickname=SERVER_CALLBACK_REQUESTER_NICK,
+        server_flags=docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+    ).hex()
+    offer_payload = ed2k_wire.encode_offer_file(
+        file_hash=bytes.fromhex(SERVER_CALLBACK_FILE_HASH),
+        name=SERVER_CALLBACK_FILE_NAME,
+        size=SERVER_CALLBACK_FILE_SIZE,
+    ).hex()
+    login_frames = [
+        row
+        for row in runtime_transcript
+        if isinstance(row, dict)
+        and row.get("direction") == "send"
+        and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
+        and row.get("opcode") == ed2k_wire.OP_LOGINREQUEST
+    ]
+    offer_frames = [
+        row
+        for row in runtime_transcript
+        if isinstance(row, dict)
+        and row.get("direction") == "send"
+        and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
+        and row.get("opcode") == ed2k_wire.OP_OFFERFILES
+    ]
+    if (
+        runtime.get("schema") != docker_ed2k_source_publisher.RECEIPT_SCHEMA
+        or runtime.get("status") != "ready"
+        or runtime.get("publisherIp") != docker_ed2k_source_publisher.PUBLISHER_IP
+        or runtime.get("expectedHighId") != requester_id
+        or runtime.get("server") != {"host": server_host, "port": server_port}
+        or runtime.get("publisher")
+        != {
+            "nickname": SERVER_CALLBACK_REQUESTER_NICK,
+            "tcpPort": requester_port,
+            "userHash": SERVER_CALLBACK_REQUESTER_HASH,
+            "serverFlags": docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+        }
+        or runtime.get("file")
+        != {
+            "hash": SERVER_CALLBACK_FILE_HASH,
+            "name": SERVER_CALLBACK_FILE_NAME,
+            "size": SERVER_CALLBACK_FILE_SIZE,
+        }
+        or runtime.get("login") != requester_login
+        or not isinstance(runtime.get("identityProbeAnswers"), int)
+        or isinstance(runtime.get("identityProbeAnswers"), bool)
+        or runtime.get("identityProbeAnswers") < 0
+        or len(login_frames) != 1
+        or login_frames[0].get("payloadHex") != login_payload
+        or len(offer_frames) != 1
+        or offer_frames[0].get("payloadHex") != offer_payload
+    ):
+        raise ValueError("server callback requester runtime receipt is not canonical")
+
+    requester_directory = (
+        run_directory / "ed2k-server" / "callback-requester"
+    ).resolve()
+    ready_path = _path_within(
+        str(requester_directory / f"{runtime_run_id}.publisher-ready.json"),
+        run_directory,
+        "server callback requester readiness receipt",
+    )
+    ready_paths = sorted(
+        path.resolve() for path in requester_directory.glob("*.publisher-ready.json")
+    )
+    if (
+        ready_paths != [ready_path]
+        or _json_object_file(
+            ready_path,
+            "server callback requester readiness receipt",
+        )
+        != runtime
+    ):
+        raise ValueError(
+            "server callback requester runtime is not its immutable receipt"
+        )
+
+    route = _object(
+        requester.get("windowsRoute"),
+        "server_callback_requester.windowsRoute",
+    )
+    if route != {
+        "destination": f"{docker_ed2k_source_publisher.PUBLISHER_IP}/32",
+        "gateway": server_host,
+        "publishedTcpPort": requester_port,
+    }:
+        raise ValueError("server callback requester route is not exact")
+
+    publication = _object(
+        requester.get("publication"),
+        "server_callback_requester.publication",
+    )
+    publication_result = _object(
+        publication.get("search_result"),
+        "server_callback_requester.publication.search_result",
+    )
+    expected_source = {
+        "client_id": requester_id,
+        "crypt_options": 0,
+        "host": docker_ed2k_source_publisher.PUBLISHER_IP,
+        "kind": "high-id",
+        "port": requester_port,
+        "user_hash": None,
+    }
+    if (
+        publication.get("hash") != SERVER_CALLBACK_FILE_HASH
+        or publication.get("requested_size") != SERVER_CALLBACK_FILE_SIZE
+        or publication.get("indexed") is not True
+        or publication.get("name") != SERVER_CALLBACK_FILE_NAME
+        or publication.get("size") != SERVER_CALLBACK_FILE_SIZE
+        or publication.get("sources") != 1
+        or publication.get("search_sources") != 1
+        or publication.get("complete_sources") != 1
+        or publication.get("endpoints") != [expected_source]
+        or publication_result.get("hash") != SERVER_CALLBACK_FILE_HASH
+        or publication_result.get("name") != SERVER_CALLBACK_FILE_NAME
+        or publication_result.get("size") != SERVER_CALLBACK_FILE_SIZE
+        or publication_result.get("sources") != 1
+        or publication_result.get("complete_sources") != 1
+        or publication_result.get("result_source_id") != requester_id
+        or publication_result.get("result_source_port") != requester_port
+    ):
+        raise ValueError(
+            "server callback publication is not joined to its HighID requester"
+        )
+
+    requester_results = _object(
+        checks.get("client_server_callback_requests"),
+        "checks.client_server_callback_requests",
+    )
+    if set(requester_results) != {"rust", "mfc"}:
+        raise ValueError("server callback requests must contain exactly rust and mfc")
+    control_directory = (requester_directory / "callback-control").resolve()
+    if (
+        not control_directory.is_relative_to(run_directory)
+        or not control_directory.is_dir()
+    ):
+        raise ValueError(
+            "server callback control directory is not immutable run evidence"
+        )
+    expected_control_names: set[str] = set()
+    for client in ("rust", "mfc"):
+        result = _object(
+            requester_results.get(client),
+            f"checks.client_server_callback_requests.{client}",
+        )
+        command_id = result.get("commandId")
+        if (
+            not isinstance(command_id, str)
+            or COMMAND_ID_PATTERN.fullmatch(command_id) is None
+        ):
+            raise ValueError(f"{client} server callback commandId is malformed")
+        target = expected_targets[client]
+        request_payload = ed2k_wire.encode_callback_request(target["clientId"])
+        request_path = _path_within(
+            str(control_directory / f"{command_id}.request.json"),
+            run_directory,
+            f"{client} server callback request receipt",
+        )
+        result_path = _path_within(
+            str(control_directory / f"{command_id}.result.json"),
+            run_directory,
+            f"{client} server callback result receipt",
+        )
+        expected_control_names.update({request_path.name, result_path.name})
+        command = _json_object_file(
+            request_path,
+            f"{client} server callback request receipt",
+        )
+        expected_command = {
+            "schema": docker_ed2k_source_publisher.CALLBACK_COMMAND_SCHEMA,
+            "commandId": command_id,
+            "runId": runtime_run_id,
+            "targetClientId": target["clientId"],
+            "targetLabel": client,
+            "timeoutSeconds": SERVER_CALLBACK_TIMEOUT_SECONDS,
+            "requestPayloadHex": request_payload.hex().upper(),
+        }
+        if command != expected_command:
+            raise ValueError(f"{client} server callback request receipt is not exact")
+        if (
+            result.get("commandId") != command_id
+            or result.get("runId") != runtime_run_id
+            or _json_object_file(
+                result_path,
+                f"{client} server callback result receipt",
+            )
+            != result
+        ):
+            raise ValueError(f"{client} server callback result receipt is not exact")
+    actual_control_names = {
+        path.name for path in control_directory.iterdir() if path.is_file()
+    }
+    if actual_control_names != expected_control_names:
+        raise ValueError("server callback control directory is not singular and exact")
+
+    captures = _object(
+        callback.get("captures"),
+        "diagnostics.serverCallback.captures",
+    )
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("server callback captures must contain exactly rust and mfc")
+    records = {
+        client: _load_final_capture_subset(
+            captures.get(client),
+            final_captures.get(client),
+            evidence_name="server callback",
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
+        raise ValueError("server callback capture is not joined to the stopped oracle")
+
+    rebuilt = (
+        server_callback_diagnostic_evidence.build_server_callback_diagnostic_evidence(
+            server_endpoint=expected_server_endpoint,
+            requester_host=docker_ed2k_source_publisher.PUBLISHER_IP,
+            requester_port=requester_port,
+            targets=expected_targets,
+            requester_results=requester_results,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
+    )
+    retained_without_capture = {
+        key: value for key, value in callback.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError(
+            "server callback receipt does not match its immutable captures"
+        )
+    return [server_callback_diagnostic_evidence.COVERAGE_ID]
+
+
 def _derived_server_login_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
     login_value = diagnostics.get("serverLogin")
     if login_value is None:
-        if report.get("transfer_scenario") == SERVER_LOGIN_SCENARIO:
+        if report.get("transfer_scenario") in {
+            SERVER_LOGIN_SCENARIO,
+            SERVER_CALLBACK_SCENARIO,
+        }:
             raise ValueError(
                 "server login scenario has no bilateral diagnostic evidence"
             )
         return []
-    if report.get("transfer_scenario") != SERVER_LOGIN_SCENARIO:
+    if report.get("transfer_scenario") not in {
+        SERVER_LOGIN_SCENARIO,
+        SERVER_CALLBACK_SCENARIO,
+    }:
         raise ValueError(
-            "server login evidence requires the server-login-request scenario"
+            "server login evidence requires a server login or callback scenario"
         )
     login = _object(login_value, "diagnostics.serverLogin")
     server_login_diagnostic_evidence.require_server_login_diagnostic_evidence(login)
@@ -2616,6 +3076,24 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == server_callback_diagnostic_evidence.COVERAGE_ID:
+        callback = _object(
+            diagnostics.get("serverCallback"),
+            "diagnostics.serverCallback",
+        )
+        clients = _object(
+            callback.get("clients"),
+            "diagnostics.serverCallback.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.serverCallback.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.serverCallback.clients.mfc")
+        return (
+            "Rust and MFC each decoded and applied the exact server callback reply at "
+            f"wire/application sequences {rust['wire']['sequence']}/"
+            f"{rust['application']['sequence']} and {mfc['wire']['sequence']}/"
+            f"{mfc['application']['sequence']}, then emitted a callback HELLO matching "
+            "its accepted LowID login identity."
+        )
     if coverage_id in {
         "server.connect.plaintext",
         "server.connect.obfuscated",
@@ -2957,6 +3435,11 @@ def build_transfer_registration(
             ),
             *_derived_server_tcp_metadata_coverage_ids(report, diagnostics),
             *_derived_server_udp_metadata_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
+            *_derived_server_callback_coverage_ids(
                 report,
                 diagnostics,
                 run_directory=run_directory,

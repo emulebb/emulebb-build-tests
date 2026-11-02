@@ -11,6 +11,7 @@ import pytest
 from emule_test_harness import ed2k_wire
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
+from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
@@ -49,6 +50,13 @@ SERVER_SOURCE_PUBLISHER_PORT = 48_017
 SERVER_UDP_SOURCE_TARGET_HOST = "127.0.0.1"
 SERVER_UDP_SOURCE_TARGET_PORT = 4_761
 SERVER_UDP_SOURCE_TARGET_UDP_PORT = SERVER_UDP_SOURCE_TARGET_PORT + 4
+SERVER_CALLBACK_REQUESTER_HASH = bytes.fromhex("426486A8CAEC0E20426486A8CAEC6E00")
+SERVER_CALLBACK_REQUESTER_NICK = "emulebb-harness-callback-requester"
+SERVER_CALLBACK_FILE_HASH = bytes.fromhex("33445566778899001122AABBCCDDEEFF")
+SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
+SERVER_CALLBACK_FILE_SIZE = 23_456
+SERVER_CALLBACK_REQUESTER_PORT = 48_018
+SERVER_CALLBACK_RUN_ID = "c" * 32
 
 
 def bilateral_login_evidence(
@@ -1782,6 +1790,383 @@ def attach_server_udp_metadata(
     return evidence
 
 
+def _server_callback_records(
+    *,
+    client: str,
+    process_id: int,
+    run_id: str,
+    trace_id: int,
+) -> list[dict[str, object]]:
+    server_endpoint = "127.0.0.1:4661"
+    requester_endpoint = (
+        f"{docker_ed2k_source_publisher.PUBLISHER_IP}:{SERVER_CALLBACK_REQUESTER_PORT}"
+    )
+    reply_payload = ipaddress.IPv4Address(
+        docker_ed2k_source_publisher.PUBLISHER_IP
+    ).packed + struct.pack("<H", SERVER_CALLBACK_REQUESTER_PORT)
+
+    def row(
+        sequence: int,
+        event: str,
+        *,
+        body: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "schema": DIAG_EVENT_SCHEMA,
+            "client": client,
+            "runId": run_id,
+            "processId": process_id,
+            "segmentId": 0,
+            "seq": sequence,
+            "streamSeq": sequence,
+            "family": "ed2k_tcp",
+            "event": event,
+            "keys": {
+                "peer": server_endpoint,
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": ed2k_wire.OP_CALLBACKREQUESTED,
+                "traceId": trace_id,
+            },
+            "body": {
+                "flow": "server",
+                "direction": "recv",
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": ed2k_wire.OP_CALLBACKREQUESTED,
+                "traceId": trace_id,
+                "transportMode": "plaintext",
+                "obfuscated": False,
+                **body,
+            },
+        }
+
+    return [
+        row(
+            10,
+            "packet",
+            body={
+                "outcome": "accepted",
+                "payloadLen": len(reply_payload),
+                "payloadHex": reply_payload.hex(),
+                "payloadHexTruncated": False,
+            },
+        ),
+        row(
+            11,
+            "callback_request_applied",
+            body={
+                "outcome": "applied",
+                "callbackEndpoint": requester_endpoint,
+                "connectOptions": None,
+                "userHash": None,
+                "payloadLen": len(reply_payload),
+                "stateId": "server.callback.request_applied",
+                "milestone": "callback_dispatch",
+                "dispatchAccepted": True,
+            },
+        ),
+    ]
+
+
+def _server_callback_request_result(
+    *,
+    client: str,
+    command_id: str,
+    target: dict[str, object],
+) -> dict[str, object]:
+    client_id = int(target["clientId"])
+    tcp_port = int(target["tcpPort"])
+    user_hash = bytes.fromhex(str(target["userHash"]))
+    request_payload = ed2k_wire.encode_callback_request(client_id)
+    hello_payload = (
+        bytes([16])
+        + user_hash
+        + client_id.to_bytes(4, "little")
+        + tcp_port.to_bytes(2, "little")
+    )
+    return {
+        "schema": docker_ed2k_source_publisher.CALLBACK_RESULT_SCHEMA,
+        "status": "completed",
+        "commandId": command_id,
+        "runId": SERVER_CALLBACK_RUN_ID,
+        "targetClientId": client_id,
+        "targetLabel": client,
+        "requestOpcode": ed2k_wire.OP_CALLBACKREQUEST,
+        "requestPayloadHex": request_payload.hex().upper(),
+        "requestTranscript": {
+            "direction": "send",
+            "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+            "opcode": ed2k_wire.OP_CALLBACKREQUEST,
+            "payloadLength": len(request_payload),
+            "payloadSha256": hashlib.sha256(request_payload).hexdigest(),
+            "payloadHex": request_payload.hex(),
+        },
+        "callbackConnection": {
+            "userHash": user_hash.hex().upper(),
+            "clientId": client_id,
+            "tcpPort": tcp_port,
+            "payloadLength": len(hello_payload),
+            "payloadHex": hello_payload.hex().upper(),
+            "peerHost": "127.0.0.1",
+            "peerPort": 50_000 + client_id,
+            "helloAnswerSent": True,
+            "helloAnswerError": None,
+        },
+    }
+
+
+def attach_server_callback(
+    report: dict[str, object],
+    *,
+    run_directory: Path,
+) -> dict[str, object]:
+    login = bilateral_login_evidence()
+    identities = {
+        "rust": {
+            "clientId": 4,
+            "tcpPort": 4662,
+            "userHash": "11" * 16,
+        },
+        "mfc": {
+            "clientId": 2,
+            "tcpPort": 4663,
+            "userHash": "22" * 16,
+        },
+    }
+    for client, identity in identities.items():
+        login["clients"][client]["decodedLogin"] = {
+            "client_id": 0,
+            "tcp_port": identity["tcpPort"],
+            "user_hash": identity["userHash"],
+        }
+        login["clients"][client]["decodedIdChange"] = {
+            "assigned_id": identity["clientId"],
+            "id_kind": "low-id",
+        }
+    attach_server_login(report, login, ("plaintext",))
+    report["transfer_scenario"] = "server-callback-reply"
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    report["network"]["ports"]["callback_requester_tcp"] = (
+        SERVER_CALLBACK_REQUESTER_PORT
+    )
+
+    targets = {
+        client: {
+            "clientId": identity["clientId"],
+            "idKind": "low-id",
+            "tcpPort": identity["tcpPort"],
+            "userHash": identity["userHash"],
+        }
+        for client, identity in identities.items()
+    }
+    records = {
+        "rust": _server_callback_records(
+            client="rust",
+            process_id=101,
+            run_id="rust-callback-run",
+            trace_id=31,
+        ),
+        "mfc": _server_callback_records(
+            client="mfc",
+            process_id=202,
+            run_id="mfc-callback-run",
+            trace_id=41,
+        ),
+    }
+    captures: dict[str, dict[str, object]] = {}
+    for client, process_id, run_id in (
+        ("rust", 101, "rust-callback-run"),
+        ("mfc", 202, "mfc-callback-run"),
+    ):
+        diagnostics_dir = run_directory / "diagnostics" / client
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "emulebb-rust-diag" if client == "rust" else "emulebb-mfc-diag"
+        segment = diagnostics_dir / f"{prefix}-{process_id}-{run_id}-000000.jsonl"
+        _write_server_source_segment(segment, records[client])
+        captures[client] = {
+            "diagnosticsDir": str(diagnostics_dir),
+            "processId": process_id,
+            "selectedSegments": [str(segment)],
+        }
+
+    callback_results = {
+        "rust": _server_callback_request_result(
+            client="rust",
+            command_id="a" * 32,
+            target=targets["rust"],
+        ),
+        "mfc": _server_callback_request_result(
+            client="mfc",
+            command_id="b" * 32,
+            target=targets["mfc"],
+        ),
+    }
+    requester_directory = run_directory / "ed2k-server" / "callback-requester"
+    control_directory = requester_directory / "callback-control"
+    control_directory.mkdir(parents=True)
+    for client, result in callback_results.items():
+        command_id = str(result["commandId"])
+        request_payload = ed2k_wire.encode_callback_request(
+            int(targets[client]["clientId"])
+        )
+        command = {
+            "schema": docker_ed2k_source_publisher.CALLBACK_COMMAND_SCHEMA,
+            "commandId": command_id,
+            "runId": SERVER_CALLBACK_RUN_ID,
+            "targetClientId": targets[client]["clientId"],
+            "targetLabel": client,
+            "timeoutSeconds": 20.0,
+            "requestPayloadHex": request_payload.hex().upper(),
+        }
+        (control_directory / f"{command_id}.request.json").write_text(
+            json.dumps(command),
+            encoding="utf-8",
+        )
+        (control_directory / f"{command_id}.result.json").write_text(
+            json.dumps(result),
+            encoding="utf-8",
+        )
+
+    requester_login = {
+        "assigned_id": docker_ed2k_source_publisher.PUBLISHER_HIGH_ID,
+        "id_kind": "high-id",
+        "welcome_opcodes": [ed2k_wire.OP_IDCHANGE, ed2k_wire.OP_SERVERSTATUS],
+    }
+    login_payload = ed2k_wire.encode_login_request(
+        user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+        tcp_port=SERVER_CALLBACK_REQUESTER_PORT,
+        nickname=SERVER_CALLBACK_REQUESTER_NICK,
+        server_flags=docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+    )
+    offer_payload = ed2k_wire.encode_offer_file(
+        file_hash=SERVER_CALLBACK_FILE_HASH,
+        name=SERVER_CALLBACK_FILE_NAME,
+        size=SERVER_CALLBACK_FILE_SIZE,
+    )
+    runtime = {
+        "schema": docker_ed2k_source_publisher.RECEIPT_SCHEMA,
+        "status": "ready",
+        "runId": SERVER_CALLBACK_RUN_ID,
+        "publisherIp": docker_ed2k_source_publisher.PUBLISHER_IP,
+        "expectedHighId": docker_ed2k_source_publisher.PUBLISHER_HIGH_ID,
+        "server": {"host": "127.0.0.1", "port": 4661},
+        "publisher": {
+            "nickname": SERVER_CALLBACK_REQUESTER_NICK,
+            "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+            "userHash": SERVER_CALLBACK_REQUESTER_HASH.hex().upper(),
+            "serverFlags": docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+        },
+        "file": {
+            "hash": SERVER_CALLBACK_FILE_HASH.hex().upper(),
+            "name": SERVER_CALLBACK_FILE_NAME,
+            "size": SERVER_CALLBACK_FILE_SIZE,
+        },
+        "login": requester_login,
+        "identityProbeAnswers": 0,
+        "transcript": [
+            {
+                "direction": "send",
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": ed2k_wire.OP_LOGINREQUEST,
+                "payloadHex": login_payload.hex(),
+            },
+            {
+                "direction": "send",
+                "protocolMarker": ed2k_wire.PROTO_EDONKEY,
+                "opcode": ed2k_wire.OP_OFFERFILES,
+                "payloadHex": offer_payload.hex(),
+            },
+        ],
+    }
+    (requester_directory / f"{SERVER_CALLBACK_RUN_ID}.publisher-ready.json").write_text(
+        json.dumps(runtime),
+        encoding="utf-8",
+    )
+    expected_source = {
+        "client_id": docker_ed2k_source_publisher.PUBLISHER_HIGH_ID,
+        "crypt_options": 0,
+        "host": docker_ed2k_source_publisher.PUBLISHER_IP,
+        "kind": "high-id",
+        "port": SERVER_CALLBACK_REQUESTER_PORT,
+        "user_hash": None,
+    }
+    report["server_callback_requester"] = {
+        "nickname": SERVER_CALLBACK_REQUESTER_NICK,
+        "ip": docker_ed2k_source_publisher.PUBLISHER_IP,
+        "tcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+        "userHash": SERVER_CALLBACK_REQUESTER_HASH.hex().upper(),
+        "serverFlags": docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+        "login": requester_login,
+        "client": {
+            "client_name": SERVER_CALLBACK_REQUESTER_NICK,
+            "nick": SERVER_CALLBACK_REQUESTER_NICK,
+            "ip": docker_ed2k_source_publisher.PUBLISHER_IP,
+            "high_id": True,
+            "shared_files": 1,
+        },
+        "publication": {
+            "hash": SERVER_CALLBACK_FILE_HASH.hex().upper(),
+            "requested_size": SERVER_CALLBACK_FILE_SIZE,
+            "indexed": True,
+            "name": SERVER_CALLBACK_FILE_NAME,
+            "size": SERVER_CALLBACK_FILE_SIZE,
+            "sources": 1,
+            "search_sources": 1,
+            "complete_sources": 1,
+            "endpoints": [expected_source],
+            "search_result": {
+                "hash": SERVER_CALLBACK_FILE_HASH.hex().upper(),
+                "name": SERVER_CALLBACK_FILE_NAME,
+                "size": SERVER_CALLBACK_FILE_SIZE,
+                "sources": 1,
+                "complete_sources": 1,
+                "result_source_id": docker_ed2k_source_publisher.PUBLISHER_HIGH_ID,
+                "result_source_port": SERVER_CALLBACK_REQUESTER_PORT,
+            },
+        },
+        "runtime": runtime,
+        "windowsRoute": {
+            "destination": f"{docker_ed2k_source_publisher.PUBLISHER_IP}/32",
+            "gateway": "127.0.0.1",
+            "publishedTcpPort": SERVER_CALLBACK_REQUESTER_PORT,
+        },
+    }
+    evidence = (
+        server_callback_diagnostic_evidence.build_server_callback_diagnostic_evidence(
+            server_endpoint="127.0.0.1:4661",
+            requester_host=docker_ed2k_source_publisher.PUBLISHER_IP,
+            requester_port=SERVER_CALLBACK_REQUESTER_PORT,
+            targets=targets,
+            requester_results=callback_results,
+            rust_records=records["rust"],
+            mfc_records=records["mfc"],
+        )
+    )
+    evidence["captures"] = captures
+    report["checks"]["client_server_callback_targets"] = targets
+    report["checks"]["client_server_callback_requests"] = callback_results
+    report["checks"]["client_server_callback_diagnostics"] = evidence
+    report["checks"]["mfc_diagnostics_shutdown"] = {
+        "ok": True,
+        "processId": 202,
+    }
+    report["diagnostics"]["serverCallback"] = evidence
+    report["diagnostics"]["captures"] = {
+        client: {
+            "diagnosticsDir": capture["diagnosticsDir"],
+            "processId": capture["processId"],
+            "selectedSegments": list(capture["selectedSegments"]),
+        }
+        for client, capture in captures.items()
+    }
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].append(
+        server_callback_diagnostic_evidence.COVERAGE_ID
+    )
+    report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
+    return evidence
+
+
 def write_transfer_report(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     output_root = tmp_path / "output"
     run = (
@@ -2215,6 +2600,147 @@ def test_build_transfer_registration_rejects_retired_server_login_mode_field(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="invalid transport plan"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def write_server_callback_report(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_callback(report, run_directory=report_path.parent)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, output_root, report, evidence
+
+
+def test_build_transfer_registration_accepts_exact_server_callback(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, _, _ = write_server_callback_report(tmp_path)
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.connect.plaintext",
+        "server.login.request",
+        "server.reply.callback",
+        "transfer.block.uncompressed",
+    ]
+    reason = next(
+        row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] == "server.reply.callback"
+    )
+    assert "callback HELLO matching its accepted LowID login identity" in reason
+
+
+def test_build_transfer_registration_rejects_callback_wrong_trace(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, evidence = write_server_callback_report(tmp_path)
+    segment = Path(evidence["captures"]["rust"]["selectedSegments"][0])
+    records = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
+    records[1]["keys"]["traceId"] = 99
+    _write_server_source_segment(segment, records)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_changed_callback_target(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
+    report["checks"]["client_server_callback_targets"]["rust"]["clientId"] = 7
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="do not derive exactly"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_changed_callback_control_file(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
+    result = report["checks"]["client_server_callback_requests"]["rust"]
+    command_id = result["commandId"]
+    command_path = (
+        report_path.parent
+        / "ed2k-server"
+        / "callback-requester"
+        / "callback-control"
+        / f"{command_id}.request.json"
+    )
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["requestPayloadHex"] = "FFFFFFFF"
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request receipt is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_changed_callback_hello_bytes(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
+    result = report["checks"]["client_server_callback_requests"]["rust"]
+    connection = result["callbackConnection"]
+    connection["payloadHex"] = "10FF" + connection["payloadHex"][4:]
+    result_path = (
+        report_path.parent
+        / "ed2k-server"
+        / "callback-requester"
+        / "callback-control"
+        / f"{result['commandId']}.result.json"
+    )
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_inexact_callback_route(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
+    report["server_callback_requester"]["windowsRoute"]["gateway"] = "127.0.0.2"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="route is not exact"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_callback_capture_bytes(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, evidence = write_server_callback_report(tmp_path)
+    segment = Path(evidence["captures"]["mfc"]["selectedSegments"][0])
+    records = [
+        json.loads(line) for line in segment.read_text(encoding="utf-8").splitlines()
+    ]
+    payload = records[0]["body"]["payloadHex"]
+    records[0]["body"]["payloadHex"] = payload[:-2] + "00"
+    _write_server_source_segment(segment, records)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_callback_evidence_in_wrong_scenario(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_server_callback_report(tmp_path)
+    report["transfer_scenario"] = "server-login-request"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires its dedicated scenario"):
         build_transfer_registration(report_path, output_root=output_root)
 
 
