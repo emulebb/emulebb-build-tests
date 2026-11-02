@@ -51,19 +51,19 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
 
     assert report["valid"] is True
     assert report["coverage"] == {
-        "coveredGroupCount": 4,
-        "coveredIdCount": 26,
+        "coveredGroupCount": 5,
+        "coveredIdCount": 27,
         "groupVerdictCounts": {
-            "parity": 4,
+            "parity": 5,
             "divergence": 0,
-            "evidence-incomplete": 13,
+            "evidence-incomplete": 12,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 26,
+            "parity": 27,
             "divergence": 0,
-            "evidence-incomplete": 74,
+            "evidence-incomplete": 73,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -91,6 +91,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     )
     assert server_queries["deterministicRunner"] == "scripts/deterministic-two-client-transfer.py"
     assert [row["coverageId"] for row in payload["coverageEvidence"]] == [
+        "lowid.buddy-callback",
         "lowid.direct-callback",
             "lowid.relayed-reask",
         "lowid.server-callback",
@@ -343,7 +344,7 @@ def test_catalog_cli_json_report_is_machine_readable(capsys: pytest.CaptureFixtu
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
-    assert report["coverage"]["coveredGroupCount"] == 4
+    assert report["coverage"]["coveredGroupCount"] == 5
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
