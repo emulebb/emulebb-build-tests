@@ -5011,16 +5011,57 @@ def _validate_client_udp_file_not_found_client(
         client.get("sharedWithdrawal"),
         f"evidence.clients.{client_id}.sharedWithdrawal",
     )
-    shared_path = str(withdrawal.get("sharedPath") or "")
-    withdrawn_path = str(withdrawal.get("withdrawnPath") or "")
-    if (
-        not shared_path.strip()
-        or not withdrawn_path.strip()
-        or shared_path.casefold() == withdrawn_path.casefold()
-    ):
+    method = str(withdrawal.get("method") or "")
+    fixture_path = str(withdrawal.get("fixturePath") or "")
+    if not fixture_path.strip():
         raise ValueError(
-            f"evidence.clients.{client_id} shared withdrawal paths are invalid"
+            f"evidence.clients.{client_id} shared withdrawal fixture path is invalid"
         )
+    expected_method = "file-move" if client_id == "rust" else "shared-roots-cleared"
+    if method != expected_method:
+        raise ValueError(
+            f"evidence.clients.{client_id} shared withdrawal method is invalid"
+        )
+    method_receipt: dict[str, object]
+    if method == "file-move":
+        moved_to_path = str(withdrawal.get("movedToPath") or "")
+        if (
+            not moved_to_path.strip()
+            or fixture_path.casefold() == moved_to_path.casefold()
+        ):
+            raise ValueError(
+                f"evidence.clients.{client_id} shared withdrawal paths are invalid"
+            )
+        method_receipt = {"movedToPath": moved_to_path}
+    else:
+        shared_directories = _object(
+            withdrawal.get("sharedDirectories"),
+            f"evidence.clients.{client_id}.sharedWithdrawal.sharedDirectories",
+        )
+        directory_request = _object(
+            shared_directories.get("request"),
+            f"evidence.clients.{client_id}.sharedWithdrawal.sharedDirectories.request",
+        )
+        _require_exact_value(
+            directory_request,
+            {"roots": [], "confirmReplaceRoots": True},
+            f"evidence.clients.{client_id}.sharedWithdrawal.sharedDirectories.request",
+        )
+        directory_response = _object(
+            shared_directories.get("response"),
+            f"evidence.clients.{client_id}.sharedWithdrawal.sharedDirectories.response",
+        )
+        directory_json = directory_response.get("json")
+        if directory_json is not None and not isinstance(directory_json, dict):
+            raise ValueError(
+                f"evidence.clients.{client_id} shared-directory response JSON is invalid"
+            )
+        method_receipt = {
+            "sharedDirectories": {
+                "request": {"roots": [], "confirmReplaceRoots": True},
+                "response": {"status": 200, "json": directory_json},
+            }
+        }
     reload_response = _object(
         withdrawal.get("reloadResponse"),
         f"evidence.clients.{client_id}.sharedWithdrawal.reloadResponse",
@@ -5032,10 +5073,10 @@ def _validate_client_udp_file_not_found_client(
         )
     withdrawal_receipt = {
         "fileHash": file_hash,
-        "sharedPath": shared_path,
-        "withdrawnPath": withdrawn_path,
+        "method": method,
+        "fixturePath": fixture_path,
+        **method_receipt,
         "presentBefore": True,
-        "movedOutsideSharedRoot": True,
         "reloadResponse": {"status": 200, "json": reload_json},
         "absentAfter": True,
     }
@@ -5989,24 +6030,22 @@ def _build_client_udp_file_not_found_registration(
             if check.get(check_field) != validated[client_id][validated_field]:
                 raise ValueError(f"{client_id} direction {check_field} disagrees")
 
-        shared_path = Path(
-            validated[client_id]["sharedWithdrawal"]["sharedPath"]
-        ).resolve()
-        withdrawn_path = Path(
-            validated[client_id]["sharedWithdrawal"]["withdrawnPath"]
-        ).resolve()
-        if shared_path != fixture_path:
+        withdrawal = validated[client_id]["sharedWithdrawal"]
+        withdrawn_fixture_path = Path(withdrawal["fixturePath"]).resolve()
+        if withdrawn_fixture_path != fixture_path:
             raise ValueError(
                 f"{client_id} direction withdrew a different shared fixture"
             )
-        if (
-            not withdrawn_path.is_relative_to(run_directory)
-            or withdrawn_path.is_relative_to(fixture_path.parent)
-            or withdrawn_path.exists()
-        ):
-            raise ValueError(
-                f"{client_id} direction withdrawal path does not prove restoration"
-            )
+        if withdrawal["method"] == "file-move":
+            moved_to_path = Path(withdrawal["movedToPath"]).resolve()
+            if (
+                not moved_to_path.is_relative_to(run_directory)
+                or moved_to_path.is_relative_to(fixture_path.parent)
+                or moved_to_path.exists()
+            ):
+                raise ValueError(
+                    f"{client_id} direction withdrawal path does not prove restoration"
+                )
 
     rust_check = direction_checks["rust"]
     capacity = _object(rust_check.get("capacity"), "checks.rust.capacity")
