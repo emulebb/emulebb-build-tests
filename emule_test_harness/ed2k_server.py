@@ -152,6 +152,8 @@ def launch_ed2k_server(
     hard_limit_files: int = 200000,
     server_udp: bool = True,
     packet_trace: bool = False,
+    advertised_address_override: str | None = None,
+    hairpin_lan_clients: bool = False,
     health_timeout_seconds: float = 30.0,
 ) -> Ed2kServerLaunch:
     """Launches the managed Rust ED2K server for a local suite."""
@@ -176,8 +178,19 @@ def launch_ed2k_server(
         hard_limit_files=hard_limit_files,
         server_udp=server_udp,
         packet_trace=packet_trace,
+        advertised_address_override=advertised_address_override,
+        hairpin_lan_clients=hairpin_lan_clients,
         health_timeout_seconds=health_timeout_seconds,
     )
+
+
+def resolve_managed_server_windows_route() -> tuple[str, str]:
+    """Returns the WSL server address and its Windows-side route interface address."""
+
+    from .rust_ed2k import wsl_ipv4_address
+
+    server_address = wsl_ipv4_address()
+    return server_address, resolve_route_bind_ip(server_address, 1)
 
 
 def ed2k_server_control(admin_base_url: str, admin_secret: str) -> Ed2kServerControl:

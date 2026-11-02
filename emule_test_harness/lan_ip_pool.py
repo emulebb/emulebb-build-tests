@@ -1,11 +1,9 @@
-"""Ephemeral secondary LAN IP aliases for the local parity swarm.
+"""Ephemeral secondary IPv4 aliases for deterministic local campaigns.
 
 The local MFC-vs-rust swarm gives every client its own source IP so the ed2k
 server and the uploader treat each instance as a distinct host (per-IP upload
 slot caps, source dedup, and same-IP anti-abuse all key on the source IP). We
-alias a small pool of free addresses onto the LAN interface that already holds
-``X_LOCAL_IP`` (all P2P + REST binding stays on that one physical interface,
-never loopback -- loopback is broken by the hide.me split tunnel), then remove
+alias a small pool of free addresses onto an existing interface, then remove
 them again on teardown. Requires an elevated process (``New-NetIPAddress``).
 """
 
@@ -70,6 +68,7 @@ class LanIpPool:
 
     lan_ip: str
     prefix_length: int = 24
+    candidate_network: str | None = None
     first_octet4: int = 211
     last_octet4: int = 250
     interface_index: int = field(init=False)
@@ -80,14 +79,20 @@ class LanIpPool:
         self.interface_index = resolve_interface_index(self.lan_ip)
 
     def _candidates(self) -> list[str]:
-        network = ipaddress.ip_interface(f"{self.lan_ip}/{self.prefix_length}").network
-        base = str(self.lan_ip).rsplit(".", 1)[0]
-        out: list[str] = []
-        for octet in range(self.first_octet4, self.last_octet4 + 1):
-            ip = f"{base}.{octet}"
-            if ipaddress.ip_address(ip) in network:
-                out.append(ip)
-        return out
+        network = (
+            ipaddress.ip_network(self.candidate_network, strict=False)
+            if self.candidate_network
+            else ipaddress.ip_interface(f"{self.lan_ip}/{self.prefix_length}").network
+        )
+        if not isinstance(network, ipaddress.IPv4Network):
+            raise ValueError(f"candidate network must be IPv4, got {network}")
+        return [
+            str(candidate)
+            for candidate in network.hosts()
+            if self.first_octet4
+            <= int(str(candidate).rsplit(".", 1)[1])
+            <= self.last_octet4
+        ]
 
     def _disable_dad(self) -> None:
         """Disables Duplicate Address Detection so new aliases are usable at once.
