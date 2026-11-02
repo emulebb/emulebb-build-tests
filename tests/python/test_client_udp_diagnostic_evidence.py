@@ -1005,6 +1005,167 @@ def immutable_queue_full_campaign_report(
     return output_root, report_path, report
 
 
+def immutable_file_not_found_campaign_report(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, Any]]:
+    output_root = tmp_path / "output"
+    run_dir = (
+        output_root
+        / "artifacts"
+        / "emulebb-rust-reask-cross-client"
+        / "20261102T171500Z-emulebb-main-release-20000"
+    )
+    fixture_path = run_dir / "fixture" / "client-udp-file-not-found.bin"
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_bytes(b"fixture")
+    withdrawn_path = run_dir / "withdrawn" / fixture_path.name
+
+    transitions = []
+    for requester in ("rust", "mfc"):
+        original = file_not_found_transition(requester)
+        withdrawal = copy.deepcopy(original.shared_withdrawal_receipt)
+        withdrawal["sharedPath"] = str(fixture_path.resolve())
+        withdrawal["withdrawnPath"] = str(withdrawn_path.resolve())
+        transitions.append(
+            evidence.ClientUdpFileNotFoundTransition(
+                **{
+                    **original.__dict__,
+                    "shared_withdrawal_receipt": withdrawal,
+                }
+            )
+        )
+    diagnostics = evidence.build_client_udp_file_not_found_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=STOCK_RECORD,
+        transitions=transitions,
+    )
+    rust = diagnostics["clients"]["rust"]
+    mfc = diagnostics["clients"]["mfc"]
+
+    def raw_receipt(client: dict[str, Any], field: str) -> dict[str, Any]:
+        return {key: value for key, value in client[field].items() if key != "ok"}
+
+    report = {
+        "schema": "emulebb-build-tests.client-udp-file-not-found-campaign.v1",
+        "suite": "emulebb-rust-reask-cross-client",
+        "scenario": "file-not-found",
+        "coverageId": "client-udp.file-not-found",
+        "status": "passed",
+        "currentPhase": "complete",
+        "network": {"publicTraffic": False, "transportMode": "plaintext"},
+        "fixture": {
+            "path": str(fixture_path),
+            "sizeBytes": fixture_path.stat().st_size,
+            "partCount": 1,
+        },
+        "builds": {
+            "runnerRevision": "1" * 40,
+            "mfcDiagnostics": {
+                "sha256": "2" * 64,
+                "sourceRevision": "3" * 40,
+            },
+            "rustDiagnostics": {
+                "sha256": "4" * 64,
+                "sourceRevision": "5" * 40,
+            },
+        },
+        "checks": {
+            "rustRequesterMfcResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": raw_receipt(rust, "control"),
+                "sharedWithdrawal": raw_receipt(rust, "sharedWithdrawal"),
+                "sourceAbsence": raw_receipt(rust, "sourceAbsence"),
+                "applicationSequence": rust["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "deadListedSequence": rust["diagnostics"]["requesterSequences"][
+                    "deadListed"
+                ],
+                "droppedSequence": rust["diagnostics"]["requesterSequences"]["dropped"],
+                "capacity": {
+                    "baseSlots": 2,
+                    "elasticSlots": 0,
+                    "effectiveSlotCap": 2,
+                    "activeSlots": 2,
+                },
+                "publication": {
+                    "clientName": "mfc-responder",
+                    "address": "192.0.2.1",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "rustHighIdClients": [
+                    {
+                        "clientName": f"rust-{index}",
+                        "address": f"192.0.2.{index + 2}",
+                        "highId": True,
+                        "sharedFiles": 0,
+                    }
+                    for index in range(3)
+                ],
+                "registration": {
+                    "fileHash": FILE_HASH.hex(),
+                    "sourceTcpEndpoint": rust["sourceTcpEndpoint"],
+                    "sourceUdpEndpoint": rust["sourceUdpEndpoint"],
+                    "sourceUserHash": rust["sourceUserHash"],
+                    "sourceUdpVersion": 4,
+                },
+            },
+            "mfcRequesterRustResponder": {
+                "fileHash": FILE_HASH.hex(),
+                "control": raw_receipt(mfc, "control"),
+                "sharedWithdrawal": raw_receipt(mfc, "sharedWithdrawal"),
+                "sourceAbsence": raw_receipt(mfc, "sourceAbsence"),
+                "applicationSequence": mfc["diagnostics"]["requesterSequences"][
+                    "applied"
+                ],
+                "deadListedSequence": mfc["diagnostics"]["requesterSequences"][
+                    "deadListed"
+                ],
+                "droppedSequence": mfc["diagnostics"]["requesterSequences"]["dropped"],
+                "publication": {
+                    "clientName": "rust-responder",
+                    "address": "192.0.2.10",
+                    "highId": True,
+                    "sharedFiles": 1,
+                },
+                "occupierHighIdClient": {
+                    "clientName": "rust-occupier",
+                    "address": "192.0.2.11",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "mfcHighIdClient": {
+                    "clientName": "mfc-requester",
+                    "address": "192.0.2.12",
+                    "highId": True,
+                    "sharedFiles": 0,
+                },
+                "occupiedSlot": {
+                    "fileHash": FILE_HASH.hex(),
+                    "slotOpenedSequence": 10,
+                    "policy": {
+                        "baseSlots": 1,
+                        "elasticSlots": 0,
+                        "effectiveSlotCap": 1,
+                    },
+                },
+                "queueSource": {
+                    "queueRank": 1,
+                    "sourceIp": "127.0.0.30",
+                    "sourceTcpPort": 4862,
+                    "sourceUserHash": mfc["sourceUserHash"],
+                },
+            },
+        },
+        "evidence": diagnostics,
+    }
+    report_path = run_dir / "emulebb-rust-reask-cross-client-result.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return output_root, report_path, report
+
+
 @pytest.mark.unit
 def test_bilateral_client_udp_v4_is_claimable() -> None:
     report = passing_report()
@@ -1344,6 +1505,104 @@ def test_queue_full_registration_rejects_failed_udp_application(
         registration.build_client_udp_registration(
             report_path,
             scenario="queue-full",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_immutable_file_not_found_campaign_builds_exact_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_file_not_found_campaign_report(
+        tmp_path
+    )
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="file-not-found",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == (
+        "rust-mfc-client-udp-file-not-found-20261102t171500z"
+    )
+    assert receipt["coverageIds"] == ["client-udp.file-not-found"]
+    assert receipt["runnerPath"] == "scripts/emulebb-rust-reask-cross-client.py"
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.file-not-found",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC each produced the same clear zero-payload file-not-found "
+                "reply after exact shared-hash withdrawal, then causally applied it, "
+                "dead-listed the source for 2700 seconds, and removed the source."
+            ),
+            "receiptIds": ["rust-mfc-client-udp-file-not-found-20261102t171500z"],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_file_not_found_registration_rejects_unrestored_fixture_path(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_file_not_found_campaign_report(
+        tmp_path
+    )
+    withdrawn_path = Path(
+        report["checks"]["rustRequesterMfcResponder"]["sharedWithdrawal"][
+            "withdrawnPath"
+        ]
+    )
+    withdrawn_path.parent.mkdir(parents=True)
+    withdrawn_path.write_bytes(b"not-restored")
+
+    with pytest.raises(ValueError, match="does not prove restoration"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="file-not-found",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_file_not_found_registration_rejects_tampered_dead_list(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_file_not_found_campaign_report(
+        tmp_path
+    )
+    report["evidence"]["clients"]["mfc"]["deadList"]["blockSecs"] = 2699
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"deadList differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="file-not-found",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_file_not_found_registration_rejects_unconfirmed_source_absence(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_file_not_found_campaign_report(
+        tmp_path
+    )
+    report["evidence"]["clients"]["rust"]["sourceAbsence"]["verifiedAbsent"] = False
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"sourceAbsence differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="file-not-found",
             output_root=output_root,
         )
 
