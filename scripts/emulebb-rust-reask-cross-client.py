@@ -1,20 +1,16 @@
-"""Local real-process validation of the Rust client's UDP source-reask (FEAT-001).
+"""Prove the bilateral direct client-UDP V4 reask transition locally.
 
-Topology (all on one LAN interface, through a local ed2k_server server):
-  * eMuleBB (reference uploader) shares one fixture, configured with its
-    minimum two upload slots and no elastic headroom.
-  * three temporary LAN aliases give the Rust peers distinct source addresses,
-    preserving eMuleBB's production same-IP anti-abuse limit.
-  * two Rust clients download the fixture and occupy both slots.
-  * the "reask" Rust client (enableUdpReask=true) then downloads the same
-    fixture -> eMuleBB has no free slot -> it QUEUES the reask client
-    (OP_QUEUERANKING) -> the reask client detaches its TCP socket onto UDP
-    reask (QueuedDetachedForUdpReask) and periodically reasks eMuleBB, which
-    answers OP_REASKACK with the queue rank.
+The canonical campaign runs both production directions against one deterministic
+fixture and one upstream-clean local eD2K server:
 
-Pass = the reask client's daemon log shows the detach + an answered reask. This
-exercises the downloader detach hook end-to-end against the reference uploader,
-which the public live-wire run could not (the server rate-limited searches).
+* Rust requester -> MFC responder, with MFC's two real upload slots occupied;
+* MFC requester -> Rust responder, with Rust's one real upload slot occupied.
+
+Each requester must queue and detach naturally. The harness then wakes exactly
+that already queued source once through the diagnostics-only scheduler control.
+The verdict comes only from complete ``diag_event_v2`` causal evidence, exact
+wire bytes, the accepted stock corpus, and matching applied state. Process exit,
+daemon log strings, elapsed time, and public traffic are never verdicts.
 """
 
 from __future__ import annotations
@@ -24,6 +20,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +32,6 @@ from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import client_udp_v4_diagnostic_evidence as udp_v4_evidence  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
-from emule_test_harness import rust_local_ed2k  # noqa: E402
-from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -54,8 +49,6 @@ API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
-DIAGNOSTIC_INITIAL_REASK_DELAY_ENV = "EMULEBB_RUST_DIAGNOSTIC_INITIAL_REASK_DELAY_SECS"
-DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS = 0
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
 # eMuleBB enforces a minimum of two upload slots. Disable elastic headroom.
 EMULEBB_MAX_UPLOAD_KIB = 4
@@ -65,6 +58,19 @@ RUST_LOG = (
     ",emulebb_ed2k::ed2k_tcp=debug,emulebb_ed2k::ed2k_transfer=debug"
     ",emulebb_ed2k::ed2k_client_udp=trace"
 )
+
+
+@dataclass(frozen=True)
+class RustRuntime:
+    nickname: str
+    base_url: str
+    process: object
+    output_path: Path
+    profile_dir: Path
+    tcp_endpoint: str
+    udp_endpoint: str
+    diagnostics_dir: Path | None
+    executable: Path
 
 
 def _api_data(payload: object) -> object:
@@ -105,6 +111,56 @@ def _split_endpoint(value: object, *, field: str) -> tuple[str, int]:
     if not 1 <= port <= 65535:
         raise RuntimeError(f"{field} port must be in the range 1..65535")
     return host, port
+
+
+def wait_for_server_client_publication(
+    admin_base_url: str,
+    api_key: str,
+    nickname: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Require one exact upstream-admin client identity with a published file."""
+
+    row = ed2k_harness.ed2k_server_control(
+        admin_base_url,
+        api_key,
+    ).wait_for_client_shared_files(nickname, 1, timeout_seconds)
+    return require_server_high_id_client(row, nickname=nickname)
+
+
+def wait_for_server_high_id_client(
+    admin_base_url: str,
+    api_key: str,
+    nickname: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Require one exact server-observed HighID client identity."""
+
+    row = ed2k_harness.ed2k_server_control(
+        admin_base_url,
+        api_key,
+    ).wait_for_client(nickname, timeout_seconds)
+    return require_server_high_id_client(row, nickname=nickname)
+
+
+def require_server_high_id_client(
+    row: dict[str, object], *, nickname: str
+) -> dict[str, object]:
+    """Normalize an exact upstream-admin HighID observation."""
+
+    observed_nickname = str(row.get("client_name") or "")
+    if observed_nickname != nickname:
+        raise RuntimeError(
+            f"Server resolved client {observed_nickname!r}; expected {nickname!r}"
+        )
+    if not bool(row.get("high_id")):
+        raise RuntimeError(f"Server observed {nickname!r} as LowID")
+    return {
+        "clientName": observed_nickname,
+        "address": str(row.get("ip") or ""),
+        "highId": bool(row.get("high_id")),
+        "sharedFiles": int(row.get("shared_files") or 0),
+    }
 
 
 def find_udp_reask_registration(
@@ -167,6 +223,7 @@ def find_mfc_queued_source(
         if str(row.get("address") or "").lower() == source_ip.lower()
         and row.get("port") == source_tcp_port
         and row.get("downloadState") == "onqueue"
+        and row.get("tcpConnected") is False
         and row.get("lowId") is False
         and isinstance(row.get("queueRank"), int)
         and not isinstance(row.get("queueRank"), bool)
@@ -287,11 +344,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument(
-        "--diagnostics",
-        action="store_true",
-        help="Use the staged Rust diagnostics executable and capture packet dumps.",
-    )
-    parser.add_argument(
         "--configuration", choices=["Debug", "Release"], default="Release"
     )
     parser.add_argument("--api-key", default=API_KEY)
@@ -322,9 +374,14 @@ def start_rust(
     label,
     enable_reask,
     diagnostics=False,
-    diagnostic_initial_reask_delay_seconds=None,
-):
-    """Writes a profile + launches one Rust client; returns (base_url, process, out, profile)."""
+    upload_limit_kibps=None,
+    base_upload_slots=None,
+    upload_slot_elastic_percent=None,
+    shared_dir=None,
+) -> RustRuntime:
+    """Launch one staged Rust client with an isolated deterministic profile."""
+
+    nickname = f"client-udp-v4-{label}"
     rest_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     ed2k_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     kad_port = cc.choose_extra_port(lan_bind_addr, used_ports, udp=True)
@@ -337,6 +394,7 @@ def start_rust(
         api_key=api_key,
         p2p_bind_ip=p2p_address,
         ed2k_port=ed2k_port,
+        ed2k_nickname=nickname,
         kad_port=kad_port,
         server_endpoint=server_endpoint,
         enable_udp_reask=enable_reask,
@@ -348,98 +406,107 @@ def start_rust(
         # logic for this local cross-client check.
         obfuscation_enabled=False,
         local_only_discovery=True,
+        upload_limit_kibps=upload_limit_kibps,
+        base_upload_slots=base_upload_slots,
+        upload_slot_elastic_percent=upload_slot_elastic_percent,
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
-    os.environ["RUST_LOG"] = RUST_LOG
     output_root = get_workspace_output_root()
     executable = (
         converged_live_wire.resolve_rust_diagnostics_exe(output_root)
         if diagnostics
         else converged_live_wire.resolve_rust_regular_exe(output_root)
     )
+    packet_dir = None
     if diagnostics:
         packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
         packet_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
-    if diagnostic_initial_reask_delay_seconds is not None and not diagnostics:
-        raise ValueError(
-            "the accelerated reask delay requires the Rust diagnostics executable"
-        )
-    previous_delay = os.environ.get(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV)
+    previous_rust_log = os.environ.get("RUST_LOG")
+    previous_diagnostic_dir = os.environ.get("EMULEBB_RUST_LOG_DIR")
     try:
-        if diagnostic_initial_reask_delay_seconds is not None:
-            os.environ[DIAGNOSTIC_INITIAL_REASK_DELAY_ENV] = str(
-                diagnostic_initial_reask_delay_seconds
-            )
+        os.environ["RUST_LOG"] = RUST_LOG
+        if packet_dir is not None:
+            os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
         else:
-            os.environ.pop(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV, None)
+            os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
         process = rust_client.start_rust_client_executable(
             executable, profile, out_path
         )
     finally:
-        if previous_delay is None:
-            os.environ.pop(DIAGNOSTIC_INITIAL_REASK_DELAY_ENV, None)
+        if previous_rust_log is None:
+            os.environ.pop("RUST_LOG", None)
         else:
-            os.environ[DIAGNOSTIC_INITIAL_REASK_DELAY_ENV] = previous_delay
+            os.environ["RUST_LOG"] = previous_rust_log
+        if previous_diagnostic_dir is None:
+            os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
+        else:
+            os.environ["EMULEBB_RUST_LOG_DIR"] = previous_diagnostic_dir
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     try:
         cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
+        if shared_dir is not None:
+            cc.request_json(
+                base_url,
+                "PATCH",
+                "/api/v1/shared-directories",
+                api_key,
+                {
+                    "roots": [{"path": str(Path(shared_dir).resolve())}],
+                    "confirmReplaceRoots": True,
+                },
+            )
+            cc.request_json(
+                base_url,
+                "POST",
+                "/api/v1/shared-directories/operations/reload",
+                api_key,
+            )
         cc.request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)
         cc.wait_for_rust_ed2k_connected(base_url, api_key, 120.0)
     except Exception:
         rust_client.stop_process_tree(process)
         raise
-    return base_url, process, out_path, profile
-
-
-def rust_download_emulebb_file(base_url, api_key, *, query, transfer_hash, timeout):
-    """Drives a Rust server search for the eMuleBB file + starts the download."""
-    found = rust_local_ed2k.wait_for_server_search_result(
-        base_url,
-        api_key,
-        query=query,
-        transfer_hash=transfer_hash,
-        timeout_seconds=timeout,
-    )
-    search_id = found["search"]["id"]
-    cc.request_json(
-        base_url,
-        "POST",
-        f"/api/v1/searches/{search_id}/results/{transfer_hash}/operations/download",
-        api_key,
-        {"paused": False},
-    )
-    cc.request_json(
-        base_url,
-        "POST",
-        f"/api/v1/transfers/{transfer_hash}/operations/resume",
-        api_key,
+    return RustRuntime(
+        nickname=nickname,
+        base_url=base_url,
+        process=process,
+        output_path=out_path,
+        profile_dir=profile,
+        tcp_endpoint=f"{p2p_address}:{ed2k_port}",
+        udp_endpoint=f"{p2p_address}:{kad_port}",
+        diagnostics_dir=packet_dir,
+        executable=executable,
     )
 
 
-def wait_for_rust_downloading(base_url, api_key, transfer_hash, timeout):
-    """Waits until the transfer is pulling bytes (occupier is holding an upload slot)."""
+def rust_shared_file_link(base_url, api_key, *, file_name, timeout):
+    """Wait for one Rust shared-file link and return its normalized hash and link."""
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        data = cc.request_json(base_url, "GET", "/api/v1/transfers", api_key)
-        items = data.get("data", data)
-        rows = items.get("items", []) if isinstance(items, dict) else []
-        for row in rows:
-            if (
-                isinstance(row, dict)
-                and str(row.get("hash") or "").lower() == transfer_hash.lower()
-            ):
-                if int(row.get("completedBytes") or 0) > 0:
-                    return int(row["completedBytes"])
+        response = cc.request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+        data = _api_data(response)
+        if isinstance(data, dict):
+            rows = data.get("sharedFiles")
+            if not isinstance(rows, list):
+                rows = data.get("items")
+        else:
+            rows = None
+        for row in rows or []:
+            if isinstance(row, dict) and row.get("name") == file_name:
+                file_hash = _canonical_hash(row.get("hash"), field="Rust shared hash")
+                link_response = cc.request_json(
+                    base_url,
+                    "GET",
+                    f"/api/v1/shared-files/{file_hash}/ed2k-link",
+                    api_key,
+                )
+                link_payload = _api_data(link_response)
+                if not isinstance(link_payload, dict) or not link_payload.get("link"):
+                    raise RuntimeError("Rust shared-file link response is incomplete")
+                return file_hash, str(link_payload["link"])
         time.sleep(2.0)
-    return 0
-
-
-def log_contains(path: Path, needle: str) -> int:
-    if not path.is_file():
-        return 0
-    text = path.read_text(encoding="utf-8", errors="replace")
-    return sum(1 for line in text.splitlines() if needle in line)
+    raise RuntimeError(f"Rust never published shared file {file_name!r}")
 
 
 def _mfc_capacity_snapshots(log_dir: Path) -> list[dict]:
@@ -475,18 +542,619 @@ def wait_for_upload_capacity(
     raise RuntimeError(f"MFC never reached {active_slots} occupied upload slots")
 
 
-def max_waiting_sessions(log_dir: Path) -> int:
-    """Read MFC's diagnostics snapshots as the queue-admission oracle."""
-    maximum = 0
-    for event in _mfc_capacity_snapshots(log_dir):
-        maximum = max(
-            maximum, int((event.get("body") or {}).get("waitingSessions") or 0)
+def wait_for_rust_occupied_upload_slot(
+    log_dir: Path,
+    *,
+    file_hash: str,
+    peer_endpoint: str,
+    timeout: float,
+) -> dict[str, object]:
+    """Require a fixed one-slot policy and one exact real admitted uploader."""
+
+    normalized_hash = _canonical_hash(file_hash, field="occupied-slot file hash")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            records = current_diag_records(log_dir, side="rust")
+        except ValueError:
+            records = []
+        snapshots = [
+            record
+            for record in records
+            if record.get("family") == "sched"
+            and record.get("event") == "capacity_snapshot"
+            and isinstance(record.get("body"), dict)
+        ]
+        policy = snapshots[-1] if snapshots else None
+        if policy is not None:
+            body = policy["body"]
+            if body.get("baseSlots") != 1:
+                raise RuntimeError(
+                    f"Rust base upload slot count is not 1: {body}"
+                )
+            if body.get("elasticSlots") != 0 or body.get("effectiveSlotCap") != 1:
+                raise RuntimeError(f"Rust upload slot cap is not fixed: {body}")
+            opened = [
+                record
+                for record in records
+                if record.get("schema") == udp_v4_evidence.DIAGNOSTIC_SCHEMA
+                and record.get("family") == "sched"
+                and record.get("event") == "upload_slot_opened"
+                and isinstance(record.get("keys"), dict)
+                and isinstance(record.get("body"), dict)
+                and str(record["keys"].get("fileHash") or "").lower()
+                == normalized_hash
+                and record["keys"].get("peer") == peer_endpoint
+                and record["body"].get("outcome") == "opened"
+                and int(record.get("seq") or 0) > int(policy.get("seq") or 0)
+            ]
+            if len(opened) > 1:
+                raise RuntimeError(
+                    f"Rust recorded multiple exact upload-slot openings: {opened!r}"
+                )
+            if opened:
+                return {
+                    "policy": dict(body),
+                    "slotOpenedSequence": opened[0].get("seq"),
+                    "fileHash": normalized_hash,
+                    "peer": peer_endpoint,
+                }
+        time.sleep(1.0)
+    raise RuntimeError("Rust never opened its fixed production slot for the exact occupier")
+
+
+def current_diag_records(log_dir: Path, *, side: str) -> list[dict[str, Any]]:
+    return converged_live_wire.load_current_diag_records(
+        log_dir,
+        side=side,
+        allow_incomplete_active_tail=True,
+    )
+
+
+def wait_for_udp_reask_registration(
+    log_dir: Path,
+    *,
+    side: str,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_udp_endpoint: str,
+    timeout: float,
+    process: object | None = None,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(f"{side} requester exited before source registration")
+        try:
+            records = current_diag_records(log_dir, side=side)
+        except ValueError:
+            records = []
+        registration = find_udp_reask_registration(
+            records,
+            file_hash=file_hash,
+            source_tcp_endpoint=source_tcp_endpoint,
+            source_udp_endpoint=source_udp_endpoint,
         )
-    return maximum
+        if registration is not None:
+            return registration
+        time.sleep(1.0)
+    raise RuntimeError(f"{side} requester never registered the exact direct V4 source")
+
+
+def wait_for_mfc_queued_source(
+    base_url: str,
+    api_key: str,
+    *,
+    file_hash: str,
+    source_ip: str,
+    source_tcp_port: int,
+    timeout: float,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = cc.request_json(
+            base_url,
+            "GET",
+            f"/api/v1/transfers/{file_hash}/sources",
+            api_key,
+        )
+        source = find_mfc_queued_source(
+            payload,
+            source_ip=source_ip,
+            source_tcp_port=source_tcp_port,
+        )
+        if source is not None:
+            return source
+        time.sleep(1.0)
+    raise RuntimeError(
+        "MFC requester never reached the exact disconnected HighID queue state"
+    )
+
+
+def trigger_queued_source_reask(
+    base_url: str,
+    api_key: str,
+    request: dict[str, object],
+) -> dict[str, object]:
+    response = dtt.retry_rest_request(
+        base_url,
+        QUEUED_SOURCE_REASK_PATH,
+        method="POST",
+        api_key=api_key,
+        json_body=request,
+        timeout_seconds=30.0,
+    )
+    receipt = queued_source_reask_receipt(request, response)
+    if receipt["response"]["status"] != 200:
+        raise RuntimeError(
+            "exact queued-source reask control failed without retry: "
+            f"{dtt.rest_smoke.compact_http_result(response)!r}"
+        )
+    return receipt
+
+
+def wait_for_udp_reask_applied(
+    log_dir: Path,
+    *,
+    side: str,
+    file_hash: str,
+    source_tcp_endpoint: str,
+    source_user_hash: str,
+    timeout: float,
+    process: object | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(f"{side} requester exited before applying the V4 reply")
+        try:
+            records = current_diag_records(log_dir, side=side)
+        except ValueError:
+            records = []
+        applied = find_udp_reask_applied(
+            records,
+            file_hash=file_hash,
+            source_tcp_endpoint=source_tcp_endpoint,
+            source_user_hash=source_user_hash,
+        )
+        if applied is not None:
+            return applied, records
+        time.sleep(1.0)
+    raise RuntimeError(f"{side} requester never applied the exact V4 reask reply")
+
+
+def start_mfc(
+    *,
+    args: argparse.Namespace,
+    paths,
+    profile_seed_dir: Path,
+    artifact_label: str,
+    p2p_address: str,
+    server_address: str,
+    ports: dict[str, int],
+    saturate_upload_queue: bool = False,
+) -> dict[str, object]:
+    profile_root = paths.source_artifacts_dir / artifact_label
+    profile = live_common.prepare_scenario_profile(
+        profile_seed_dir,
+        profile_root,
+        [],
+        CLIENT_EMULEBB.profile_id,
+    )
+    config_dir = Path(profile["config_dir"])
+    dtt.configure_client_profile(
+        config_dir=config_dir,
+        app_exe=paths.app_exe,
+        nick=CLIENT_EMULEBB.nick,
+        tcp_port=ports["client1_tcp"],
+        udp_port=ports["client1_udp"],
+        ed2k_enabled=True,
+        autoconnect=False,
+        rest_api_key=args.api_key,
+        rest_port=ports["client1_rest"],
+        lan_bind_addr=args.lan_bind_addr,
+        enable_diagnostic_rest_endpoints=True,
+        p2p_bind_interface_name=args.p2p_bind_interface_name,
+        p2p_bind_addr=p2p_address,
+        crypt_layer_supported=False,
+        crypt_layer_requested=False,
+        crypt_layer_required=False,
+    )
+    if saturate_upload_queue:
+        # MFC clamps the slot count to its production minimum of two. Remove
+        # elastic headroom and slow the fixture before the process reads the
+        # profile so two occupiers deterministically hold both slots.
+        live_common.apply_section_preferences(
+            config_dir,
+            "UploadPolicy",
+            (("MaxUploadClientsAllowed", "2"), ("UploadSlotElasticPercent", "0")),
+        )
+        live_common.apply_emule_preferences(
+            config_dir,
+            (("MaxUpload", str(EMULEBB_MAX_UPLOAD_KIB)),),
+        )
+    dtt.write_server_met(
+        config_dir / "server.met",
+        address=server_address,
+        port=ports["ed2k_tcp"],
+        name="client-udp-v4-local",
+    )
+    app = live_common.launch_app(
+        paths.app_exe,
+        Path(profile["profile_base"]),
+        minimized_to_tray=True,
+    )
+    base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
+    try:
+        dtt.rest_smoke.wait_for_rest_ready(
+            base_url,
+            args.api_key,
+            args.rest_ready_timeout_seconds,
+        )
+        dtt.add_and_connect_server(
+            base_url,
+            args.api_key,
+            address=server_address,
+            port=ports["ed2k_tcp"],
+            timeout_seconds=args.server_connect_timeout_seconds,
+        )
+    except Exception:
+        live_common.close_app_cleanly(app)
+        raise
+    return {
+        "app": app,
+        "baseUrl": base_url,
+        "profile": profile,
+        "configDir": config_dir,
+        "diagnosticsDir": Path(profile["profile_base"]) / "logs",
+        "tcpEndpoint": f"{p2p_address}:{ports['client1_tcp']}",
+        "udpEndpoint": f"{p2p_address}:{ports['client1_udp']}",
+    }
+
+
+def stop_mfc(runtime: dict[str, object] | None) -> None:
+    if runtime is None:
+        return
+    try:
+        live_common.close_app_cleanly(runtime["app"])
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run_rust_requester_phase(
+    *,
+    args: argparse.Namespace,
+    paths,
+    profile_seed_dir: Path,
+    rust_repo: Path,
+    mfc_responder_ip: str,
+    server_address: str,
+    peer_ips: list[str],
+    ports: dict[str, int],
+    used_ports: set[int],
+    server_endpoint: str,
+    admin_base_url: str,
+    fixture_path: Path,
+) -> tuple[udp_v4_evidence.ClientUdpV4Transition, dict[str, object]]:
+    mfc = None
+    rust_clients: list[RustRuntime] = []
+    try:
+        mfc = start_mfc(
+            args=args,
+            paths=paths,
+            profile_seed_dir=profile_seed_dir,
+            artifact_label="phase-rust-requester",
+            p2p_address=mfc_responder_ip,
+            server_address=server_address,
+            ports=ports,
+            saturate_upload_queue=True,
+        )
+        dtt.add_emule_shared_file(mfc["baseUrl"], args.api_key, fixture_path)
+        dtt.reload_emule_shared_files(mfc["baseUrl"], args.api_key)
+        shared = dtt.wait_for_emule_shared_file_link(
+            mfc["baseUrl"],
+            args.api_key,
+            file_name=fixture_path.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        link = str(shared["link"])
+        file_hash = _canonical_hash(
+            dtt.parse_ed2k_file_link(link)["hash"],
+            field="MFC shared hash",
+        )
+        publication = wait_for_server_client_publication(
+            admin_base_url,
+            args.api_key,
+            CLIENT_EMULEBB.nick,
+            args.server_publish_timeout_seconds,
+        )
+
+        occupiers = [
+            start_rust(
+                repo=rust_repo,
+                paths=paths,
+                lan_bind_addr=args.lan_bind_addr,
+                api_key=args.api_key,
+                p2p_address=peer_ips[index],
+                server_endpoint=server_endpoint,
+                used_ports=used_ports,
+                label=f"v4-occupier-{index + 1}",
+                enable_reask=False,
+            )
+            for index in range(2)
+        ]
+        rust_clients.extend(occupiers)
+        requester = start_rust(
+            repo=rust_repo,
+            paths=paths,
+            lan_bind_addr=args.lan_bind_addr,
+            api_key=args.api_key,
+            p2p_address=peer_ips[2],
+            server_endpoint=server_endpoint,
+            used_ports=used_ports,
+            label="v4-rust-requester",
+            enable_reask=True,
+            diagnostics=True,
+        )
+        rust_clients.append(requester)
+        rust_high_id_clients = [
+            wait_for_server_high_id_client(
+                admin_base_url,
+                args.api_key,
+                runtime.nickname,
+                args.server_connect_timeout_seconds,
+            )
+            for runtime in rust_clients
+        ]
+        for occupier in occupiers:
+            cc.request_json(
+                occupier.base_url,
+                "POST",
+                "/api/v1/transfers",
+                args.api_key,
+                {"link": link, "paused": False},
+            )
+        capacity = wait_for_upload_capacity(
+            mfc["diagnosticsDir"],
+            active_slots=2,
+            timeout=args.reask_observe_timeout_seconds,
+        )
+        cc.request_json(
+            requester.base_url,
+            "POST",
+            "/api/v1/transfers",
+            args.api_key,
+            {"link": link, "paused": False},
+        )
+        registration = wait_for_udp_reask_registration(
+            requester.diagnostics_dir,
+            side="rust",
+            file_hash=file_hash,
+            source_tcp_endpoint=mfc["tcpEndpoint"],
+            source_udp_endpoint=mfc["udpEndpoint"],
+            timeout=args.reask_observe_timeout_seconds,
+            process=requester.process,
+        )
+        control_request = queued_source_reask_request(
+            file_hash=file_hash,
+            source_tcp_endpoint=registration["sourceTcpEndpoint"],
+            source_udp_endpoint=registration["sourceUdpEndpoint"],
+            source_user_hash=registration["sourceUserHash"],
+        )
+        control_receipt = trigger_queued_source_reask(
+            requester.base_url,
+            args.api_key,
+            control_request,
+        )
+        applied, requester_records = wait_for_udp_reask_applied(
+            requester.diagnostics_dir,
+            side="rust",
+            file_hash=file_hash,
+            source_tcp_endpoint=mfc["tcpEndpoint"],
+            source_user_hash=registration["sourceUserHash"],
+            timeout=args.reask_observe_timeout_seconds,
+            process=requester.process,
+        )
+        responder_records = current_diag_records(mfc["diagnosticsDir"], side="emule")
+        return (
+            udp_v4_evidence.ClientUdpV4Transition(
+                requester="rust",
+                responder="mfc",
+                source_tcp_endpoint=mfc["tcpEndpoint"],
+                source_udp_endpoint=mfc["udpEndpoint"],
+                source_user_hash=bytes.fromhex(registration["sourceUserHash"]),
+                requester_udp_endpoint=requester.udp_endpoint,
+                control_receipt=control_receipt,
+                requester_records=requester_records,
+                responder_records=responder_records,
+            ),
+            {
+                "fileHash": file_hash,
+                "publication": publication,
+                "rustHighIdClients": rust_high_id_clients,
+                "capacity": capacity,
+                "registration": registration,
+                "control": control_receipt,
+                "applicationSequence": applied.get("seq"),
+            },
+        )
+    finally:
+        stop_mfc(mfc)
+        for runtime in rust_clients:
+            rust_client.stop_process_tree(runtime.process)
+
+
+def run_mfc_requester_phase(
+    *,
+    args: argparse.Namespace,
+    paths,
+    profile_seed_dir: Path,
+    rust_repo: Path,
+    uploader_ip: str,
+    occupier_ip: str,
+    p2p_address: str,
+    server_address: str,
+    ports: dict[str, int],
+    used_ports: set[int],
+    server_endpoint: str,
+    admin_base_url: str,
+    fixture_path: Path,
+    expected_file_hash: str,
+) -> tuple[udp_v4_evidence.ClientUdpV4Transition, dict[str, object]]:
+    mfc = None
+    uploader = None
+    occupier = None
+    try:
+        uploader = start_rust(
+            repo=rust_repo,
+            paths=paths,
+            lan_bind_addr=args.lan_bind_addr,
+            api_key=args.api_key,
+            p2p_address=uploader_ip,
+            server_endpoint=server_endpoint,
+            used_ports=used_ports,
+            label="v4-rust-responder",
+            enable_reask=True,
+            diagnostics=True,
+            upload_limit_kibps=4,
+            base_upload_slots=1,
+            upload_slot_elastic_percent=0,
+            shared_dir=fixture_path.parent,
+        )
+        file_hash, link = rust_shared_file_link(
+            uploader.base_url,
+            args.api_key,
+            file_name=fixture_path.name,
+            timeout=args.link_export_timeout_seconds,
+        )
+        if file_hash != expected_file_hash:
+            raise RuntimeError(
+                f"Rust responder fixture hash {file_hash} does not match MFC {expected_file_hash}"
+            )
+        uploader_host, uploader_tcp_port = _split_endpoint(
+            uploader.tcp_endpoint,
+            field="Rust uploader TCP endpoint",
+        )
+        publication = wait_for_server_client_publication(
+            admin_base_url,
+            args.api_key,
+            uploader.nickname,
+            args.server_publish_timeout_seconds,
+        )
+
+        occupier = start_rust(
+            repo=rust_repo,
+            paths=paths,
+            lan_bind_addr=args.lan_bind_addr,
+            api_key=args.api_key,
+            p2p_address=occupier_ip,
+            server_endpoint=server_endpoint,
+            used_ports=used_ports,
+            label="v4-responder-occupier",
+            enable_reask=False,
+        )
+        occupier_high_id_client = wait_for_server_high_id_client(
+            admin_base_url,
+            args.api_key,
+            occupier.nickname,
+            args.server_connect_timeout_seconds,
+        )
+        cc.request_json(
+            occupier.base_url,
+            "POST",
+            "/api/v1/transfers",
+            args.api_key,
+            {"link": link, "paused": False},
+        )
+        occupied_slot = wait_for_rust_occupied_upload_slot(
+            uploader.diagnostics_dir,
+            file_hash=file_hash,
+            peer_endpoint=occupier.tcp_endpoint,
+            timeout=args.reask_observe_timeout_seconds,
+        )
+
+        mfc = start_mfc(
+            args=args,
+            paths=paths,
+            profile_seed_dir=profile_seed_dir,
+            artifact_label="phase-mfc-requester",
+            p2p_address=p2p_address,
+            server_address=server_address,
+            ports=ports,
+        )
+        mfc_high_id_client = wait_for_server_high_id_client(
+            admin_base_url,
+            args.api_key,
+            CLIENT_EMULEBB.nick,
+            args.server_connect_timeout_seconds,
+        )
+        dtt.add_transfer(mfc["baseUrl"], args.api_key, link, file_hash)
+        source = wait_for_mfc_queued_source(
+            mfc["baseUrl"],
+            args.api_key,
+            file_hash=file_hash,
+            source_ip=uploader_host,
+            source_tcp_port=uploader_tcp_port,
+            timeout=args.reask_observe_timeout_seconds,
+        )
+        control_request = queued_source_reask_request(
+            file_hash=file_hash,
+            source_tcp_endpoint=uploader.tcp_endpoint,
+            source_udp_endpoint=uploader.udp_endpoint,
+            source_user_hash=source["sourceUserHash"],
+        )
+        control_receipt = trigger_queued_source_reask(
+            mfc["baseUrl"],
+            args.api_key,
+            control_request,
+        )
+        applied, requester_records = wait_for_udp_reask_applied(
+            mfc["diagnosticsDir"],
+            side="emule",
+            file_hash=file_hash,
+            source_tcp_endpoint=uploader.tcp_endpoint,
+            source_user_hash=source["sourceUserHash"],
+            timeout=args.reask_observe_timeout_seconds,
+        )
+        responder_records = current_diag_records(
+            uploader.diagnostics_dir,
+            side="rust",
+        )
+        return (
+            udp_v4_evidence.ClientUdpV4Transition(
+                requester="mfc",
+                responder="rust",
+                source_tcp_endpoint=uploader.tcp_endpoint,
+                source_udp_endpoint=uploader.udp_endpoint,
+                source_user_hash=bytes.fromhex(source["sourceUserHash"]),
+                requester_udp_endpoint=mfc["udpEndpoint"],
+                control_receipt=control_receipt,
+                requester_records=requester_records,
+                responder_records=responder_records,
+            ),
+            {
+                "fileHash": file_hash,
+                "publication": publication,
+                "occupierHighIdClient": occupier_high_id_client,
+                "occupiedSlot": occupied_slot,
+                "mfcHighIdClient": mfc_high_id_client,
+                "queueSource": source,
+                "control": control_receipt,
+                "applicationSequence": applied.get("seq"),
+            },
+        )
+    finally:
+        stop_mfc(mfc)
+        if occupier is not None:
+            rust_client.stop_process_tree(occupier.process)
+        if uploader is not None:
+            rust_client.stop_process_tree(uploader.process)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.fixture_size_bytes <= 0:
+        raise ValueError("--fixture-size-bytes must be greater than zero")
     app_exe = args.app_exe or str(
         converged_live_wire.resolve_mfc_diagnostics_exe(
             get_workspace_output_root(),
@@ -508,28 +1176,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile_seed_dir
         else paths.seed_config_dir
     )
-    report: dict[str, object] = {"suite": SUITE_NAME, "status": "running", "checks": {}}
+    report: dict[str, object] = {
+        "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
+        "suite": SUITE_NAME,
+        "coverageId": udp_v4_evidence.COVERAGE_ID,
+        "status": "running",
+        "checks": {},
+    }
     server_process = None
-    occupier_procs = []
-    reask_proc = None
-    emulebb_app = None
-    peer_ip_pool = None
+    high_id_pool = None
     try:
-        p2p_address = dtt.resolve_lan_p2p_bind_address(
-            lan_bind_addr=args.lan_bind_addr,
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
-            p2p_bind_interface_address=args.p2p_bind_interface_address,
-        )
+        if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
+            raise ValueError(
+                "client-udp.v4 owns its deterministic HighID route; "
+                "do not pass a P2P bind override"
+            )
+        (
+            high_id_pool,
+            high_id_address,
+            _windows_route_address,
+        ) = dtt.provision_relayed_reask_high_id_address()
+        peer_ips = high_id_pool.acquire(3)
         ports = dtt.choose_distinct_ports(args.lan_bind_addr)
         used_ports = set(ports.values())
-        server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        peer_ip_pool = LanIpPool(p2p_address)
-        peer_ips = peer_ip_pool.acquire(3)
-        report["network"] = {
-            "serverAddress": p2p_address,
-            "rustPeerAddresses": peer_ips,
-            "diagnosticInitialReaskDelaySeconds": DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS,
+        rust_diagnostics_exe = converged_live_wire.resolve_rust_diagnostics_exe(
+            get_workspace_output_root()
+        )
+        report["builds"] = {
+            "rustDiagnostics": {
+                "path": str(rust_diagnostics_exe),
+                "sha256": dtt.file_sha256(rust_diagnostics_exe),
+                "sourceRevision": dtt.git_head_revision(rust_repo),
+            },
+            "mfcDiagnostics": {
+                "path": str(paths.app_exe),
+                "sha256": dtt.file_sha256(paths.app_exe),
+            },
+            "runnerRevision": dtt.git_head_revision(REPO_ROOT),
         }
 
         ed2k_server = ed2k_harness.launch_ed2k_server(
@@ -539,185 +1223,111 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
-            ed2k_address=p2p_address,
+            ed2k_address=high_id_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
+            advertised_address_override=high_id_address,
+            hairpin_lan_clients=True,
         )
         server_process = ed2k_server.process
-        admin_base_url = ed2k_server.admin_base_url
-
-        # --- eMuleBB uploader: two minimum slots, slow upload, one fixture ---
-        emulebb = live_common.prepare_scenario_profile(
-            profile_seed_dir, paths.source_artifacts_dir, [], CLIENT_EMULEBB.profile_id
-        )
-        config_dir = Path(emulebb["config_dir"])
-        dtt.configure_client_profile(
-            config_dir=config_dir,
-            app_exe=paths.app_exe,
-            nick=CLIENT_EMULEBB.nick,
-            tcp_port=ports["client1_tcp"],
-            udp_port=ports["client1_udp"],
-            ed2k_enabled=True,
-            autoconnect=False,
-            rest_api_key=args.api_key,
-            rest_port=ports["client1_rest"],
-            lan_bind_addr=args.lan_bind_addr,
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
-            p2p_bind_addr=p2p_address,
-        )
-        # MFC clamps the configured value to MIN_UP_CLIENTS_ALLOWED=2.
-        live_common.apply_section_preferences(
-            config_dir,
-            "UploadPolicy",
-            (("MaxUploadClientsAllowed", "2"), ("UploadSlotElasticPercent", "0")),
-        )
-        live_common.apply_emule_preferences(
-            config_dir, (("MaxUpload", str(EMULEBB_MAX_UPLOAD_KIB)),)
-        )
-        dtt.write_server_met(
-            config_dir / "server.met",
-            address=p2p_address,
-            port=ports["ed2k_tcp"],
-            name="reask-local",
-        )
-        emulebb_app = live_common.launch_app(
-            paths.app_exe, Path(emulebb["profile_base"]), minimized_to_tray=True
-        )
-        emulebb_base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
-        dtt.rest_smoke.wait_for_rest_ready(
-            emulebb_base_url, args.api_key, args.rest_ready_timeout_seconds
-        )
-        dtt.add_and_connect_server(
-            emulebb_base_url,
-            args.api_key,
-            address=p2p_address,
-            port=ports["ed2k_tcp"],
-            timeout_seconds=args.server_connect_timeout_seconds,
-        )
-
-        fixture_path = (
-            paths.source_artifacts_dir / "emulebb-shared" / "reask-fixture.bin"
-        )
-        dtt.write_fixture_file(fixture_path, args.fixture_size_bytes, seed=0x5EA5C0DE)
-        dtt.add_emule_shared_file(emulebb_base_url, args.api_key, fixture_path)
-        dtt.reload_emule_shared_files(emulebb_base_url, args.api_key)
-        shared_link = dtt.wait_for_emule_shared_file_link(
-            emulebb_base_url,
-            args.api_key,
-            file_name=fixture_path.name,
-            timeout_seconds=args.link_export_timeout_seconds,
-        )
-        link_info = dtt.parse_ed2k_file_link(str(shared_link["link"]))
-        transfer_hash = str(link_info["hash"])
-        ed2k_harness.wait_for_server_file(
-            admin_base_url,
-            args.api_key,
-            transfer_hash,
-            args.server_publish_timeout_seconds,
-        )
-        report["checks"]["emulebb_shared"] = {
-            "hash": transfer_hash,
-            "name": fixture_path.name,
+        server_address = ed2k_server.ed2k_host
+        server_endpoint = f"{server_address}:{ed2k_server.ed2k_port}"
+        report["network"] = {
+            "controlAddress": args.lan_bind_addr,
+            "serverAddress": server_address,
+            "mfcResponderAddress": high_id_address,
+            "rustPeerAddresses": peer_ips,
+            "transportMode": "plaintext",
+            "publicTraffic": False,
+        }
+        report["builds"]["ed2kServer"] = {
+            "path": str(ed2k_server.server_exe),
+            "sha256": dtt.file_sha256(ed2k_server.server_exe),
+            "build": ed2k_server.build,
         }
 
-        # Start all three clients before requesting a transfer. Otherwise the
-        # first slow transfer can time out while later clients are connecting.
-        occupiers = []
-        for index, peer_ip in enumerate(peer_ips[:2], start=1):
-            occ_url, occupier_proc, _occ_out, _ = start_rust(
-                repo=rust_repo,
-                paths=paths,
-                lan_bind_addr=args.lan_bind_addr,
-                api_key=args.api_key,
-                p2p_address=peer_ip,
-                server_endpoint=server_endpoint,
-                used_ports=used_ports,
-                label=f"occupier-{index}",
-                enable_reask=False,
-                diagnostics=args.diagnostics,
-            )
-            occupier_procs.append(occupier_proc)
-            occupiers.append(occ_url)
-        reask_url, reask_proc, reask_out, _ = start_rust(
-            repo=rust_repo,
+        fixture_path = paths.source_artifacts_dir / "fixture" / "client-udp-v4.bin"
+        dtt.write_fixture_file(
+            fixture_path,
+            args.fixture_size_bytes,
+            seed=0x5EA5C0DE,
+        )
+        part_count = max(
+            1,
+            (args.fixture_size_bytes + cc.ED2K_PART_SIZE_BYTES - 1)
+            // cc.ED2K_PART_SIZE_BYTES,
+        )
+        report["fixture"] = {
+            "path": str(fixture_path),
+            "sizeBytes": args.fixture_size_bytes,
+            "partCount": part_count,
+        }
+
+        report["currentPhase"] = "rust-requester-mfc-responder"
+        rust_transition, rust_check = run_rust_requester_phase(
+            args=args,
             paths=paths,
-            lan_bind_addr=args.lan_bind_addr,
-            api_key=args.api_key,
-            p2p_address=peer_ips[2],
-            server_endpoint=server_endpoint,
+            profile_seed_dir=profile_seed_dir,
+            rust_repo=rust_repo,
+            mfc_responder_ip=high_id_address,
+            server_address=server_address,
+            peer_ips=peer_ips,
+            ports=ports,
             used_ports=used_ports,
-            label="reask",
-            enable_reask=True,
-            diagnostics=True,
-            diagnostic_initial_reask_delay_seconds=DIAGNOSTIC_INITIAL_REASK_DELAY_SECONDS,
+            server_endpoint=server_endpoint,
+            admin_base_url=ed2k_server.admin_base_url,
+            fixture_path=fixture_path,
         )
-        for occ_url in occupiers:
-            cc.request_json(
-                occ_url,
-                "POST",
-                "/api/v1/transfers",
-                args.api_key,
-                {"link": str(shared_link["link"]), "paused": False},
-            )
-        mfc_log_dir = Path(emulebb["profile_base"]) / "logs"
-        report["checks"]["occupied_capacity"] = wait_for_upload_capacity(
-            mfc_log_dir, active_slots=2, timeout=90.0
-        )
+        report["checks"]["rustRequesterMfcResponder"] = rust_check
 
-        # --- reask Rust: gets queued -> detaches onto UDP reask ---
-        cc.request_json(
-            reask_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {"link": str(shared_link["link"]), "paused": False},
+        report["currentPhase"] = "mfc-requester-rust-responder"
+        mfc_transition, mfc_check = run_mfc_requester_phase(
+            args=args,
+            paths=paths,
+            profile_seed_dir=profile_seed_dir,
+            rust_repo=rust_repo,
+            uploader_ip=high_id_address,
+            occupier_ip=peer_ips[0],
+            p2p_address=peer_ips[1],
+            server_address=server_address,
+            ports=ports,
+            used_ports=used_ports,
+            server_endpoint=server_endpoint,
+            admin_base_url=ed2k_server.admin_base_url,
+            fixture_path=fixture_path,
+            expected_file_hash=rust_check["fileHash"],
         )
+        report["checks"]["mfcRequesterRustResponder"] = mfc_check
 
-        # Observe the detach + an answered reask in the reask client's log.
-        deadline = time.monotonic() + args.reask_observe_timeout_seconds
-        detaches = acks = 0
-        while time.monotonic() < deadline:
-            detaches = log_contains(reask_out, "detaching source")
-            acks = log_contains(reask_out, "routed reply")
-            if detaches > 0 and acks > 0:
-                break
-            time.sleep(3.0)
-        waiting = max_waiting_sessions(mfc_log_dir)
-        report["checks"]["reask"] = {
-            "mfcWaitingSessionsMax": waiting,
-            "detaches": detaches,
-            "ackedReplies": acks,
-        }
-        if waiting == 0:
-            report["reason"] = (
-                "MFC never admitted the third same-IP client to its queue"
-            )
-        report["status"] = (
-            "passed" if waiting > 0 and detaches > 0 and acks > 0 else "failed"
+        report["currentPhase"] = "causal-evidence"
+        evidence = udp_v4_evidence.build_client_udp_v4_diagnostic_evidence(
+            file_hash=bytes.fromhex(rust_check["fileHash"]),
+            part_count=part_count,
+            stock_record=load_stock_client_udp_record(),
+            transitions=[rust_transition, mfc_transition],
         )
-        return 0 if report["status"] == "passed" else 1
+        report["evidence"] = evidence
+        udp_v4_evidence.require_client_udp_v4_diagnostic_evidence(evidence)
+        report["currentPhase"] = "complete"
+        report["status"] = "passed"
+        return 0
     except Exception as exc:  # noqa: BLE001
         report["status"] = "failed"
-        report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+        report["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc) or repr(exc),
+        }
         return 1
     finally:
-        if emulebb_app is not None:
-            try:
-                live_common.close_app_cleanly(emulebb_app)
-            except Exception:  # noqa: BLE001
-                pass
-        for occupier_proc in occupier_procs:
-            rust_client.stop_process_tree(occupier_proc)
-        rust_client.stop_process_tree(reask_proc)
         ed2k_harness.stop_process(server_process)
-        if peer_ip_pool is not None:
-            peer_ip_pool.release()
-        report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        if high_id_pool is not None:
+            high_id_pool.release()
+        report["finishedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         harness_cli_common.write_json_file(
             paths.source_artifacts_dir / "emulebb-rust-reask-cross-client-result.json",
             report,
         )
-        print(report)
+        print(json.dumps(report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
