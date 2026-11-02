@@ -793,6 +793,41 @@ def collect_buddy_callback_diagnostics(
     return evidence
 
 
+def wait_for_buddy_socket_readiness(
+    *,
+    client: str,
+    diagnostics_dir: Path,
+    side: str,
+    process_id: int,
+    buddy_host: str,
+    buddy_tcp_port: int,
+) -> dict[str, object]:
+    """Waits for the exact diagnostic state that can accept a callback relay."""
+
+    def resolve() -> dict[str, object] | None:
+        capture = converged_live_wire.load_current_diag_capture(
+            diagnostics_dir,
+            side=side,
+            process_id=process_id,
+            allow_incomplete_active_tail=True,
+        )
+        return buddy_callback_diagnostic_evidence.buddy_socket_readiness(
+            capture.records,
+            client=client,
+            buddy_host=buddy_host,
+            buddy_user_hash=BUDDY_CALLBACK_BUDDY_USER_HASH,
+            buddy_id=BUDDY_CALLBACK_BUDDY_ID,
+            buddy_tcp_port=buddy_tcp_port,
+        )
+
+    return live_common.wait_for(
+        resolve,
+        SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
+        0.1,
+        f"{client} held buddy relay readiness",
+    )
+
+
 def collect_relayed_reask_diagnostics(
     *,
     source_host: str,
@@ -4760,6 +4795,24 @@ def main(argv: list[str] | None = None) -> int:
                     target_user_hash=bytes.fromhex(str(target["userHash"])),
                     target_server_client_id=int(target["clientId"]),
                     target_peer_hello_client_id=int(target["peerHelloClientId"]),
+                    wait_for_relay_ready=lambda client=client: (
+                        wait_for_buddy_socket_readiness(
+                            client=client,
+                            diagnostics_dir=(
+                                Path(client2["log_dir"])
+                                if client == "mfc"
+                                else rust_diagnostics_dir
+                            ),
+                            side="emule" if client == "mfc" else "rust",
+                            process_id=(
+                                client2_process_id
+                                if client == "mfc"
+                                else int(client1_process.pid)
+                            ),
+                            buddy_host=p2p_address,
+                            buddy_tcp_port=ports["buddy_callback_buddy_tcp"],
+                        )
+                    ),
                     timeout_seconds=SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
                 )
             report["checks"]["client_buddy_callback_controls"] = controls

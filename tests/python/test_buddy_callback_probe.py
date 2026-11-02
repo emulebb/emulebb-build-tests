@@ -199,6 +199,14 @@ def test_buddy_callback_probe_records_complete_socket_chain() -> None:
                 target_user_hash=TARGET_HASH,
                 target_server_client_id=target_client_id,
                 target_peer_hello_client_id=target_client_id,
+                wait_for_relay_ready=lambda: {
+                    "ok": True,
+                    "client": "fixture",
+                    "family": "kad_event",
+                    "event": "buddy_socket",
+                    "milestone": "buddy_socket_attached",
+                    "sequence": 5,
+                },
                 timeout_seconds=2.0,
             )
     finally:
@@ -211,6 +219,7 @@ def test_buddy_callback_probe_records_complete_socket_chain() -> None:
     assert result["findBuddyRequest"]["rawHex"].startswith("E451")
     assert result["findBuddyResponse"]["rawHex"].startswith("E45A")
     assert result["callbackRequest"]["rawHex"].startswith("E452")
+    assert result["relayReadiness"]["sequence"] == 5
     assert result["callbackRelay"]["rawHex"].startswith("C5")
     assert result["callbackRelay"]["buddyId"] == BUDDY_ID.hex().upper()
     assert result["callbackRelay"]["fileHash"] == FILE_HASH.hex().upper()

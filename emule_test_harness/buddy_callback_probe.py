@@ -7,6 +7,7 @@ import socket
 import struct
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from emule_test_harness import ed2k_wire
@@ -348,6 +349,7 @@ class BuddyCallbackProbe:
         target_user_hash: bytes,
         target_server_client_id: int,
         target_peer_hello_client_id: int,
+        wait_for_relay_ready: Callable[[], dict[str, object]],
         timeout_seconds: float,
     ) -> dict[str, object]:
         """Exercises discovery, held relay, callback, and resulting peer HELLO."""
@@ -433,6 +435,16 @@ class BuddyCallbackProbe:
             if hello_answer["tcpPort"] != target_tcp_port:
                 raise RuntimeError(
                     "OP_HELLOANSWER carried an unexpected target TCP port"
+                )
+
+            relay_readiness = wait_for_relay_ready()
+            relay_ready_observed_at = time.time()
+            if (
+                not isinstance(relay_readiness, dict)
+                or relay_readiness.get("ok") is not True
+            ):
+                raise RuntimeError(
+                    "buddy relay readiness callback returned no exact ready receipt"
                 )
 
             callback_request = encode_callback_request(
@@ -584,6 +596,10 @@ class BuddyCallbackProbe:
                 "payloadHex": callback_request[2:].hex().upper(),
                 "sentBytes": callback_sent_bytes,
                 "sentAt": callback_sent_at,
+            },
+            "relayReadiness": {
+                **relay_readiness,
+                "observedAt": relay_ready_observed_at,
             },
             "callbackRelay": {
                 **relay,

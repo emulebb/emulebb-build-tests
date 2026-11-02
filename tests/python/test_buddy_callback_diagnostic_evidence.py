@@ -193,6 +193,15 @@ def _probe(client: str, requester_udp_port: int) -> dict[str, object]:
                 "receivedAt": 4.0,
             },
         },
+        "relayReadiness": {
+            "ok": True,
+            "client": client,
+            "family": "kad_event",
+            "event": "buddy_socket",
+            "milestone": "buddy_socket_attached",
+            "sequence": 5,
+            "observedAt": 4.5,
+        },
         "callbackRequest": {
             "sourceEndpoint": f"{HOST}:{requester_udp_port}",
             "targetEndpoint": f"{HOST}:{target['udpPort']}",
@@ -361,6 +370,34 @@ def test_complete_bilateral_buddy_callback_chain_is_eligible() -> None:
         "bothComplete": True,
         "ok": True,
     }
+
+
+@pytest.mark.unit
+def test_buddy_socket_readiness_requires_one_exact_ready_event() -> None:
+    records = _records("mfc", 36102)
+
+    receipt = evidence.buddy_socket_readiness(
+        records,
+        client="mfc",
+        buddy_host=HOST,
+        buddy_user_hash=BUDDY_HASH,
+        buddy_id=BUDDY_ID,
+        buddy_tcp_port=BUDDY_TCP_PORT,
+    )
+
+    assert receipt is not None
+    assert receipt["sequence"] == 5
+    assert (
+        evidence.buddy_socket_readiness(
+            [*records, copy.deepcopy(records[4])],
+            client="mfc",
+            buddy_host=HOST,
+            buddy_user_hash=BUDDY_HASH,
+            buddy_id=BUDDY_ID,
+            buddy_tcp_port=BUDDY_TCP_PORT,
+        )
+        is None
+    )
 
 
 @pytest.mark.unit

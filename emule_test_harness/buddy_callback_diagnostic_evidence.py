@@ -230,6 +230,11 @@ def _probe_receipt(
         if isinstance(receipt.get("callbackRequest"), dict)
         else {}
     )
+    relay_readiness = (
+        receipt.get("relayReadiness")
+        if isinstance(receipt.get("relayReadiness"), dict)
+        else {}
+    )
     relay = (
         receipt.get("callbackRelay")
         if isinstance(receipt.get("callbackRelay"), dict)
@@ -281,11 +286,20 @@ def _probe_receipt(
         receipt.get("requester") if isinstance(receipt.get("requester"), dict) else {}
     )
     requester_udp_port = requester.get("udpPort")
+    relay_readiness_sequence = relay_readiness.get("sequence")
+    relay_readiness_sequence = (
+        relay_readiness_sequence
+        if isinstance(relay_readiness_sequence, int)
+        and not isinstance(relay_readiness_sequence, bool)
+        and relay_readiness_sequence > 0
+        else None
+    )
     timestamps = [
         _timestamp(find_request.get("sentAt")),
         _timestamp(find_response.get("receivedAt")),
         _timestamp(held_hello.get("sentAt")),
         _timestamp(held_answer.get("receivedAt")),
+        _timestamp(relay_readiness.get("observedAt")),
         _timestamp(callback_request.get("sentAt")),
         _timestamp(relay.get("receivedAt")),
         _timestamp(resulting_hello.get("sentAt")),
@@ -345,6 +359,12 @@ def _probe_receipt(
         and 0 < requester_udp_port <= 0xFFFF
         and requester.get("userHash") == requester_user_hash.hex().upper()
         and receipt.get("fileHash") == file_hash.hex().upper()
+        and relay_readiness.get("ok") is True
+        and relay_readiness.get("client") == client
+        and relay_readiness.get("family") == "kad_event"
+        and relay_readiness.get("event") == "buddy_socket"
+        and relay_readiness.get("milestone") == "buddy_socket_attached"
+        and relay_readiness_sequence is not None
         and find_request.get("sourceEndpoint") == f"{buddy_host}:{buddy_udp_port}"
         and find_request.get("targetEndpoint") == f"{target_host}:{target['udpPort']}"
         and find_request.get("rawHex") == expected_find_request.hex().upper()
@@ -379,6 +399,7 @@ def _probe_receipt(
         "callbackRequestRawHex": expected_callback_request.hex().upper(),
         "relayRawHex": relay.get("rawHex"),
         "heldSourceEndpoint": held.get("sourceEndpoint"),
+        "relayReadinessSequence": relay_readiness_sequence,
         "orderedTimestamps": ordered_timestamps,
         "targetHelloIdentity": _decode_hello_answer(held_answer),
         "resultingHelloIdentity": _listener_hello(listener_observation),
@@ -482,6 +503,41 @@ def _buddy_socket_event(
         and _same_hex(body.get("clientHash"), buddy_user_hash)
         and body.get("advertisedTcpPort") == buddy_tcp_port
     )
+
+
+def buddy_socket_readiness(
+    records: Iterable[dict[str, Any]],
+    *,
+    client: str,
+    buddy_host: str,
+    buddy_user_hash: bytes,
+    buddy_id: bytes,
+    buddy_tcp_port: int,
+) -> dict[str, Any] | None:
+    """Returns one exact receipt only after the held socket can own relays."""
+
+    record, count = _single(
+        list(records),
+        lambda candidate: _buddy_socket_event(
+            candidate,
+            buddy_host=buddy_host,
+            buddy_user_hash=buddy_user_hash,
+            buddy_id=buddy_id,
+            buddy_tcp_port=buddy_tcp_port,
+        ),
+    )
+    if record is None or count != 1:
+        return None
+    return {
+        "ok": True,
+        "client": client,
+        "family": "kad_event",
+        "event": "buddy_socket",
+        "milestone": "buddy_socket_attached",
+        "sequence": _sequence(record),
+        "runId": record.get("runId"),
+        "processId": record.get("processId"),
+    }
 
 
 def _callback_event(
@@ -629,6 +685,10 @@ def _client_evidence(
             buddy_tcp_port=buddy_tcp_port,
         ),
     )
+    readiness_joined = bool(
+        socket_event is not None
+        and probe.get("relayReadinessSequence") == _sequence(socket_event)
+    )
     callback_request, callback_request_count = _single(
         records,
         lambda record: (
@@ -683,6 +743,7 @@ def _client_evidence(
         target["ok"]
         and control["ok"]
         and probe["ok"]
+        and readiness_joined
         and ordered
         and all(
             count == 1
@@ -721,6 +782,7 @@ def _client_evidence(
             "socketAttached": {
                 "count": socket_event_count,
                 "sequence": _sequence(socket_event) or None,
+                "probeReadinessJoined": readiness_joined,
             },
             "callbackRequest": {
                 "count": callback_request_count,
