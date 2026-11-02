@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from emule_test_harness import diag_event_runs
 from emule_test_harness import buddy_callback_diagnostic_evidence
+from emule_test_harness import build_provenance
 from emule_test_harness import client_udp_diagnostic_evidence
 from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import docker_ed2k_source_publisher
@@ -21,6 +22,7 @@ from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
 from emule_test_harness import kad_nodes
 from emule_test_harness import relayed_reask_diagnostic_evidence
+from emule_test_harness import rust_ed2k
 from emule_test_harness import server_callback_diagnostic_evidence
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_search_diagnostic_evidence
@@ -29,6 +31,7 @@ from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_source_diagnostic_evidence
 from emule_test_harness import scripted_ed2k_udp_source
+from emule_test_harness import soak_build_refresh
 from emule_test_harness import transfer_diagnostic_evidence
 
 TRANSFER_SUITE = "deterministic-two-client-transfer"
@@ -5520,6 +5523,97 @@ def _validate_high_id_observation(
         raise ValueError(f"{field} did not publish the required shared file")
 
 
+def _validate_client_udp_build(
+    builds: dict[str, Any],
+    *,
+    build_key: str,
+    authority_id: str,
+    expected_command: list[str],
+) -> dict[str, str]:
+    build = _object(builds.get(build_key), f"builds.{build_key}")
+    executable_sha256 = _lower_hex(
+        build.get("sha256"),
+        SHA256_PATTERN,
+        f"builds.{build_key}.sha256",
+    )
+    receipt = _object(build.get("build"), f"builds.{build_key}.build")
+    if receipt.get("schema") != build_provenance.BUILD_RECEIPT_SCHEMA:
+        raise ValueError(f"builds.{build_key}.build has the wrong schema")
+    _require_exact_value(
+        receipt.get("command"),
+        expected_command,
+        f"builds.{build_key}.build.command",
+    )
+    if receipt.get("returnCode") != 0:
+        raise ValueError(f"builds.{build_key}.build did not succeed")
+    for field in (
+        "sourceCleanBefore",
+        "sourceCleanAfter",
+        "orchestratorCleanBefore",
+        "orchestratorCleanAfter",
+    ):
+        if receipt.get(field) is not True:
+            raise ValueError(f"builds.{build_key}.build.{field} must be true")
+    source_revision = _lower_hex(
+        receipt.get("sourceRevision"),
+        GIT_REVISION_PATTERN,
+        f"builds.{build_key}.build.sourceRevision",
+    )
+    _lower_hex(
+        receipt.get("orchestratorRevision"),
+        GIT_REVISION_PATTERN,
+        f"builds.{build_key}.build.orchestratorRevision",
+    )
+    return {
+        "authorityId": authority_id,
+        "executableSha256": executable_sha256,
+        "sourceRevision": source_revision,
+    }
+
+
+def _client_udp_build_provenance(
+    report: dict[str, Any],
+) -> tuple[str, list[dict[str, str]]]:
+    """Validate authoritative campaign builds and return compact receipt subjects."""
+
+    builds = _object(report.get("builds"), "builds")
+    runner = _object(builds.get("runner"), "builds.runner")
+    if runner.get("sourceClean") is not True:
+        raise ValueError("builds.runner.sourceClean must be true")
+    runner_revision = _lower_hex(
+        runner.get("sourceRevision"),
+        GIT_REVISION_PATTERN,
+        "builds.runner.sourceRevision",
+    )
+    specifications = (
+        (
+            "mfcDiagnostics",
+            "mfc-oracle",
+            soak_build_refresh.diagnostics_build_command("mfc", clean=True),
+        ),
+        (
+            "rustDiagnostics",
+            "rust-product",
+            soak_build_refresh.diagnostics_build_command("rust", clean=True),
+        ),
+        (
+            "ed2kServer",
+            "ed2k-server-dependency",
+            rust_ed2k.server_build_command(clean=True),
+        ),
+    )
+    subjects = [
+        _validate_client_udp_build(
+            builds,
+            build_key=build_key,
+            authority_id=authority_id,
+            expected_command=expected_command,
+        )
+        for build_key, authority_id, expected_command in specifications
+    ]
+    return runner_revision, subjects
+
+
 def _build_client_udp_ack_registration(
     report_path: Path,
     *,
@@ -5808,31 +5902,7 @@ def _build_client_udp_ack_registration(
         "checks.mfc.queueSource",
     )
 
-    builds = _object(report.get("builds"), "builds")
-    runner_revision = _lower_hex(
-        builds.get("runnerRevision"), GIT_REVISION_PATTERN, "builds.runnerRevision"
-    )
-    subjects = []
-    for build_key, authority_id in (
-        ("mfcDiagnostics", "mfc-oracle"),
-        ("rustDiagnostics", "rust-product"),
-    ):
-        build = _object(builds.get(build_key), f"builds.{build_key}")
-        subjects.append(
-            {
-                "authorityId": authority_id,
-                "executableSha256": _lower_hex(
-                    build.get("sha256"),
-                    SHA256_PATTERN,
-                    f"builds.{build_key}.sha256",
-                ),
-                "sourceRevision": _lower_hex(
-                    build.get("sourceRevision"),
-                    GIT_REVISION_PATTERN,
-                    f"builds.{build_key}.sourceRevision",
-                ),
-            }
-        )
+    runner_revision, subjects = _client_udp_build_provenance(report)
 
     stamp = stamp_match.group("stamp").lower()
     receipt_id = f"rust-mfc-client-udp-{receipt_suffix}-{stamp}"
@@ -6194,31 +6264,7 @@ def _build_client_udp_queue_full_registration(
         "checks.mfc.queueSource",
     )
 
-    builds = _object(report.get("builds"), "builds")
-    runner_revision = _lower_hex(
-        builds.get("runnerRevision"), GIT_REVISION_PATTERN, "builds.runnerRevision"
-    )
-    subjects = []
-    for build_key, authority_id in (
-        ("mfcDiagnostics", "mfc-oracle"),
-        ("rustDiagnostics", "rust-product"),
-    ):
-        build = _object(builds.get(build_key), f"builds.{build_key}")
-        subjects.append(
-            {
-                "authorityId": authority_id,
-                "executableSha256": _lower_hex(
-                    build.get("sha256"),
-                    SHA256_PATTERN,
-                    f"builds.{build_key}.sha256",
-                ),
-                "sourceRevision": _lower_hex(
-                    build.get("sourceRevision"),
-                    GIT_REVISION_PATTERN,
-                    f"builds.{build_key}.sourceRevision",
-                ),
-            }
-        )
+    runner_revision, subjects = _client_udp_build_provenance(report)
 
     stamp = stamp_match.group("stamp").lower()
     receipt_id = f"rust-mfc-client-udp-queue-full-{stamp}"
@@ -6510,31 +6556,7 @@ def _build_client_udp_file_not_found_registration(
         "checks.mfc.queueSource",
     )
 
-    builds = _object(report.get("builds"), "builds")
-    runner_revision = _lower_hex(
-        builds.get("runnerRevision"), GIT_REVISION_PATTERN, "builds.runnerRevision"
-    )
-    subjects = []
-    for build_key, authority_id in (
-        ("mfcDiagnostics", "mfc-oracle"),
-        ("rustDiagnostics", "rust-product"),
-    ):
-        build = _object(builds.get(build_key), f"builds.{build_key}")
-        subjects.append(
-            {
-                "authorityId": authority_id,
-                "executableSha256": _lower_hex(
-                    build.get("sha256"),
-                    SHA256_PATTERN,
-                    f"builds.{build_key}.sha256",
-                ),
-                "sourceRevision": _lower_hex(
-                    build.get("sourceRevision"),
-                    GIT_REVISION_PATTERN,
-                    f"builds.{build_key}.sourceRevision",
-                ),
-            }
-        )
+    runner_revision, subjects = _client_udp_build_provenance(report)
 
     stamp = stamp_match.group("stamp").lower()
     receipt_id = f"rust-mfc-client-udp-file-not-found-{stamp}"

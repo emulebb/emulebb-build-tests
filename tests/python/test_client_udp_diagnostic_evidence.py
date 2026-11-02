@@ -54,6 +54,54 @@ STOCK_RECORD = {
     "scenarioId": "stock.13.client-udp.v1",
     "transport": "udp",
 }
+
+
+def authoritative_builds() -> dict[str, Any]:
+    """Return the strict build provenance required by client-UDP registration."""
+
+    def receipt(command: list[str], source_revision: str) -> dict[str, Any]:
+        return {
+            "schema": registration.build_provenance.BUILD_RECEIPT_SCHEMA,
+            "command": command,
+            "returnCode": 0,
+            "sourceRevision": source_revision,
+            "sourceCleanBefore": True,
+            "sourceCleanAfter": True,
+            "orchestratorRevision": "8" * 40,
+            "orchestratorCleanBefore": True,
+            "orchestratorCleanAfter": True,
+        }
+
+    return {
+        "runner": {"sourceRevision": "1" * 40, "sourceClean": True},
+        "mfcDiagnostics": {
+            "sha256": "2" * 64,
+            "build": receipt(
+                registration.soak_build_refresh.diagnostics_build_command(
+                    "mfc", clean=True
+                ),
+                "3" * 40,
+            ),
+        },
+        "rustDiagnostics": {
+            "sha256": "4" * 64,
+            "build": receipt(
+                registration.soak_build_refresh.diagnostics_build_command(
+                    "rust", clean=True
+                ),
+                "5" * 40,
+            ),
+        },
+        "ed2kServer": {
+            "sha256": "6" * 64,
+            "build": receipt(
+                registration.rust_ed2k.server_build_command(clean=True),
+                "7" * 40,
+            ),
+        },
+    }
+
+
 ENDPOINTS = {
     "rust": {
         "sourceTcp": "127.0.0.10:4662",
@@ -883,17 +931,7 @@ def immutable_campaign_report(
             "sizeBytes": fixture_path.stat().st_size,
             "partCount": 1,
         },
-        "builds": {
-            "runnerRevision": "1" * 40,
-            "mfcDiagnostics": {
-                "sha256": "2" * 64,
-                "sourceRevision": "3" * 40,
-            },
-            "rustDiagnostics": {
-                "sha256": "4" * 64,
-                "sourceRevision": "5" * 40,
-            },
-        },
+        "builds": authoritative_builds(),
         "checks": {
             "rustRequesterMfcResponder": {
                 "fileHash": FILE_HASH.hex(),
@@ -1059,17 +1097,7 @@ def immutable_queue_full_campaign_report(
             "sizeBytes": fixture_path.stat().st_size,
             "partCount": 1,
         },
-        "builds": {
-            "runnerRevision": "1" * 40,
-            "mfcDiagnostics": {
-                "sha256": "2" * 64,
-                "sourceRevision": "3" * 40,
-            },
-            "rustDiagnostics": {
-                "sha256": "4" * 64,
-                "sourceRevision": "5" * 40,
-            },
-        },
+        "builds": authoritative_builds(),
         "checks": {
             "rustRequesterMfcResponder": {
                 "fileHash": FILE_HASH.hex(),
@@ -1219,17 +1247,7 @@ def immutable_file_not_found_campaign_report(
             "sizeBytes": fixture_path.stat().st_size,
             "partCount": 1,
         },
-        "builds": {
-            "runnerRevision": "1" * 40,
-            "mfcDiagnostics": {
-                "sha256": "2" * 64,
-                "sourceRevision": "3" * 40,
-            },
-            "rustDiagnostics": {
-                "sha256": "4" * 64,
-                "sourceRevision": "5" * 40,
-            },
-        },
+        "builds": authoritative_builds(),
         "checks": {
             "rustRequesterMfcResponder": {
                 "fileHash": FILE_HASH.hex(),
@@ -1797,6 +1815,7 @@ def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
     assert [subject["authorityId"] for subject in receipt["subjects"]] == [
         "mfc-oracle",
         "rust-product",
+        "ed2k-server-dependency",
     ]
     assert result["coverageEvidence"][0]["verdict"] == "parity"
 
@@ -2187,10 +2206,61 @@ def test_client_udp_v4_registration_requires_source_provenance(
     tmp_path: Path,
 ) -> None:
     output_root, report_path, report = immutable_campaign_report(tmp_path)
-    report["builds"]["mfcDiagnostics"].pop("sourceRevision")
+    report["builds"]["mfcDiagnostics"]["build"].pop("sourceRevision")
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="sourceRevision is malformed"):
+    with pytest.raises(
+        ValueError,
+        match=r"builds\.mfcDiagnostics\.build\.sourceRevision is malformed",
+    ):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v4",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_registration_rejects_noncanonical_build_command(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    report["builds"]["rustDiagnostics"]["build"]["command"].remove("--clean")
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"rustDiagnostics\.build\.command differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v4",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_registration_rejects_dirty_build_source(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    report["builds"]["mfcDiagnostics"]["build"]["sourceCleanAfter"] = False
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sourceCleanAfter must be true"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v4",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_registration_requires_server_build_provenance(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(tmp_path)
+    report["builds"].pop("ed2kServer")
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="builds.ed2kServer must be an object"):
         registration.build_client_udp_registration(
             report_path,
             scenario="v4",
