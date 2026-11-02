@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from emule_test_harness import ed2k_server as ed2k_harness
+from emule_test_harness import ed2k_wire
 from emule_test_harness import rust_ed2k
 
 
@@ -380,8 +381,15 @@ def test_hash_only_metadata_recovery_uses_one_canonical_transport_case() -> None
     module.validate_args(canonical)
 
 
-def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
+@pytest.mark.parametrize(
+    "scenario_name",
+    ["SERVER_KEYWORD_SEARCH", "SERVER_ADVANCED_SEARCH"],
+)
+def test_server_search_variants_use_one_canonical_oracle_case(
+    scenario_name: str,
+) -> None:
     module = load_suite_module()
+    scenario = getattr(module, scenario_name)
     wrong_client = module.parse_args(
         [
             "--lan-bind-addr",
@@ -389,7 +397,7 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
             "--client2-identity",
             "stock_emule",
             "--transfer-scenario",
-            module.SERVER_KEYWORD_SEARCH,
+            scenario,
         ]
     )
     wrong_case = module.parse_args(
@@ -399,7 +407,7 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
             "--protocol-case",
             "obfuscated-preferred",
             "--transfer-scenario",
-            module.SERVER_KEYWORD_SEARCH,
+            scenario,
         ]
     )
     canonical = module.parse_args(
@@ -409,7 +417,7 @@ def test_server_keyword_search_uses_one_canonical_oracle_case() -> None:
             "--protocol-case",
             "obfuscated-required",
             "--transfer-scenario",
-            module.SERVER_KEYWORD_SEARCH,
+            scenario,
         ]
     )
 
@@ -1292,10 +1300,23 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
 
 
-def test_server_keyword_search_is_bilateral_and_uses_a_neutral_fixture() -> None:
+def test_server_search_variants_share_one_bilateral_neutral_fixture_lane() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
+    assert module.SERVER_SEARCH_VARIANTS == {
+        module.SERVER_KEYWORD_SEARCH: "keyword",
+        module.SERVER_ADVANCED_SEARCH: "advanced",
+    }
+    assert module.SERVER_SEARCH_CRITERIA[module.SERVER_KEYWORD_SEARCH] == (
+        ed2k_wire.ServerSearchCriteria()
+    )
+    assert module.SERVER_SEARCH_CRITERIA[module.SERVER_ADVANCED_SEARCH] == (
+        ed2k_wire.ServerSearchCriteria(
+            min_size_bytes=module.SERVER_SEARCH_FILE_SIZE,
+            max_size_bytes=module.SERVER_SEARCH_FILE_SIZE,
+        )
+    )
     assert module.SERVER_SEARCH_QUERY in module.SERVER_SEARCH_FILE_NAME
     assert module.SERVER_SEARCH_FILE_NAME != "deterministicserversearch-transfer.bin"
     assert module.SERVER_SEARCH_QUERY not in "deterministicserversearch-transfer.bin"

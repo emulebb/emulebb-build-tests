@@ -76,6 +76,7 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
+SERVER_ADVANCED_SEARCH = "server-advanced-search"
 SERVER_TCP_SOURCE = "server-tcp-source"
 SERVER_TCP_METADATA = "server-tcp-metadata"
 SERVER_UDP_METADATA = "server-udp-metadata"
@@ -93,6 +94,17 @@ SERVER_SEARCH_QUERY = "deterministicparitysearch"
 SERVER_SEARCH_FILE_HASH = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
 SERVER_SEARCH_FILE_NAME = "deterministicparitysearch-result.bin"
 SERVER_SEARCH_FILE_SIZE = 12_345
+SERVER_SEARCH_VARIANTS = {
+    SERVER_KEYWORD_SEARCH: server_search_diagnostic_evidence.KEYWORD_VARIANT,
+    SERVER_ADVANCED_SEARCH: server_search_diagnostic_evidence.ADVANCED_VARIANT,
+}
+SERVER_SEARCH_CRITERIA = {
+    SERVER_KEYWORD_SEARCH: ed2k_wire.ServerSearchCriteria(),
+    SERVER_ADVANCED_SEARCH: ed2k_wire.ServerSearchCriteria(
+        min_size_bytes=SERVER_SEARCH_FILE_SIZE,
+        max_size_bytes=SERVER_SEARCH_FILE_SIZE,
+    ),
+}
 SERVER_SEARCH_PUBLISHER_HASH = bytes.fromhex("102132435465768798A9BACBDCEDFE0F")
 SERVER_SEARCH_PUBLISHER_NICK = "emulebb-harness-search-publisher"
 SERVER_SOURCE_FILE_HASH = bytes.fromhex("22334455667788990011AABBCCDDEEFF")
@@ -110,6 +122,7 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_KEYWORD_SEARCH,
+    SERVER_ADVANCED_SEARCH,
     SERVER_TCP_SOURCE,
     SERVER_TCP_METADATA,
     SERVER_UDP_METADATA,
@@ -193,7 +206,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             if args.transfer_scenario
             in {
                 SERVER_LOGIN_REQUEST,
-                SERVER_KEYWORD_SEARCH,
+                *SERVER_SEARCH_VARIANTS,
                 SERVER_TCP_SOURCE,
                 SERVER_TCP_METADATA,
                 SERVER_UDP_METADATA,
@@ -228,12 +241,12 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "Hash-only metadata recovery uses the single canonical obfuscated-required case."
             )
-    if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+    if args.transfer_scenario in SERVER_SEARCH_VARIANTS:
         if args.client2_identity != "mfc_oracle":
-            raise ValueError("Server keyword search requires the MFC diagnostics oracle.")
+            raise ValueError("Server search requires the MFC diagnostics oracle.")
         if args.protocol_case != "obfuscated-required":
             raise ValueError(
-                "Server keyword search uses the single canonical obfuscated-required case."
+                "Server search uses the single canonical obfuscated-required case."
             )
     if args.transfer_scenario == SERVER_TCP_SOURCE:
         if args.client2_identity != "mfc_oracle":
@@ -2373,6 +2386,8 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     udp_source_request_version = SERVER_UDP_SOURCE_VERSIONS.get(args.transfer_scenario)
+    server_search_variant = SERVER_SEARCH_VARIANTS.get(args.transfer_scenario)
+    server_search_criteria = SERVER_SEARCH_CRITERIA.get(args.transfer_scenario)
     udp_source_version_token = (
         f"v{udp_source_request_version}"
         if udp_source_request_version is not None
@@ -2449,7 +2464,7 @@ def main(argv: list[str] | None = None) -> int:
         server_connect_address = resolve_ed2k_server_connect_address(args.ed2k_server_connect_address)
         ports = choose_distinct_ports(
             args.lan_bind_addr,
-            include_search_publisher=args.transfer_scenario == SERVER_KEYWORD_SEARCH,
+            include_search_publisher=args.transfer_scenario in SERVER_SEARCH_VARIANTS,
             include_source_publisher=args.transfer_scenario == SERVER_TCP_SOURCE,
             include_metadata_target=args.transfer_scenario == SERVER_UDP_METADATA,
             include_udp_source_target=udp_source_request_version is not None,
@@ -2597,7 +2612,7 @@ def main(argv: list[str] | None = None) -> int:
                 "stats": metadata_server_control.stats(),
             }
 
-        if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+        if args.transfer_scenario in SERVER_SEARCH_VARIANTS:
             current_phase = "publish_server_search_fixture"
             server_search_publisher = ed2k_wire.Ed2kWireClient(
                 server_address,
@@ -2750,7 +2765,7 @@ def main(argv: list[str] | None = None) -> int:
             else "deterministicserverlogin-fixture.bin"
             if args.transfer_scenario == SERVER_LOGIN_REQUEST
             else "deterministicserversearch-transfer.bin"
-            if args.transfer_scenario == SERVER_KEYWORD_SEARCH
+            if args.transfer_scenario in SERVER_SEARCH_VARIANTS
             else "deterministicserversource-transfer.bin"
             if args.transfer_scenario == SERVER_TCP_SOURCE
             else "deterministicservertcpmetadata-transfer.bin"
@@ -3461,7 +3476,7 @@ def main(argv: list[str] | None = None) -> int:
                 server_login_evidence
             )
 
-        if args.transfer_scenario == SERVER_KEYWORD_SEARCH:
+        if args.transfer_scenario in SERVER_SEARCH_VARIANTS:
             if client2_process_id is None:
                 raise RuntimeError(
                     "Bilateral server-search diagnostics require the MFC process identity."
@@ -3469,13 +3484,15 @@ def main(argv: list[str] | None = None) -> int:
             driven_searches: dict[str, dict[str, object]] = {}
             report["checks"]["client_server_searches"] = driven_searches
             search_failures: dict[str, dict[str, str]] = {}
-            current_phase = "rust_server_keyword_search"
+            if server_search_variant is None or server_search_criteria is None:
+                raise RuntimeError("Server search scenario has no variant contract.")
+            current_phase = f"rust_server_{server_search_variant}_search"
             try:
                 driven_searches["rust"] = rust_local_ed2k.run_single_server_search(
                     base_url,
                     args.api_key,
                     query=SERVER_SEARCH_QUERY,
-                    criteria=ed2k_wire.ServerSearchCriteria(),
+                    criteria=server_search_criteria,
                     expected_hash=SERVER_SEARCH_FILE_HASH.hex(),
                     expected_name=SERVER_SEARCH_FILE_NAME,
                     expected_size=SERVER_SEARCH_FILE_SIZE,
@@ -3487,13 +3504,13 @@ def main(argv: list[str] | None = None) -> int:
                     "type": type(exc).__name__,
                     "message": str(exc),
                 }
-            current_phase = "mfc_server_keyword_search"
+            current_phase = f"mfc_server_{server_search_variant}_search"
             try:
                 driven_searches["mfc"] = rust_local_ed2k.run_single_server_search(
                     client2_base_url,
                     args.api_key,
                     query=SERVER_SEARCH_QUERY,
-                    criteria=ed2k_wire.ServerSearchCriteria(),
+                    criteria=server_search_criteria,
                     expected_hash=SERVER_SEARCH_FILE_HASH.hex(),
                     expected_name=SERVER_SEARCH_FILE_NAME,
                     expected_size=SERVER_SEARCH_FILE_SIZE,
@@ -3507,9 +3524,9 @@ def main(argv: list[str] | None = None) -> int:
                 }
             current_phase = "collect_server_search_diagnostics"
             server_search_evidence = collect_server_search_diagnostics(
-                variant=server_search_diagnostic_evidence.KEYWORD_VARIANT,
+                variant=server_search_variant,
                 query=SERVER_SEARCH_QUERY,
-                criteria=ed2k_wire.ServerSearchCriteria(),
+                criteria=server_search_criteria,
                 expected_file_hash=SERVER_SEARCH_FILE_HASH.hex(),
                 expected_file_name=SERVER_SEARCH_FILE_NAME,
                 expected_file_size=SERVER_SEARCH_FILE_SIZE,
