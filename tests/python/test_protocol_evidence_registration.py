@@ -1954,17 +1954,37 @@ def attach_direct_callback(
     mfc_config_dir = run_directory / "profiles" / "mfc" / "config"
     report["profiles"]["rust"]["profile_dir"] = str(rust_profile_dir)
     report["profiles"]["mfc"]["config_dir"] = str(mfc_config_dir)
-    kad_nodes.write_nodes_dat(
-        rust_profile_dir / "nodes.dat",
+    rust_nodes = kad_nodes.encode_nodes_dat(
         [
             kad_nodes.BootstrapContact(
                 "127.0.0.1",
                 SERVER_CALLBACK_REQUESTER_PORT,
                 SERVER_CALLBACK_REQUESTER_PORT,
             )
-        ],
+        ]
     )
-    kad_nodes.write_nodes_dat(mfc_config_dir / "nodes.dat", [])
+    mfc_nodes = kad_nodes.encode_nodes_dat([])
+    (rust_profile_dir / "nodes.dat").parent.mkdir(parents=True, exist_ok=True)
+    (rust_profile_dir / "nodes.dat").write_bytes(rust_nodes)
+    (mfc_config_dir / "nodes.dat").parent.mkdir(parents=True, exist_ok=True)
+    (mfc_config_dir / "nodes.dat").write_bytes(mfc_nodes)
+    launch_inputs = run_directory / "launch-inputs" / "direct-callback-kad"
+    launch_inputs.mkdir(parents=True, exist_ok=True)
+    launch_receipts: dict[str, dict[str, object]] = {}
+    for label, name, payload in (
+        ("rustNodesDat", "rust-nodes.dat", rust_nodes),
+        ("mfcNodesDat", "mfc-nodes.dat", mfc_nodes),
+    ):
+        path = launch_inputs / name
+        path.write_bytes(payload)
+        launch_receipts[label] = {
+            "path": str(path),
+            "sizeBytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    report["network"]["directCallbackKadIsolation"]["launchInputs"] = (
+        launch_receipts
+    )
     targets = {
         client: {
             "clientId": identity["clientId"],
@@ -2946,7 +2966,7 @@ def test_build_transfer_registration_rejects_public_direct_callback_seed(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-def test_build_transfer_registration_rejects_mfc_direct_callback_kad_contact(
+def test_build_transfer_registration_uses_retained_launch_input_after_mfc_shutdown_mutation(
     tmp_path: Path,
 ) -> None:
     report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
@@ -2957,7 +2977,28 @@ def test_build_transfer_registration_rejects_mfc_direct_callback_kad_contact(
     )
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="MFC direct callback nodes.dat is not empty"):
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert "lowid.direct-callback" in registration["evidenceReceipt"]["coverageIds"]
+
+
+def test_build_transfer_registration_rejects_mutated_mfc_kad_launch_input(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report, _ = write_direct_callback_report(tmp_path)
+    retained = Path(
+        report["network"]["directCallbackKadIsolation"]["launchInputs"][
+            "mfcNodesDat"
+        ]["path"]
+    )
+    retained.write_bytes(
+        kad_nodes.encode_nodes_dat(
+            [kad_nodes.BootstrapContact("127.0.0.1", 4672, 4662)]
+        )
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mfcNodesDat launch input does not match"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

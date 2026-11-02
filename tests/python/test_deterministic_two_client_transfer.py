@@ -1537,6 +1537,9 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
     assert '"directCallbackKadIsolation"' in script_text
     assert '"mfcBootstrapSeeds": []' in script_text
     assert 'Path(client2["config_dir"]) / "nodes.dat",\n                    [],' in script_text
+    assert 'direct_callback_kad_isolation["launchInputs"]' in script_text
+    assert 'launch_inputs / "rust-nodes.dat"' in script_text
+    assert 'launch_inputs / "mfc-nodes.dat"' in script_text
     assert '"client1_direct_callback_kad_start"' in script_text
     assert '"/api/v1/kad/operations/start"' in script_text
     assert '"client_direct_callback_kad_running"' in script_text
@@ -1549,6 +1552,24 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
         in script_text
     )
     assert "direct_callback_evidence=direct_callback_evidence" in script_text
+
+
+def test_retain_launch_input_copies_exact_bytes_and_receipts(tmp_path: Path) -> None:
+    module = load_suite_module()
+    source = tmp_path / "profile" / "nodes.dat"
+    destination = tmp_path / "launch-inputs" / "nodes.dat"
+    payload = b"deterministic-launch-input"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(payload)
+
+    receipt = module.retain_launch_input(source, destination)
+
+    assert destination.read_bytes() == payload
+    assert receipt == {
+        "path": str(destination),
+        "sizeBytes": len(payload),
+        "sha256": module.file_sha256(destination),
+    }
 
 
 def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:

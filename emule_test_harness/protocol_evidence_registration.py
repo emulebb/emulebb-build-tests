@@ -2718,36 +2718,71 @@ def _derived_direct_callback_coverage_ids(
         network.get("directCallbackKadIsolation"),
         "network.directCallbackKadIsolation",
     )
-    if kad_isolation != {
+    expected_kad_isolation = {
         "publicDiscovery": False,
         "rustBootstrapSeed": {
             "endpoint": f"{requester_host}:{requester_port}",
             "tcpPort": requester_port,
         },
         "mfcBootstrapSeeds": [],
-    }:
+    }
+    if (
+        set(kad_isolation) != {*expected_kad_isolation, "launchInputs"}
+        or any(
+            kad_isolation.get(field) != value
+            for field, value in expected_kad_isolation.items()
+        )
+    ):
         raise ValueError("direct callback Kad isolation is not exact")
 
-    profiles = _object(report.get("profiles"), "profiles")
-    rust_profile = _profile_by_client_key(profiles, "emulebb_rust")
-    mfc_profile = _profile_by_client_key(profiles, "mfc_oracle")
-    rust_nodes_path = _path_within(
-        str(Path(str(rust_profile.get("profile_dir"))) / "nodes.dat"),
-        run_directory,
-        "Rust direct callback nodes.dat",
+    launch_inputs = _object(
+        kad_isolation.get("launchInputs"),
+        "network.directCallbackKadIsolation.launchInputs",
     )
-    mfc_nodes_path = _path_within(
-        str(Path(str(mfc_profile.get("config_dir"))) / "nodes.dat"),
-        run_directory,
-        "MFC direct callback nodes.dat",
-    )
-    expected_rust_nodes = kad_nodes.encode_nodes_dat(
-        [kad_nodes.BootstrapContact(requester_host, requester_port, requester_port)]
-    )
-    if rust_nodes_path.read_bytes() != expected_rust_nodes:
-        raise ValueError("Rust direct callback nodes.dat is not the isolated seed")
-    if mfc_nodes_path.read_bytes() != kad_nodes.encode_nodes_dat([]):
-        raise ValueError("MFC direct callback nodes.dat is not empty")
+    expected_launch_inputs = {
+        "rustNodesDat": (
+            run_directory / "launch-inputs" / "direct-callback-kad" / "rust-nodes.dat",
+            kad_nodes.encode_nodes_dat(
+                [
+                    kad_nodes.BootstrapContact(
+                        requester_host,
+                        requester_port,
+                        requester_port,
+                    )
+                ]
+            ),
+        ),
+        "mfcNodesDat": (
+            run_directory / "launch-inputs" / "direct-callback-kad" / "mfc-nodes.dat",
+            kad_nodes.encode_nodes_dat([]),
+        ),
+    }
+    if set(launch_inputs) != set(expected_launch_inputs):
+        raise ValueError("direct callback Kad launch inputs are incomplete")
+    for label, (expected_path, expected_payload) in expected_launch_inputs.items():
+        receipt = _object(
+            launch_inputs.get(label),
+            f"network.directCallbackKadIsolation.launchInputs.{label}",
+        )
+        if set(receipt) != {"path", "sizeBytes", "sha256"}:
+            raise ValueError(f"{label} launch-input receipt is not exact")
+        retained_path = _path_within(
+            receipt.get("path"),
+            run_directory,
+            f"{label} launch-input path",
+        )
+        retained_sha256 = _lower_hex(
+            receipt.get("sha256"),
+            SHA256_PATTERN,
+            f"{label} launch-input SHA-256",
+        )
+        if (
+            retained_path != expected_path.resolve()
+            or receipt.get("sizeBytes") != len(expected_payload)
+            or retained_path.read_bytes() != expected_payload
+            or _file_sha256(retained_path) != retained_sha256
+        ):
+            raise ValueError(f"{label} launch input does not match the isolated topology")
 
     kad_runtimes = _object(
         checks.get("client_direct_callback_kad_running"),

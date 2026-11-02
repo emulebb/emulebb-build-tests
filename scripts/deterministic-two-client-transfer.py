@@ -1390,6 +1390,19 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def retain_launch_input(source: Path, destination: Path) -> dict[str, object]:
+    """Retains one pre-launch input outside the client-mutated profile tree."""
+
+    payload = source.read_bytes()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    return {
+        "path": str(destination),
+        "sizeBytes": len(payload),
+        "sha256": file_sha256(destination),
+    }
+
+
 def wait_for_exported_link(path: Path, timeout_seconds: float) -> str:
     """Waits for client2 to export a non-empty eD2K link file."""
 
@@ -2637,6 +2650,7 @@ def main(argv: list[str] | None = None) -> int:
     ) = None
     direct_callback_requester: direct_callback_probe.DirectCallbackProbe | None = None
     rust_isolated_kad_seed: kad_nodes.BootstrapContact | None = None
+    direct_callback_kad_isolation: dict[str, object] | None = None
     source_publisher_login: dict[str, object] | None = None
     source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
@@ -2722,7 +2736,7 @@ def main(argv: list[str] | None = None) -> int:
                 ports["callback_requester_tcp"],
                 ports["callback_requester_tcp"],
             )
-            report["network"]["directCallbackKadIsolation"] = {
+            direct_callback_kad_isolation = {
                 "publicDiscovery": False,
                 "rustBootstrapSeed": {
                     "endpoint": rust_isolated_kad_seed.endpoint,
@@ -2730,6 +2744,9 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 "mfcBootstrapSeeds": [],
             }
+            report["network"]["directCallbackKadIsolation"] = (
+                direct_callback_kad_isolation
+            )
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
             current_phase = "start_server_callback_requester"
@@ -3235,6 +3252,21 @@ def main(argv: list[str] | None = None) -> int:
                     Path(client2["config_dir"]) / "nodes.dat",
                     [],
                 )
+                if direct_callback_kad_isolation is None:
+                    raise RuntimeError("Direct callback Kad isolation was not initialized.")
+                launch_inputs = (
+                    paths.source_artifacts_dir / "launch-inputs" / "direct-callback-kad"
+                )
+                direct_callback_kad_isolation["launchInputs"] = {
+                    "rustNodesDat": retain_launch_input(
+                        rust_profile / "nodes.dat",
+                        launch_inputs / "rust-nodes.dat",
+                    ),
+                    "mfcNodesDat": retain_launch_input(
+                        Path(client2["config_dir"]) / "nodes.dat",
+                        launch_inputs / "mfc-nodes.dat",
+                    ),
+                }
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
                 Path(client2["config_dir"]) / "shareddir.dat",
