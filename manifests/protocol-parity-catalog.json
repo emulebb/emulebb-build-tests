@@ -244,6 +244,13 @@
   },
   "coverageEvidence": [
     {
+      "coverageId": "client-udp.file-not-found",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each produced the same clear zero-payload file-not-found reply after exact shared-hash withdrawal, then causally applied it, dead-listed the source for 2700 seconds, and removed the source.",
+      "receiptIds": ["rust-mfc-client-udp-file-not-found-20261102t173926z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "client-udp.queue-full",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each produced and applied the same clear zero-payload queue-full reply after exact real-waiter removal and one causally consumed stock queue-pressure prerequisite.",
@@ -2023,6 +2030,28 @@
           "authorityId": "rust-product",
           "executableSha256": "aad5ff065844091e695048c7931d2932d26eb7ab389242b1bfa6f78011a367d9",
           "sourceRevision": "ac6fc4429e7ca09dd2058c1443cd63d0b19361da"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261102T173926Z-emulebb-main-release-9780/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "b420db82edd4f12a447e44a080c42166eda917ef9189e3d7e2f1133c0d92f808",
+      "coverageIds": ["client-udp.file-not-found"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-client-udp-file-not-found-20261102t173926z",
+      "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
+      "runnerRevision": "564e2d9ab697fa164ac263100c7dd729ed9f8991",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "5156830c055a0840b2471db5545d63d589a2e850d81dc3887bca45a30cd34d0b",
+          "sourceRevision": "be2a0f79c31ef6763679890d08180a1f04051e07"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "5c468512fa363deba04587ad0c05d3528e8cb17f986885d5c8b5fdc7a64026d9",
+          "sourceRevision": "056a91d020af90e15cda4a70bf88c165a7da2c7d"
         }
       ]
     }
