@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import struct
 
-from emule_test_harness.kad_nodes import parse_nodes_dat
+from emule_test_harness.kad_nodes import (
+    BootstrapContact,
+    encode_nodes_dat,
+    parse_nodes_dat,
+)
 
 
 def _basic(seed: int, version_or_type: int = 9) -> bytes:
@@ -55,3 +59,22 @@ def test_unsupported_headers_are_rejected() -> None:
     assert parse_nodes_dat(b"") == []
     assert parse_nodes_dat(struct.pack("<III", 0, 99, 0)) == []
     assert parse_nodes_dat(_modern(3, [], edition=2)) == []
+
+
+def test_encoder_is_deterministic_and_roundtrips_public_contact() -> None:
+    contact = BootstrapContact("8.8.4.4", 4672, 4662)
+
+    first = encode_nodes_dat([contact])
+    second = encode_nodes_dat([contact])
+
+    assert first == second
+    assert len(first) == 12 + 25
+    assert parse_nodes_dat(first) == [contact]
+
+
+def test_encoder_retains_local_seed_without_classifying_it_as_public() -> None:
+    encoded = encode_nodes_dat([BootstrapContact("127.0.0.1", 24672, 24662)])
+
+    assert len(encoded) == 12 + 25
+    assert encoded[:12] == struct.pack("<III", 0, 1, 1)
+    assert parse_nodes_dat(encoded) == []

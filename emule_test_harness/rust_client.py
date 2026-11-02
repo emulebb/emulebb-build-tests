@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import signal
-import struct
 import subprocess
 from pathlib import Path
 
+from . import kad_nodes
 from .paths import get_workspace_output_root
 from . import rust_metadata
 
@@ -91,6 +91,7 @@ def write_rust_profile(
     vpn_guard_allowed_public_ip_cidrs: str = "",
     initial_shared_directory_reload: bool | None = None,
     local_only_discovery: bool = False,
+    local_kad_seed: kad_nodes.BootstrapContact | None = None,
 ) -> None:
     """Writes a minimal eMuleBB Rust profile for local harness runs.
 
@@ -104,7 +105,14 @@ def write_rust_profile(
     if local_only_discovery:
         # WHY: first-run discovery imports public nodes.dat when this file is
         # absent. Local-only harnesses must never silently bootstrap public Kad.
-        (profile_dir / "nodes.dat").write_bytes(struct.pack("<III", 0, 2, 0))
+        if local_kad_seed is None:
+            kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [])
+        else:
+            if network_kademlia is not True:
+                raise ValueError(
+                    "local_kad_seed requires network_kademlia=True so the intent is explicit"
+                )
+            kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [local_kad_seed])
     settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():
@@ -121,7 +129,7 @@ def write_rust_profile(
         core_settings["maxConnections"] = max_connections
     if network_kademlia is not None:
         core_settings["networkKademlia"] = network_kademlia
-    if local_only_discovery:
+    if local_only_discovery and local_kad_seed is None:
         # An empty nodes.dat suppresses first-run URL import, but the DHT still
         # has built-in public fallback contacts. ED2K-only lanes disable Kad.
         core_settings["networkKademlia"] = False
