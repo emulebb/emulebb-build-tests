@@ -618,7 +618,10 @@ def _transition_evidence(
     schedule, schedule_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_schedule_decision") and identity(record)
+            _event(record, "sched", "udp_reask_schedule_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "eligible"
+            and _body(record).get("reason") == "eligible"
         ),
     )
     schedule_ok = bool(
@@ -629,7 +632,12 @@ def _transition_evidence(
     decision, decision_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_decision") and identity(record)
+            _event(record, "sched", "udp_reask_decision")
+            and identity(record)
+            and _body(record).get("outcome") == "sent"
+            and _body(record).get("transportEligible") is True
+            and _body(record).get("reason") == "udp_reask_sent"
+            and _body(record).get("path") == "direct"
         ),
     )
     decision_ok = bool(
@@ -765,7 +773,23 @@ def _transition_evidence(
     applied, applied_count = _single(
         requester_records,
         lambda record: (
-            _event(record, "sched", "udp_reask_reply_applied") and identity(record)
+            _event(record, "sched", "udp_reask_reply_applied")
+            and identity(record)
+            and _body(record).get("outcome") == "applied"
+            and _body(record).get("replyOpcode") == OP_REASKACK
+            and _body(record).get("queueRank") == queue_rank
+            and _body(record).get("requestPendingAfter") is False
+            and _body(record).get("remoteQueueFullAfter") is False
+            and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
+            and _body(record).get("sourceUdpVersion") == 4
+            and _body(record).get("queueRankApplied") is True
+            and _body(record).get("partStatusIncluded") is True
+            and _body(record).get("wirePartCount") == 0
+            and _body(record).get("partStatusApplied") is True
+            and _body(record).get("partCountAfter") == part_count
+            and _body(record).get("availablePartsAfter") == part_count
+            and _body(record).get("partStatusBitsAfter") == "1" * part_count
+            and _body(record).get("noNeededPartsAfter") is False
         ),
     )
     applied_ok = bool(

@@ -1274,6 +1274,42 @@ def test_bilateral_client_udp_clear_is_claimable() -> None:
 
 
 @pytest.mark.unit
+def test_clear_allows_prior_noneligible_scheduler_observation() -> None:
+    original = transition("mfc")
+    records = copy.deepcopy(list(original.requester_records))
+    for record in records[1:]:
+        record["seq"] += 1
+    records.insert(
+        1,
+        sched_record(
+            2,
+            "udp_reask_schedule_decision",
+            {
+                "outcome": "skipped",
+                "reason": "reask_window_not_open",
+                "timeUntilReaskMs": 1_738_922,
+            },
+            requester="mfc",
+        ),
+    )
+    mfc_transition = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+    report = evidence.build_client_udp_clear_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=STOCK_RECORD,
+        transitions=[transition("rust"), mfc_transition],
+    )
+
+    evidence.require_client_udp_clear_diagnostic_evidence(report)
+    assert report["clients"]["mfc"]["diagnostics"]["counts"]["schedule"] == 1
+    assert (
+        report["clients"]["mfc"]["diagnostics"]["requesterSequences"]["schedule"] == 3
+    )
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("should_crypt", [None, True])
 def test_clear_requires_false_registered_crypt_decision(
     should_crypt: bool | None,
@@ -1953,7 +1989,7 @@ def test_reply_application_must_include_exact_v4_state() -> None:
     report = passing_report(rust_transition=wrong)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 1
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 0
     assert report["clients"]["rust"]["diagnostics"]["ok"] is False
 
 
