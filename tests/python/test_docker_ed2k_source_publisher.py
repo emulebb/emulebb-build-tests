@@ -40,7 +40,9 @@ def create_repo_fixture(tmp_path: Path) -> Path:
 
 
 def ready_receipt(
-    *, assigned_id: int = publisher.PUBLISHER_HIGH_ID
+    *,
+    assigned_id: int = publisher.PUBLISHER_HIGH_ID,
+    server_flags: int = publisher.PLAIN_SERVER_FLAGS,
 ) -> dict[str, object]:
     return {
         "schema": publisher.RECEIPT_SCHEMA,
@@ -53,7 +55,7 @@ def ready_receipt(
             "nickname": publisher.DEFAULT_NICKNAME,
             "tcpPort": PUBLISHER_PORT,
             "userHash": USER_HASH.hex().upper(),
-            "serverFlags": publisher.SERVER_FLAGS,
+            "serverFlags": server_flags,
         },
         "file": {
             "hash": FILE_HASH.hex().upper(),
@@ -81,7 +83,8 @@ def test_constants_pin_isolated_amd64_fixture_identity() -> None:
     assert publisher.BENCHMARK_SUBNET == "198.18.240.0/28"
     assert publisher.PUBLISHER_IP == "198.18.240.2"
     assert publisher.PUBLISHER_HIGH_ID == 0x02F012C6
-    assert publisher.SERVER_FLAGS == 0x0119
+    assert publisher.PLAIN_SERVER_FLAGS == 0x0119
+    assert publisher.OBFUSCATED_SOURCE_SERVER_FLAGS == 0x0319
 
 
 class FakeStream:
@@ -194,6 +197,7 @@ def test_child_listens_before_login_offers_file_and_publishes_receipt(
         server_host=SERVER_HOST,
         server_port=SERVER_PORT,
         publisher_port=PUBLISHER_PORT,
+        server_flags=publisher.OBFUSCATED_SOURCE_SERVER_FLAGS,
         user_hash=USER_HASH,
         nickname=publisher.DEFAULT_NICKNAME,
         file_hash=FILE_HASH,
@@ -221,7 +225,7 @@ def test_child_listens_before_login_offers_file_and_publishes_receipt(
                 "user_hash": USER_HASH,
                 "tcp_port": PUBLISHER_PORT,
                 "nickname": publisher.DEFAULT_NICKNAME,
-                "server_flags": 0x0119,
+                "server_flags": publisher.OBFUSCATED_SOURCE_SERVER_FLAGS,
             },
         ),
     ]
@@ -236,6 +240,7 @@ def test_child_listens_before_login_offers_file_and_publishes_receipt(
         "welcome_opcodes": [0x40, 0x34],
     }
     assert receipt["identityProbeAnswers"] == 2
+    assert receipt["publisher"]["serverFlags"] == publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert list(tmp_path.glob("*.tmp")) == []
 
@@ -284,6 +289,7 @@ def test_child_rejects_noncanonical_assigned_id_before_offer(
         server_host=SERVER_HOST,
         server_port=SERVER_PORT,
         publisher_port=PUBLISHER_PORT,
+        server_flags=publisher.PLAIN_SERVER_FLAGS,
         user_hash=USER_HASH,
         nickname=publisher.DEFAULT_NICKNAME,
         file_hash=FILE_HASH,
@@ -383,6 +389,7 @@ def start_with_fake_docker(
         server_host=SERVER_HOST,
         server_port=SERVER_PORT,
         publisher_port=PUBLISHER_PORT,
+        server_flags=publisher.PLAIN_SERVER_FLAGS,
         user_hash=USER_HASH,
         file_hash=FILE_HASH,
         file_name=FILE_NAME,
@@ -450,6 +457,8 @@ def test_parent_uses_only_wsl_argv_and_pinned_bounded_docker_commands(
         str(SERVER_PORT),
         "--publisher-port",
         str(PUBLISHER_PORT),
+        "--server-flags",
+        str(publisher.PLAIN_SERVER_FLAGS),
         "--user-hash",
         USER_HASH.hex().upper(),
         "--nickname",
@@ -510,6 +519,7 @@ def test_missing_pinned_image_fails_before_network_without_pull(
             server_host=SERVER_HOST,
             server_port=SERVER_PORT,
             publisher_port=PUBLISHER_PORT,
+            server_flags=publisher.PLAIN_SERVER_FLAGS,
             user_hash=USER_HASH,
             file_hash=FILE_HASH,
             file_name=FILE_NAME,
@@ -549,6 +559,7 @@ def test_wrong_assigned_id_rejects_receipt_and_cleans_container_then_network(
             server_host=SERVER_HOST,
             server_port=SERVER_PORT,
             publisher_port=PUBLISHER_PORT,
+            server_flags=publisher.PLAIN_SERVER_FLAGS,
             user_hash=USER_HASH,
             file_hash=FILE_HASH,
             file_name=FILE_NAME,
@@ -618,6 +629,8 @@ def test_child_cli_builds_configuration_for_persisted_module(
             str(SERVER_PORT),
             "--publisher-port",
             str(PUBLISHER_PORT),
+            "--server-flags",
+            str(publisher.PLAIN_SERVER_FLAGS),
             "--user-hash",
             USER_HASH.hex(),
             "--nickname",
@@ -642,6 +655,7 @@ def test_child_cli_builds_configuration_for_persisted_module(
             server_host=SERVER_HOST,
             server_port=SERVER_PORT,
             publisher_port=PUBLISHER_PORT,
+            server_flags=publisher.PLAIN_SERVER_FLAGS,
             user_hash=USER_HASH,
             nickname=publisher.DEFAULT_NICKNAME,
             file_hash=FILE_HASH,

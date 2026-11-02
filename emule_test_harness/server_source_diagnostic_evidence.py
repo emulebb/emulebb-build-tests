@@ -1,4 +1,4 @@
-"""Strict bilateral evidence gate for one plaintext eD2K server source lookup."""
+"""Strict bilateral evidence gate for one eD2K server source lookup."""
 
 from __future__ import annotations
 
@@ -22,8 +22,14 @@ SOURCE_COVERAGE_BY_TRANSPORT = {
 REPLY_COVERAGE_ID = "server.reply.sources"
 ELIGIBLE_COVERAGE_IDS = (*SOURCE_COVERAGE_BY_TRANSPORT.values(), REPLY_COVERAGE_ID)
 SOURCE_PROTOCOL_MARKER = ed2k_wire.PROTO_EDONKEY
-SOURCE_REQUEST_OPCODE = ed2k_wire.OP_GETSOURCES
-SOURCE_REPLY_OPCODE = ed2k_wire.OP_FOUNDSOURCES
+SOURCE_REQUEST_OPCODE_BY_TRANSPORT = {
+    "plaintext": ed2k_wire.OP_GETSOURCES,
+    "obfuscated": ed2k_wire.OP_GETSOURCES_OBFU,
+}
+SOURCE_REPLY_OPCODE_BY_TRANSPORT = {
+    "plaintext": ed2k_wire.OP_FOUNDSOURCES,
+    "obfuscated": ed2k_wire.OP_FOUNDSOURCES_OBFU,
+}
 CLIENTS = ("rust", "mfc")
 
 
@@ -80,6 +86,13 @@ def _payload(record: dict[str, Any] | None) -> bytes | None:
     return payload
 
 
+def _conflicts_with_fixture_payload(
+    record: dict[str, Any], expected_hash: bytes
+) -> bool:
+    payload = _payload(record)
+    return payload is None or payload[:16] == expected_hash
+
+
 def _packet_shape(
     record: dict[str, Any],
     *,
@@ -125,8 +138,21 @@ def _request_evidence(
             record,
             endpoint=endpoint,
             direction="send",
-            opcode=SOURCE_REQUEST_OPCODE,
+            opcode=SOURCE_REQUEST_OPCODE_BY_TRANSPORT[expected_transport_mode],
         )
+    ]
+    conflicting = [
+        record
+        for record in records
+        if _packet_shape(
+            record,
+            endpoint=endpoint,
+            direction="send",
+            opcode=SOURCE_REQUEST_OPCODE_BY_TRANSPORT[
+                "plaintext" if expected_transport_mode == "obfuscated" else "obfuscated"
+            ],
+        )
+        and _conflicts_with_fixture_payload(record, expected_payload[:16])
     ]
     exact = [
         record
@@ -135,7 +161,11 @@ def _request_evidence(
         and _matches_transport(record, expected_transport_mode)
         and _body(record).get("outcome") == "attempted"
     ]
-    request = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
+    request = (
+        exact[0]
+        if len(candidates) == 1 and len(exact) == 1 and not conflicting
+        else None
+    )
     observed_payload = _payload(candidates[0]) if len(candidates) == 1 else None
     sequence = _sequence(request)
     trace_id = _trace_id(request)
@@ -144,6 +174,7 @@ def _request_evidence(
         {
             "ok": ok,
             "packetCount": len(candidates),
+            "conflictingPacketCount": len(conflicting),
             "exactPacketCount": len(exact),
             "sequence": sequence or None,
             "traceId": trace_id,
@@ -174,11 +205,31 @@ def _send_outcome_evidence(
         and _peer(record) == endpoint.casefold()
         and _trace_id(record) == trace_id
         and _keys(record).get("protocolMarker") == SOURCE_PROTOCOL_MARKER
-        and _keys(record).get("opcode") == SOURCE_REQUEST_OPCODE
+        and _keys(record).get("opcode")
+        == SOURCE_REQUEST_OPCODE_BY_TRANSPORT[expected_transport_mode]
         and _body(record).get("flow") == "server"
         and _body(record).get("direction") == "send"
         and _body(record).get("protocolMarker") == SOURCE_PROTOCOL_MARKER
-        and _body(record).get("opcode") == SOURCE_REQUEST_OPCODE
+        and _body(record).get("opcode")
+        == SOURCE_REQUEST_OPCODE_BY_TRANSPORT[expected_transport_mode]
+    ]
+    conflicting_opcode = SOURCE_REQUEST_OPCODE_BY_TRANSPORT[
+        "plaintext" if expected_transport_mode == "obfuscated" else "obfuscated"
+    ]
+    conflicting = [
+        record
+        for record in records
+        if record.get("schema") == DIAGNOSTIC_SCHEMA
+        and record.get("family") == "ed2k_tcp"
+        and record.get("event") == "send_outcome"
+        and _peer(record) == endpoint.casefold()
+        and _trace_id(record) == trace_id
+        and _keys(record).get("protocolMarker") == SOURCE_PROTOCOL_MARKER
+        and _keys(record).get("opcode") == conflicting_opcode
+        and _body(record).get("flow") == "server"
+        and _body(record).get("direction") == "send"
+        and _body(record).get("protocolMarker") == SOURCE_PROTOCOL_MARKER
+        and _body(record).get("opcode") == conflicting_opcode
     ]
     exact = [
         record
@@ -187,7 +238,11 @@ def _send_outcome_evidence(
         and _body(record).get("deliveryKnown") is True
         and _matches_transport(record, expected_transport_mode)
     ]
-    outcome = exact[0] if len(candidates) == 1 and len(exact) == 1 else None
+    outcome = (
+        exact[0]
+        if len(candidates) == 1 and len(exact) == 1 and not conflicting
+        else None
+    )
     sequence = _sequence(outcome)
     ok = (
         bool(
@@ -196,7 +251,7 @@ def _send_outcome_evidence(
             and sequence > request_sequence
         )
         if required
-        else not candidates
+        else not candidates and not conflicting
     )
     return (
         {
@@ -204,6 +259,7 @@ def _send_outcome_evidence(
             "required": required,
             "evidenceModel": "terminal-socket-outcome" if required else "correlated-reply-after-attempt",
             "outcomeCount": len(candidates),
+            "conflictingOutcomeCount": len(conflicting),
             "successfulOutcomeCount": len(exact),
             "sequence": sequence or None,
             "traceId": _trace_id(outcome),
@@ -227,6 +283,7 @@ def _reply_evidence(
     expected_client_id: int,
     expected_host: str,
     expected_tcp_port: int,
+    expected_user_hash: str,
     expected_transport_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = [
@@ -236,8 +293,23 @@ def _reply_evidence(
             record,
             endpoint=endpoint,
             direction="recv",
-            opcode=SOURCE_REPLY_OPCODE,
+            opcode=SOURCE_REPLY_OPCODE_BY_TRANSPORT[expected_transport_mode],
         )
+    ]
+    conflicting_opcode = SOURCE_REPLY_OPCODE_BY_TRANSPORT[
+        "plaintext" if expected_transport_mode == "obfuscated" else "obfuscated"
+    ]
+    expected_hash_bytes = bytes.fromhex(expected_hash)
+    conflicting = [
+        record
+        for record in records
+        if _packet_shape(
+            record,
+            endpoint=endpoint,
+            direction="recv",
+            opcode=conflicting_opcode,
+        )
+        and _conflicts_with_fixture_payload(record, expected_hash_bytes)
     ]
     same_trace = [record for record in candidates if _trace_id(record) == trace_id]
     decoded_rows: list[tuple[dict[str, Any], dict[str, object]]] = []
@@ -248,7 +320,10 @@ def _reply_evidence(
             malformed_count += 1
             continue
         try:
-            decoded = ed2k_wire.decode_found_sources(payload, obfuscated=False)
+            decoded = ed2k_wire.decode_found_sources(
+                payload,
+                obfuscated=expected_transport_mode == "obfuscated",
+            )
         except ed2k_wire.Ed2kWireError:
             malformed_count += 1
             continue
@@ -259,8 +334,8 @@ def _reply_evidence(
         "client_id": expected_client_id,
         "host": expected_host,
         "port": expected_tcp_port,
-        "crypt_options": 0,
-        "user_hash": None,
+        "crypt_options": 0x81 if expected_transport_mode == "obfuscated" else 0,
+        "user_hash": expected_user_hash.upper() if expected_transport_mode == "obfuscated" else None,
     }
     exact = [
         (record, decoded)
@@ -271,7 +346,14 @@ def _reply_evidence(
         and decoded.get("source_count") == 1
         and decoded.get("sources") == [expected_source]
     ]
-    reply = exact[0][0] if len(candidates) == 1 and len(same_trace) == 1 and len(exact) == 1 else None
+    reply = (
+        exact[0][0]
+        if len(candidates) == 1
+        and len(same_trace) == 1
+        and len(exact) == 1
+        and not conflicting
+        else None
+    )
     decoded = exact[0][1] if reply is not None else None
     sequence = _sequence(reply)
     ok = bool(
@@ -284,6 +366,7 @@ def _reply_evidence(
         {
             "ok": ok,
             "packetCount": len(candidates),
+            "conflictingPacketCount": len(conflicting),
             "tracePacketCount": len(same_trace),
             "malformedPacketCount": malformed_count,
             "exactPacketCount": len(exact),
@@ -324,12 +407,14 @@ def _application_evidence(
         body = _body(record)
         if (
             keys.get("protocolMarker") == SOURCE_PROTOCOL_MARKER
-            and keys.get("opcode") == SOURCE_REPLY_OPCODE
+            and keys.get("opcode")
+            == SOURCE_REPLY_OPCODE_BY_TRANSPORT[expected_transport_mode]
             and body.get("flow") == "server"
             and body.get("phase") == "source_search"
             and body.get("direction") == "recv"
             and body.get("protocolMarker") == SOURCE_PROTOCOL_MARKER
-            and body.get("opcode") == SOURCE_REPLY_OPCODE
+            and body.get("opcode")
+            == SOURCE_REPLY_OPCODE_BY_TRANSPORT[expected_transport_mode]
             and _matches_transport(record, expected_transport_mode)
             and body.get("stateId") == "server.source.result_applied"
             and body.get("milestone") == "result_applied"
@@ -403,6 +488,7 @@ def build_server_source_diagnostic_evidence(
     publisher_client_id: int,
     publisher_host: str,
     publisher_tcp_port: int,
+    publisher_user_hash: str,
     expected_transport_mode: str,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
@@ -413,6 +499,11 @@ def build_server_source_diagnostic_evidence(
     normalized_hash = expected_file_hash.casefold()
     if expected_transport_mode not in SOURCE_COVERAGE_BY_TRANSPORT:
         raise ValueError("Expected server-source transport must be plaintext or obfuscated.")
+    normalized_publisher_hash = publisher_user_hash.casefold()
+    if len(normalized_publisher_hash) != 32 or any(
+        value not in "0123456789abcdef" for value in normalized_publisher_hash
+    ):
+        raise ValueError("Publisher user hash must be 32 hexadecimal characters.")
     if len(normalized_hash) != 32 or any(value not in "0123456789abcdef" for value in normalized_hash):
         raise ValueError("Expected source file hash must be 32 hexadecimal characters.")
     if not expected_file_name:
@@ -423,7 +514,7 @@ def build_server_source_diagnostic_evidence(
         or expected_file_size <= 0
         or expected_file_size > 0xFFFF_FFFF
     ):
-        raise ValueError("Plain GETSOURCES file size must be a positive u32 integer.")
+        raise ValueError("GETSOURCES file size must be a positive u32 integer.")
     if not server_endpoint or ":" not in server_endpoint:
         raise ValueError("Source server endpoint must be host:port.")
     try:
@@ -449,7 +540,7 @@ def build_server_source_diagnostic_evidence(
 
     expected_payload = ed2k_wire.encode_source_request(bytes.fromhex(normalized_hash), expected_file_size)
     if len(expected_payload) != 20:
-        raise AssertionError("Plain small-file GETSOURCES payload must be exactly 20 bytes.")
+        raise AssertionError("Small-file GETSOURCES payload must be exactly 20 bytes.")
 
     records_by_client = {"rust": list(rust_records), "mfc": list(mfc_records)}
     clients: dict[str, dict[str, Any]] = {}
@@ -480,6 +571,7 @@ def build_server_source_diagnostic_evidence(
             expected_client_id=publisher_client_id,
             expected_host=str(publisher_address),
             expected_tcp_port=publisher_tcp_port,
+            expected_user_hash=normalized_publisher_hash,
             expected_transport_mode=expected_transport_mode,
         )
         application = _application_evidence(
@@ -546,8 +638,14 @@ def build_server_source_diagnostic_evidence(
                     "client_id": publisher_client_id,
                     "host": str(publisher_address),
                     "port": publisher_tcp_port,
-                    "crypt_options": 0,
-                    "user_hash": None,
+                    "crypt_options": (
+                        0x81 if expected_transport_mode == "obfuscated" else 0
+                    ),
+                    "user_hash": (
+                        normalized_publisher_hash.upper()
+                        if expected_transport_mode == "obfuscated"
+                        else None
+                    ),
                 }
             ]
         ),
@@ -590,6 +688,8 @@ def build_server_source_diagnostic_evidence(
         "ok": not failures,
         "serverEndpoint": server_endpoint.casefold(),
         "transportMode": expected_transport_mode,
+        "requestOpcode": SOURCE_REQUEST_OPCODE_BY_TRANSPORT[expected_transport_mode],
+        "replyOpcode": SOURCE_REPLY_OPCODE_BY_TRANSPORT[expected_transport_mode],
         "expectedFile": {
             "hash": normalized_hash,
             "name": expected_file_name,
@@ -600,6 +700,8 @@ def build_server_source_diagnostic_evidence(
             "clientId": publisher_client_id,
             "host": str(publisher_address),
             "tcpPort": publisher_tcp_port,
+            "userHash": normalized_publisher_hash,
+            "cryptOptions": 0x81 if expected_transport_mode == "obfuscated" else 0,
         },
         "failures": failures,
         "clients": clients,
@@ -613,7 +715,7 @@ def build_server_source_diagnostic_evidence(
 
 
 def require_server_source_diagnostic_evidence(report: dict[str, Any]) -> None:
-    """Raises unless the exact bilateral plaintext source lookup is proven."""
+    """Raises unless the exact bilateral source lookup is proven."""
 
     if report.get("schema") != SCHEMA:
         raise RuntimeError("Deterministic server source diagnostics have an unexpected schema.")

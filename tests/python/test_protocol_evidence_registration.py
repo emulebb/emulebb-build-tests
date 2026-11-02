@@ -10,6 +10,7 @@ import pytest
 
 from emule_test_harness import ed2k_wire
 from emule_test_harness import docker_ed2k_source_publisher
+from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
@@ -590,11 +591,18 @@ def _server_source_records(
         bytes.fromhex(SERVER_SOURCE_FILE_HASH),
         SERVER_SOURCE_FILE_SIZE,
     )
-    reply_payload = (
-        bytes.fromhex(SERVER_SOURCE_FILE_HASH)
-        + b"\x01"
-        + struct.pack("<IH", SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT)
+    source_payload = struct.pack(
+        "<IH", SERVER_SOURCE_PUBLISHER_ID, SERVER_SOURCE_PUBLISHER_PORT
     )
+    if transport_mode == "obfuscated":
+        source_payload += b"\x81" + SERVER_SOURCE_PUBLISHER_HASH
+    reply_payload = bytes.fromhex(SERVER_SOURCE_FILE_HASH) + b"\x01" + source_payload
+    request_opcode = server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE_BY_TRANSPORT[
+        transport_mode
+    ]
+    reply_opcode = server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE_BY_TRANSPORT[
+        transport_mode
+    ]
 
     def row(
         sequence: int,
@@ -626,7 +634,7 @@ def _server_source_records(
         "packet",
         keys={
             **packet_keys,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": request_opcode,
             "traceId": trace_id,
         },
         body={
@@ -634,7 +642,7 @@ def _server_source_records(
             "direction": "send",
             "outcome": "attempted",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": request_opcode,
             "transportMode": transport_mode,
             "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
@@ -648,7 +656,7 @@ def _server_source_records(
         "send_outcome",
         keys={
             **packet_keys,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": request_opcode,
         },
         body={
             "flow": "server",
@@ -656,7 +664,7 @@ def _server_source_records(
             "outcome": "send_succeeded",
             "deliveryKnown": True,
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": request_opcode,
             "transportMode": transport_mode,
             "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
@@ -667,7 +675,7 @@ def _server_source_records(
         "packet",
         keys={
             **packet_keys,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "opcode": reply_opcode,
             "traceId": trace_id,
         },
         body={
@@ -675,7 +683,7 @@ def _server_source_records(
             "direction": "recv",
             "outcome": "accepted",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "opcode": reply_opcode,
             "transportMode": transport_mode,
             "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
@@ -690,7 +698,7 @@ def _server_source_records(
         keys={
             **packet_keys,
             "fileHash": SERVER_SOURCE_FILE_HASH,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "opcode": reply_opcode,
             "traceId": trace_id,
         },
         body={
@@ -699,7 +707,7 @@ def _server_source_records(
             "direction": "recv",
             "outcome": "applied",
             "protocolMarker": server_source_diagnostic_evidence.SOURCE_PROTOCOL_MARKER,
-            "opcode": server_source_diagnostic_evidence.SOURCE_REPLY_OPCODE,
+            "opcode": reply_opcode,
             "transportMode": transport_mode,
             "obfuscated": transport_mode == "obfuscated",
             "traceId": trace_id,
@@ -789,6 +797,7 @@ def attach_server_source(
         publisher_client_id=SERVER_SOURCE_PUBLISHER_ID,
         publisher_host=SERVER_SOURCE_PUBLISHER_HOST,
         publisher_tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+        publisher_user_hash=SERVER_SOURCE_PUBLISHER_HASH.hex(),
         expected_transport_mode=transport_mode,
         rust_records=records["rust"],
         mfc_records=records["mfc"],
@@ -801,17 +810,27 @@ def attach_server_source(
         "client_id": SERVER_SOURCE_PUBLISHER_ID,
         "host": SERVER_SOURCE_PUBLISHER_HOST,
         "port": SERVER_SOURCE_PUBLISHER_PORT,
-        "crypt_options": 0,
-        "user_hash": None,
+        "crypt_options": 0x81 if transport_mode == "obfuscated" else 0,
+        "user_hash": (
+            SERVER_SOURCE_PUBLISHER_HASH.hex().upper()
+            if transport_mode == "obfuscated"
+            else None
+        ),
     }
+    expected_server_flags = (
+        docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
+        if transport_mode == "obfuscated"
+        else docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS
+    )
     report["transfer_scenario"] = "server-tcp-source"
-    report["protocol_case"] = {
-        "name": (
-            "plain-server-plain-clients"
-            if transport_mode == "plaintext"
-            else "obfuscated-required"
-        )
-    }
+    protocol_case_name = (
+        "plain-server-plain-clients"
+        if transport_mode == "plaintext"
+        else "obfuscated-required"
+    )
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP[protocol_case_name]
+    )
     report["network"] = {
         "ed2k_server_address": "127.0.0.1",
         "ports": {
@@ -848,7 +867,7 @@ def attach_server_source(
                     "nickname": SERVER_SOURCE_PUBLISHER_NICK,
                     "tcpPort": SERVER_SOURCE_PUBLISHER_PORT,
                     "userHash": SERVER_SOURCE_PUBLISHER_HASH.hex().upper(),
-                    "serverFlags": docker_ed2k_source_publisher.SERVER_FLAGS,
+                    "serverFlags": expected_server_flags,
                 },
                 "file": {
                     "hash": SERVER_SOURCE_FILE_HASH.upper(),
@@ -868,7 +887,7 @@ def attach_server_source(
                             user_hash=SERVER_SOURCE_PUBLISHER_HASH,
                             tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
                             nickname=SERVER_SOURCE_PUBLISHER_NICK,
-                            server_flags=docker_ed2k_source_publisher.SERVER_FLAGS,
+                            server_flags=expected_server_flags,
                         ),
                     ).evidence("send"),
                     ed2k_wire.Ed2kFrame(
@@ -915,7 +934,7 @@ def attach_server_source(
         },
     }
     report["checks"]["client_server_source_stimulus"] = {
-        "mode": "plain-ed2k-link-without-source-hints",
+        "mode": "source-free-ed2k-link",
         "link": (
             f"ed2k://|file|{SERVER_SOURCE_FILE_NAME}|{SERVER_SOURCE_FILE_SIZE}|"
             f"{SERVER_SOURCE_FILE_HASH}|/"
@@ -2097,6 +2116,44 @@ def test_build_transfer_registration_accepts_obfuscated_server_tcp_source(
     assert "obfuscated GETSOURCES" in reasons["server.source.tcp-obfuscated"]
 
 
+def test_build_transfer_registration_rejects_source_transport_case_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+        transport_mode="obfuscated",
+    )
+    report["protocol_case"] = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="selected server transport"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_mutated_source_protocol_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+        transport_mode="obfuscated",
+    )
+    report["protocol_case"]["client_crypt_required"] = False
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact canonical surface"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
 def test_build_transfer_registration_rejects_source_scenario_without_evidence(
     tmp_path: Path,
 ) -> None:
@@ -2253,7 +2310,10 @@ def test_build_transfer_registration_rejects_wrong_source_publisher_provenance(
         build_transfer_registration(report_path, output_root=output_root)
 
 
-@pytest.mark.parametrize("mutation", ["identity", "login-frame", "offer-frame"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["identity", "server-flags", "login-frame", "offer-frame"],
+)
 def test_build_transfer_registration_rejects_mutated_source_publisher_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2268,6 +2328,8 @@ def test_build_transfer_registration_rejects_mutated_source_publisher_runtime(
     runtime = report["server_source_fixture"]["publisher"]["runtime"]
     if mutation == "identity":
         runtime["publisherIp"] = "198.18.240.3"
+    elif mutation == "server-flags":
+        runtime["publisher"]["serverFlags"] ^= ed2k_wire.SRVCAP_SUPPORTCRYPT
     elif mutation == "login-frame":
         runtime["transcript"][0]["payloadHex"] = "00"
     else:
@@ -2275,6 +2337,98 @@ def test_build_transfer_registration_rejects_mutated_source_publisher_runtime(
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     with pytest.raises(ValueError, match="runtime receipt is not canonical"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+def test_build_transfer_registration_rejects_conflicting_publisher_login(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+        transport_mode="obfuscated",
+    )
+    runtime = report["server_source_fixture"]["publisher"]["runtime"]
+    runtime["transcript"].append(
+        ed2k_wire.Ed2kFrame(
+            ed2k_wire.PROTO_EDONKEY,
+            ed2k_wire.OP_LOGINREQUEST,
+            ed2k_wire.encode_login_request(
+                user_hash=SERVER_SOURCE_PUBLISHER_HASH,
+                tcp_port=SERVER_SOURCE_PUBLISHER_PORT,
+                nickname=SERVER_SOURCE_PUBLISHER_NICK,
+                server_flags=docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS,
+            ),
+        ).evidence("send")
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime receipt is not canonical"):
+        build_transfer_registration(report_path, output_root=output_root)
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    ["request-size", "request-truncated", "reply-trace", "reply-length"],
+)
+def test_build_transfer_registration_rejects_opposite_source_family_in_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    conflict: str,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_source(
+        report,
+        run_directory=report_path.parent,
+        monkeypatch=monkeypatch,
+        transport_mode="obfuscated",
+    )
+    if conflict.startswith("request"):
+        client = "rust"
+        rows = _server_source_records(
+            client=client,
+            process_id=101,
+            run_id="rust-source-run",
+            trace_id=909,
+            transport_mode="plaintext",
+        )
+        conflicting = rows[0]
+        if conflict == "request-size":
+            payload = bytes.fromhex(SERVER_SOURCE_FILE_HASH) + (
+                SERVER_SOURCE_FILE_SIZE + 1
+            ).to_bytes(4, "little")
+            conflicting["body"]["payloadHex"] = payload.hex()
+            conflicting["body"]["payloadLen"] = len(payload)
+        else:
+            conflicting["body"]["payloadHexTruncated"] = True
+    else:
+        client = "mfc"
+        rows = _server_source_records(
+            client=client,
+            process_id=202,
+            run_id="mfc-source-run",
+            trace_id=909,
+            transport_mode="plaintext",
+        )
+        conflicting = rows[1]
+        if conflict == "reply-length":
+            conflicting["body"]["payloadLen"] += 1
+    segment = Path(evidence["captures"][client]["selectedSegments"][0])
+    retained = [
+        json.loads(line)
+        for line in segment.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    next_sequence = len(retained) + 1
+    conflicting["seq"] = next_sequence
+    conflicting["streamSeq"] = next_sequence
+    _write_server_source_segment(segment, [*retained, conflicting])
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match its immutable captures"):
         build_transfer_registration(report_path, output_root=output_root)
 
 

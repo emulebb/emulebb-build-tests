@@ -17,6 +17,7 @@ ENDPOINT = "127.0.0.1:4661"
 PUBLISHER_HOST = "198.18.240.2"
 PUBLISHER_CLIENT_ID = int.from_bytes(ipaddress.IPv4Address(PUBLISHER_HOST).packed, "little")
 PUBLISHER_TCP_PORT = 48_017
+PUBLISHER_USER_HASH = "32547698badcfe1021436587a9cbed0f"
 
 
 def record(
@@ -46,12 +47,13 @@ def request_record(
     transport_mode: str = "plaintext",
 ) -> dict[str, object]:
     payload = ed2k_wire.encode_source_request(bytes.fromhex(FILE_HASH), FILE_SIZE)
+    opcode = evidence.SOURCE_REQUEST_OPCODE_BY_TRANSPORT[transport_mode]
     return record(
         client,
         seq,
         "packet",
         keys={
-            "opcode": evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": opcode,
             "peer": ENDPOINT,
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
             "traceId": trace_id,
@@ -60,8 +62,10 @@ def request_record(
             "direction": "send",
             "flow": "server",
             "obfuscated": transport_mode == "obfuscated",
-            "opcode": evidence.SOURCE_REQUEST_OPCODE,
-            "opcodeName": "OP_GETSOURCES",
+            "opcode": opcode,
+            "opcodeName": (
+                "OP_GETSOURCES_OBFU" if transport_mode == "obfuscated" else "OP_GETSOURCES"
+            ),
             "outcome": "attempted",
             "payloadHex": payload.hex(),
             "payloadHexTruncated": False,
@@ -79,12 +83,13 @@ def send_outcome_record(
     trace_id: int,
     transport_mode: str = "plaintext",
 ) -> dict[str, object]:
+    opcode = evidence.SOURCE_REQUEST_OPCODE_BY_TRANSPORT[transport_mode]
     return record(
         client,
         seq,
         "send_outcome",
         keys={
-            "opcode": evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": opcode,
             "peer": ENDPOINT,
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
         },
@@ -93,7 +98,7 @@ def send_outcome_record(
             "direction": "send",
             "flow": "server",
             "obfuscated": transport_mode == "obfuscated",
-            "opcode": evidence.SOURCE_REQUEST_OPCODE,
+            "opcode": opcode,
             "outcome": "send_succeeded",
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
             "traceId": trace_id,
@@ -107,8 +112,12 @@ def found_sources_payload(
     file_hash: str = FILE_HASH,
     client_id: int = PUBLISHER_CLIENT_ID,
     tcp_port: int = PUBLISHER_TCP_PORT,
+    transport_mode: str = "plaintext",
 ) -> bytes:
-    return bytes.fromhex(file_hash) + b"\x01" + struct.pack("<IH", client_id, tcp_port)
+    source = struct.pack("<IH", client_id, tcp_port)
+    if transport_mode == "obfuscated":
+        source += b"\x81" + bytes.fromhex(PUBLISHER_USER_HASH)
+    return bytes.fromhex(file_hash) + b"\x01" + source
 
 
 def reply_record(
@@ -119,13 +128,18 @@ def reply_record(
     payload: bytes | None = None,
     transport_mode: str = "plaintext",
 ) -> dict[str, object]:
-    wire_payload = found_sources_payload() if payload is None else payload
+    wire_payload = (
+        found_sources_payload(transport_mode=transport_mode)
+        if payload is None
+        else payload
+    )
+    opcode = evidence.SOURCE_REPLY_OPCODE_BY_TRANSPORT[transport_mode]
     return record(
         client,
         seq,
         "packet",
         keys={
-            "opcode": evidence.SOURCE_REPLY_OPCODE,
+            "opcode": opcode,
             "peer": ENDPOINT,
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
             "traceId": trace_id,
@@ -134,8 +148,10 @@ def reply_record(
             "direction": "recv",
             "flow": "server",
             "obfuscated": transport_mode == "obfuscated",
-            "opcode": evidence.SOURCE_REPLY_OPCODE,
-            "opcodeName": "OP_FOUNDSOURCES",
+            "opcode": opcode,
+            "opcodeName": (
+                "OP_FOUNDSOURCES_OBFU" if transport_mode == "obfuscated" else "OP_FOUNDSOURCES"
+            ),
             "outcome": "accepted",
             "payloadHex": wire_payload.hex(),
             "payloadHexTruncated": False,
@@ -153,13 +169,14 @@ def application_record(
     trace_id: int,
     transport_mode: str = "plaintext",
 ) -> dict[str, object]:
+    opcode = evidence.SOURCE_REPLY_OPCODE_BY_TRANSPORT[transport_mode]
     return record(
         client,
         seq,
         "source_result_applied",
         keys={
             "fileHash": FILE_HASH,
-            "opcode": evidence.SOURCE_REPLY_OPCODE,
+            "opcode": opcode,
             "peer": ENDPOINT,
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
             "traceId": trace_id,
@@ -169,8 +186,10 @@ def application_record(
             "flow": "server",
             "milestone": "result_applied",
             "obfuscated": transport_mode == "obfuscated",
-            "opcode": evidence.SOURCE_REPLY_OPCODE,
-            "opcodeName": "OP_FOUNDSOURCES",
+            "opcode": opcode,
+            "opcodeName": (
+                "OP_FOUNDSOURCES_OBFU" if transport_mode == "obfuscated" else "OP_FOUNDSOURCES"
+            ),
             "outcome": "applied",
             "phase": "source_search",
             "protocolMarker": evidence.SOURCE_PROTOCOL_MARKER,
@@ -218,6 +237,11 @@ def build(
     rows: dict[str, dict[str, object]] | None = None,
     transport_mode: str = "plaintext",
 ) -> dict[str, object]:
+    record_transport_mode = (
+        transport_mode
+        if transport_mode in evidence.SOURCE_COVERAGE_BY_TRANSPORT
+        else "plaintext"
+    )
     return evidence.build_server_source_diagnostic_evidence(
         expected_file_hash=FILE_HASH,
         expected_file_name=FILE_NAME,
@@ -226,12 +250,13 @@ def build(
         publisher_client_id=PUBLISHER_CLIENT_ID,
         publisher_host=PUBLISHER_HOST,
         publisher_tcp_port=PUBLISHER_TCP_PORT,
+        publisher_user_hash=PUBLISHER_USER_HASH,
         expected_transport_mode=transport_mode,
         rust_records=(
-            client_records("rust", 101, transport_mode) if rust is None else rust
+            client_records("rust", 101, record_transport_mode) if rust is None else rust
         ),
         mfc_records=(
-            client_records("mfc", 202, transport_mode) if mfc is None else mfc
+            client_records("mfc", 202, record_transport_mode) if mfc is None else mfc
         ),
         transfer_rows=(
             {"rust": transfer_row("rust"), "mfc": transfer_row("mfc")}
@@ -251,6 +276,7 @@ def test_exact_bilateral_plaintext_source_lookup_is_claimable() -> None:
     assert report["clients"]["rust"]["wire"]["sendOutcome"]["sequence"] == 11
     assert report["clients"]["rust"]["wire"]["reply"]["causalPredecessor"] == "send_outcome"
     assert report["clients"]["mfc"]["wire"]["sendOutcome"] == {
+        "conflictingOutcomeCount": 0,
         "deliveryKnown": None,
         "evidenceModel": "correlated-reply-after-attempt",
         "obfuscated": None,
@@ -315,6 +341,14 @@ def test_exact_bilateral_obfuscated_source_lookup_is_claimable() -> None:
     assert report["transportMode"] == "obfuscated"
     assert report["clients"]["rust"]["wire"]["request"]["obfuscated"] is True
     assert report["clients"]["mfc"]["wire"]["reply"]["transportMode"] == "obfuscated"
+    assert report["clients"]["mfc"]["wire"]["reply"]["decoded"]["sources"][0] == {
+        "kind": "high-id",
+        "client_id": PUBLISHER_CLIENT_ID,
+        "host": PUBLISHER_HOST,
+        "port": PUBLISHER_TCP_PORT,
+        "crypt_options": 0x81,
+        "user_hash": PUBLISHER_USER_HASH.upper(),
+    }
     assert report["coverageClaims"]["eligibleCoverageIds"] == [
         "server.source.tcp-obfuscated",
         "server.reply.sources",
@@ -329,6 +363,129 @@ def test_selected_transport_must_match_every_causal_record() -> None:
 
     assert report["ok"] is False
     assert "rust.request" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_plaintext_request_opcode() -> None:
+    records = client_records("rust", 101, "obfuscated")
+    records[0]["keys"]["opcode"] = ed2k_wire.OP_GETSOURCES
+    records[0]["body"]["opcode"] = ed2k_wire.OP_GETSOURCES
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["request"]["packetCount"] == 0
+    assert "rust.request" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_plaintext_reply_opcode() -> None:
+    records = client_records("mfc", 202, "obfuscated")
+    records[1]["keys"]["opcode"] = ed2k_wire.OP_FOUNDSOURCES
+    records[1]["body"]["opcode"] = ed2k_wire.OP_FOUNDSOURCES
+
+    report = build(mfc=records, transport_mode="obfuscated")
+
+    assert report["clients"]["mfc"]["wire"]["reply"]["packetCount"] == 0
+    assert "mfc.reply" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_coexisting_plaintext_request() -> None:
+    records = client_records("rust", 101, "obfuscated")
+    records.insert(0, request_record("rust", 9, 303, "plaintext"))
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["request"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "rust.request" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_same_hash_plaintext_request_with_wrong_size() -> None:
+    records = client_records("rust", 101, "obfuscated")
+    conflicting = request_record("rust", 9, 303, "plaintext")
+    payload = bytes.fromhex(FILE_HASH) + (FILE_SIZE + 1).to_bytes(4, "little")
+    conflicting["body"]["payloadHex"] = payload.hex()
+    conflicting["body"]["payloadLen"] = len(payload)
+    records.insert(0, conflicting)
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["request"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "rust.request" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_truncated_plaintext_request() -> None:
+    records = client_records("rust", 101, "obfuscated")
+    conflicting = request_record("rust", 9, 303, "plaintext")
+    conflicting["body"]["payloadHexTruncated"] = True
+    records.insert(0, conflicting)
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["request"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "rust.request" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_coexisting_plaintext_send_outcome() -> None:
+    records = client_records("rust", 101, "obfuscated")
+    records.insert(2, send_outcome_record("rust", 11, 101, "plaintext"))
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["sendOutcome"][
+        "conflictingOutcomeCount"
+    ] == 1
+    assert "rust.sendOutcome" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_coexisting_plaintext_reply() -> None:
+    records = client_records("mfc", 202, "obfuscated")
+    records.insert(2, reply_record("mfc", 12, 202, transport_mode="plaintext"))
+
+    report = build(mfc=records, transport_mode="obfuscated")
+
+    assert report["clients"]["mfc"]["wire"]["reply"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "mfc.reply" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_same_hash_plaintext_reply_on_other_trace() -> None:
+    records = client_records("mfc", 202, "obfuscated")
+    records.insert(2, reply_record("mfc", 12, 303, transport_mode="plaintext"))
+
+    report = build(mfc=records, transport_mode="obfuscated")
+
+    assert report["clients"]["mfc"]["wire"]["reply"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "mfc.reply" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+def test_obfuscated_transport_rejects_length_inconsistent_plaintext_reply() -> None:
+    records = client_records("mfc", 202, "obfuscated")
+    conflicting = reply_record("mfc", 12, 303, transport_mode="plaintext")
+    conflicting["body"]["payloadLen"] += 1
+    records.insert(2, conflicting)
+
+    report = build(mfc=records, transport_mode="obfuscated")
+
+    assert report["clients"]["mfc"]["wire"]["reply"][
+        "conflictingPacketCount"
+    ] == 1
+    assert "mfc.reply" in report["failures"]
     assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
@@ -477,6 +634,29 @@ def test_wrong_reply_hash_or_source_fails_closed(payload: bytes) -> None:
     assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
+@pytest.mark.parametrize("mutation", ["crypt-options", "user-hash"])
+def test_obfuscated_reply_requires_exact_crypt_identity(mutation: str) -> None:
+    payload = bytearray(found_sources_payload(transport_mode="obfuscated"))
+    if mutation == "crypt-options":
+        payload[23] = 0x80
+    else:
+        payload[24:40] = bytes.fromhex("ff" * 16)
+    records = client_records("rust", 101, "obfuscated")
+    records[2] = reply_record(
+        "rust",
+        12,
+        101,
+        payload=bytes(payload),
+        transport_mode="obfuscated",
+    )
+
+    report = build(rust=records, transport_mode="obfuscated")
+
+    assert report["clients"]["rust"]["wire"]["reply"]["ok"] is False
+    assert "rust.reply" in report["failures"]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
 def test_duplicate_reply_fails_closed() -> None:
     records = client_records("mfc", 202)
     duplicate = copy.deepcopy(records[1])
@@ -606,6 +786,7 @@ def test_invalid_plain_source_fixture_is_rejected() -> None:
             publisher_client_id=PUBLISHER_CLIENT_ID,
             publisher_host=PUBLISHER_HOST,
             publisher_tcp_port=PUBLISHER_TCP_PORT,
+            publisher_user_hash=PUBLISHER_USER_HASH,
             expected_transport_mode="plaintext",
             rust_records=[],
             mfc_records=[],
@@ -635,6 +816,7 @@ def test_publisher_identity_must_be_one_exact_high_id(
             publisher_client_id=publisher_client_id,
             publisher_host=publisher_host,
             publisher_tcp_port=PUBLISHER_TCP_PORT,
+            publisher_user_hash=PUBLISHER_USER_HASH,
             expected_transport_mode="plaintext",
             rust_records=[],
             mfc_records=[],

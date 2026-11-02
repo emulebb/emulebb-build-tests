@@ -34,7 +34,8 @@ DOCKER_PLATFORM = "linux/amd64"
 BENCHMARK_SUBNET = "198.18.240.0/28"
 PUBLISHER_IP = "198.18.240.2"
 PUBLISHER_HIGH_ID = int.from_bytes(ipaddress.IPv4Address(PUBLISHER_IP).packed, "little")
-SERVER_FLAGS = 0x0119
+PLAIN_SERVER_FLAGS = 0x0119
+OBFUSCATED_SOURCE_SERVER_FLAGS = PLAIN_SERVER_FLAGS | ed2k_wire.SRVCAP_SUPPORTCRYPT
 DEFAULT_NICKNAME = "emulebb-harness-source-publisher"
 RECEIPT_SCHEMA = "emulebb.docker-ed2k-source-publisher/1"
 
@@ -120,6 +121,12 @@ def _parse_hash(value: bytes | str, field_name: str) -> bytes:
 def _validate_port(value: int, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 0xFFFF:
         raise ValueError(f"{field_name} must be an integer in 1..65535")
+    return value
+
+
+def _validate_server_flags(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0xFFFF_FFFF:
+        raise ValueError("server_flags must be an integer in 0..2^32-1")
     return value
 
 
@@ -243,6 +250,7 @@ def _validate_receipt(
     server_host: str,
     server_port: int,
     publisher_port: int,
+    server_flags: int,
     user_hash: bytes,
     nickname: str,
     file_hash: bytes,
@@ -282,7 +290,7 @@ def _validate_receipt(
             "nickname": nickname,
             "tcpPort": publisher_port,
             "userHash": user_hash.hex().upper(),
-            "serverFlags": SERVER_FLAGS,
+            "serverFlags": server_flags,
         },
         "file": {
             "hash": file_hash.hex().upper(),
@@ -302,6 +310,7 @@ def start_docker_ed2k_source_publisher(
     server_host: str,
     server_port: int,
     publisher_port: int,
+    server_flags: int,
     user_hash: bytes | str,
     file_hash: bytes | str,
     file_name: str,
@@ -322,6 +331,7 @@ def start_docker_ed2k_source_publisher(
         raise ValueError("server_host must be non-empty")
     server_port = _validate_port(server_port, "server_port")
     publisher_port = _validate_port(publisher_port, "publisher_port")
+    server_flags = _validate_server_flags(server_flags)
     user_hash_bytes = _parse_hash(user_hash, "user_hash")
     file_hash_bytes = _parse_hash(file_hash, "file_hash")
     if not nickname:
@@ -420,6 +430,8 @@ def start_docker_ed2k_source_publisher(
             str(server_port),
             "--publisher-port",
             str(publisher_port),
+            "--server-flags",
+            str(server_flags),
             "--user-hash",
             user_hash_bytes.hex().upper(),
             "--nickname",
@@ -454,6 +466,7 @@ def start_docker_ed2k_source_publisher(
             server_host=server_host,
             server_port=server_port,
             publisher_port=publisher_port,
+            server_flags=server_flags,
             user_hash=user_hash_bytes,
             nickname=nickname,
             file_hash=file_hash_bytes,
@@ -623,6 +636,7 @@ class ChildConfiguration:
     server_host: str
     server_port: int
     publisher_port: int
+    server_flags: int
     user_hash: bytes
     nickname: str
     file_hash: bytes
@@ -701,7 +715,7 @@ def run_child(
             user_hash=config.user_hash,
             tcp_port=config.publisher_port,
             nickname=config.nickname,
-            server_flags=SERVER_FLAGS,
+            server_flags=config.server_flags,
         )
         if (
             login.get("assigned_id") != PUBLISHER_HIGH_ID
@@ -727,7 +741,7 @@ def run_child(
                 "nickname": config.nickname,
                 "tcpPort": config.publisher_port,
                 "userHash": config.user_hash.hex().upper(),
-                "serverFlags": SERVER_FLAGS,
+                "serverFlags": config.server_flags,
             },
             "file": {
                 "hash": config.file_hash.hex().upper(),
@@ -754,6 +768,7 @@ def _child_parser(subparsers: Any) -> None:
     child.add_argument("--server-host", required=True)
     child.add_argument("--server-port", required=True, type=int)
     child.add_argument("--publisher-port", required=True, type=int)
+    child.add_argument("--server-flags", required=True, type=int)
     child.add_argument("--user-hash", required=True)
     child.add_argument("--nickname", required=True)
     child.add_argument("--file-hash", required=True)
@@ -775,6 +790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         server_host=args.server_host,
         server_port=_validate_port(args.server_port, "server_port"),
         publisher_port=_validate_port(args.publisher_port, "publisher_port"),
+        server_flags=_validate_server_flags(args.server_flags),
         user_hash=_parse_hash(args.user_hash, "user_hash"),
         nickname=args.nickname,
         file_hash=_parse_hash(args.file_hash, "file_hash"),

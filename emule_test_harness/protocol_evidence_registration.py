@@ -13,6 +13,7 @@ from typing import Any
 
 from emule_test_harness import diag_event_runs
 from emule_test_harness import docker_ed2k_source_publisher
+from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
@@ -780,13 +781,24 @@ def _derived_server_source_coverage_ids(
         "plain-server-plain-clients": "plaintext",
         "obfuscated-required": "obfuscated",
     }
-    expected_transport_mode = transport_by_case.get(protocol_case.get("name"))
+    case_name = protocol_case.get("name")
+    expected_transport_mode = transport_by_case.get(case_name)
     if expected_transport_mode is None:
         raise ValueError(
             "server source scenario requires the canonical plaintext or obfuscated-required case"
         )
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP[case_name]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError("server source protocol case is not the exact canonical surface")
     if source.get("transportMode") != expected_transport_mode:
         raise ValueError("server source diagnostics do not match the selected server transport")
+    expected_publisher_server_flags = (
+        docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
+        if expected_transport_mode == "obfuscated"
+        else docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS
+    )
     expected_ids = [
         server_source_diagnostic_evidence.SOURCE_COVERAGE_BY_TRANSPORT[
             expected_transport_mode
@@ -866,30 +878,38 @@ def _derived_server_source_coverage_ids(
         user_hash=bytes.fromhex(SERVER_SOURCE_PUBLISHER_HASH),
         tcp_port=publisher_port,
         nickname=SERVER_SOURCE_PUBLISHER_NICK,
-        server_flags=docker_ed2k_source_publisher.SERVER_FLAGS,
+        server_flags=expected_publisher_server_flags,
     ).hex()
     offer_payload = ed2k_wire.encode_offer_file(
         file_hash=bytes.fromhex(SERVER_SOURCE_FILE_HASH),
         name=SERVER_SOURCE_FILE_NAME,
         size=SERVER_SOURCE_FILE_SIZE,
     ).hex()
-    exact_login_frames = [
+    login_frames = [
         row
         for row in runtime_transcript
         if isinstance(row, dict)
         and row.get("direction") == "send"
         and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
         and row.get("opcode") == ed2k_wire.OP_LOGINREQUEST
-        and row.get("payloadHex") == login_payload
     ]
-    exact_offer_frames = [
+    exact_login_frames = [
+        row
+        for row in login_frames
+        if row.get("payloadHex") == login_payload
+    ]
+    offer_frames = [
         row
         for row in runtime_transcript
         if isinstance(row, dict)
         and row.get("direction") == "send"
         and row.get("protocolMarker") == ed2k_wire.PROTO_EDONKEY
         and row.get("opcode") == ed2k_wire.OP_OFFERFILES
-        and row.get("payloadHex") == offer_payload
+    ]
+    exact_offer_frames = [
+        row
+        for row in offer_frames
+        if row.get("payloadHex") == offer_payload
     ]
     runtime_network = _object(report.get("network"), "network")
     runtime_ports = _object(runtime_network.get("ports"), "network.ports")
@@ -910,7 +930,7 @@ def _derived_server_source_coverage_ids(
             "nickname": SERVER_SOURCE_PUBLISHER_NICK,
             "tcpPort": publisher_port,
             "userHash": SERVER_SOURCE_PUBLISHER_HASH.upper(),
-            "serverFlags": docker_ed2k_source_publisher.SERVER_FLAGS,
+            "serverFlags": expected_publisher_server_flags,
         }
         or runtime_file
         != {
@@ -922,7 +942,9 @@ def _derived_server_source_coverage_ids(
         or not isinstance(runtime.get("identityProbeAnswers"), int)
         or isinstance(runtime.get("identityProbeAnswers"), bool)
         or runtime.get("identityProbeAnswers") < 0
+        or len(login_frames) != 1
         or len(exact_login_frames) != 1
+        or len(offer_frames) != 1
         or len(exact_offer_frames) != 1
     ):
         raise ValueError("server source publisher runtime receipt is not canonical")
@@ -944,8 +966,12 @@ def _derived_server_source_coverage_ids(
         "client_id": publisher_id,
         "host": publisher_host,
         "port": publisher_port,
-        "crypt_options": 0,
-        "user_hash": None,
+        "crypt_options": 0x81 if expected_transport_mode == "obfuscated" else 0,
+        "user_hash": (
+            SERVER_SOURCE_PUBLISHER_HASH.upper()
+            if expected_transport_mode == "obfuscated"
+            else None
+        ),
     }
     publication_source_reply = _object(
         publication.get("source_reply"),
@@ -1011,7 +1037,7 @@ def _derived_server_source_coverage_ids(
         f"{SERVER_SOURCE_FILE_HASH}|/"
     )
     if stimulus != {
-        "mode": "plain-ed2k-link-without-source-hints",
+        "mode": "source-free-ed2k-link",
         "link": expected_link,
         "hash": SERVER_SOURCE_FILE_HASH,
         "name": SERVER_SOURCE_FILE_NAME,
@@ -1056,6 +1082,7 @@ def _derived_server_source_coverage_ids(
         publisher_client_id=publisher_id,
         publisher_host=publisher_host,
         publisher_tcp_port=publisher_port,
+        publisher_user_hash=SERVER_SOURCE_PUBLISHER_HASH,
         expected_transport_mode=expected_transport_mode,
         rust_records=records["rust"],
         mfc_records=records["mfc"],

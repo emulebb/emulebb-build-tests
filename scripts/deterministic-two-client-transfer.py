@@ -493,6 +493,7 @@ def collect_server_source_diagnostics(
     publisher_client_id: int,
     publisher_host: str,
     publisher_tcp_port: int,
+    publisher_user_hash: str,
     expected_transport_mode: str,
     transfer_rows: dict[str, dict[str, object]],
     rust_diagnostics_dir: Path,
@@ -522,6 +523,7 @@ def collect_server_source_diagnostics(
         publisher_client_id=publisher_client_id,
         publisher_host=publisher_host,
         publisher_tcp_port=publisher_tcp_port,
+        publisher_user_hash=publisher_user_hash,
         expected_transport_mode=expected_transport_mode,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
@@ -2319,6 +2321,7 @@ def main(argv: list[str] | None = None) -> int:
         docker_ed2k_source_publisher.DockerEd2kSourcePublisherHandle | None
     ) = None
     source_publisher_login: dict[str, object] | None = None
+    source_server_transport_mode: str | None = None
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     server_login_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
@@ -2511,11 +2514,25 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.transfer_scenario == SERVER_TCP_SOURCE:
             current_phase = "publish_server_source_fixture"
+            source_transport_plan = ed2k_protocol_cases.required_server_transport_plan(
+                protocol_case
+            )
+            if len(source_transport_plan) != 1:
+                raise RuntimeError(
+                    "Server-source proof requires one deterministic server transport."
+                )
+            source_server_transport_mode = source_transport_plan[0]
+            source_publisher_server_flags = (
+                docker_ed2k_source_publisher.OBFUSCATED_SOURCE_SERVER_FLAGS
+                if source_server_transport_mode == "obfuscated"
+                else docker_ed2k_source_publisher.PLAIN_SERVER_FLAGS
+            )
             server_source_publisher = (
                 docker_ed2k_source_publisher.start_docker_ed2k_source_publisher(
                     server_host=server_address,
                     server_port=ports["ed2k_tcp"],
                     publisher_port=ports["source_publisher_tcp"],
+                    server_flags=source_publisher_server_flags,
                     user_hash=SERVER_SOURCE_PUBLISHER_HASH,
                     file_hash=SERVER_SOURCE_FILE_HASH,
                     file_name=SERVER_SOURCE_FILE_NAME,
@@ -3247,6 +3264,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if source_publisher_login is None:
                 raise RuntimeError("Server-source publisher login was not initialized.")
+            if source_server_transport_mode is None:
+                raise RuntimeError("Server-source transport mode was not initialized.")
             publisher_client_id = source_publisher_login.get("assigned_id")
             if not isinstance(publisher_client_id, int) or isinstance(
                 publisher_client_id, bool
@@ -3260,7 +3279,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{SERVER_SOURCE_FILE_SIZE}|{SERVER_SOURCE_FILE_HASH.hex()}|/"
             )
             report["checks"]["client_server_source_stimulus"] = {
-                "mode": "plain-ed2k-link-without-source-hints",
+                "mode": "source-free-ed2k-link",
                 "link": source_link,
                 "hash": SERVER_SOURCE_FILE_HASH.hex(),
                 "name": SERVER_SOURCE_FILE_NAME,
@@ -3307,9 +3326,8 @@ def main(argv: list[str] | None = None) -> int:
                 publisher_client_id=publisher_client_id,
                 publisher_host=docker_ed2k_source_publisher.PUBLISHER_IP,
                 publisher_tcp_port=ports["source_publisher_tcp"],
-                expected_transport_mode=ed2k_protocol_cases.required_server_transport_plan(
-                    protocol_case
-                )[0],
+                publisher_user_hash=SERVER_SOURCE_PUBLISHER_HASH.hex(),
+                expected_transport_mode=source_server_transport_mode,
                 transfer_rows=source_transfer_rows,
                 rust_diagnostics_dir=rust_diagnostics_dir,
                 rust_process_id=int(client1_process.pid),
