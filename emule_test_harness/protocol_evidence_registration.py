@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from emule_test_harness import diag_event_runs
+from emule_test_harness import direct_callback_diagnostic_evidence
 from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
@@ -35,6 +36,7 @@ ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 COMMAND_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_CALLBACK_SCENARIO = "server-callback-reply"
+DIRECT_CALLBACK_SCENARIO = "direct-callback"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
 SERVER_ADVANCED_SEARCH_SCENARIO = "server-advanced-search"
 SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
@@ -2191,6 +2193,74 @@ def _derived_server_udp_metadata_coverage_ids(
     return expected_ids
 
 
+def _accepted_lowid_targets(
+    login: dict[str, Any],
+    *,
+    udp_ports: dict[str, Any] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Derives exact client identities from the accepted bilateral login."""
+
+    login_clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
+    expected_clients = _object(
+        login.get("expectedClients"),
+        "diagnostics.serverLogin.expectedClients",
+    )
+    targets: dict[str, dict[str, object]] = {}
+    for client in ("rust", "mfc"):
+        login_row = _object(
+            login_clients.get(client),
+            f"diagnostics.serverLogin.clients.{client}",
+        )
+        expected_client = _object(
+            expected_clients.get(client),
+            f"diagnostics.serverLogin.expectedClients.{client}",
+        )
+        decoded_login = _object(
+            login_row.get("decodedLogin"),
+            f"diagnostics.serverLogin.clients.{client}.decodedLogin",
+        )
+        decoded_id = _object(
+            login_row.get("decodedIdChange"),
+            f"diagnostics.serverLogin.clients.{client}.decodedIdChange",
+        )
+        target_id = _positive_int(
+            decoded_id.get("assigned_id"),
+            f"{client} callback target ID",
+        )
+        target_port = _positive_int(
+            expected_client.get("tcpPort"),
+            f"{client} callback target TCP port",
+        )
+        target_hash = str(decoded_login.get("user_hash") or "").upper()
+        if (
+            target_id >= ed2k_wire.LOW_ID_CEILING
+            or target_port > 0xFFFF
+            or decoded_id.get("id_kind") != "low-id"
+            or decoded_login.get("tcp_port") != target_port
+            or len(target_hash) != 32
+            or any(character not in "0123456789ABCDEF" for character in target_hash)
+        ):
+            raise ValueError(
+                f"{client} callback target is not an exact accepted LowID login"
+            )
+        target: dict[str, object] = {
+            "clientId": target_id,
+            "idKind": "low-id",
+            "tcpPort": target_port,
+            "userHash": target_hash,
+        }
+        if udp_ports is not None:
+            udp_port = _positive_int(
+                udp_ports.get(client),
+                f"{client} callback target UDP port",
+            )
+            if udp_port > 0xFFFF:
+                raise ValueError(f"{client} callback target UDP port is invalid")
+            target["udpPort"] = udp_port
+        targets[client] = target
+    return targets
+
+
 def _derived_server_callback_coverage_ids(
     report: dict[str, Any],
     diagnostics: dict[str, Any],
@@ -2235,61 +2305,13 @@ def _derived_server_callback_coverage_ids(
         raise ValueError(
             "server callback login evidence does not match its retained snapshot"
         )
-    login_clients = _object(login.get("clients"), "diagnostics.serverLogin.clients")
-    expected_clients = _object(
-        login.get("expectedClients"),
-        "diagnostics.serverLogin.expectedClients",
-    )
     targets = _object(
         checks.get("client_server_callback_targets"),
         "checks.client_server_callback_targets",
     )
     if set(targets) != {"rust", "mfc"}:
         raise ValueError("server callback targets must contain exactly rust and mfc")
-    expected_targets: dict[str, dict[str, object]] = {}
-    for client in ("rust", "mfc"):
-        login_row = _object(
-            login_clients.get(client),
-            f"diagnostics.serverLogin.clients.{client}",
-        )
-        expected_client = _object(
-            expected_clients.get(client),
-            f"diagnostics.serverLogin.expectedClients.{client}",
-        )
-        decoded_login = _object(
-            login_row.get("decodedLogin"),
-            f"diagnostics.serverLogin.clients.{client}.decodedLogin",
-        )
-        decoded_id = _object(
-            login_row.get("decodedIdChange"),
-            f"diagnostics.serverLogin.clients.{client}.decodedIdChange",
-        )
-        target_id = _positive_int(
-            decoded_id.get("assigned_id"),
-            f"{client} callback target ID",
-        )
-        target_port = _positive_int(
-            expected_client.get("tcpPort"),
-            f"{client} callback target TCP port",
-        )
-        target_hash = str(decoded_login.get("user_hash") or "").upper()
-        if (
-            target_id >= ed2k_wire.LOW_ID_CEILING
-            or target_port > 0xFFFF
-            or decoded_id.get("id_kind") != "low-id"
-            or decoded_login.get("tcp_port") != target_port
-            or len(target_hash) != 32
-            or any(character not in "0123456789ABCDEF" for character in target_hash)
-        ):
-            raise ValueError(
-                f"{client} callback target is not an exact accepted LowID login"
-            )
-        expected_targets[client] = {
-            "clientId": target_id,
-            "idKind": "low-id",
-            "tcpPort": target_port,
-            "userHash": target_hash,
-        }
+    expected_targets = _accepted_lowid_targets(login)
     if targets != expected_targets:
         raise ValueError(
             "server callback targets do not derive exactly from accepted logins"
@@ -2628,6 +2650,175 @@ def _derived_server_callback_coverage_ids(
     ]
 
 
+def _derived_direct_callback_coverage_ids(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    run_directory: Path,
+) -> list[str]:
+    callback_value = diagnostics.get("directCallback")
+    scenario = report.get("transfer_scenario")
+    if callback_value is None:
+        if scenario == DIRECT_CALLBACK_SCENARIO:
+            raise ValueError("direct callback scenario has no diagnostic evidence")
+        return []
+    if scenario != DIRECT_CALLBACK_SCENARIO:
+        raise ValueError("direct callback evidence requires its dedicated scenario")
+
+    callback = _object(callback_value, "diagnostics.directCallback")
+    if callback.get("schema") != direct_callback_diagnostic_evidence.SCHEMA:
+        raise ValueError("direct callback diagnostics use an unexpected schema")
+    try:
+        direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence(
+            callback
+        )
+    except RuntimeError as exc:
+        raise ValueError("direct callback diagnostics are not complete") from exc
+
+    protocol_case = _object(report.get("protocol_case"), "protocol_case")
+    canonical_case = ed2k_protocol_cases.protocol_surface(
+        ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"]
+    )
+    if protocol_case != canonical_case:
+        raise ValueError(
+            "direct callback scenario requires the canonical plaintext case"
+        )
+
+    checks = _object(report.get("checks"), "checks")
+    if checks.get("client_direct_callback_diagnostics") != callback:
+        raise ValueError(
+            "direct callback diagnostics do not match the retained snapshot"
+        )
+    login = _object(diagnostics.get("serverLogin"), "diagnostics.serverLogin")
+    if checks.get("client_server_login_diagnostics") != login:
+        raise ValueError(
+            "direct callback login evidence does not match its retained snapshot"
+        )
+
+    network = _object(report.get("network"), "network")
+    ports = _object(network.get("ports"), "network.ports")
+    try:
+        requester_host = str(
+            ipaddress.IPv4Address(network.get("p2p_bind_interface_address"))
+        )
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("direct callback bind address is not canonical IPv4") from exc
+    requester_port = _positive_int(
+        ports.get("callback_requester_tcp"),
+        "network.ports.callback_requester_tcp",
+    )
+    udp_ports = {
+        "rust": _positive_int(ports.get("client1_udp"), "network.ports.client1_udp"),
+        "mfc": _positive_int(ports.get("client2_udp"), "network.ports.client2_udp"),
+    }
+    if requester_port > 0xFFFF or any(port > 0xFFFF for port in udp_ports.values()):
+        raise ValueError("direct callback topology contains an invalid port")
+    isolated_seed = _object(
+        network.get("isolatedKadSeed"),
+        "network.isolatedKadSeed",
+    )
+    if isolated_seed != {
+        "endpoint": f"{requester_host}:{requester_port}",
+        "tcpPort": requester_port,
+        "publicDiscovery": False,
+    }:
+        raise ValueError("direct callback Kad seed is not isolated and exact")
+
+    kad_runtimes = _object(
+        checks.get("client_direct_callback_kad_running"),
+        "checks.client_direct_callback_kad_running",
+    )
+    if set(kad_runtimes) != {"rust", "mfc"}:
+        raise ValueError("direct callback Kad runtimes must contain rust and mfc")
+    for client in ("rust", "mfc"):
+        runtime = _object(
+            kad_runtimes.get(client),
+            f"checks.client_direct_callback_kad_running.{client}",
+        )
+        status = _object(
+            runtime.get("status"),
+            f"checks.client_direct_callback_kad_running.{client}.status",
+        )
+        payload = _object(
+            status.get("json"),
+            f"checks.client_direct_callback_kad_running.{client}.status.json",
+        )
+        observations = runtime.get("observations")
+        if (
+            status.get("status") != 200
+            or payload.get("running") is not True
+            or not isinstance(observations, list)
+            or not observations
+            or not isinstance(observations[-1], dict)
+            or observations[-1].get("running") is not True
+        ):
+            raise ValueError(f"{client} direct callback Kad runtime is not running")
+
+    targets = _object(
+        checks.get("client_direct_callback_targets"),
+        "checks.client_direct_callback_targets",
+    )
+    if set(targets) != {"rust", "mfc"}:
+        raise ValueError("direct callback targets must contain exactly rust and mfc")
+    expected_targets = _accepted_lowid_targets(login, udp_ports=udp_ports)
+    if targets != expected_targets:
+        raise ValueError(
+            "direct callback targets do not derive exactly from accepted logins"
+        )
+
+    requester_results = _object(
+        checks.get("client_direct_callback_requests"),
+        "checks.client_direct_callback_requests",
+    )
+    if set(requester_results) != {"rust", "mfc"}:
+        raise ValueError("direct callback requests must contain exactly rust and mfc")
+
+    captures = _object(
+        callback.get("captures"),
+        "diagnostics.directCallback.captures",
+    )
+    final_captures = _object(diagnostics.get("captures"), "diagnostics.captures")
+    if set(captures) != {"rust", "mfc"} or set(final_captures) != {"rust", "mfc"}:
+        raise ValueError("direct callback captures must contain exactly rust and mfc")
+    records = {
+        client: _load_final_capture_subset(
+            captures.get(client),
+            final_captures.get(client),
+            evidence_name="direct callback",
+            client=client,
+            run_directory=run_directory,
+        )
+        for client in ("rust", "mfc")
+    }
+    mfc_shutdown = _object(
+        checks.get("mfc_diagnostics_shutdown"),
+        "checks.mfc_diagnostics_shutdown",
+    )
+    if mfc_shutdown.get("ok") is not True or mfc_shutdown.get("processId") != captures[
+        "mfc"
+    ].get("processId"):
+        raise ValueError("direct callback capture is not joined to the stopped oracle")
+
+    rebuilt = direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+        requester_host=requester_host,
+        requester_tcp_port=requester_port,
+        requester_user_hash=bytes.fromhex(SERVER_CALLBACK_REQUESTER_HASH),
+        target_host=requester_host,
+        targets=expected_targets,
+        requester_results=requester_results,
+        rust_records=records["rust"],
+        mfc_records=records["mfc"],
+    )
+    retained_without_capture = {
+        key: value for key, value in callback.items() if key != "captures"
+    }
+    if rebuilt != retained_without_capture:
+        raise ValueError(
+            "direct callback receipt does not match its immutable captures"
+        )
+    return [direct_callback_diagnostic_evidence.COVERAGE_ID]
+
+
 def _derived_server_login_coverage_ids(
     report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> list[str]:
@@ -2636,6 +2827,7 @@ def _derived_server_login_coverage_ids(
         if report.get("transfer_scenario") in {
             SERVER_LOGIN_SCENARIO,
             SERVER_CALLBACK_SCENARIO,
+            DIRECT_CALLBACK_SCENARIO,
         }:
             raise ValueError(
                 "server login scenario has no bilateral diagnostic evidence"
@@ -2644,6 +2836,7 @@ def _derived_server_login_coverage_ids(
     if report.get("transfer_scenario") not in {
         SERVER_LOGIN_SCENARIO,
         SERVER_CALLBACK_SCENARIO,
+        DIRECT_CALLBACK_SCENARIO,
     }:
         raise ValueError(
             "server login evidence requires a server login or callback scenario"
@@ -3080,6 +3273,24 @@ def _derived_server_login_coverage_ids(
 
 
 def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
+    if coverage_id == direct_callback_diagnostic_evidence.COVERAGE_ID:
+        callback = _object(
+            diagnostics.get("directCallback"),
+            "diagnostics.directCallback",
+        )
+        clients = _object(
+            callback.get("clients"),
+            "diagnostics.directCallback.clients",
+        )
+        rust = _object(clients.get("rust"), "diagnostics.directCallback.clients.rust")
+        mfc = _object(clients.get("mfc"), "diagnostics.directCallback.clients.mfc")
+        return (
+            "Rust and MFC each started from an accepted LowID assignment, applied the "
+            "same exact direct UDP callback request at diagnostic sequences "
+            f"{rust['wireApplication']['sequence']}/"
+            f"{mfc['wireApplication']['sequence']}, then connected to the isolated "
+            "HighID requester with a HELLO matching the assigned identity."
+        )
     if coverage_id == LOWID_SERVER_CALLBACK_COVERAGE_ID:
         callback = _object(
             diagnostics.get("serverCallback"),
@@ -3462,6 +3673,11 @@ def build_transfer_registration(
                 run_directory=run_directory,
             ),
             *_derived_server_callback_coverage_ids(
+                report,
+                diagnostics,
+                run_directory=run_directory,
+            ),
+            *_derived_direct_callback_coverage_ids(
                 report,
                 diagnostics,
                 run_directory=run_directory,
