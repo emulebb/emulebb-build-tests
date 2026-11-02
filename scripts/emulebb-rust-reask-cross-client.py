@@ -2126,6 +2126,7 @@ def main(argv: list[str] | None = None) -> int:
         converged_live_wire.resolve_mfc_diagnostics_exe(
             get_workspace_output_root(),
             configuration="Release",
+            require_exists=False,
         )
     )
     paths = harness_cli_common.prepare_run_paths(
@@ -2137,6 +2138,7 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=False,
     )
     profile_seed_dir = (
         Path(args.profile_seed_dir).resolve()

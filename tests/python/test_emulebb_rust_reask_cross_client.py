@@ -287,6 +287,19 @@ def test_every_campaign_rust_process_uses_the_authoritative_diagnostics_binary()
     assert "EMULEBB_RUST_LOG_DIR" in source
 
 
+def test_authoritative_runner_defers_mfc_executable_validation_until_clean_build() -> (
+    None
+):
+    module = _load_module()
+    source = inspect.getsource(module.main)
+
+    assert "require_exists=False" in source
+    assert "require_app_exe=False" in source
+    assert source.index("prepare_authoritative_builds(paths)") > source.index(
+        "prepare_run_paths("
+    )
+
+
 @pytest.mark.parametrize(
     "override",
     ("--app-root", "--app-exe", "--ed2k-server-repo", "--ed2k-server-exe"),

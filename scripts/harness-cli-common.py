@@ -639,8 +639,14 @@ def resolve_app_executable(
     workspace_root: Path | None = None,
     app_root: str | Path | None = None,
     app_exe: str | Path | None = None,
+    *,
+    require_exists: bool = True,
 ) -> tuple[Path, Path, Path]:
-    """Resolves the concrete app executable plus its workspace/app roots."""
+    """Resolves the app executable path plus its workspace/app roots.
+
+    Build-owning callers may defer the existence check until their canonical
+    build has staged the resolved executable.
+    """
 
     resolved_workspace_root = (workspace_root or get_default_workspace_root(repo_root)).resolve()
     resolved_app_root = resolve_app_root(
@@ -668,7 +674,7 @@ def resolve_app_executable(
             / "bin"
             / MAIN_APP_EXE_NAME
         ).resolve()
-    if not resolved_app_exe.is_file():
+    if require_exists and not resolved_app_exe.is_file():
         raise RuntimeError(f"App executable was not found at '{resolved_app_exe}'.")
     return resolved_workspace_root, resolved_app_root, resolved_app_exe
 
@@ -683,8 +689,13 @@ def prepare_run_paths(
     app_exe: str | Path | None = None,
     artifacts_dir: str | Path | None = None,
     keep_artifacts: bool = False,
+    require_app_exe: bool = True,
 ) -> HarnessRunPaths:
-    """Resolves canonical paths for one Python-first harness invocation."""
+    """Resolves canonical paths for one Python-first harness invocation.
+
+    ``require_app_exe=False`` is reserved for runners that build the exact
+    resolved executable before launching it.
+    """
 
     repo_root = get_repo_root(script_file)
     resolved_workspace_root, resolved_app_root, resolved_app_exe = resolve_app_executable(
@@ -693,6 +704,7 @@ def prepare_run_paths(
         workspace_root=Path(workspace_root).resolve() if workspace_root else None,
         app_root=app_root,
         app_exe=app_exe,
+        require_exists=require_app_exe,
     )
     seed_config_dir = (repo_root / "manifests" / "live-profile-seed" / "config").resolve()
     if not seed_config_dir.is_dir():
