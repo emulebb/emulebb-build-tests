@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,7 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "outcome": "accepted",
                 "sourceUdpEndpoint": endpoints["sourceUdp"],
                 "sourceUdpVersion": 4,
+                "shouldCrypt": False,
                 "lowId": False,
                 "buddyEndpoint": None,
                 "buddyId": None,
@@ -750,7 +752,25 @@ def passing_report(
     )
 
 
-def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+def passing_clear_report(
+    *,
+    rust_transition: evidence.ClientUdpV4Transition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_clear_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[rust_transition or transition("rust"), transition("mfc")],
+    )
+
+
+def immutable_campaign_report(
+    tmp_path: Path,
+    *,
+    scenario: str = "v4",
+) -> tuple[Path, Path, dict[str, Any]]:
+    assert scenario in {"v4", "clear"}
     output_root = tmp_path / "output"
     run_dir = (
         output_root
@@ -758,17 +778,32 @@ def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any
         / "emulebb-rust-reask-cross-client"
         / "20261102T123752Z-emulebb-main-release-100"
     )
-    fixture_path = run_dir / "fixture" / "client-udp-v4.bin"
+    fixture_path = run_dir / "fixture" / f"client-udp-{scenario}.bin"
     fixture_path.parent.mkdir(parents=True)
     fixture_path.write_bytes(b"fixture")
-    diagnostics = passing_report()
+    transitions = [transition("rust"), transition("mfc")]
+    diagnostics = (
+        evidence.build_client_udp_clear_diagnostic_evidence(
+            file_hash=FILE_HASH,
+            part_count=PART_COUNT,
+            stock_record=STOCK_RECORD,
+            transitions=transitions,
+        )
+        if scenario == "clear"
+        else evidence.build_client_udp_v4_diagnostic_evidence(
+            file_hash=FILE_HASH,
+            part_count=PART_COUNT,
+            stock_record=STOCK_RECORD,
+            transitions=transitions,
+        )
+    )
     rust = diagnostics["clients"]["rust"]
     mfc = diagnostics["clients"]["mfc"]
     report = {
-        "schema": "emulebb-build-tests.client-udp-v4-campaign.v1",
+        "schema": f"emulebb-build-tests.client-udp-{scenario}-campaign.v1",
         "suite": "emulebb-rust-reask-cross-client",
-        "scenario": "v4",
-        "coverageId": "client-udp.v4",
+        "scenario": scenario,
+        "coverageId": f"client-udp.{scenario}",
         "status": "passed",
         "currentPhase": "complete",
         "network": {"publicTraffic": False, "transportMode": "plaintext"},
@@ -873,6 +908,34 @@ def immutable_campaign_report(tmp_path: Path) -> tuple[Path, Path, dict[str, Any
         },
         "evidence": diagnostics,
     }
+    if scenario == "clear":
+        raw_path = run_dir / "client-udp-clear-raw-evidence.json"
+        raw_payload = {
+            "schema": evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+            "scenario": "clear",
+            "fileHash": FILE_HASH.hex(),
+            "partCount": PART_COUNT,
+            "transitions": [
+                {
+                    "requester": item.requester,
+                    "responder": item.responder,
+                    "sourceTcpEndpoint": item.source_tcp_endpoint,
+                    "sourceUdpEndpoint": item.source_udp_endpoint,
+                    "sourceUserHash": item.source_user_hash.hex(),
+                    "requesterUdpEndpoint": item.requester_udp_endpoint,
+                    "controlReceipt": item.control_receipt,
+                    "requesterRecords": list(item.requester_records),
+                    "responderRecords": list(item.responder_records),
+                }
+                for item in transitions
+            ],
+        }
+        raw_path.write_text(json.dumps(raw_payload, indent=2), encoding="utf-8")
+        report["rawEvidence"] = {
+            "path": str(raw_path),
+            "sizeBytes": raw_path.stat().st_size,
+            "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        }
     report_path = run_dir / "emulebb-rust-reask-cross-client-result.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return output_root, report_path, report
@@ -1194,6 +1257,103 @@ def test_bilateral_client_udp_v4_is_claimable() -> None:
 
 
 @pytest.mark.unit
+def test_bilateral_client_udp_clear_is_claimable() -> None:
+    report = passing_clear_report()
+
+    evidence.require_client_udp_clear_diagnostic_evidence(report)
+    assert report["schema"] == evidence.CLEAR_SCHEMA
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["client-udp.clear"]
+    assert report["clients"]["rust"]["clearTransport"] == {
+        "registrationShouldCrypt": False,
+        "requestOut": {"transportMode": "plaintext", "obfuscated": False},
+        "requestIn": {"transportMode": "plaintext", "obfuscated": False},
+        "ackOut": {"transportMode": "plaintext", "obfuscated": False},
+        "ackIn": {"transportMode": "plaintext", "obfuscated": False},
+        "ok": True,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("should_crypt", [None, True])
+def test_clear_requires_false_registered_crypt_decision(
+    should_crypt: bool | None,
+) -> None:
+    original = transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    if should_crypt is None:
+        records[0]["body"].pop("shouldCrypt")
+    else:
+        records[0]["body"]["shouldCrypt"] = should_crypt
+    wrong = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_clear_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["registration"] == 1
+    assert report["clients"]["rust"]["clearTransport"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_clear_rejects_obfuscated_packet_evidence() -> None:
+    original = transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    records[3]["body"]["transportMode"] = "obfuscated"
+    records[3]["body"]["obfuscated"] = True
+    wrong = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_clear_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["requestOut"] == 1
+    assert report["clients"]["rust"]["clearTransport"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_clear_rejects_contradictory_registered_crypt_decision() -> None:
+    original = transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    contradictory = copy.deepcopy(records[0])
+    contradictory["seq"] = 8
+    contradictory["body"]["shouldCrypt"] = True
+    records.append(contradictory)
+    wrong = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_clear_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["registration"] == 2
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_clear_rejects_contradictory_obfuscated_packet() -> None:
+    original = transition("rust")
+    records = copy.deepcopy(list(original.requester_records))
+    contradictory = copy.deepcopy(records[3])
+    contradictory["seq"] = 8
+    contradictory["body"]["transportMode"] = "obfuscated"
+    contradictory["body"]["obfuscated"] = True
+    records.append(contradictory)
+    wrong = evidence.ClientUdpV4Transition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_clear_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["requestOut"] == 2
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
 def test_bilateral_client_udp_queue_full_is_claimable() -> None:
     report = passing_queue_full_report()
 
@@ -1433,6 +1593,88 @@ def test_immutable_client_udp_v4_campaign_builds_catalog_registration(
         "rust-product",
     ]
     assert result["coverageEvidence"][0]["verdict"] == "parity"
+
+
+@pytest.mark.unit
+def test_immutable_clear_campaign_builds_exact_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_campaign_report(
+        tmp_path,
+        scenario="clear",
+    )
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="clear",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == "rust-mfc-client-udp-clear-20261102t123752z"
+    assert receipt["coverageIds"] == ["client-udp.clear"]
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.clear",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC each selected the non-crypt client-UDP path, emitted "
+                "the same clear OP_EMULEPROT reask and ACK bytes, and causally "
+                "applied the same queue-rank and complete-source state."
+            ),
+            "receiptIds": ["rust-mfc-client-udp-clear-20261102t123752z"],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_clear_registration_rejects_tampered_transport_decision(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="clear",
+    )
+    report["evidence"]["clients"]["rust"]["clearTransport"][
+        "registrationShouldCrypt"
+    ] = True
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"evidence differs"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="clear",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_clear_registration_rereduces_hashed_raw_diagnostics(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="clear",
+    )
+    raw_path = Path(report["rawEvidence"]["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["transitions"][0]["requesterRecords"][0]["body"]["shouldCrypt"] = True
+    raw_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    report["rawEvidence"]["sizeBytes"] = raw_path.stat().st_size
+    report["rawEvidence"]["sha256"] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw client-UDP clear diagnostics"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="clear",
+            output_root=output_root,
+        )
 
 
 @pytest.mark.unit
@@ -1711,7 +1953,8 @@ def test_reply_application_must_include_exact_v4_state() -> None:
     report = passing_report(rust_transition=wrong)
 
     assert report["ok"] is False
-    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 0
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["applied"] == 1
+    assert report["clients"]["rust"]["diagnostics"]["ok"] is False
 
 
 @pytest.mark.unit

@@ -4291,11 +4291,7 @@ def _require_exact_value(value: Any, expected: Any, field: str) -> None:
         raise ValueError(f"{field} differs at {difference}")
 
 
-def _client_udp_stock_authority(
-    catalog_path: Path,
-    *,
-    coverage_id: str,
-) -> dict[str, Any]:
+def _client_udp_stock_record(catalog_path: Path) -> dict[str, Any]:
     payload = _json_object_file(catalog_path.resolve(), "protocol parity catalog")
     records = payload.get("records")
     matches = [
@@ -4306,7 +4302,15 @@ def _client_udp_stock_authority(
     ]
     if len(matches) != 1:
         raise ValueError("catalog must contain one stock client-UDP authority")
-    record = matches[0]
+    return matches[0]
+
+
+def _client_udp_stock_authority(
+    catalog_path: Path,
+    *,
+    coverage_id: str,
+) -> dict[str, Any]:
+    record = _client_udp_stock_record(catalog_path)
     try:
         fixture = base64.b64decode(
             str(record.get("fixtureBase64") or ""), validate=True
@@ -4341,12 +4345,113 @@ def _positive_sequence(value: Any, field: str) -> int:
     return _positive_int(value, field)
 
 
-def _validate_client_udp_v4_client(
+def _rebuild_client_udp_clear_evidence(
+    report: dict[str, Any],
+    *,
+    run_directory: Path,
+    file_hash: str,
+    part_count: int,
+    stock_record: dict[str, Any],
+) -> dict[str, Any]:
+    receipt = _object(report.get("rawEvidence"), "rawEvidence")
+    if set(receipt) != {"path", "sizeBytes", "sha256"}:
+        raise ValueError("rawEvidence receipt is not exact")
+    raw_path = _path_within(receipt.get("path"), run_directory, "rawEvidence.path")
+    raw_size = _positive_int(receipt.get("sizeBytes"), "rawEvidence.sizeBytes")
+    raw_sha256 = _lower_hex(receipt.get("sha256"), SHA256_PATTERN, "rawEvidence.sha256")
+    if raw_path.stat().st_size != raw_size or _file_sha256(raw_path) != raw_sha256:
+        raise ValueError("rawEvidence bytes do not match the immutable receipt")
+
+    raw = _json_object_file(raw_path, "client-UDP clear raw evidence")
+    if set(raw) != {"schema", "scenario", "fileHash", "partCount", "transitions"}:
+        raise ValueError("client-UDP clear raw evidence envelope is not exact")
+    if (
+        raw.get("schema") != client_udp_diagnostic_evidence.CLEAR_RAW_EVIDENCE_SCHEMA
+        or raw.get("scenario") != "clear"
+        or raw.get("fileHash") != file_hash
+        or raw.get("partCount") != part_count
+    ):
+        raise ValueError("client-UDP clear raw evidence identity is invalid")
+    raw_transitions = raw.get("transitions")
+    if not isinstance(raw_transitions, list) or len(raw_transitions) != 2:
+        raise ValueError("client-UDP clear raw evidence must contain two transitions")
+
+    expected_fields = {
+        "requester",
+        "responder",
+        "sourceTcpEndpoint",
+        "sourceUdpEndpoint",
+        "sourceUserHash",
+        "requesterUdpEndpoint",
+        "controlReceipt",
+        "requesterRecords",
+        "responderRecords",
+    }
+    transitions: list[client_udp_diagnostic_evidence.ClientUdpV4Transition] = []
+    for index, value in enumerate(raw_transitions):
+        transition = _object(value, f"rawEvidence.transitions[{index}]")
+        if set(transition) != expected_fields:
+            raise ValueError(f"rawEvidence.transitions[{index}] envelope is not exact")
+        requester_records = transition.get("requesterRecords")
+        responder_records = transition.get("responderRecords")
+        if (
+            not isinstance(requester_records, list)
+            or not requester_records
+            or any(not isinstance(record, dict) for record in requester_records)
+            or not isinstance(responder_records, list)
+            or not responder_records
+            or any(not isinstance(record, dict) for record in responder_records)
+        ):
+            raise ValueError(
+                f"rawEvidence.transitions[{index}] diagnostic records are invalid"
+            )
+        transitions.append(
+            client_udp_diagnostic_evidence.ClientUdpV4Transition(
+                requester=str(transition.get("requester") or ""),
+                responder=str(transition.get("responder") or ""),
+                source_tcp_endpoint=str(transition.get("sourceTcpEndpoint") or ""),
+                source_udp_endpoint=str(transition.get("sourceUdpEndpoint") or ""),
+                source_user_hash=bytes.fromhex(
+                    _lower_hex(
+                        transition.get("sourceUserHash"),
+                        ED2K_HASH_PATTERN,
+                        f"rawEvidence.transitions[{index}].sourceUserHash",
+                    )
+                ),
+                requester_udp_endpoint=str(
+                    transition.get("requesterUdpEndpoint") or ""
+                ),
+                control_receipt=_object(
+                    transition.get("controlReceipt"),
+                    f"rawEvidence.transitions[{index}].controlReceipt",
+                ),
+                requester_records=requester_records,
+                responder_records=responder_records,
+            )
+        )
+
+    rebuilt = client_udp_diagnostic_evidence.build_client_udp_clear_diagnostic_evidence(
+        file_hash=bytes.fromhex(file_hash),
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+    )
+    try:
+        client_udp_diagnostic_evidence.require_client_udp_clear_diagnostic_evidence(
+            rebuilt
+        )
+    except RuntimeError as exc:
+        raise ValueError("raw client-UDP clear diagnostics are not claimable") from exc
+    return rebuilt
+
+
+def _validate_client_udp_ack_client(
     client_id: str,
     value: Any,
     *,
     file_hash: str,
     part_count: int,
+    require_clear_transport: bool,
 ) -> dict[str, Any]:
     client = _object(value, f"evidence.clients.{client_id}")
     responder = "mfc" if client_id == "rust" else "rust"
@@ -4474,6 +4579,23 @@ def _validate_client_udp_v4_client(
         f"evidence.clients.{client_id}.wire",
     )
 
+    clear_transport = None
+    if require_clear_transport:
+        plaintext = {"transportMode": "plaintext", "obfuscated": False}
+        clear_transport = {
+            "registrationShouldCrypt": False,
+            "requestOut": plaintext,
+            "requestIn": plaintext,
+            "ackOut": plaintext,
+            "ackIn": plaintext,
+            "ok": True,
+        }
+        _require_exact_value(
+            client.get("clearTransport"),
+            clear_transport,
+            f"evidence.clients.{client_id}.clearTransport",
+        )
+
     diagnostics = _object(
         client.get("diagnostics"),
         f"evidence.clients.{client_id}.diagnostics",
@@ -4590,6 +4712,7 @@ def _validate_client_udp_v4_client(
         "sourceTcpEndpoint": source_tcp_endpoint,
         "sourceUdpEndpoint": source_udp_endpoint,
         "sourceUserHash": source_user_hash,
+        "clearTransport": clear_transport,
     }
 
 
@@ -5304,13 +5427,20 @@ def _validate_high_id_observation(
         raise ValueError(f"{field} did not publish the required shared file")
 
 
-def _build_client_udp_v4_registration(
+def _build_client_udp_ack_registration(
     report_path: Path,
     *,
     output_root: Path,
     catalog_path: Path | None = None,
+    scenario: str,
+    campaign_schema: str,
+    evidence_schema: str,
+    coverage_id: str,
+    receipt_suffix: str,
+    reason: str,
+    require_clear_transport: bool,
 ) -> dict[str, Any]:
-    """Independently validates one immutable bilateral V4 campaign receipt."""
+    """Independently validate one immutable bilateral request/ACK campaign."""
 
     resolved_output = output_root.resolve()
     resolved_report = report_path.resolve()
@@ -5333,37 +5463,41 @@ def _build_client_udp_v4_registration(
 
     report = _json_object_file(resolved_report, "client-UDP campaign report")
     if (
-        report.get("schema") != "emulebb-build-tests.client-udp-v4-campaign.v1"
+        report.get("schema") != campaign_schema
         or report.get("suite") != CLIENT_UDP_SUITE
-        or report.get("scenario") != "v4"
+        or report.get("scenario") != scenario
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
-        or report.get("coverageId") != client_udp_diagnostic_evidence.COVERAGE_ID
+        or report.get("coverageId") != coverage_id
     ):
-        raise ValueError("report is not a completed client-UDP V4 campaign")
+        raise ValueError(f"report is not a completed client-UDP {scenario} campaign")
 
     network = _object(report.get("network"), "network")
     if (
         network.get("publicTraffic") is not False
         or network.get("transportMode") != "plaintext"
     ):
-        raise ValueError("client-UDP V4 campaign must be local plaintext traffic")
+        raise ValueError(
+            f"client-UDP {scenario} campaign must be local plaintext traffic"
+        )
 
     fixture = _object(report.get("fixture"), "fixture")
     fixture_path = _path_within(fixture.get("path"), run_directory, "fixture.path")
     fixture_size = _positive_int(fixture.get("sizeBytes"), "fixture.sizeBytes")
     part_count = _positive_int(fixture.get("partCount"), "fixture.partCount")
     if fixture_path.stat().st_size != fixture_size or part_count != 1:
-        raise ValueError("client-UDP V4 fixture is not the recorded one-part file")
+        raise ValueError(
+            f"client-UDP {scenario} fixture is not the recorded one-part file"
+        )
 
     evidence = _object(report.get("evidence"), "evidence")
     if (
-        evidence.get("schema") != client_udp_diagnostic_evidence.SCHEMA
+        evidence.get("schema") != evidence_schema
         or evidence.get("ok") is not True
         or evidence.get("failures") != []
         or evidence.get("partCount") != part_count
     ):
-        raise ValueError("client-UDP V4 evidence envelope is invalid")
+        raise ValueError(f"client-UDP {scenario} evidence envelope is invalid")
     file_hash = _lower_hex(
         evidence.get("fileHash"), ED2K_HASH_PATTERN, "evidence.fileHash"
     )
@@ -5374,9 +5508,10 @@ def _build_client_udp_v4_registration(
         / "manifests"
         / "protocol-parity-catalog.json"
     )
+    stock_record = _client_udp_stock_record(selected_catalog)
     stock_authority = _client_udp_stock_authority(
         selected_catalog,
-        coverage_id=client_udp_diagnostic_evidence.COVERAGE_ID,
+        coverage_id=coverage_id,
     )
     _require_exact_value(
         evidence.get("stockAuthority"), stock_authority, "evidence.stockAuthority"
@@ -5384,21 +5519,33 @@ def _build_client_udp_v4_registration(
     _require_exact_value(
         evidence.get("coverageClaims"),
         {
-            "eligibleCoverageIds": [client_udp_diagnostic_evidence.COVERAGE_ID],
+            "eligibleCoverageIds": [coverage_id],
             "evidenceLayers": list(client_udp_diagnostic_evidence.EVIDENCE_LAYERS),
         },
         "evidence.coverageClaims",
     )
+    if require_clear_transport:
+        rebuilt_evidence = _rebuild_client_udp_clear_evidence(
+            report,
+            run_directory=run_directory,
+            file_hash=file_hash,
+            part_count=part_count,
+            stock_record=stock_record,
+        )
+        _require_exact_value(evidence, rebuilt_evidence, "evidence")
 
     clients = _object(evidence.get("clients"), "evidence.clients")
     if set(clients) != {"rust", "mfc"}:
-        raise ValueError("client-UDP V4 evidence must contain exactly Rust and MFC")
+        raise ValueError(
+            f"client-UDP {scenario} evidence must contain exactly Rust and MFC"
+        )
     validated = {
-        client_id: _validate_client_udp_v4_client(
+        client_id: _validate_client_udp_ack_client(
             client_id,
             clients[client_id],
             file_hash=file_hash,
             part_count=part_count,
+            require_clear_transport=require_clear_transport,
         )
         for client_id in ("rust", "mfc")
     }
@@ -5416,7 +5563,7 @@ def _build_client_udp_v4_registration(
     comparison["ok"] = all(comparison.values())
     _require_exact_value(evidence.get("comparison"), comparison, "evidence.comparison")
     if comparison["ok"] is not True:
-        raise ValueError("client-UDP V4 bilateral comparison is not exact")
+        raise ValueError(f"client-UDP {scenario} bilateral comparison is not exact")
 
     checks = _object(report.get("checks"), "checks")
     direction_checks = {
@@ -5551,8 +5698,7 @@ def _build_client_udp_v4_registration(
         )
 
     stamp = stamp_match.group("stamp").lower()
-    receipt_id = f"rust-mfc-client-udp-v4-{stamp}"
-    coverage_id = client_udp_diagnostic_evidence.COVERAGE_ID
+    receipt_id = f"rust-mfc-client-udp-{receipt_suffix}-{stamp}"
     evidence_layers = list(client_udp_diagnostic_evidence.EVIDENCE_LAYERS)
     receipt = {
         "artifactLocator": f"output-root:{relative_report.as_posix()}",
@@ -5568,15 +5714,63 @@ def _build_client_udp_v4_registration(
     coverage_evidence = {
         "coverageId": coverage_id,
         "evidenceLayers": evidence_layers,
-        "reason": (
-            "Rust and MFC emitted byte-identical direct V4 reasks and ACKs, then "
-            "applied the same queue-rank and complete-source state through causally "
-            "ordered bilateral diagnostics."
-        ),
+        "reason": reason,
         "receiptIds": [receipt_id],
         "verdict": "parity",
     }
     return {"coverageEvidence": [coverage_evidence], "evidenceReceipt": receipt}
+
+
+def _build_client_udp_v4_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral V4 campaign receipt."""
+
+    return _build_client_udp_ack_registration(
+        report_path,
+        output_root=output_root,
+        catalog_path=catalog_path,
+        scenario="v4",
+        campaign_schema="emulebb-build-tests.client-udp-v4-campaign.v1",
+        evidence_schema=client_udp_diagnostic_evidence.SCHEMA,
+        coverage_id=client_udp_diagnostic_evidence.COVERAGE_ID,
+        receipt_suffix="v4",
+        reason=(
+            "Rust and MFC emitted byte-identical direct V4 reasks and ACKs, then "
+            "applied the same queue-rank and complete-source state through causally "
+            "ordered bilateral diagnostics."
+        ),
+        require_clear_transport=False,
+    )
+
+
+def _build_client_udp_clear_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral clear campaign receipt."""
+
+    return _build_client_udp_ack_registration(
+        report_path,
+        output_root=output_root,
+        catalog_path=catalog_path,
+        scenario="clear",
+        campaign_schema="emulebb-build-tests.client-udp-clear-campaign.v1",
+        evidence_schema=client_udp_diagnostic_evidence.CLEAR_SCHEMA,
+        coverage_id=client_udp_diagnostic_evidence.CLEAR_COVERAGE_ID,
+        receipt_suffix="clear",
+        reason=(
+            "Rust and MFC each selected the non-crypt client-UDP path, emitted the "
+            "same clear OP_EMULEPROT reask and ACK bytes, and causally applied the "
+            "same queue-rank and complete-source state."
+        ),
+        require_clear_transport=True,
+    )
 
 
 def _build_client_udp_queue_full_registration(
@@ -6202,6 +6396,12 @@ def build_client_udp_registration(
             output_root=output_root,
             catalog_path=catalog_path,
         )
+    if scenario == "clear":
+        return _build_client_udp_clear_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
     if scenario == "queue-full":
         return _build_client_udp_queue_full_registration(
             report_path,
@@ -6472,7 +6672,7 @@ def run_client_udp_registration_cli(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["v4", "queue-full", "file-not-found"],
+        choices=["v4", "clear", "queue-full", "file-not-found"],
         required=True,
     )
     parser.add_argument("--report", type=Path, required=True)

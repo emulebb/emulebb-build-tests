@@ -8,6 +8,8 @@ fixture and one upstream-clean local eD2K server:
 
 Each requester must queue and detach naturally. The harness then wakes exactly
 that already queued source once through the diagnostics-only scheduler control.
+For clear, both clients must record a false per-source crypt decision before the
+ordinary scheduler emits the exact plaintext request and ACK frames.
 For queue-full, the exact requester is removed from the responder's real upload
 queue before one exact, expiring queue-pressure prerequisite is armed. The
 ordinary scheduler and production packet path remain responsible for the
@@ -81,21 +83,25 @@ RUST_LOG = (
 
 SCENARIO_COVERAGE_IDS = {
     "v4": udp_evidence.COVERAGE_ID,
+    "clear": udp_evidence.CLEAR_COVERAGE_ID,
     "queue-full": udp_evidence.QUEUE_FULL_COVERAGE_ID,
     "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
 }
 SCENARIO_CAMPAIGN_SCHEMAS = {
     "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
+    "clear": "emulebb-build-tests.client-udp-clear-campaign.v1",
     "queue-full": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
     "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
 }
 SCENARIO_REPLY_OPCODES = {
     "v4": udp_evidence.OP_REASKACK,
+    "clear": udp_evidence.OP_REASKACK,
     "queue-full": udp_evidence.OP_QUEUEFULL,
     "file-not-found": udp_evidence.OP_FILENOTFOUND,
 }
 SCENARIO_EVIDENCE_BUILDERS = {
     "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
+    "clear": udp_evidence.build_client_udp_clear_diagnostic_evidence,
     "queue-full": udp_evidence.build_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.build_client_udp_file_not_found_diagnostic_evidence
@@ -103,11 +109,42 @@ SCENARIO_EVIDENCE_BUILDERS = {
 }
 SCENARIO_EVIDENCE_REQUIREMENTS = {
     "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
+    "clear": udp_evidence.require_client_udp_clear_diagnostic_evidence,
     "queue-full": udp_evidence.require_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.require_client_udp_file_not_found_diagnostic_evidence
     ),
 }
+
+
+def build_clear_raw_evidence(
+    *,
+    file_hash: str,
+    part_count: int,
+    transitions: list[udp_evidence.ClientUdpV4Transition],
+) -> dict[str, object]:
+    """Serialize the complete reducer inputs for independent receipt validation."""
+
+    return {
+        "schema": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+        "scenario": "clear",
+        "fileHash": _canonical_hash(file_hash, field="file_hash"),
+        "partCount": part_count,
+        "transitions": [
+            {
+                "requester": transition.requester,
+                "responder": transition.responder,
+                "sourceTcpEndpoint": transition.source_tcp_endpoint,
+                "sourceUdpEndpoint": transition.source_udp_endpoint,
+                "sourceUserHash": transition.source_user_hash.hex(),
+                "requesterUdpEndpoint": transition.requester_udp_endpoint,
+                "controlReceipt": transition.control_receipt,
+                "requesterRecords": list(transition.requester_records),
+                "responderRecords": list(transition.responder_records),
+            }
+            for transition in transitions
+        ],
+    }
 
 
 @dataclass(frozen=True)
@@ -2144,12 +2181,30 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["mfcRequesterRustResponder"] = mfc_check
 
         report["currentPhase"] = "causal-evidence"
+        transitions = [rust_transition, mfc_transition]
+        if args.scenario == "clear":
+            raw_evidence_path = (
+                paths.source_artifacts_dir / "client-udp-clear-raw-evidence.json"
+            )
+            harness_cli_common.write_json_file(
+                raw_evidence_path,
+                build_clear_raw_evidence(
+                    file_hash=rust_check["fileHash"],
+                    part_count=part_count,
+                    transitions=transitions,
+                ),
+            )
+            report["rawEvidence"] = {
+                "path": str(raw_evidence_path),
+                "sizeBytes": raw_evidence_path.stat().st_size,
+                "sha256": dtt.file_sha256(raw_evidence_path),
+            }
         evidence_builder = SCENARIO_EVIDENCE_BUILDERS[args.scenario]
         evidence = evidence_builder(
             file_hash=bytes.fromhex(rust_check["fileHash"]),
             part_count=part_count,
             stock_record=load_stock_client_udp_record(),
-            transitions=[rust_transition, mfc_transition],
+            transitions=transitions,
         )
         report["evidence"] = evidence
         SCENARIO_EVIDENCE_REQUIREMENTS[args.scenario](evidence)
