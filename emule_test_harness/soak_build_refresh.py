@@ -13,12 +13,13 @@ def diagnostics_build_command(
     mfc_variant: str = "main",
     mfc_arch: str = "x64",
     mfc_configuration: str = "Release",
+    clean: bool = False,
 ) -> list[str]:
     """Return the official incremental diagnostics build for one soak client."""
 
     common = [sys.executable, "-m", "emule_workspace", "build"]
     if client == "rust":
-        return [
+        command = [
             *common,
             "clients",
             "--client",
@@ -31,12 +32,15 @@ def diagnostics_build_command(
             "ErrorsOnly",
             "--diagnostics",
         ]
+        if clean:
+            command.append("--clean")
+        return command
     if client == "mfc":
         if mfc_configuration != "Release":
             raise RuntimeError(
                 "MFC diagnostics soaks require --mfc-configuration Release."
             )
-        return [
+        command = [
             *common,
             "app",
             "--variant",
@@ -49,6 +53,9 @@ def diagnostics_build_command(
             "ErrorsOnly",
             "--diagnostics",
         ]
+        if clean:
+            command.append("--clean")
+        return command
     raise ValueError(f"Unsupported soak client: {client}")
 
 

@@ -24,6 +24,25 @@ RUST_ED2K_SERVER_EXE_ENV = "EMULEBB_TEST_RUST_ED2K_SERVER_EXE"
 RUST_ED2K_WSL_DISTRIBUTION_ENV = "EMULEBB_TEST_WSL_DISTRIBUTION"
 
 
+def server_build_command(*, clean: bool = False) -> list[str]:
+    """Returns the canonical managed ed2k-server build command."""
+
+    command = [
+        sys.executable,
+        "-m",
+        "emule_workspace",
+        "build",
+        "ed2k-server",
+        "--config",
+        "Release",
+        "--platform",
+        "x64",
+    ]
+    if clean:
+        command.append("--clean")
+    return command
+
+
 @dataclass(frozen=True)
 class RustEd2kServerBinary:
     """Resolved staged Rust server executable and its build result."""
@@ -100,17 +119,7 @@ def build_or_skip_server_binary(
         )
     resolve_server_repo(workspace_root, None)
     build_repo = resolve_manifest_repo(workspace_root, "build")
-    command = [
-        sys.executable,
-        "-m",
-        "emule_workspace",
-        "build",
-        "ed2k-server",
-        "--config",
-        "Release",
-        "--platform",
-        "x64",
-    ]
+    command = server_build_command()
     completed = subprocess.run(
         command,
         cwd=build_repo,
