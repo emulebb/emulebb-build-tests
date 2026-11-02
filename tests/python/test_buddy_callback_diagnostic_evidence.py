@@ -81,7 +81,7 @@ def _kad_packet(
 def _relay_raw(requester_host: str = HOST) -> bytes:
     payload = (
         BUDDY_ID
-        + FILE_HASH
+        + buddy_callback_probe._kad_uint128_wire_bytes(FILE_HASH, "file_hash")
         + int(ipaddress.IPv4Address(requester_host)).to_bytes(4, "little")
         + struct.pack("<H", REQUESTER_TCP_PORT)
     )
@@ -119,7 +119,9 @@ def _probe(client: str, requester_udp_port: int) -> dict[str, object]:
     find_response = (
         bytes((0xE4, 0x5A))
         + BUDDY_ID
-        + bytes.fromhex(target["userHash"])
+        + buddy_callback_probe._kad_uint128_wire_bytes(
+            bytes.fromhex(target["userHash"]), "target_hash"
+        )
         + struct.pack("<H", target["tcpPort"])
     )
     callback_request = buddy_callback_probe.encode_callback_request(

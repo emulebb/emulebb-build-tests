@@ -50,21 +50,26 @@ def test_buddy_callback_codecs_match_stock_layouts() -> None:
     )
 
     assert find_request == bytes.fromhex(
-        "E451000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F3412"
+        "E451000102030405060708090A0B0C0D0E0F13121110171615141B1A19181F1E1D1C3412"
     )
     assert callback_request == bytes.fromhex(
-        "E452000102030405060708090A0B0C0D0E0F202122232425262728292A2B2C2D2E2F7856"
+        "E452000102030405060708090A0B0C0D0E0F23222120272625242B2A29282F2E2D2C7856"
     )
 
 
 @pytest.mark.unit
 def test_find_buddy_response_and_callback_relay_decode_exact_fields() -> None:
-    response = bytes((0xE4, 0x5A)) + BUDDY_ID + TARGET_HASH + struct.pack("<H", 4662)
+    response = (
+        bytes((0xE4, 0x5A))
+        + BUDDY_ID
+        + buddy_callback_probe._kad_uint128_wire_bytes(TARGET_HASH, "target_hash")
+        + struct.pack("<H", 4662)
+    )
     decoded_response = buddy_callback_probe.decode_find_buddy_response(response)
     requester_host = "192.0.2.17"
     relay_payload = (
         BUDDY_ID
-        + FILE_HASH
+        + buddy_callback_probe._kad_uint128_wire_bytes(FILE_HASH, "file_hash")
         + int(ipaddress.IPv4Address(requester_host)).to_bytes(4, "little")
         + struct.pack("<H", 4670)
     )
@@ -128,7 +133,9 @@ def test_buddy_callback_probe_records_complete_socket_chain() -> None:
             find_response = (
                 bytes((0xE4, 0x5A))
                 + BUDDY_ID
-                + TARGET_HASH
+                + buddy_callback_probe._kad_uint128_wire_bytes(
+                    TARGET_HASH, "target_hash"
+                )
                 + struct.pack("<H", target_tcp_port)
             )
             target_udp.sendto(find_response, buddy_source)
@@ -153,7 +160,9 @@ def test_buddy_callback_probe_records_complete_socket_chain() -> None:
                 )
                 relay_payload = (
                     BUDDY_ID
-                    + FILE_HASH
+                    + buddy_callback_probe._kad_uint128_wire_bytes(
+                        FILE_HASH, "file_hash"
+                    )
                     + int(ipaddress.IPv4Address(requester_source[0])).to_bytes(
                         4, "little"
                     )

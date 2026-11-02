@@ -37,6 +37,15 @@ def _hash16(value: bytes, field_name: str) -> bytes:
     return result
 
 
+def _kad_uint128_wire_bytes(value: bytes, field_name: str) -> bytes:
+    """Converts a canonical hash to/from stock eMule `CUInt128` wire order."""
+
+    canonical = _hash16(value, field_name)
+    return b"".join(
+        canonical[offset : offset + 4][::-1] for offset in range(0, HASH_BYTES, 4)
+    )
+
+
 def _port(value: int, field_name: str) -> int:
     if (
         not isinstance(value, int)
@@ -81,7 +90,7 @@ def encode_find_buddy_request(
     return (
         bytes((OP_KADEMLIAHEADER, KADEMLIA_FINDBUDDY_REQ))
         + buddy_id
-        + client_hash
+        + _kad_uint128_wire_bytes(client_hash, "client_hash")
         + struct.pack("<H", tcp_port)
     )
 
@@ -103,7 +112,10 @@ def decode_find_buddy_response(raw: bytes) -> dict[str, object]:
         "rawHex": raw.hex().upper(),
         "payloadHex": raw[2:].hex().upper(),
         "buddyId": raw[2:18].hex().upper(),
-        "clientHash": raw[18:34].hex().upper(),
+        "clientHash": _kad_uint128_wire_bytes(raw[18:34], "client_hash_wire")
+        .hex()
+        .upper(),
+        "clientHashWireHex": raw[18:34].hex().upper(),
         "tcpPort": int.from_bytes(raw[34:36], "little"),
         "connectOptions": raw[36] if len(raw) == 37 else None,
     }
@@ -123,7 +135,7 @@ def encode_callback_request(
     return (
         bytes((OP_KADEMLIAHEADER, KADEMLIA_CALLBACK_REQ))
         + buddy_id
-        + file_hash
+        + _kad_uint128_wire_bytes(file_hash, "file_hash")
         + struct.pack("<H", requester_tcp_port)
     )
 
@@ -254,7 +266,10 @@ def decode_callback_relay(raw: bytes) -> dict[str, object]:
     return {
         **frame.evidence(),
         "buddyId": frame.payload[:16].hex().upper(),
-        "fileHash": frame.payload[16:32].hex().upper(),
+        "fileHash": _kad_uint128_wire_bytes(frame.payload[16:32], "file_hash_wire")
+        .hex()
+        .upper(),
+        "fileHashWireHex": frame.payload[16:32].hex().upper(),
         "requesterHost": requester_host,
         "requesterTcpPort": int.from_bytes(frame.payload[36:38], "little"),
     }
