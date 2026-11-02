@@ -28,6 +28,7 @@ from emule_test_harness import ed2k_protocol_cases  # noqa: E402
 from emule_test_harness import ed2k_wire  # noqa: E402
 from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness import direct_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import direct_callback_probe  # noqa: E402
 from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
 from emule_test_harness import kad_nodes  # noqa: E402
@@ -338,6 +339,7 @@ def collect_transfer_diagnostics(
     expected_source_host: str,
     expected_source_port: int,
     expected_source_user_hash: str,
+    direct_callback_evidence: dict[str, object] | None,
     server_callback_evidence: dict[str, object] | None,
     server_login_evidence: dict[str, object] | None,
     server_search_evidence: dict[str, object] | None,
@@ -379,6 +381,14 @@ def collect_transfer_diagnostics(
         expected_source_user_hash=expected_source_user_hash,
     )
     extra_claims: set[str] = set()
+    if direct_callback_evidence is not None:
+        direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence(
+            direct_callback_evidence
+        )
+        evidence["directCallback"] = direct_callback_evidence
+        extra_claims.update(
+            direct_callback_evidence["coverageClaims"]["eligibleCoverageIds"]
+        )
     if server_callback_evidence is not None:
         server_callback_diagnostic_evidence.require_server_callback_diagnostic_evidence(
             server_callback_evidence
@@ -568,6 +578,58 @@ def collect_server_callback_diagnostics(
             server_endpoint=server_endpoint,
             requester_host=docker_ed2k_source_publisher.PUBLISHER_IP,
             requester_port=requester_port,
+            targets=targets,
+            requester_results=requester_results,
+            rust_records=rust_capture.records,
+            mfc_records=mfc_capture.records,
+        )
+    )
+    evidence["captures"] = {
+        "rust": {
+            "processId": rust_process_id,
+            "diagnosticsDir": str(rust_diagnostics_dir),
+            "selectedSegments": [str(path) for path in rust_capture.selected_segments],
+        },
+        "mfc": {
+            "processId": mfc_process_id,
+            "diagnosticsDir": str(mfc_diagnostics_dir),
+            "selectedSegments": [str(path) for path in mfc_capture.selected_segments],
+        },
+    }
+    return evidence
+
+
+def collect_direct_callback_diagnostics(
+    *,
+    requester_host: str,
+    requester_port: int,
+    targets: dict[str, object],
+    requester_results: dict[str, object],
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    mfc_diagnostics_dir: Path,
+    mfc_process_id: int,
+) -> dict[str, object]:
+    """Snapshots exact bilateral direct-callback evidence before transfer traffic."""
+
+    rust_capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir,
+        side="rust",
+        process_id=rust_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    mfc_capture = converged_live_wire.load_current_diag_capture(
+        mfc_diagnostics_dir,
+        side="emule",
+        process_id=mfc_process_id,
+        allow_incomplete_active_tail=True,
+    )
+    evidence = (
+        direct_callback_diagnostic_evidence.build_direct_callback_diagnostic_evidence(
+            requester_host=requester_host,
+            requester_tcp_port=requester_port,
+            requester_user_hash=SERVER_CALLBACK_REQUESTER_HASH,
+            target_host=requester_host,
             targets=targets,
             requester_results=requester_results,
             rust_records=rust_capture.records,
@@ -2580,6 +2642,7 @@ def main(argv: list[str] | None = None) -> int:
     metadata_server_publisher: ed2k_wire.Ed2kWireClient | None = None
     udp_source_fixture: scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer | None = None
     server_login_evidence: dict[str, object] | None = None
+    direct_callback_evidence: dict[str, object] | None = None
     server_callback_evidence: dict[str, object] | None = None
     server_search_evidence: dict[str, object] | None = None
     server_source_evidence: dict[str, object] | None = None
@@ -3716,6 +3779,16 @@ def main(argv: list[str] | None = None) -> int:
             callback_targets = callback_targets_from_login_evidence(
                 server_login_evidence
             )
+            callback_targets = {
+                "mfc": {
+                    **callback_targets["mfc"],
+                    "udpPort": ports["client2_udp"],
+                },
+                "rust": {
+                    **callback_targets["rust"],
+                    "udpPort": ports["client1_udp"],
+                },
+            }
             report["checks"]["client_direct_callback_targets"] = callback_targets
             direct_callback_requester = direct_callback_probe.DirectCallbackProbe(
                 bind_host=p2p_address,
@@ -3759,6 +3832,23 @@ def main(argv: list[str] | None = None) -> int:
                 direct_callback_results[client] = result
             report["checks"]["client_direct_callback_requests"] = (
                 direct_callback_results
+            )
+            current_phase = "collect_direct_callback_diagnostics"
+            direct_callback_evidence = collect_direct_callback_diagnostics(
+                requester_host=p2p_address,
+                requester_port=ports["callback_requester_tcp"],
+                targets=callback_targets,
+                requester_results=direct_callback_results,
+                rust_diagnostics_dir=rust_diagnostics_dir,
+                rust_process_id=int(client1_process.pid),
+                mfc_diagnostics_dir=Path(client2["log_dir"]),
+                mfc_process_id=client2_process_id,
+            )
+            report["checks"]["client_direct_callback_diagnostics"] = (
+                direct_callback_evidence
+            )
+            direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence(
+                direct_callback_evidence
             )
 
         if args.transfer_scenario == SERVER_CALLBACK_REPLY:
@@ -4058,6 +4148,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_host=p2p_address,
                 expected_source_port=ports["client2_tcp"],
                 expected_source_user_hash=source_user_hash,
+                direct_callback_evidence=direct_callback_evidence,
                 server_callback_evidence=server_callback_evidence,
                 server_login_evidence=server_login_evidence,
                 server_search_evidence=server_search_evidence,
@@ -4116,6 +4207,9 @@ def main(argv: list[str] | None = None) -> int:
         if server_login_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverLogin"] = server_login_evidence
+        if direct_callback_evidence is not None:
+            diagnostics = report.setdefault("diagnostics", {})
+            diagnostics["directCallback"] = direct_callback_evidence
         if server_callback_evidence is not None:
             diagnostics = report.setdefault("diagnostics", {})
             diagnostics["serverCallback"] = server_callback_evidence

@@ -1538,6 +1538,12 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
     assert "direct_callback_probe.DirectCallbackProbe(" in script_text
     assert 'for client, udp_port in (' in script_text
     assert "callback_targets_from_login_evidence(" in script_text
+    assert "collect_direct_callback_diagnostics(" in script_text
+    assert (
+        "direct_callback_diagnostic_evidence.require_direct_callback_diagnostic_evidence("
+        in script_text
+    )
+    assert "direct_callback_evidence=direct_callback_evidence" in script_text
 
 
 def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> None:
