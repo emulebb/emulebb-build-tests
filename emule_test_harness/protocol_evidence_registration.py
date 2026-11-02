@@ -16,6 +16,7 @@ from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
 from emule_test_harness import server_login_diagnostic_evidence
+from emule_test_harness import server_search_diagnostic_evidence
 from emule_test_harness import server_source_diagnostic_evidence
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence
 from emule_test_harness import server_udp_metadata_diagnostic_evidence
@@ -32,6 +33,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SERVER_LOGIN_SCENARIO = "server-login-request"
 SERVER_KEYWORD_SEARCH_SCENARIO = "server-keyword-search"
+SERVER_ADVANCED_SEARCH_SCENARIO = "server-advanced-search"
 SERVER_TCP_SOURCE_SCENARIO = "server-tcp-source"
 SERVER_TCP_METADATA_SCENARIO = "server-tcp-metadata"
 SERVER_UDP_METADATA_SCENARIO = "server-udp-metadata"
@@ -43,8 +45,19 @@ SERVER_UDP_SOURCE_TRANSCRIPTS = {
     version: f"server-udp-source-v{version}-transcript.json"
     for version in SERVER_UDP_SOURCE_SCENARIOS
 }
-SERVER_SEARCH_SCHEMA = "emulebb-build-tests.deterministic-server-search-diagnostics.v3"
-SERVER_SEARCH_COVERAGE_IDS = ("server.reply.search", "server.search.keyword")
+SERVER_SEARCH_VARIANTS = {
+    SERVER_KEYWORD_SEARCH_SCENARIO: server_search_diagnostic_evidence.KEYWORD_VARIANT,
+    SERVER_ADVANCED_SEARCH_SCENARIO: server_search_diagnostic_evidence.ADVANCED_VARIANT,
+}
+SERVER_SEARCH_COVERAGE_IDS = tuple(
+    sorted(
+        {
+            coverage_id
+            for coverage_ids in server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT.values()
+            for coverage_id in coverage_ids
+        }
+    )
+)
 SERVER_SEARCH_EVIDENCE_LAYERS = (
     "codec-transcript",
     "deterministic-state-machine",
@@ -269,20 +282,24 @@ def _derived_server_search_coverage_ids(
 ) -> list[str]:
     search_value = diagnostics.get("serverSearch")
     if search_value is None:
-        if report.get("transfer_scenario") == SERVER_KEYWORD_SEARCH_SCENARIO:
-            raise ValueError("server keyword search scenario has no diagnostic evidence")
+        if report.get("transfer_scenario") in SERVER_SEARCH_VARIANTS:
+            raise ValueError("server search scenario has no diagnostic evidence")
         return []
-    if report.get("transfer_scenario") != SERVER_KEYWORD_SEARCH_SCENARIO:
-        raise ValueError("server search evidence requires the server keyword search scenario")
+    scenario = report.get("transfer_scenario")
+    variant = SERVER_SEARCH_VARIANTS.get(scenario)
+    if variant is None:
+        raise ValueError("server search evidence requires a server search scenario")
     search = _object(search_value, "diagnostics.serverSearch")
-    if search.get("schema") != SERVER_SEARCH_SCHEMA:
+    if search.get("schema") != server_search_diagnostic_evidence.SCHEMA:
         raise ValueError("server search diagnostics use an unexpected schema")
     if search.get("ok") is not True or search.get("failures") != []:
         raise ValueError("server search diagnostics are not complete")
-    if search.get("variant") != "keyword" or search.get("criteria") != {}:
-        raise ValueError("server keyword search diagnostics use an unexpected variant")
+    if search.get("variant") != variant:
+        raise ValueError("server search diagnostics use an unexpected variant")
 
-    expected_ids = list(SERVER_SEARCH_COVERAGE_IDS)
+    expected_ids = list(
+        server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[variant]
+    )
     claims = _object(search.get("coverageClaims"), "diagnostics.serverSearch.coverageClaims")
     if search.get("observedCoverageIds") != expected_ids:
         raise ValueError("server search diagnostic observations are not exact")
@@ -305,6 +322,16 @@ def _derived_server_search_coverage_ids(
     if not isinstance(fixture_name, str) or not fixture_name:
         raise ValueError("server_search_fixture.name must be a non-empty string")
     fixture_size = _positive_int(fixture.get("size"), "server_search_fixture.size")
+    expected_criteria = (
+        {}
+        if variant == server_search_diagnostic_evidence.KEYWORD_VARIANT
+        else {
+            "minSizeBytes": fixture_size,
+            "maxSizeBytes": fixture_size,
+        }
+    )
+    if search.get("criteria") != expected_criteria:
+        raise ValueError("server search diagnostics use unexpected criteria")
     expected_file = {
         "hash": fixture_hash,
         "name": fixture_name,
@@ -387,8 +414,17 @@ def _derived_server_search_coverage_ids(
     query = search.get("query")
     if not isinstance(query, str) or not query:
         raise ValueError("server search query must be a non-empty string")
-    expected_payload_hex = ed2k_wire.encode_search_request(query).hex()
-    expected_request = {"query": query, "method": "server", "type": ""}
+    criteria = ed2k_wire.ServerSearchCriteria(
+        min_size_bytes=expected_criteria.get("minSizeBytes"),
+        max_size_bytes=expected_criteria.get("maxSizeBytes"),
+    )
+    expected_payload_hex = ed2k_wire.encode_search_request(query, criteria).hex()
+    expected_request = {
+        "query": query,
+        "method": "server",
+        "type": "",
+        **expected_criteria,
+    }
     driven_searches = _object(
         checks.get("client_server_searches"),
         "checks.client_server_searches",
@@ -2522,9 +2558,10 @@ def _coverage_reason(coverage_id: str, diagnostics: dict[str, Any]) -> str:
             mfc_wire.get("request"),
             "diagnostics.serverSearch.clients.mfc.wire.request",
         )
-        if coverage_id == "server.search.keyword":
+        if coverage_id in {"server.search.keyword", "server.search.advanced"}:
+            search_kind = "keyword" if coverage_id.endswith("keyword") else "advanced"
             return (
-                "Rust and MFC each emitted one identical encoded keyword request over "
+                f"Rust and MFC each emitted one identical encoded {search_kind} request over "
                 f"obfuscated server transport at sequences "
                 f"{rust_request['sequence']}/{mfc_request['sequence']}."
             )

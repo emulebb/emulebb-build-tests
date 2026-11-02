@@ -233,7 +233,30 @@ def attach_server_login(
     report["diagnostics"]["coverageClaims"]["eligibleCoverageIds"].sort()
 
 
-def driven_server_search(client: str, search_id: str) -> dict[str, object]:
+def server_search_contract(
+    scenario: str,
+) -> tuple[str, ed2k_wire.ServerSearchCriteria]:
+    if scenario == "server-keyword-search":
+        return (
+            server_search_diagnostic_evidence.KEYWORD_VARIANT,
+            ed2k_wire.ServerSearchCriteria(),
+        )
+    if scenario == "server-advanced-search":
+        return (
+            server_search_diagnostic_evidence.ADVANCED_VARIANT,
+            ed2k_wire.ServerSearchCriteria(
+                min_size_bytes=SEARCH_FILE_SIZE,
+                max_size_bytes=SEARCH_FILE_SIZE,
+            ),
+        )
+    raise AssertionError(f"unsupported test server-search scenario: {scenario}")
+
+
+def driven_server_search(
+    client: str,
+    search_id: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
+) -> dict[str, object]:
     result = {
         "hash": SEARCH_FILE_HASH.upper(),
         "sizeBytes": SEARCH_FILE_SIZE,
@@ -251,6 +274,16 @@ def driven_server_search(client: str, search_id: str) -> dict[str, object]:
             "query": SEARCH_QUERY,
             "method": "server",
             "type": "",
+            **(
+                {"minSizeBytes": criteria.min_size_bytes}
+                if criteria.min_size_bytes is not None
+                else {}
+            ),
+            **(
+                {"maxSizeBytes": criteria.max_size_bytes}
+                if criteria.max_size_bytes is not None
+                else {}
+            ),
         },
         "searchId": search_id,
         "created": {
@@ -273,11 +306,14 @@ def driven_server_search(client: str, search_id: str) -> dict[str, object]:
 
 def bilateral_search_evidence(
     driven_searches: dict[str, dict[str, object]],
+    *,
+    variant: str,
+    criteria: ed2k_wire.ServerSearchCriteria,
 ) -> dict[str, object]:
     coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
-        server_search_diagnostic_evidence.KEYWORD_VARIANT
+        variant
     ]
-    payload_hex = ed2k_wire.encode_search_request(SEARCH_QUERY).hex()
+    payload_hex = ed2k_wire.encode_search_request(SEARCH_QUERY, criteria).hex()
     wire_result = {
         "hash": SEARCH_FILE_HASH.upper(),
         "name": SEARCH_FILE_NAME,
@@ -370,9 +406,20 @@ def bilateral_search_evidence(
     return {
         "schema": server_search_diagnostic_evidence.SCHEMA,
         "ok": True,
-        "variant": server_search_diagnostic_evidence.KEYWORD_VARIANT,
+        "variant": variant,
         "query": SEARCH_QUERY,
-        "criteria": {},
+        "criteria": {
+            **(
+                {"minSizeBytes": criteria.min_size_bytes}
+                if criteria.min_size_bytes is not None
+                else {}
+            ),
+            **(
+                {"maxSizeBytes": criteria.max_size_bytes}
+                if criteria.max_size_bytes is not None
+                else {}
+            ),
+        },
         "serverEndpoint": "127.0.0.1:4661",
         "expectedFile": {
             "hash": SEARCH_FILE_HASH,
@@ -405,16 +452,24 @@ def bilateral_search_evidence(
     }
 
 
-def attach_server_search(report: dict[str, object]) -> dict[str, object]:
+def attach_server_search(
+    report: dict[str, object],
+    scenario: str = "server-keyword-search",
+) -> dict[str, object]:
+    variant, criteria = server_search_contract(scenario)
     coverage_ids = server_search_diagnostic_evidence.COVERAGE_IDS_BY_VARIANT[
-        server_search_diagnostic_evidence.KEYWORD_VARIANT
+        variant
     ]
     driven_searches = {
-        "rust": driven_server_search("rust", "rust-search-1"),
-        "mfc": driven_server_search("mfc", "mfc-search-1"),
+        "rust": driven_server_search("rust", "rust-search-1", criteria),
+        "mfc": driven_server_search("mfc", "mfc-search-1", criteria),
     }
-    evidence = bilateral_search_evidence(driven_searches)
-    report["transfer_scenario"] = "server-keyword-search"
+    evidence = bilateral_search_evidence(
+        driven_searches,
+        variant=variant,
+        criteria=criteria,
+    )
+    report["transfer_scenario"] = scenario
     report["network"] = {
         "ed2k_server_address": "127.0.0.1",
         "ports": {"ed2k_tcp": 4661, "search_publisher_tcp": 4664},
@@ -2145,6 +2200,44 @@ def test_build_transfer_registration_accepts_exact_server_keyword_search(tmp_pat
         "server.reply.search",
         "server.search.keyword",
     ]
+
+
+def test_build_transfer_registration_accepts_exact_server_advanced_search(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    attach_server_search(report, "server-advanced-search")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    registration = build_transfer_registration(report_path, output_root=output_root)
+
+    assert registration["evidenceReceipt"]["coverageIds"] == [
+        "peer.startup.aich",
+        "peer.startup.multipacket-ext2",
+        "queue.admission",
+        "server.reply.search",
+        "server.search.advanced",
+        "transfer.block.uncompressed",
+    ]
+    rows = {
+        row["coverageId"]: row["reason"]
+        for row in registration["coverageEvidence"]
+        if row["coverageId"] in {"server.reply.search", "server.search.advanced"}
+    }
+    assert set(rows) == {"server.reply.search", "server.search.advanced"}
+    assert "encoded advanced request" in rows["server.search.advanced"]
+
+
+def test_build_transfer_registration_rejects_advanced_search_without_exact_bounds(
+    tmp_path: Path,
+) -> None:
+    report_path, output_root, report = write_transfer_report(tmp_path)
+    evidence = attach_server_search(report, "server-advanced-search")
+    evidence["criteria"]["maxSizeBytes"] += 1
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected criteria"):
+        build_transfer_registration(report_path, output_root=output_root)
 
 
 def test_build_transfer_registration_rejects_legacy_server_search_schema(
