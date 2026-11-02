@@ -27,6 +27,7 @@ def _record(
     opcode: int,
     direction: str,
     trace_id: int,
+    send_attempt_id: int | None = None,
     payload: bytes | None = None,
     body_extra: dict[str, object] | None = None,
     keys_extra: dict[str, object] | None = None,
@@ -49,6 +50,9 @@ def _record(
         "transportMode": "plaintext",
         "obfuscated": False,
     }
+    if send_attempt_id is not None:
+        keys["sendAttemptId"] = send_attempt_id
+        body["sendAttemptId"] = send_attempt_id
     if payload is not None:
         body.update(
             {
@@ -80,7 +84,8 @@ def _records(*, rust: bool) -> list[dict[str, object]]:
             event="packet",
             opcode=ed2k_wire.OP_GLOBGETSOURCES,
             direction="send",
-            trace_id=31,
+            trace_id=0 if rust else 31,
+            send_attempt_id=5 if rust else None,
             payload=request_payload,
         )
     ]
@@ -91,7 +96,8 @@ def _records(*, rust: bool) -> list[dict[str, object]]:
                 event="send_outcome",
                 opcode=ed2k_wire.OP_GLOBGETSOURCES,
                 direction="send",
-                trace_id=31,
+                trace_id=0,
+                send_attempt_id=5,
                 body_extra={"outcome": "send_succeeded", "deliveryKnown": True},
             )
         )
@@ -228,6 +234,23 @@ def test_udp_source_v1_evidence_accepts_complete_bilateral_trace() -> None:
         "server.source.udp-v1",
         "server.reply.sources",
     ]
+    assert evidence["clients"]["rust"]["wire"]["request"]["traceId"] is None
+    assert evidence["clients"]["rust"]["wire"]["request"]["sendAttemptId"] == 5
+    assert evidence["clients"]["rust"]["wire"]["sendOutcome"]["sendAttemptId"] == 5
+
+
+def test_udp_source_v1_evidence_rejects_mismatched_rust_send_attempt() -> None:
+    rust_records = _records(rust=True)
+    send_outcome = next(
+        record for record in rust_records if record["event"] == "send_outcome"
+    )
+    send_outcome["keys"]["sendAttemptId"] = 6
+    send_outcome["body"]["sendAttemptId"] = 6
+
+    evidence = _build(rust_records=rust_records)
+
+    assert evidence["ok"] is False
+    assert "rust.sendOutcome" in evidence["failures"]
 
 
 def test_udp_source_v1_evidence_rejects_v2_request_even_with_valid_v1_trace() -> None:

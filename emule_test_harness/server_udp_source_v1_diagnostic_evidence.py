@@ -57,6 +57,24 @@ def _trace_id(record: dict[str, Any] | None) -> int | None:
     return next(iter(unique)) if len(unique) == 1 else None
 
 
+def _send_attempt_id(record: dict[str, Any] | None) -> int | None:
+    if record is None:
+        return None
+    values = [
+        value
+        for value in (
+            _keys(record).get("sendAttemptId"),
+            _body(record).get("sendAttemptId"),
+        )
+        if value is not None
+    ]
+    normalized = [_positive_int(value) for value in values]
+    if not normalized or any(value is None for value in normalized):
+        return None
+    unique = set(normalized)
+    return next(iter(unique)) if len(unique) == 1 else None
+
+
 def _payload(record: dict[str, Any] | None) -> bytes | None:
     body = _body(record)
     value = body.get("payloadHex")
@@ -100,6 +118,7 @@ def _request_evidence(
     *,
     udp_endpoint: str,
     expected_payload: bytes,
+    require_send_attempt_id: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = _packet_candidates(
         records,
@@ -118,7 +137,11 @@ def _request_evidence(
         for record in candidates
         if _payload(record) == expected_payload
         and _body(record).get("outcome") == "attempted"
-        and _trace_id(record) is not None
+        and (
+            _send_attempt_id(record) is not None
+            if require_send_attempt_id
+            else _trace_id(record) is not None
+        )
     ]
     request = exact[0] if len(candidates) == len(exact) == 1 and not forbidden else None
     return (
@@ -129,6 +152,7 @@ def _request_evidence(
             "forbiddenV2PacketCount": len(forbidden),
             "sequence": _sequence(request) or None,
             "traceId": _trace_id(request),
+            "sendAttemptId": _send_attempt_id(request),
             "payloadHex": _payload(request).hex() if _payload(request) is not None else None,
             "expectedPayloadHex": expected_payload.hex(),
         },
@@ -143,7 +167,7 @@ def _send_outcome_evidence(
     request: dict[str, Any] | None,
     required: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    trace_id = _trace_id(request)
+    send_attempt_id = _send_attempt_id(request)
     candidates = [
         record
         for record in records
@@ -151,7 +175,7 @@ def _send_outcome_evidence(
         and record.get("family") == "ed2k_server_udp"
         and record.get("event") == "send_outcome"
         and str(_keys(record).get("peer") or "").casefold() == udp_endpoint.casefold()
-        and _trace_id(record) == trace_id
+        and _send_attempt_id(record) == send_attempt_id
         and _keys(record).get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
         and _body(record).get("opcode") == ed2k_wire.OP_GLOBGETSOURCES
     ]
@@ -175,6 +199,7 @@ def _send_outcome_evidence(
             "successfulOutcomeCount": len(exact),
             "sequence": _sequence(outcome) or None,
             "traceId": _trace_id(outcome),
+            "sendAttemptId": _send_attempt_id(outcome),
             "outcome": _body(outcome).get("outcome") if outcome is not None else None,
             "deliveryKnown": _body(outcome).get("deliveryKnown") if outcome is not None else None,
         },
@@ -488,6 +513,7 @@ def build_server_udp_source_v1_diagnostic_evidence(
             records_by_client[client],
             udp_endpoint=target_udp_endpoint,
             expected_payload=expected_request_payload,
+            require_send_attempt_id=client == "rust",
         )
         outcome_summary, outcome = _send_outcome_evidence(
             records_by_client[client],

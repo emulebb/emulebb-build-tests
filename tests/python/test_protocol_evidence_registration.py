@@ -992,6 +992,7 @@ def _server_udp_source_v1_records(
         *,
         opcode: int,
         trace_id: int,
+        send_attempt_id: int | None = None,
         direction: str,
         outcome: str,
         payload: bytes | None = None,
@@ -1016,6 +1017,9 @@ def _server_udp_source_v1_records(
             "obfuscated": False,
             "traceId": trace_id,
         }
+        if send_attempt_id is not None:
+            keys["sendAttemptId"] = send_attempt_id
+            body["sendAttemptId"] = send_attempt_id
         if payload is not None:
             body.update(
                 {
@@ -1044,7 +1048,8 @@ def _server_udp_source_v1_records(
             1,
             "packet",
             opcode=ed2k_wire.OP_GLOBGETSOURCES,
-            trace_id=31,
+            trace_id=0 if client == "rust" else 31,
+            send_attempt_id=5 if client == "rust" else None,
             direction="send",
             outcome="attempted",
             payload=request_payload,
@@ -1057,7 +1062,8 @@ def _server_udp_source_v1_records(
                 next_sequence,
                 "send_outcome",
                 opcode=ed2k_wire.OP_GLOBGETSOURCES,
-                trace_id=31,
+                trace_id=0,
+                send_attempt_id=5,
                 direction="send",
                 outcome="send_succeeded",
                 body_extra={"deliveryKnown": True},
