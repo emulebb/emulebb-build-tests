@@ -5,7 +5,10 @@ from typing import Any
 
 import pytest
 
-from emule_test_harness import ed2k_wire, server_callback_diagnostic_evidence as evidence
+from emule_test_harness import (
+    ed2k_wire,
+    server_callback_diagnostic_evidence as evidence,
+)
 
 
 SERVER_ENDPOINT = "172.17.0.2:4661"
@@ -87,6 +90,13 @@ def requester_result(
     client: str, client_id: int, tcp_port: int, user_hash_byte: int
 ) -> dict[str, object]:
     payload = ed2k_wire.encode_callback_request(client_id)
+    user_hash = bytes([user_hash_byte]) * 16
+    hello_payload = (
+        bytes([16])
+        + user_hash
+        + client_id.to_bytes(4, "little")
+        + tcp_port.to_bytes(2, "little")
+    )
     return {
         "schema": "emulebb.docker-ed2k-source-publisher.callback-result/1",
         "status": "completed",
@@ -105,9 +115,11 @@ def requester_result(
             "payloadHex": payload.hex(),
         },
         "callbackConnection": {
-            "userHash": (bytes([user_hash_byte]) * 16).hex().upper(),
-            "clientId": 0,
+            "userHash": user_hash.hex().upper(),
+            "clientId": client_id,
             "tcpPort": tcp_port,
+            "payloadLength": len(hello_payload),
+            "payloadHex": hello_payload.hex().upper(),
             "peerHost": "198.18.240.1",
             "peerPort": 50000 + client_id,
         },
@@ -143,9 +155,7 @@ def test_bilateral_callback_reply_and_connect_are_claimable() -> None:
     report = passing_report()
 
     evidence.require_server_callback_diagnostic_evidence(report)
-    assert report["coverageClaims"]["eligibleCoverageIds"] == [
-        "server.reply.callback"
-    ]
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["server.reply.callback"]
     assert report["expectedReplyPayloadHex"] == REPLY_PAYLOAD.hex().upper()
     assert report["clients"]["rust"]["target"]["clientId"] == 7
     assert report["clients"]["mfc"]["target"]["clientId"] == 9
@@ -162,9 +172,7 @@ def test_callback_application_must_follow_reply_on_same_trace() -> None:
 
 @pytest.mark.unit
 def test_duplicate_callback_reply_is_ambiguous() -> None:
-    report = passing_report(
-        mfc_records=[packet(20, 2), packet(21, 2), applied(22, 2)]
-    )
+    report = passing_report(mfc_records=[packet(20, 2), packet(21, 2), applied(22, 2)])
 
     assert report["ok"] is False
     assert report["clients"]["mfc"]["wire"]["packetCount"] == 2
@@ -177,6 +185,18 @@ def test_callback_connection_must_match_target_login_identity() -> None:
         **wrong["callbackConnection"],  # type: ignore[dict-item]
         "userHash": "FF" * 16,
     }
+    report = passing_report(rust_result=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["requester"]["ok"] is False
+
+
+@pytest.mark.unit
+def test_callback_connection_fields_must_match_retained_hello_payload() -> None:
+    wrong = requester_result("rust", 7, 4662, 0x11)
+    connection = wrong["callbackConnection"]
+    assert isinstance(connection, dict)
+    connection["payloadHex"] = str(connection["payloadHex"]).replace("11", "FF", 1)
     report = passing_report(rust_result=wrong)
 
     assert report["ok"] is False

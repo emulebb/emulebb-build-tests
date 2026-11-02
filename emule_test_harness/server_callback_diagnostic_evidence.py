@@ -65,9 +65,7 @@ def _peer(record: dict[str, Any]) -> str:
 def _payload(record: dict[str, Any] | None) -> bytes | None:
     body = _body(record)
     payload_hex = body.get("payloadHex")
-    if body.get("payloadHexTruncated") is not False or not isinstance(
-        payload_hex, str
-    ):
+    if body.get("payloadHexTruncated") is not False or not isinstance(payload_hex, str):
         return None
     try:
         payload = bytes.fromhex(payload_hex)
@@ -142,6 +140,29 @@ def _target(value: object) -> dict[str, Any]:
     }
 
 
+def _hello_identity(value: object) -> dict[str, object] | None:
+    connection = value if isinstance(value, dict) else {}
+    payload_hex = connection.get("payloadHex")
+    if not isinstance(payload_hex, str):
+        return None
+    try:
+        payload = bytes.fromhex(payload_hex)
+    except ValueError:
+        return None
+    if (
+        payload_hex != payload.hex().upper()
+        or connection.get("payloadLength") != len(payload)
+        or len(payload) < 23
+        or payload[0] != 16
+    ):
+        return None
+    return {
+        "userHash": payload[1:17].hex().upper(),
+        "clientId": int.from_bytes(payload[17:21], "little"),
+        "tcpPort": int.from_bytes(payload[21:23], "little"),
+    }
+
+
 def _requester_result(
     value: object,
     *,
@@ -150,9 +171,7 @@ def _requester_result(
 ) -> dict[str, Any]:
     result = value if isinstance(value, dict) else {}
     request_payload = (
-        ed2k_wire.encode_callback_request(target["clientId"])
-        if target["ok"]
-        else b""
+        ed2k_wire.encode_callback_request(target["clientId"]) if target["ok"] else b""
     )
     transcript = (
         result.get("requestTranscript")
@@ -164,6 +183,7 @@ def _requester_result(
         if isinstance(result.get("callbackConnection"), dict)
         else {}
     )
+    hello_identity = _hello_identity(connection)
     request_hash = hashlib.sha256(request_payload).hexdigest()
     ok = bool(
         target["ok"]
@@ -179,10 +199,16 @@ def _requester_result(
         and transcript.get("opcode") == ed2k_wire.OP_CALLBACKREQUEST
         and transcript.get("payloadLength") == len(request_payload)
         and transcript.get("payloadSha256") == request_hash
-        and str(transcript.get("payloadHex") or "").casefold()
-        == request_payload.hex()
+        and str(transcript.get("payloadHex") or "").casefold() == request_payload.hex()
         and str(connection.get("userHash") or "").upper() == target["userHash"]
+        and connection.get("clientId") == target["clientId"]
         and connection.get("tcpPort") == target["tcpPort"]
+        and hello_identity
+        == {
+            "userHash": target["userHash"],
+            "clientId": target["clientId"],
+            "tcpPort": target["tcpPort"],
+        }
     )
     return {
         "ok": ok,
@@ -232,9 +258,7 @@ def _client_evidence(
         and _body(record).get("callbackEndpoint")
         == f"{decoded['peer_host']}:{decoded['peer_port']}"
         and _body(record).get("connectOptions") == decoded["connect_options"]
-        and (
-            str(_body(record).get("userHash") or "").upper() or None
-        )
+        and (str(_body(record).get("userHash") or "").upper() or None)
         == decoded["user_hash"]
         and _body(record).get("payloadLen") == decoded["payload_length"]
         and _body(record).get("stateId") == "server.callback.request_applied"
@@ -334,8 +358,12 @@ def build_server_callback_diagnostic_evidence(
             (row["wire"]["decoded"] or {}).get("has_crypt_profile") is False
             for row in clients.values()
         ),
-        "bothApplied": all(row["application"]["ok"] is True for row in clients.values()),
-        "bothConnected": all(row["requester"]["ok"] is True for row in clients.values()),
+        "bothApplied": all(
+            row["application"]["ok"] is True for row in clients.values()
+        ),
+        "bothConnected": all(
+            row["requester"]["ok"] is True for row in clients.values()
+        ),
     }
     comparison["ok"] = all(comparison.values())
     failures = [
@@ -366,12 +394,16 @@ def require_server_callback_diagnostic_evidence(report: dict[str, Any]) -> None:
     """Raises unless both selected clients causally applied the callback reply."""
 
     if report.get("schema") != SCHEMA:
-        raise RuntimeError("Deterministic server-callback diagnostics have an unexpected schema")
+        raise RuntimeError(
+            "Deterministic server-callback diagnostics have an unexpected schema"
+        )
     if report.get("ok") is not True:
         raise RuntimeError(
             "Deterministic server-callback diagnostics are incomplete: "
             f"{report.get('failures')!r}"
         )
     claims = report.get("coverageClaims")
-    if not isinstance(claims, dict) or claims.get("eligibleCoverageIds") != [COVERAGE_ID]:
+    if not isinstance(claims, dict) or claims.get("eligibleCoverageIds") != [
+        COVERAGE_ID
+    ]:
         raise RuntimeError("Deterministic server-callback coverage claims are invalid")
