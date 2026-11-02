@@ -81,6 +81,26 @@ def test_rust_route_inventory_reads_chained_axum_methods(tmp_path: Path) -> None
     }
 
 
+def test_rust_route_inventory_does_not_borrow_methods_from_later_source(tmp_path: Path) -> None:
+    routes_rs = write(
+        tmp_path / "routes.rs",
+        '''
+        Router::new().route(
+            "/api/v1/diagnostics/protocol-fixtures/queued-lowid-sources",
+            post(create_fixture),
+        );
+
+        async fn unrelated() {
+            let _handler = get(read_something);
+        }
+        ''',
+    )
+
+    assert rust_route_inventory(routes_rs) == {
+        Route("POST", "/diagnostics/protocol-fixtures/queued-lowid-sources"),
+    }
+
+
 def test_openapi_route_inventory_reads_path_methods(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",

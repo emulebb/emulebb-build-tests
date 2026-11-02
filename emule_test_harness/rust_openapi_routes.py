@@ -12,7 +12,11 @@ from typing import Iterable
 import yaml
 
 from .paths import get_required_emule_workspace_root
-from .rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
+from .rust_rest_contract import (
+    REST_CONTRACT_VERSION,
+    REST_CONTRACT_VERSION_HEADER,
+    RUST_PRIVATE_DIAGNOSTICS_ROUTES,
+)
 
 HTTP_METHODS = ("delete", "get", "patch", "post", "put")
 API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
@@ -148,6 +152,12 @@ class Route:
 
     method: str
     path: str
+
+
+PRIVATE_DIAGNOSTICS_ROUTES = frozenset(
+    Route(method, path.removeprefix("/api/v1"))
+    for method, path in RUST_PRIVATE_DIAGNOSTICS_ROUTES
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -647,7 +657,7 @@ def rust_route_inventory(routes_rs: Path) -> set[Route]:
 
     text = routes_rs.read_text(encoding="utf-8")
     routes: set[Route] = set()
-    for chunk in text.split(".route(")[1:]:
+    for chunk in rust_call_arguments(text, ".route("):
         path_match = re.search(r'"([^"]+)"', chunk)
         if path_match is None:
             continue
@@ -659,6 +669,43 @@ def rust_route_inventory(routes_rs: Path) -> set[Route]:
             if re.search(rf"\b{method}\s*\(", chunk):
                 routes.add(Route(method.upper(), path))
     return routes
+
+
+def rust_call_arguments(text: str, marker: str) -> Iterable[str]:
+    """Yields balanced Rust call arguments without scanning later source."""
+
+    cursor = 0
+    while True:
+        marker_index = text.find(marker, cursor)
+        if marker_index < 0:
+            return
+        body_start = marker_index + len(marker)
+        depth = 1
+        quote: str | None = None
+        escaped = False
+        index = body_start
+        while index < len(text):
+            character = text[index]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = None
+            elif character in {'"', "'"}:
+                quote = character
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    yield text[body_start:index]
+                    cursor = index + 1
+                    break
+            index += 1
+        else:
+            return
 
 
 def openapi_route_inventory(openapi_yaml: Path) -> set[Route]:
@@ -4158,8 +4205,10 @@ def compare_route_contract(
     openapi_yaml: Path,
     responses_rs: Path | None = None,
     settings_surface_rs: Path | None = None,
+    *,
+    private_routes: Iterable[Route] = (),
 ) -> RouteDriftReport:
-    implemented = rust_route_inventory(routes_rs)
+    implemented = rust_route_inventory(routes_rs) - set(private_routes)
     documented = openapi_route_inventory(openapi_yaml)
     component_ref_drift = openapi_component_ref_drift(openapi_yaml)
     operation_metadata_drift = openapi_operation_metadata_drift(openapi_yaml)
@@ -4317,6 +4366,7 @@ def run_cli(argv: list[str] | None = None) -> int:
         openapi_yaml,
         responses_rs,
         settings_surface_rs,
+        private_routes=PRIVATE_DIAGNOSTICS_ROUTES,
     )
     if args.json:
         print(json.dumps(report.as_json_dict(), indent=2, sort_keys=True))
