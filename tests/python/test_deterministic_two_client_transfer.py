@@ -817,6 +817,7 @@ def test_callback_scenarios_accept_only_plaintext_mfc_oracle_lane() -> None:
     for scenario in (
         module.SERVER_CALLBACK_REPLY,
         module.DIRECT_CALLBACK,
+        module.BUDDY_CALLBACK,
         module.RELAYED_REASK,
     ):
         wrong_client = module.parse_args(
@@ -1268,6 +1269,26 @@ def test_choose_distinct_ports_adds_dedicated_callback_requester(monkeypatch) ->
     )
 
     assert ports["callback_requester_tcp"] == 6210
+    assert len(ports) == len(set(ports.values()))
+
+
+def test_choose_distinct_ports_adds_buddy_callback_endpoints(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(module, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MIN", 6200)
+    monkeypatch.setattr(module, "ED2K_LOCAL_PORT_MAX", 6212)
+    monkeypatch.setattr(module.random, "randrange", lambda _start, _stop: 6200)
+
+    ports = module.choose_distinct_ports(
+        "172.24.112.1",
+        include_callback_requester=True,
+        include_buddy_callback_probe=True,
+    )
+
+    assert ports["callback_requester_tcp"] == 6210
+    assert ports["buddy_callback_buddy_tcp"] == 6211
+    assert ports["buddy_callback_buddy_udp"] == 6212
     assert len(ports) == len(set(ports.values()))
 
 
@@ -1731,7 +1752,7 @@ def test_server_callback_reuses_bilateral_runner_and_controlled_highid_peer() ->
 
     assert module.SERVER_CALLBACK_REPLY in module.TRANSFER_SCENARIOS
     assert "include_callback_requester=args.transfer_scenario" in script_text
-    assert "in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK}" in script_text
+    assert "in {SERVER_CALLBACK_REPLY, DIRECT_CALLBACK, BUDDY_CALLBACK}" in script_text
     assert "server_callback_requester.request_callback(" in script_text
     assert 'for client in ("mfc", "rust"):' in script_text
     assert "callback_targets_from_login_evidence(" in script_text
@@ -1772,6 +1793,25 @@ def test_direct_callback_reuses_lowid_runner_with_isolated_kad_and_exact_probe()
         in script_text
     )
     assert "direct_callback_evidence=direct_callback_evidence" in script_text
+
+
+def test_buddy_callback_reuses_canonical_runner_with_real_relay_chain() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert module.BUDDY_CALLBACK in module.TRANSFER_SCENARIOS
+    assert '"buddyCallbackKadIsolation"' in script_text
+    assert 'buddy_callback_kad_isolation["launchInputs"]' in script_text
+    assert '"client1_buddy_callback_kad_start"' in script_text
+    assert '"client_buddy_callback_kad_running"' in script_text
+    assert "buddy_callback_probe.BuddyCallbackProbe(" in script_text
+    assert "prepare_buddy_relay_eligibility(" in script_text
+    assert "collect_buddy_callback_diagnostics(" in script_text
+    assert (
+        "buddy_callback_diagnostic_evidence.require_buddy_callback_diagnostic_evidence("
+        in script_text
+    )
+    assert "buddy_callback_evidence=buddy_callback_evidence" in script_text
 
 
 def test_retain_launch_input_copies_exact_bytes_and_receipts(tmp_path: Path) -> None:
@@ -1973,9 +2013,7 @@ def test_wait_for_mfc_mutation_ready_records_startup_transition(monkeypatch) -> 
         lambda resolve, *_args: resolve() or resolve(),
     )
 
-    result = module.wait_for_mfc_mutation_ready(
-        "http://127.0.0.1:4711", "secret", 1.0
-    )
+    result = module.wait_for_mfc_mutation_ready("http://127.0.0.1:4711", "secret", 1.0)
 
     assert result["lifecycle"]["state"] == "running"
     assert [row["lifecycle"]["state"] for row in result["observations"]] == [
@@ -2016,9 +2054,7 @@ def test_wait_for_mfc_mutation_ready_rejects_incomplete_lifecycle(monkeypatch) -
     )
 
     with pytest.raises(RuntimeError, match="accept mutations") as exc_info:
-        module.wait_for_mfc_mutation_ready(
-            "http://127.0.0.1:4711", "secret", 1.0
-        )
+        module.wait_for_mfc_mutation_ready("http://127.0.0.1:4711", "secret", 1.0)
 
     assert "'acceptingMutations': False" in str(exc_info.value)
 
@@ -3505,6 +3541,73 @@ def test_install_queued_lowid_source_requires_exact_normalized_receipt(
             receipt["request"],
         )
     ]
+
+
+def test_prepare_buddy_relay_eligibility_requires_exact_receipt(monkeypatch) -> None:
+    module = load_suite_module()
+    expected = {
+        "prepared": True,
+        "tcpFirewalled": False,
+        "udpVerified": True,
+        "udpOpen": True,
+        "state": "buddy-relay-eligible",
+    }
+    calls: list[tuple[str, str]] = []
+
+    def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
+        calls.append((method, path))
+        return {
+            "status": 200,
+            "json": expected,
+            "raw_json": {"data": expected, "meta": {"apiVersion": "v1"}},
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "compact_http_result",
+        lambda result: {"status": result["status"], "json": result["json"]},
+    )
+
+    receipt = module.prepare_buddy_relay_eligibility(
+        "http://127.0.0.1:4711",
+        "key",
+    )
+
+    assert receipt == {
+        "request": {
+            "method": "POST",
+            "path": module.buddy_callback_diagnostic_evidence.CONTROL_PATH,
+        },
+        "response": {"status": 200, "json": expected},
+    }
+    assert calls == [("POST", module.buddy_callback_diagnostic_evidence.CONTROL_PATH)]
+
+
+def test_prepare_buddy_relay_eligibility_rejects_extra_fields(monkeypatch) -> None:
+    module = load_suite_module()
+
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": {
+                "prepared": True,
+                "tcpFirewalled": False,
+                "udpVerified": True,
+                "udpOpen": True,
+                "state": "buddy-relay-eligible",
+                "legacy": True,
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="non-canonical receipt"):
+        module.prepare_buddy_relay_eligibility(
+            "http://127.0.0.1:4711",
+            "key",
+        )
 
 
 def test_install_queued_lowid_source_rejects_extra_response_fields(monkeypatch) -> None:
