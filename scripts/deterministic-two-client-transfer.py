@@ -116,6 +116,7 @@ SERVER_SOURCE_PUBLISHER_HASH = bytes.fromhex("32547698BADCFE1021436587A9CBED0F")
 SERVER_SOURCE_PUBLISHER_NICK = "emulebb-harness-source-publisher"
 SERVER_CALLBACK_REQUESTER_HASH = bytes.fromhex("426486A8CAEC0E20426486A8CAEC6E00")
 SERVER_CALLBACK_REQUESTER_NICK = "emulebb-harness-callback-requester"
+SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS = 20.0
 SERVER_CALLBACK_FILE_HASH = bytes.fromhex("33445566778899001122AABBCCDDEEFF")
 SERVER_CALLBACK_FILE_NAME = "deterministic-server-callback.bin"
 SERVER_CALLBACK_FILE_SIZE = 23_456
@@ -3678,7 +3679,7 @@ def main(argv: list[str] | None = None) -> int:
                 callback_results[client] = server_callback_requester.request_callback(
                     target_client_id=target_id,
                     target_label=client,
-                    timeout_seconds=args.server_publish_timeout_seconds,
+                    timeout_seconds=SERVER_CALLBACK_CONNECT_TIMEOUT_SECONDS,
                 )
             report["checks"]["client_server_callback_requests"] = callback_results
             current_phase = "collect_server_callback_diagnostics"

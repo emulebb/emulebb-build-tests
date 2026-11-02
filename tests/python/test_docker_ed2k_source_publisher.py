@@ -158,7 +158,39 @@ def test_identity_probe_details_preserve_callback_peer_hello() -> None:
         "tcpPort": 4661,
         "payloadLength": len(hello_payload),
         "payloadHex": hello_payload.hex().upper(),
+        "helloAnswerSent": True,
+        "helloAnswerError": None,
     }
+
+
+@pytest.mark.unit
+def test_callback_peer_hello_survives_answer_socket_close() -> None:
+    probe_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
+    hello_payload = (
+        b"\x10"
+        + probe_hash
+        + (7).to_bytes(4, "little")
+        + (4661).to_bytes(2, "little")
+        + (0).to_bytes(4, "little")
+    )
+
+    class ClosingStream(FakeStream):
+        def sendall(self, _value: bytes) -> None:
+            raise ConnectionResetError("peer closed")
+
+    stream = ClosingStream(ed2k_wire.encode_frame(publisher.OP_HELLO, hello_payload))
+    observation = publisher._answer_identity_probe(
+        stream,  # type: ignore[arg-type]
+        user_hash=USER_HASH,
+        client_id=publisher.PUBLISHER_HIGH_ID,
+        tcp_port=PUBLISHER_PORT,
+    )
+
+    assert observation is not None
+    assert observation["userHash"] == probe_hash.hex().upper()
+    assert observation["tcpPort"] == 4661
+    assert observation["helloAnswerSent"] is False
+    assert observation["helloAnswerError"] == "ConnectionResetError: peer closed"
 
 
 @pytest.mark.unit
@@ -294,6 +326,12 @@ def test_callback_command_joins_exact_request_to_new_peer_hello(tmp_path: Path) 
     class FakeListener:
         def observation_count(self) -> int:
             return 2
+
+        def connection_attempt_count(self) -> int:
+            return 3
+
+        def connection_attempts_after(self, _start_index: int) -> list[dict[str, object]]:
+            return []
 
         def wait_for_observation_after(
             self, start_index: int, timeout_seconds: float

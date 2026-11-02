@@ -688,19 +688,29 @@ def _answer_identity_probe(
     peer_user_hash = frame.payload[1:17]
     peer_client_id = int.from_bytes(frame.payload[17:21], "little")
     peer_tcp_port = int.from_bytes(frame.payload[21:23], "little")
-    stream.sendall(
-        encode_hello_answer(
-            user_hash=user_hash,
-            client_id=client_id,
-            tcp_port=tcp_port,
+    hello_answer_sent = True
+    hello_answer_error: str | None = None
+    try:
+        stream.sendall(
+            encode_hello_answer(
+                user_hash=user_hash,
+                client_id=client_id,
+                tcp_port=tcp_port,
+            )
         )
-    )
+    except (OSError, TimeoutError) as exc:
+        # The callback proof is the complete peer HELLO. Preserve that causal
+        # observation even when the peer closes before consuming our answer.
+        hello_answer_sent = False
+        hello_answer_error = f"{type(exc).__name__}: {exc}"
     return {
         "userHash": peer_user_hash.hex().upper(),
         "clientId": peer_client_id,
         "tcpPort": peer_tcp_port,
         "payloadLength": len(frame.payload),
         "payloadHex": frame.payload.hex().upper(),
+        "helloAnswerSent": hello_answer_sent,
+        "helloAnswerError": hello_answer_error,
     }
 
 
@@ -732,6 +742,7 @@ class PlainEd2kIdentityProbeListener:
         self.user_hash = _parse_hash(user_hash, "user_hash")
         self.probe_answers = 0
         self._observations: list[dict[str, object]] = []
+        self._connection_attempts: list[dict[str, object]] = []
         self._observation_condition = threading.Condition()
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
@@ -768,6 +779,11 @@ class PlainEd2kIdentityProbeListener:
                 continue
             except OSError:
                 break
+            attempt: dict[str, object] = {
+                "peerHost": str(peer[0]),
+                "peerPort": int(peer[1]),
+                "acceptedAt": time.time(),
+            }
             try:
                 stream.settimeout(2.0)
                 observation = _answer_identity_probe(
@@ -777,6 +793,7 @@ class PlainEd2kIdentityProbeListener:
                     tcp_port=self.tcp_port,
                 )
                 if observation is not None:
+                    attempt.update({"status": "hello", **observation})
                     self.probe_answers += 1
                     observation = {
                         **observation,
@@ -787,11 +804,22 @@ class PlainEd2kIdentityProbeListener:
                     with self._observation_condition:
                         self._observations.append(observation)
                         self._observation_condition.notify_all()
-            except (OSError, TimeoutError, ed2k_wire.Ed2kWireError):
+                else:
+                    attempt["status"] = "unrelated-frame"
+            except (OSError, TimeoutError, ed2k_wire.Ed2kWireError) as exc:
                 # A normal HighID decision first performs a bare connect and
                 # closes it without sending bytes.  That is expected traffic.
-                pass
+                attempt.update(
+                    {
+                        "status": "error",
+                        "errorType": type(exc).__name__,
+                        "errorMessage": str(exc) or repr(exc),
+                    }
+                )
             finally:
+                with self._observation_condition:
+                    self._connection_attempts.append(attempt)
+                    self._observation_condition.notify_all()
                 stream.close()
 
     def observation_count(self) -> int:
@@ -799,6 +827,18 @@ class PlainEd2kIdentityProbeListener:
 
         with self._observation_condition:
             return len(self._observations)
+
+    def connection_attempt_count(self) -> int:
+        """Returns the number of accepted sockets, including bare HighID probes."""
+
+        with self._observation_condition:
+            return len(self._connection_attempts)
+
+    def connection_attempts_after(self, start_index: int) -> list[dict[str, object]]:
+        """Returns immutable diagnostic copies of accepted sockets after an index."""
+
+        with self._observation_condition:
+            return [dict(value) for value in self._connection_attempts[start_index:]]
 
     def wait_for_observation_after(
         self,
@@ -917,12 +957,20 @@ def _execute_callback_command(
         raise DockerEd2kSourcePublisherError("Docker callback command request payload does not match")
 
     observation_index = listener.observation_count()
+    connection_attempt_index = listener.connection_attempt_count()
     transcript_index = len(client.transcript)
     client.send(ed2k_wire.OP_CALLBACKREQUEST, request_payload)
-    callback_connection = listener.wait_for_observation_after(
-        observation_index,
-        float(timeout_seconds),
-    )
+    try:
+        callback_connection = listener.wait_for_observation_after(
+            observation_index,
+            float(timeout_seconds),
+        )
+    except TimeoutError as exc:
+        attempts = listener.connection_attempts_after(connection_attempt_index)
+        raise DockerEd2kSourcePublisherError(
+            "Timed out waiting for callback peer HELLO; "
+            f"connectionAttempts={json.dumps(attempts, sort_keys=True)}"
+        ) from exc
     transcript_delta = list(client.transcript[transcript_index:])
     if len(transcript_delta) != 1:
         raise DockerEd2kSourcePublisherError(
