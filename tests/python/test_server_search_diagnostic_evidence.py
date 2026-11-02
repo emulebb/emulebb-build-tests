@@ -37,7 +37,7 @@ def record(
 
 
 def request_record(client: str, seq: int, trace_id: int, send_attempt_id: int | None) -> dict[str, object]:
-    payload = ed2k_wire.encode_term_search(QUERY)
+    payload = ed2k_wire.encode_search_request(QUERY)
     keys: dict[str, object] = {
         "opcode": evidence.SEARCH_REQUEST_OPCODE,
         "peer": ENDPOINT,
@@ -310,7 +310,7 @@ def test_duplicate_mfc_request_is_not_causally_attributable() -> None:
 
 def test_mismatched_query_payload_is_rejected() -> None:
     records = rust_records()
-    payload = ed2k_wire.encode_term_search("some-other-query")
+    payload = ed2k_wire.encode_search_request("some-other-query")
     records[1]["body"]["payloadHex"] = payload.hex()
     records[1]["body"]["payloadLen"] = len(payload)
 

@@ -385,7 +385,7 @@ def _derived_server_search_coverage_ids(
     query = search.get("query")
     if not isinstance(query, str) or not query:
         raise ValueError("server search query must be a non-empty string")
-    expected_payload_hex = ed2k_wire.encode_term_search(query).hex()
+    expected_payload_hex = ed2k_wire.encode_search_request(query).hex()
     driven_searches = _object(
         checks.get("client_server_searches"),
         "checks.client_server_searches",

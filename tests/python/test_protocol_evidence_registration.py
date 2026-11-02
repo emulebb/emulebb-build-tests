@@ -269,7 +269,7 @@ def driven_server_search(client: str, search_id: str) -> dict[str, object]:
 def bilateral_search_evidence(
     driven_searches: dict[str, dict[str, object]],
 ) -> dict[str, object]:
-    payload_hex = ed2k_wire.encode_term_search(SEARCH_QUERY).hex()
+    payload_hex = ed2k_wire.encode_search_request(SEARCH_QUERY).hex()
     wire_result = {
         "hash": SEARCH_FILE_HASH.upper(),
         "name": SEARCH_FILE_NAME,

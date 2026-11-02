@@ -9,6 +9,38 @@ from emule_test_harness import ed2k_wire
 
 
 @pytest.mark.unit
+def test_server_search_request_codec_preserves_keyword_wire_shape() -> None:
+    assert ed2k_wire.encode_search_request("fixture") == b"\x01\x07\x00fixture"
+
+
+@pytest.mark.unit
+def test_server_search_request_codec_matches_stock_size_expression() -> None:
+    encoded = ed2k_wire.encode_search_request(
+        "fixture",
+        ed2k_wire.ServerSearchCriteria(
+            min_size_bytes=12_345,
+            max_size_bytes=12_345,
+        ),
+    )
+
+    assert encoded == (
+        b"\x00\x00"
+        b"\x01\x07\x00fixture"
+        b"\x00\x00"
+        b"\x03\x39\x30\x00\x00\x03\x01\x00\x02"
+        b"\x03\x39\x30\x00\x00\x04\x01\x00\x02"
+    )
+
+
+@pytest.mark.unit
+def test_server_search_criteria_rejects_invalid_size_ranges() -> None:
+    with pytest.raises(ValueError, match="positive u32"):
+        ed2k_wire.ServerSearchCriteria(min_size_bytes=0)
+    with pytest.raises(ValueError, match="greater than or equal"):
+        ed2k_wire.ServerSearchCriteria(min_size_bytes=2, max_size_bytes=1)
+
+
+@pytest.mark.unit
 def test_clear_and_packed_frames_decode_to_the_same_payload() -> None:
     payload = b"protocol evidence"
     clear = ed2k_wire.encode_frame(0x42, payload)

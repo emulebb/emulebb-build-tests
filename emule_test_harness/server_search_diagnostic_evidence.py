@@ -481,7 +481,7 @@ def build_server_search_diagnostic_evidence(
     if not isinstance(driven_searches, dict) or set(driven_searches) != set(CLIENTS):
         raise ValueError("Driven server searches must contain exactly rust and mfc.")
 
-    expected_request_payload = ed2k_wire.encode_term_search(normalized_query)
+    expected_request_payload = ed2k_wire.encode_search_request(normalized_query)
     records_by_client = {"rust": list(rust_records), "mfc": list(mfc_records)}
     clients: dict[str, dict[str, Any]] = {}
     failures: list[str] = []

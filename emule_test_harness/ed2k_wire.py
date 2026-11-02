@@ -86,9 +86,42 @@ COMPLETE_FILE_ID = 0xFBFB_FBFB
 COMPLETE_FILE_PORT = 0xFBFB
 MAX_FRAME_BYTES = 8_000_000
 
+SEARCH_PARAM_BOOLEAN = 0x00
+SEARCH_PARAM_STRING = 0x01
+SEARCH_PARAM_NUMERIC32 = 0x03
+SEARCH_BOOL_AND = 0x00
+SEARCH_OP_GREATER_EQUAL = 0x03
+SEARCH_OP_LESS_EQUAL = 0x04
+
 
 class Ed2kWireError(RuntimeError):
     """Raised for malformed, truncated, or unexpected eD2K traffic."""
+
+
+@dataclass(frozen=True)
+class ServerSearchCriteria:
+    """Deterministic subset of stock eD2K server-search constraints."""
+
+    min_size_bytes: int | None = None
+    max_size_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("min_size_bytes", self.min_size_bytes),
+            ("max_size_bytes", self.max_size_bytes),
+        ):
+            if value is not None and (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not 0 < value <= 0xFFFF_FFFF
+            ):
+                raise ValueError(f"{field_name} must be a positive u32 when set")
+        if (
+            self.min_size_bytes is not None
+            and self.max_size_bytes is not None
+            and self.max_size_bytes < self.min_size_bytes
+        ):
+            raise ValueError("max_size_bytes must be greater than or equal to min_size_bytes")
 
 
 @dataclass(frozen=True)
@@ -651,16 +684,61 @@ def encode_hash_search(file_hash: bytes) -> bytes:
 
     if len(file_hash) != 16:
         raise ValueError("file_hash must be 16 bytes")
-    return encode_term_search(f"ed2k::{file_hash.hex().upper()}")
+    return encode_search_request(f"ed2k::{file_hash.hex().upper()}")
 
 
-def encode_term_search(term: str) -> bytes:
-    """Builds one compact string-term SEARCHREQUEST expression."""
+def _encode_size_search_leaf(value: int, operator: int) -> bytes:
+    return (
+        bytes([SEARCH_PARAM_NUMERIC32])
+        + struct.pack("<I", value)
+        + bytes([operator])
+        + struct.pack("<H", 1)
+        + bytes([FT_FILESIZE])
+    )
+
+
+def _fold_search_and(leaves: list[bytes]) -> bytes:
+    if not leaves:
+        return b""
+    folded = leaves[-1]
+    for leaf in reversed(leaves[:-1]):
+        folded = bytes([SEARCH_PARAM_BOOLEAN, SEARCH_BOOL_AND]) + leaf + folded
+    return folded
+
+
+def encode_search_request(
+    term: str,
+    criteria: ServerSearchCriteria | None = None,
+) -> bytes:
+    """Builds the exact stock SEARCHREQUEST expression for one server search."""
 
     encoded = term.encode("utf-8")
     if not encoded or len(encoded) > 0xFFFF:
         raise ValueError("search term must encode to 1..65535 bytes")
-    return b"\x01" + struct.pack("<H", len(encoded)) + encoded
+    keyword = bytes([SEARCH_PARAM_STRING]) + struct.pack("<H", len(encoded)) + encoded
+    criteria = criteria or ServerSearchCriteria()
+    constraints: list[bytes] = []
+    if criteria.min_size_bytes is not None:
+        constraints.append(
+            _encode_size_search_leaf(
+                criteria.min_size_bytes,
+                SEARCH_OP_GREATER_EQUAL,
+            )
+        )
+    if criteria.max_size_bytes is not None:
+        constraints.append(
+            _encode_size_search_leaf(
+                criteria.max_size_bytes,
+                SEARCH_OP_LESS_EQUAL,
+            )
+        )
+    if not constraints:
+        return keyword
+    return (
+        bytes([SEARCH_PARAM_BOOLEAN, SEARCH_BOOL_AND])
+        + keyword
+        + _fold_search_and(constraints)
+    )
 
 
 def encode_source_request(file_hash: bytes, size: int) -> bytes:
@@ -931,7 +1009,7 @@ class Ed2kWireClient:
     def search_term(self, term: str) -> list[dict[str, object]]:
         """Runs one keyword search and returns its decoded result page."""
 
-        self.send(OP_SEARCHREQUEST, encode_term_search(term))
+        self.send(OP_SEARCHREQUEST, encode_search_request(term))
         frame = self.receive_until({OP_SEARCHRESULT})
         return decode_search_results(frame.payload)
 
