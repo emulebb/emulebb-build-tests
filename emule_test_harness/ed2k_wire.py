@@ -9,7 +9,7 @@ import struct
 import time
 import zlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 
 PROTO_EDONKEY = 0xE3
@@ -28,6 +28,8 @@ OP_FOUNDSOURCES = 0x42
 OP_FOUNDSOURCES_OBFU = 0x44
 OP_GLOBSERVSTATREQ = 0x96
 OP_GLOBSERVSTATRES = 0x97
+OP_GLOBGETSOURCES = 0x9A
+OP_GLOBFOUNDSOURCES = 0x9B
 OP_SERVER_DESC_REQ = 0xA2
 OP_SERVER_DESC_RES = 0xA3
 
@@ -337,6 +339,111 @@ def decode_server_udp_status_response(
         "udp_key": udp_key,
         "trailing_hex": trailing.hex().upper(),
     }
+
+
+def _server_udp_payload(
+    datagram: bytes,
+    *,
+    expected_opcode: int,
+    message_name: str,
+) -> bytes:
+    """Returns the payload of one exact clear eD2K server UDP datagram."""
+
+    if len(datagram) < 2:
+        raise Ed2kWireError(f"{message_name} is shorter than its marker and opcode.")
+    marker, opcode = datagram[:2]
+    if marker != PROTO_EDONKEY:
+        raise Ed2kWireError(
+            f"{message_name} has unsupported protocol marker 0x{marker:02X}."
+        )
+    if opcode != expected_opcode:
+        raise Ed2kWireError(
+            f"{message_name} has opcode 0x{opcode:02X}, expected 0x{expected_opcode:02X}."
+        )
+    return datagram[2:]
+
+
+def encode_server_udp_source_v1_request(file_hashes: Iterable[bytes]) -> bytes:
+    """Encodes one clear ``OP_GLOBGETSOURCES`` hash-only datagram."""
+
+    hashes = tuple(file_hashes)
+    if not hashes:
+        raise ValueError("GLOBGETSOURCES requires at least one file hash")
+    if any(len(file_hash) != 16 for file_hash in hashes):
+        raise ValueError("each GLOBGETSOURCES file hash must be 16 bytes")
+    return bytes([PROTO_EDONKEY, OP_GLOBGETSOURCES]) + b"".join(hashes)
+
+
+def decode_server_udp_source_v1_request(datagram: bytes) -> dict[str, object]:
+    """Decodes one exact clear ``OP_GLOBGETSOURCES`` hash-only datagram."""
+
+    payload = _server_udp_payload(
+        datagram,
+        expected_opcode=OP_GLOBGETSOURCES,
+        message_name="GLOBGETSOURCES",
+    )
+    if not payload or len(payload) % 16:
+        raise Ed2kWireError(
+            "GLOBGETSOURCES payload must contain one or more complete 16-byte hashes."
+        )
+    hashes = [
+        payload[offset : offset + 16].hex().upper()
+        for offset in range(0, len(payload), 16)
+    ]
+    return {"hash_count": len(hashes), "hashes": hashes}
+
+
+def encode_server_udp_source_v1_reply(
+    *,
+    file_hash: bytes,
+    sources: Iterable[tuple[int, int]],
+) -> bytes:
+    """Encodes one clear IPv4 ``OP_GLOBFOUNDSOURCES`` datagram."""
+
+    if len(file_hash) != 16:
+        raise ValueError("file_hash must be 16 bytes")
+    source_rows = tuple(sources)
+    if len(source_rows) > 0xFF:
+        raise ValueError("GLOBFOUNDSOURCES source count must fit in one byte")
+    payload = bytearray(file_hash)
+    payload.append(len(source_rows))
+    for client_id, port in source_rows:
+        if (
+            not isinstance(client_id, int)
+            or isinstance(client_id, bool)
+            or not 0 <= client_id <= 0xFFFF_FFFF
+        ):
+            raise ValueError("GLOBFOUNDSOURCES client ID must fit in u32")
+        if (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or not 1 <= port <= 0xFFFF
+        ):
+            raise ValueError("GLOBFOUNDSOURCES TCP port must be in 1..65535")
+        payload.extend(struct.pack("<IH", client_id, port))
+    return bytes([PROTO_EDONKEY, OP_GLOBFOUNDSOURCES]) + bytes(payload)
+
+
+def decode_server_udp_source_v1_reply(datagram: bytes) -> dict[str, object]:
+    """Decodes one exact clear IPv4 ``OP_GLOBFOUNDSOURCES`` datagram."""
+
+    payload = _server_udp_payload(
+        datagram,
+        expected_opcode=OP_GLOBFOUNDSOURCES,
+        message_name="GLOBFOUNDSOURCES",
+    )
+    if len(payload) < 17:
+        raise Ed2kWireError(
+            "GLOBFOUNDSOURCES payload requires a 16-byte hash and source count."
+        )
+    source_count = payload[16]
+    expected_length = 17 + source_count * 6
+    if len(payload) != expected_length:
+        raise Ed2kWireError(
+            "GLOBFOUNDSOURCES payload length mismatch: "
+            f"expected {expected_length}, received {len(payload)}."
+        )
+    return decode_found_sources(payload, obfuscated=False)
 
 
 def decode_server_udp_description_request(payload: bytes) -> dict[str, int]:
