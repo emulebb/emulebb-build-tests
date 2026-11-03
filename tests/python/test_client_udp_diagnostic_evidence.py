@@ -1109,10 +1109,11 @@ def immutable_campaign_report(
         },
         "evidence": diagnostics,
     }
-    if scenario in {"v3", "clear", "encrypted"}:
+    if scenario in {"v2", "v3", "clear", "encrypted"}:
         raw_path = run_dir / f"client-udp-{scenario}-raw-evidence.json"
         raw_payload = {
             "schema": {
+                "v2": evidence.V2_RAW_EVIDENCE_SCHEMA,
                 "v3": evidence.V3_RAW_EVIDENCE_SCHEMA,
                 "clear": evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
                 "encrypted": evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,
@@ -2022,6 +2023,95 @@ def test_file_not_found_requires_source_removal_without_swap() -> None:
     assert client["sourceAbsence"]["ok"] is False
     assert client["diagnostics"]["counts"]["dropped"] == 0
     assert client["diagnostics"]["counts"]["forbiddenSwap"] == 1
+
+
+@pytest.mark.unit
+def test_immutable_client_udp_v2_campaign_builds_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_campaign_report(
+        tmp_path,
+        scenario="v2",
+    )
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="v2",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == "rust-mfc-client-udp-v2-20261102t123752z"
+    assert receipt["coverageIds"] == ["client-udp.v2"]
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.v2",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC advertised client UDP v2, emitted byte-identical "
+                "direct v2 hash-only reasks and rank-only ACKs, then causally "
+                "applied the same queue rank without complete-source or "
+                "part-status fields."
+            ),
+            "receiptIds": ["rust-mfc-client-udp-v2-20261102t123752z"],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_client_udp_v2_registration_rereduces_hashed_raw_diagnostics(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="v2",
+    )
+    raw_path = Path(report["rawEvidence"]["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    request = raw["transitions"][0]["requesterRecords"][3]["body"]
+    request.update(
+        {
+            "rawHex": V3_REQUEST_RAW.hex(),
+            "rawLen": len(V3_REQUEST_RAW),
+            "payloadHex": V3_REQUEST_RAW[2:].hex(),
+            "payloadLen": len(V3_REQUEST_RAW) - 2,
+        }
+    )
+    raw_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    report["rawEvidence"]["sizeBytes"] = raw_path.stat().st_size
+    report["rawEvidence"]["sha256"] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw client-UDP v2 diagnostics"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v2",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_v2_registration_rejects_campaign_version_mismatch(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="v2",
+    )
+    report["clientUdpVersion"] = 3
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="completed client-UDP v2 campaign"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v2",
+            output_root=output_root,
+        )
 
 
 @pytest.mark.unit

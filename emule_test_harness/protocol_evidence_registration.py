@@ -4583,7 +4583,7 @@ def _validate_client_udp_ack_client(
             if client_udp_version > 3
             else b""
         )
-        + bytes((1, 0))
+        + (bytes((1, 0)) if client_udp_version > 2 else b"")
     )
     wire = _object(client.get("wire"), f"evidence.clients.{client_id}.wire")
     if wire.get("ok") is not True:
@@ -4620,7 +4620,7 @@ def _validate_client_udp_ack_client(
             if client_udp_version > 3
             else None
         ),
-        "completeSourceCount": 1,
+        "completeSourceCount": 1 if client_udp_version > 2 else None,
     }
     expected_ack = {
         "ok": True,
@@ -5681,8 +5681,8 @@ def _build_client_udp_ack_registration(
         raise ValueError("report parent must be a timestamped client-UDP run directory")
 
     report = _json_object_file(resolved_report, "client-UDP campaign report")
-    if type(client_udp_version) is not int or client_udp_version not in (3, 4):
-        raise ValueError("ACK campaign client UDP version must be exactly 3 or 4")
+    if type(client_udp_version) is not int or client_udp_version not in (2, 3, 4):
+        raise ValueError("ACK campaign client UDP version must be exactly 2, 3, or 4")
     if (
         report.get("schema") != campaign_schema
         or report.get("suite") != CLIENT_UDP_SUITE
@@ -5959,6 +5959,41 @@ def _build_client_udp_ack_registration(
         "verdict": "parity",
     }
     return {"coverageEvidence": [coverage_evidence], "evidenceReceipt": receipt}
+
+
+def _build_client_udp_v2_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral V2 campaign receipt."""
+
+    return _build_client_udp_ack_registration(
+        report_path,
+        output_root=output_root,
+        catalog_path=catalog_path,
+        scenario="v2",
+        campaign_schema="emulebb-build-tests.client-udp-v2-campaign.v1",
+        evidence_schema=client_udp_diagnostic_evidence.V2_SCHEMA,
+        coverage_id=client_udp_diagnostic_evidence.V2_COVERAGE_ID,
+        client_udp_version=2,
+        receipt_suffix="v2",
+        reason=(
+            "Rust and MFC advertised client UDP v2, emitted byte-identical direct "
+            "v2 hash-only reasks and rank-only ACKs, then causally applied the same "
+            "queue rank without complete-source or part-status fields."
+        ),
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
+        raw_evidence_schema=client_udp_diagnostic_evidence.V2_RAW_EVIDENCE_SCHEMA,
+        evidence_builder=(
+            client_udp_diagnostic_evidence.build_client_udp_v2_diagnostic_evidence
+        ),
+        evidence_requirement=(
+            client_udp_diagnostic_evidence.require_client_udp_v2_diagnostic_evidence
+        ),
+    )
 
 
 def _build_client_udp_v3_registration(
@@ -6667,6 +6702,12 @@ def build_client_udp_registration(
 ) -> dict[str, Any]:
     """Independently validates one explicit canonical client-UDP scenario."""
 
+    if scenario == "v2":
+        return _build_client_udp_v2_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
     if scenario == "v3":
         return _build_client_udp_v3_registration(
             report_path,
@@ -6961,7 +7002,15 @@ def run_client_udp_registration_cli(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["v3", "v4", "clear", "encrypted", "queue-full", "file-not-found"],
+        choices=[
+            "v2",
+            "v3",
+            "v4",
+            "clear",
+            "encrypted",
+            "queue-full",
+            "file-not-found",
+        ],
         required=True,
     )
     parser.add_argument("--report", type=Path, required=True)
