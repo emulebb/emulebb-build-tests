@@ -1601,19 +1601,12 @@ def start_mfc(
         name="client-udp-local",
     )
     selected_udp_version = _require_client_udp_version(client_udp_version)
-    previous_udp_version = os.environ.get(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV)
-    try:
-        os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = str(selected_udp_version)
-        app = live_common.launch_app(
-            paths.app_exe,
-            Path(profile["profile_base"]),
-            minimized_to_tray=True,
-        )
-    finally:
-        if previous_udp_version is None:
-            os.environ.pop(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV, None)
-        else:
-            os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = previous_udp_version
+    app = live_common.launch_app(
+        paths.app_exe,
+        Path(profile["profile_base"]),
+        minimized_to_tray=True,
+        extra_args=(f"--diagnostic-client-udp-version={selected_udp_version}",),
+    )
     base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
     try:
         dtt.rest_smoke.wait_for_rest_ready(

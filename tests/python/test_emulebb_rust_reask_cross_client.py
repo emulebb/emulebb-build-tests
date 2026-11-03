@@ -312,7 +312,7 @@ def test_every_campaign_mfc_process_selects_the_exact_client_udp_version() -> No
     module = _load_module()
     source = inspect.getsource(module.start_mfc)
 
-    assert "DIAGNOSTIC_CLIENT_UDP_VERSION_ENV" in source
+    assert "--diagnostic-client-udp-version=" in source
     assert "selected_udp_version" in source
 
 
@@ -586,13 +586,16 @@ def test_exact_direct_v3_registration_builds_control_identity() -> None:
 
     assert identity is not None
     assert identity["sourceUdpVersion"] == 3
-    assert module.queued_source_reask_request(
-        file_hash=FILE_HASH,
-        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
-        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
-        source_user_hash=SOURCE_USER_HASH,
-        source_udp_version=3,
-    )["sourceUdpVersion"] == 3
+    assert (
+        module.queued_source_reask_request(
+            file_hash=FILE_HASH,
+            source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+            source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+            source_user_hash=SOURCE_USER_HASH,
+            source_udp_version=3,
+        )["sourceUdpVersion"]
+        == 3
+    )
 
 
 def test_registration_rejects_duplicate_exact_identity() -> None:
