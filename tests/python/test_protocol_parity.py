@@ -60,7 +60,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 5,
-        "coveredIdCount": 33,
+        "coveredIdCount": 34,
         "groupVerdictCounts": {
             "parity": 5,
             "divergence": 0,
@@ -69,9 +69,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 33,
+            "parity": 34,
             "divergence": 0,
-            "evidence-incomplete": 67,
+            "evidence-incomplete": 66,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -111,6 +111,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "client-udp.encrypted",
         "client-udp.file-not-found",
         "client-udp.queue-full",
+        "client-udp.v2",
         "client-udp.v3",
         "client-udp.v4",
         "lowid.buddy-callback",
@@ -277,7 +278,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.login.request",
         "transfer.block.uncompressed",
     ]
-    assert len(payload["evidenceReceipts"]) == 26
+    assert len(payload["evidenceReceipts"]) == 27
     assert payload["evidenceReceipts"][21]["coverageIds"] == ["client-udp.queue-full"]
     assert payload["evidenceReceipts"][22]["coverageIds"] == [
         "client-udp.file-not-found"
@@ -285,6 +286,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert payload["evidenceReceipts"][23]["coverageIds"] == ["client-udp.clear"]
     assert payload["evidenceReceipts"][24]["coverageIds"] == ["client-udp.encrypted"]
     assert payload["evidenceReceipts"][25]["coverageIds"] == ["client-udp.v3"]
+    assert payload["evidenceReceipts"][26]["coverageIds"] == ["client-udp.v2"]
     assert [
         subject["authorityId"]
         for subject in payload["evidenceReceipts"][24]["subjects"]
