@@ -11,11 +11,16 @@ from typing import Any, Callable, Iterable
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
 CLEAR_SCHEMA = "emulebb-build-tests.client-udp-clear-diagnostics.v1"
 CLEAR_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-clear-raw-evidence.v1"
+ENCRYPTED_SCHEMA = "emulebb-build-tests.client-udp-encrypted-diagnostics.v1"
+ENCRYPTED_RAW_EVIDENCE_SCHEMA = (
+    "emulebb-build-tests.client-udp-encrypted-raw-evidence.v1"
+)
 QUEUE_FULL_SCHEMA = "emulebb-build-tests.client-udp-queue-full-diagnostics.v1"
 FILE_NOT_FOUND_SCHEMA = "emulebb-build-tests.client-udp-file-not-found-diagnostics.v1"
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 COVERAGE_ID = "client-udp.v4"
 CLEAR_COVERAGE_ID = "client-udp.clear"
+ENCRYPTED_COVERAGE_ID = "client-udp.encrypted"
 QUEUE_FULL_COVERAGE_ID = "client-udp.queue-full"
 FILE_NOT_FOUND_COVERAGE_ID = "client-udp.file-not-found"
 CLIENTS = ("rust", "mfc")
@@ -32,6 +37,8 @@ OP_REASKACK = 0x91
 OP_FILENOTFOUND = 0x92
 OP_QUEUEFULL = 0x93
 OP_REASKCALLBACKUDP = 0x94
+CLIENT_UDP_CRYPT_OVERHEAD = 8
+CLIENT_UDP_RESERVED_MARKERS = frozenset((0xC5, 0xD4, 0xE4, 0xE5, 0xA3, 0xB2))
 
 
 @dataclass(frozen=True)
@@ -224,6 +231,91 @@ def _decode_file_not_found(raw_hex: object) -> dict[str, Any]:
         return {"ok": True, "rawHex": raw.hex(), "payloadLength": 0}
     except (TypeError, ValueError) as error:
         return {"ok": False, "error": str(error)}
+
+
+def _diagnostic_clear_frame_hex(record: dict[str, Any] | None) -> str | None:
+    """Rebuild the diagnosed clear frame without decrypting trusted ciphertext."""
+
+    if record is None:
+        return None
+    marker = _keys(record).get("protocolMarker")
+    opcode = _keys(record).get("opcode")
+    body = _body(record)
+    payload_hex = body.get("payloadHex")
+    if (
+        not isinstance(marker, int)
+        or isinstance(marker, bool)
+        or not 0 <= marker <= 0xFF
+        or not isinstance(opcode, int)
+        or isinstance(opcode, bool)
+        or not 0 <= opcode <= 0xFF
+        or not isinstance(payload_hex, str)
+        or len(payload_hex) % 2 != 0
+        or body.get("payloadHexTruncated") is not False
+    ):
+        return None
+    try:
+        payload = bytes.fromhex(payload_hex)
+    except ValueError:
+        return None
+    if body.get("payloadLen") != len(payload):
+        return None
+    return (bytes((marker, opcode)) + payload).hex()
+
+
+def _packet_transport_evidence(
+    record: dict[str, Any] | None,
+    *,
+    expected_transport_mode: str,
+) -> dict[str, Any]:
+    """Validate one diagnosed plaintext or obfuscated client-UDP datagram."""
+
+    body = _body(record)
+    raw_hex = body.get("rawHex")
+    clear_hex = _diagnostic_clear_frame_hex(record)
+    raw: bytes | None = None
+    clear: bytes | None = None
+    try:
+        if isinstance(raw_hex, str) and len(raw_hex) % 2 == 0:
+            raw = bytes.fromhex(raw_hex)
+        if clear_hex is not None:
+            clear = bytes.fromhex(clear_hex)
+    except ValueError:
+        raw = None
+        clear = None
+    expected_obfuscated = expected_transport_mode == "obfuscated"
+    overhead = len(raw) - len(clear) if raw is not None and clear is not None else None
+    common_ok = bool(
+        record is not None
+        and expected_transport_mode in {"plaintext", "obfuscated"}
+        and body.get("transportMode") == expected_transport_mode
+        and body.get("obfuscated") is expected_obfuscated
+        and raw is not None
+        and clear is not None
+        and body.get("rawLen") == len(raw)
+    )
+    if expected_obfuscated:
+        framing_ok = bool(
+            common_ok
+            and overhead == CLIENT_UDP_CRYPT_OVERHEAD
+            and raw != clear
+            and raw
+            and raw[0] & 0x01 == 0x01
+            and raw[0] not in CLIENT_UDP_RESERVED_MARKERS
+        )
+    else:
+        framing_ok = bool(common_ok and overhead == 0 and raw == clear)
+    return {
+        "ok": framing_ok,
+        "transportMode": body.get("transportMode"),
+        "obfuscated": body.get("obfuscated"),
+        "rawHex": raw.hex() if raw is not None else None,
+        "clearFrameHex": clear.hex() if clear is not None else None,
+        "rawLen": len(raw) if raw is not None else None,
+        "clearFrameLen": len(clear) if clear is not None else None,
+        "overheadBytes": overhead,
+        "wireMarker": raw[0] if raw else None,
+    }
 
 
 def _stock_authority(
@@ -574,7 +666,8 @@ def _transition_evidence(
     *,
     file_hash: str,
     part_count: int,
-    require_clear_transport: bool = False,
+    expected_transport_mode: str = "plaintext",
+    expected_should_crypt: bool | None = None,
 ) -> dict[str, Any]:
     requester_records = list(transition.requester_records)
     responder_records = list(transition.responder_records)
@@ -608,8 +701,8 @@ def _transition_evidence(
         == transition.source_udp_endpoint
         and _body(registration).get("sourceUdpVersion") == 4
         and (
-            not require_clear_transport
-            or _body(registration).get("shouldCrypt") is False
+            expected_should_crypt is None
+            or _body(registration).get("shouldCrypt") is expected_should_crypt
         )
         and _body(registration).get("lowId") is False
         and _body(registration).get("buddyEndpoint") is None
@@ -659,14 +752,16 @@ def _transition_evidence(
             and _body(record).get("direction") == "send"
         ),
     )
+    request_out_transport = _packet_transport_evidence(
+        request_out,
+        expected_transport_mode=expected_transport_mode,
+    )
     request_out_ok = bool(
         request_out is not None
         and _body(request_out).get("outcome") == "attempted"
         and _body(request_out).get("role") == "reask_request"
         and _body(request_out).get("phase") == "reask_request"
-        and _body(request_out).get("transportMode") == "plaintext"
-        and _body(request_out).get("obfuscated") is False
-        and _body(request_out).get("payloadHexTruncated") is False
+        and request_out_transport["ok"] is True
     )
     request_attempt_id = (
         _keys(request_out).get("sendAttemptId") if request_out else None
@@ -698,13 +793,15 @@ def _transition_evidence(
             and _body(record).get("direction") == "recv"
         ),
     )
+    request_in_transport = _packet_transport_evidence(
+        request_in,
+        expected_transport_mode=expected_transport_mode,
+    )
     request_in_ok = bool(
         request_in is not None
         and _body(request_in).get("outcome") == "accepted"
         and _body(request_in).get("phase") == "reask_request"
-        and _body(request_in).get("transportMode") == "plaintext"
-        and _body(request_in).get("obfuscated") is False
-        and _body(request_in).get("payloadHexTruncated") is False
+        and request_in_transport["ok"] is True
     )
     ack_out, ack_out_count = _single(
         responder_records,
@@ -717,14 +814,16 @@ def _transition_evidence(
             and _body(record).get("direction") == "send"
         ),
     )
+    ack_out_transport = _packet_transport_evidence(
+        ack_out,
+        expected_transport_mode=expected_transport_mode,
+    )
     ack_out_ok = bool(
         ack_out is not None
         and _body(ack_out).get("outcome") == "attempted"
         and _body(ack_out).get("role") == "reciprocity_reply"
         and _body(ack_out).get("phase") == "reciprocity_reply"
-        and _body(ack_out).get("transportMode") == "plaintext"
-        and _body(ack_out).get("obfuscated") is False
-        and _body(ack_out).get("payloadHexTruncated") is False
+        and ack_out_transport["ok"] is True
     )
     ack_attempt_id = _keys(ack_out).get("sendAttemptId") if ack_out else None
     ack_terminal, ack_terminal_count = _single(
@@ -754,21 +853,21 @@ def _transition_evidence(
             and _body(record).get("direction") == "recv"
         ),
     )
+    ack_in_transport = _packet_transport_evidence(
+        ack_in,
+        expected_transport_mode=expected_transport_mode,
+    )
     ack_in_ok = bool(
         ack_in is not None
         and _body(ack_in).get("outcome") == "accepted"
         and _body(ack_in).get("phase") == "reask_reply"
-        and _body(ack_in).get("transportMode") == "plaintext"
-        and _body(ack_in).get("obfuscated") is False
-        and _body(ack_in).get("payloadHexTruncated") is False
+        and ack_in_transport["ok"] is True
     )
 
-    request = _decode_request(_body(request_out).get("rawHex") if request_out else None)
-    responder_request = _decode_request(
-        _body(request_in).get("rawHex") if request_in else None
-    )
-    ack = _decode_ack(_body(ack_out).get("rawHex") if ack_out else None)
-    requester_ack = _decode_ack(_body(ack_in).get("rawHex") if ack_in else None)
+    request = _decode_request(request_out_transport["clearFrameHex"])
+    responder_request = _decode_request(request_in_transport["clearFrameHex"])
+    ack = _decode_ack(ack_out_transport["clearFrameHex"])
+    requester_ack = _decode_ack(ack_in_transport["clearFrameHex"])
     queue_rank = ack.get("queueRank") if ack.get("ok") is True else None
     applied, applied_count = _single(
         requester_records,
@@ -895,7 +994,9 @@ def _transition_evidence(
         )
     )
     clear_transport = None
-    if require_clear_transport:
+    encrypted_transport = None
+    transport_decision_ok = expected_should_crypt is None
+    if expected_should_crypt is False:
         plaintext = {"transportMode": "plaintext", "obfuscated": False}
 
         def packet_transport(record: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -925,6 +1026,35 @@ def _transition_evidence(
                 for field in ("requestOut", "requestIn", "ackOut", "ackIn")
             )
         )
+        transport_decision_ok = clear_transport["ok"] is True
+    elif expected_should_crypt is True:
+        encrypted_transport = {
+            "registrationShouldCrypt": (
+                _body(registration).get("shouldCrypt")
+                if registration is not None
+                else None
+            ),
+            "requestOut": request_out_transport,
+            "requestIn": request_in_transport,
+            "ackOut": ack_out_transport,
+            "ackIn": ack_in_transport,
+            "requestWireBytesEqual": (
+                request_out_transport["rawHex"] == request_in_transport["rawHex"]
+            ),
+            "ackWireBytesEqual": (
+                ack_out_transport["rawHex"] == ack_in_transport["rawHex"]
+            ),
+        }
+        encrypted_transport["ok"] = bool(
+            encrypted_transport["registrationShouldCrypt"] is True
+            and all(
+                encrypted_transport[field]["ok"] is True
+                for field in ("requestOut", "requestIn", "ackOut", "ackIn")
+            )
+            and encrypted_transport["requestWireBytesEqual"] is True
+            and encrypted_transport["ackWireBytesEqual"] is True
+        )
+        transport_decision_ok = encrypted_transport["ok"] is True
     ok = bool(
         transition.requester in CLIENTS
         and transition.responder in CLIENTS
@@ -941,7 +1071,7 @@ def _transition_evidence(
         and requester_ordered
         and responder_ordered
         and wire_ok
-        and (clear_transport is None or clear_transport["ok"] is True)
+        and transport_decision_ok
     )
     result = {
         "ok": ok,
@@ -976,6 +1106,8 @@ def _transition_evidence(
     }
     if clear_transport is not None:
         result["clearTransport"] = clear_transport
+    if encrypted_transport is not None:
+        result["encryptedTransport"] = encrypted_transport
     return result
 
 
@@ -1729,7 +1861,8 @@ def _build_client_udp_ack_diagnostic_evidence(
     transitions: Iterable[ClientUdpV4Transition],
     schema: str,
     coverage_id: str,
-    require_clear_transport: bool,
+    expected_transport_mode: str,
+    expected_should_crypt: bool | None,
 ) -> dict[str, Any]:
     """Prove both clients originate, answer, and apply one exact direct ACK reask."""
 
@@ -1746,7 +1879,8 @@ def _build_client_udp_ack_diagnostic_evidence(
             transition,
             file_hash=file_hash_hex,
             part_count=part_count,
-            require_clear_transport=require_clear_transport,
+            expected_transport_mode=expected_transport_mode,
+            expected_should_crypt=expected_should_crypt,
         )
     exact_clients = set(clients) == set(CLIENTS) and not duplicate_requesters
     ordered_clients = [clients[client] for client in CLIENTS if client in clients]
@@ -1835,7 +1969,8 @@ def build_client_udp_v4_diagnostic_evidence(
         transitions=transitions,
         schema=SCHEMA,
         coverage_id=COVERAGE_ID,
-        require_clear_transport=False,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
     )
 
 
@@ -1855,7 +1990,29 @@ def build_client_udp_clear_diagnostic_evidence(
         transitions=transitions,
         schema=CLEAR_SCHEMA,
         coverage_id=CLEAR_COVERAGE_ID,
-        require_clear_transport=True,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=False,
+    )
+
+
+def build_client_udp_encrypted_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpV4Transition],
+) -> dict[str, Any]:
+    """Prove the direct V4 request/ACK path used stock obfuscated transport."""
+
+    return _build_client_udp_ack_diagnostic_evidence(
+        file_hash=file_hash,
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+        schema=ENCRYPTED_SCHEMA,
+        coverage_id=ENCRYPTED_COVERAGE_ID,
+        expected_transport_mode="obfuscated",
+        expected_should_crypt=True,
     )
 
 
@@ -1900,6 +2057,17 @@ def require_client_udp_clear_diagnostic_evidence(report: dict[str, Any]) -> None
         schema=CLEAR_SCHEMA,
         coverage_id=CLEAR_COVERAGE_ID,
         label="clear",
+    )
+
+
+def require_client_udp_encrypted_diagnostic_evidence(report: dict[str, Any]) -> None:
+    """Raise unless both clients causally selected and completed encrypted UDP."""
+
+    _require_client_udp_ack_diagnostic_evidence(
+        report,
+        schema=ENCRYPTED_SCHEMA,
+        coverage_id=ENCRYPTED_COVERAGE_ID,
+        label="encrypted",
     )
 
 

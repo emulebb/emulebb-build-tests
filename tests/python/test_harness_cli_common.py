@@ -279,6 +279,53 @@ def test_prepare_run_paths_defaults_to_output_roots(monkeypatch, tmp_path: Path)
     assert paths.keep_source_artifacts is False
 
 
+def test_prepare_run_paths_can_defer_executable_validation_for_build_owner(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = load_harness_cli_common_module()
+    repo_root = tmp_path / "repos" / "emulebb-build-tests"
+    script_file = repo_root / "scripts" / "suite.py"
+    seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
+    app_root = tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main"
+    output_root = tmp_path.parent / f"{tmp_path.name}-emulebb-output"
+    missing_exe = output_root / "builds" / "app" / "main" / "emulebb.exe"
+    seed_dir.mkdir(parents=True)
+    app_root.mkdir(parents=True)
+
+    monkeypatch.setattr(module, "utc_run_id", lambda: "20260521T120000Z")
+    monkeypatch.setattr(module.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(
+        module, "configure_local_dumps", lambda **_kwargs: {"enabled": False}
+    )
+    monkeypatch.setenv("TEMP", r"C:\not-the-workspace-temp")
+    monkeypatch.setenv("TMP", r"C:\not-the-workspace-temp")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\not-the-workspace-localappdata")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+
+    with pytest.raises(RuntimeError, match="App executable was not found"):
+        module.prepare_run_paths(
+            script_file=script_file,
+            suite_name="build-owning-suite",
+            configuration="Release",
+            workspace_root=tmp_path / "workspaces" / "workspace",
+            app_root=app_root,
+            app_exe=missing_exe,
+        )
+
+    paths = module.prepare_run_paths(
+        script_file=script_file,
+        suite_name="build-owning-suite",
+        configuration="Release",
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=app_root,
+        app_exe=missing_exe,
+        require_app_exe=False,
+    )
+
+    assert paths.app_exe == missing_exe.resolve()
+    assert not paths.app_exe.exists()
+
+
 def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     repo_root = tmp_path / "repos" / "emulebb-build-tests"

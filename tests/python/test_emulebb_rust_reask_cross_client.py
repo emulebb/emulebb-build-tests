@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -159,8 +161,176 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
         module.udp_evidence.require_client_udp_clear_diagnostic_evidence
     )
 
+    encrypted = module.parse_args(
+        [
+            "--scenario",
+            "encrypted",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert module.SCENARIO_COVERAGE_IDS[encrypted.scenario] == ("client-udp.encrypted")
+    assert module.SCENARIO_CAMPAIGN_SCHEMAS[encrypted.scenario] == (
+        "emulebb-build-tests.client-udp-encrypted-campaign.v1"
+    )
+    assert module.SCENARIO_OBFUSCATION[encrypted.scenario] is True
+    assert module.SCENARIO_EVIDENCE_BUILDERS[encrypted.scenario] is (
+        module.udp_evidence.build_client_udp_encrypted_diagnostic_evidence
+    )
+    assert module.SCENARIO_EVIDENCE_REQUIREMENTS[encrypted.scenario] is (
+        module.udp_evidence.require_client_udp_encrypted_diagnostic_evidence
+    )
 
-def test_clear_raw_evidence_serializes_complete_reducer_inputs() -> None:
+
+def test_authoritative_builds_clean_build_and_hash_every_campaign_binary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    workspace_root = tmp_path / "workspace"
+    output_root = tmp_path / "output"
+    repos = {
+        "build": workspace_root / "repos" / "emulebb-build",
+        "emulebb_rust": workspace_root / "repos" / "emulebb-rust",
+        "ed2k_server": workspace_root / "repos" / "ed2k-server",
+    }
+    mfc_repo = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main"
+    for repo in (*repos.values(), mfc_repo):
+        repo.mkdir(parents=True)
+    rust_exe = output_root / "rust-diagnostics.exe"
+    mfc_exe = output_root / "mfc-diagnostics.exe"
+    server_exe = output_root / "ed2k-server"
+    for executable, payload in (
+        (rust_exe, b"rust"),
+        (mfc_exe, b"mfc"),
+        (server_exe, b"server"),
+    ):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(payload)
+
+    calls: list[dict[str, object]] = []
+
+    def build(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return {
+            "schema": module.build_provenance.BUILD_RECEIPT_SCHEMA,
+            "command": command,
+            "returnCode": 0,
+            "sourceRevision": str(len(calls)) * 40,
+            "sourceCleanBefore": True,
+            "sourceCleanAfter": True,
+            "orchestratorRevision": "4" * 40,
+            "orchestratorCleanBefore": True,
+            "orchestratorCleanAfter": True,
+        }
+
+    monkeypatch.setattr(
+        module,
+        "resolve_manifest_repo",
+        lambda _root, key: repos[key],
+    )
+    monkeypatch.setattr(
+        module.build_provenance,
+        "require_clean_git_source",
+        lambda *_args, **_kwargs: SimpleNamespace(revision="5" * 40, clean=True),
+    )
+    monkeypatch.setattr(
+        module.build_provenance,
+        "run_canonical_source_build",
+        build,
+    )
+    monkeypatch.setattr(module, "get_workspace_output_root", lambda: output_root)
+    monkeypatch.setattr(
+        module.converged_live_wire,
+        "resolve_rust_diagnostics_exe",
+        lambda _root: rust_exe,
+    )
+    monkeypatch.setattr(
+        module.rust_ed2k, "resolve_server_exe", lambda _override: server_exe
+    )
+
+    result = module.prepare_authoritative_builds(
+        SimpleNamespace(
+            workspace_root=workspace_root,
+            app_root=mfc_repo,
+            app_exe=mfc_exe,
+        )
+    )
+
+    assert len(calls) == 3
+    assert [call["command"][-1] for call in calls] == ["--clean", "--clean", "--clean"]
+    assert [call["source_repo"] for call in calls] == [
+        repos["emulebb_rust"],
+        mfc_repo,
+        repos["ed2k_server"],
+    ]
+    assert calls[2]["timeout_seconds"] == 900.0
+    assert result.rust_repo == repos["emulebb_rust"]
+    assert result.server_exe == server_exe
+    assert result.report["runner"] == {
+        "sourceRevision": "5" * 40,
+        "sourceClean": True,
+    }
+    assert result.report["rustDiagnostics"]["build"]["sourceRevision"] == "1" * 40
+    assert result.report["mfcDiagnostics"]["build"]["sourceRevision"] == "2" * 40
+    assert result.report["ed2kServer"]["build"]["sourceRevision"] == "3" * 40
+
+
+def test_every_campaign_rust_process_uses_the_authoritative_diagnostics_binary() -> (
+    None
+):
+    module = _load_module()
+    source = inspect.getsource(module.start_rust)
+
+    assert "resolve_rust_diagnostics_exe" in source
+    assert "resolve_rust_regular_exe" not in source
+    assert "EMULEBB_RUST_LOG_DIR" in source
+
+
+def test_authoritative_runner_defers_mfc_executable_validation_until_clean_build() -> (
+    None
+):
+    module = _load_module()
+    source = inspect.getsource(module.main)
+
+    assert "require_exists=False" in source
+    assert "require_app_exe=False" in source
+    assert source.index("prepare_authoritative_builds(paths)") > source.index(
+        "prepare_run_paths("
+    )
+
+
+@pytest.mark.parametrize(
+    "override",
+    ("--app-root", "--app-exe", "--ed2k-server-repo", "--ed2k-server-exe"),
+)
+def test_authoritative_runner_has_no_binary_or_source_overrides(override: str) -> None:
+    module = _load_module()
+
+    with pytest.raises(SystemExit):
+        module.parse_args(
+            [
+                "--scenario",
+                "encrypted",
+                "--lan-bind-addr",
+                "127.0.0.1",
+                override,
+                "ignored",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "schema"),
+    [
+        ("clear", "CLEAR_RAW_EVIDENCE_SCHEMA"),
+        ("encrypted", "ENCRYPTED_RAW_EVIDENCE_SCHEMA"),
+    ],
+)
+def test_ack_raw_evidence_serializes_complete_reducer_inputs(
+    scenario: str,
+    schema: str,
+) -> None:
     module = _load_module()
     transition = module.udp_evidence.ClientUdpV4Transition(
         requester="rust",
@@ -174,15 +344,16 @@ def test_clear_raw_evidence_serializes_complete_reducer_inputs() -> None:
         responder_records=[{"seq": 2}],
     )
 
-    payload = module.build_clear_raw_evidence(
+    payload = module.build_ack_raw_evidence(
+        scenario=scenario,
         file_hash=FILE_HASH,
         part_count=1,
         transitions=[transition],
     )
 
     assert payload == {
-        "schema": module.udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
-        "scenario": "clear",
+        "schema": getattr(module.udp_evidence, schema),
+        "scenario": scenario,
         "fileHash": FILE_HASH,
         "partCount": 1,
         "transitions": [

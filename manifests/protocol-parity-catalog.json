@@ -23,6 +23,12 @@
       "role": "preferred-observable-runtime-oracle"
     },
     {
+      "authorityId": "ed2k-server-dependency",
+      "path": "repos/ed2k-server",
+      "revision": "d6a6dd672815a13265393ff22622c7fd97b58eee",
+      "role": "upstream-clean-deterministic-dependency"
+    },
+    {
       "authorityId": "amule-stable",
       "path": "repos/amule-stable",
       "revision": "02db0d7faecfc377694ff6242bc23346185990ed",
@@ -248,6 +254,13 @@
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each selected the non-crypt client-UDP path, emitted the same clear OP_EMULEPROT reask and ACK bytes, and causally applied the same queue-rank and complete-source state.",
       "receiptIds": ["rust-mfc-client-udp-clear-20261102t202501z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "client-udp.encrypted",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC each selected the crypt client-UDP path, exchanged stock eight-byte obfuscated envelopes around identical clear V4 reask and ACK frames, and causally applied the same queue state.",
+      "receiptIds": ["rust-mfc-client-udp-encrypted-20261102t223823z"],
       "verdict": "parity"
     },
     {
@@ -2081,6 +2094,33 @@
           "authorityId": "rust-product",
           "executableSha256": "4effb2103108173782b9183682621529217a7e29d4bd09b2f7fa2bbd4385799f",
           "sourceRevision": "ae01da5069f465ee2f4802b2a9a0ed6735f67e22"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261102T223823Z-emulebb-main-release-7472/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "d7a35823b5e39a8d925ac6b3c7358348f6cdff7df832669aa1330d80d92c0471",
+      "coverageIds": ["client-udp.encrypted"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-client-udp-encrypted-20261102t223823z",
+      "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
+      "runnerRevision": "9f39f81d154e65976450ce51ece7d22ee8fd4ad7",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "7c08aa3461800d7924d751d0cd94d54e595c271a585b9c6fb65a777bbda7f299",
+          "sourceRevision": "367747a17413d96229d20885b426a30afff85b35"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "5e96ab23ddb678e829e352b4549ce2d5f7a08d34b1171a63089851c07653ae3c",
+          "sourceRevision": "fb673418fd42946f56893081c43494fc1172ed7a"
+        },
+        {
+          "authorityId": "ed2k-server-dependency",
+          "executableSha256": "ffb5655198a882156627e0ff6d5d5a3a94ce02a423023f3b94f0bd8c00569886",
+          "sourceRevision": "d6a6dd672815a13265393ff22622c7fd97b58eee"
         }
       ]
     }

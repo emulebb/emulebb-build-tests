@@ -8,8 +8,9 @@ fixture and one upstream-clean local eD2K server:
 
 Each requester must queue and detach naturally. The harness then wakes exactly
 that already queued source once through the diagnostics-only scheduler control.
-For clear, both clients must record a false per-source crypt decision before the
-ordinary scheduler emits the exact plaintext request and ACK frames.
+For clear or encrypted transport, both clients must record the corresponding
+per-source crypt decision before the ordinary scheduler emits the exact request
+and ACK frames.
 For queue-full, the exact requester is removed from the responder's real upload
 queue before one exact, expiring queue-pressure prerequisite is armed. The
 ordinary scheduler and production packet path remain responsible for the
@@ -45,9 +46,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
+from emule_test_harness import build_provenance  # noqa: E402
 from emule_test_harness import client_udp_diagnostic_evidence as udp_evidence  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_ed2k  # noqa: E402
+from emule_test_harness import soak_build_refresh  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -84,24 +88,28 @@ RUST_LOG = (
 SCENARIO_COVERAGE_IDS = {
     "v4": udp_evidence.COVERAGE_ID,
     "clear": udp_evidence.CLEAR_COVERAGE_ID,
+    "encrypted": udp_evidence.ENCRYPTED_COVERAGE_ID,
     "queue-full": udp_evidence.QUEUE_FULL_COVERAGE_ID,
     "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
 }
 SCENARIO_CAMPAIGN_SCHEMAS = {
     "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
     "clear": "emulebb-build-tests.client-udp-clear-campaign.v1",
+    "encrypted": "emulebb-build-tests.client-udp-encrypted-campaign.v1",
     "queue-full": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
     "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
 }
 SCENARIO_REPLY_OPCODES = {
     "v4": udp_evidence.OP_REASKACK,
     "clear": udp_evidence.OP_REASKACK,
+    "encrypted": udp_evidence.OP_REASKACK,
     "queue-full": udp_evidence.OP_QUEUEFULL,
     "file-not-found": udp_evidence.OP_FILENOTFOUND,
 }
 SCENARIO_EVIDENCE_BUILDERS = {
     "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.build_client_udp_clear_diagnostic_evidence,
+    "encrypted": udp_evidence.build_client_udp_encrypted_diagnostic_evidence,
     "queue-full": udp_evidence.build_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.build_client_udp_file_not_found_diagnostic_evidence
@@ -110,24 +118,40 @@ SCENARIO_EVIDENCE_BUILDERS = {
 SCENARIO_EVIDENCE_REQUIREMENTS = {
     "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.require_client_udp_clear_diagnostic_evidence,
+    "encrypted": udp_evidence.require_client_udp_encrypted_diagnostic_evidence,
     "queue-full": udp_evidence.require_client_udp_queue_full_diagnostic_evidence,
     "file-not-found": (
         udp_evidence.require_client_udp_file_not_found_diagnostic_evidence
     ),
 }
+SCENARIO_OBFUSCATION = {
+    scenario: scenario == "encrypted" for scenario in SCENARIO_COVERAGE_IDS
+}
+SCENARIO_RAW_EVIDENCE_SCHEMAS = {
+    "clear": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+    "encrypted": udp_evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,
+}
 
 
-def build_clear_raw_evidence(
+def build_ack_raw_evidence(
     *,
+    scenario: str,
     file_hash: str,
     part_count: int,
     transitions: list[udp_evidence.ClientUdpV4Transition],
 ) -> dict[str, object]:
-    """Serialize the complete reducer inputs for independent receipt validation."""
+    """Serialize complete ACK reducer inputs for independent receipt validation."""
+
+    try:
+        schema = SCENARIO_RAW_EVIDENCE_SCHEMAS[scenario]
+    except KeyError as exc:
+        raise ValueError(
+            f"scenario has no raw ACK evidence schema: {scenario!r}"
+        ) from exc
 
     return {
-        "schema": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
-        "scenario": "clear",
+        "schema": schema,
+        "scenario": scenario,
         "fileHash": _canonical_hash(file_hash, field="file_hash"),
         "partCount": part_count,
         "transitions": [
@@ -158,6 +182,16 @@ class RustRuntime:
     udp_endpoint: str
     diagnostics_dir: Path | None
     executable: Path
+
+
+@dataclass(frozen=True)
+class AuthoritativeBuilds:
+    """Exact canonical binaries and causal build receipts for one campaign."""
+
+    rust_repo: Path
+    rust_exe: Path
+    server_exe: Path
+    report: dict[str, object]
 
 
 def _api_data(payload: object) -> object:
@@ -695,14 +729,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=sorted(SCENARIO_COVERAGE_IDS),
         required=True,
     )
-    parser.add_argument("--app-root")
-    parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
-    parser.add_argument(
-        "--configuration", choices=["Debug", "Release"], default="Release"
-    )
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
@@ -714,9 +743,79 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reask-observe-timeout-seconds", type=float, default=180.0)
     # Large enough that the slow eMuleBB slot stays busy for a few reask ticks.
     parser.add_argument("--fixture-size-bytes", type=int, default=8 * 1024 * 1024)
-    parser.add_argument("--ed2k-server-repo")
-    parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
+
+
+def prepare_authoritative_builds(paths) -> AuthoritativeBuilds:
+    """Clean-build every campaign executable from clean, unchanged sources."""
+
+    workspace_root = paths.workspace_root
+    build_repo = resolve_manifest_repo(workspace_root, "build")
+    rust_repo = resolve_manifest_repo(workspace_root, "emulebb_rust")
+    server_repo = resolve_manifest_repo(workspace_root, "ed2k_server")
+    runner_state = build_provenance.require_clean_git_source(
+        REPO_ROOT,
+        label="client-UDP campaign runner",
+    )
+    rust_build = build_provenance.run_canonical_source_build(
+        soak_build_refresh.diagnostics_build_command("rust", clean=True),
+        build_repo=build_repo,
+        source_repo=rust_repo,
+        label="Rust diagnostics",
+    )
+    mfc_build = build_provenance.run_canonical_source_build(
+        soak_build_refresh.diagnostics_build_command("mfc", clean=True),
+        build_repo=build_repo,
+        source_repo=paths.app_root,
+        label="MFC diagnostics oracle",
+    )
+    server_build = build_provenance.run_canonical_source_build(
+        rust_ed2k.server_build_command(clean=True),
+        build_repo=build_repo,
+        source_repo=server_repo,
+        label="ed2k-server dependency",
+        timeout_seconds=900.0,
+    )
+
+    rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(
+        get_workspace_output_root()
+    )
+    mfc_exe = paths.app_exe.resolve()
+    server_exe = rust_ed2k.resolve_server_exe(None)
+    for label, executable in (
+        ("Rust diagnostics", rust_exe),
+        ("MFC diagnostics oracle", mfc_exe),
+        ("ed2k-server dependency", server_exe),
+    ):
+        if not executable.is_file():
+            raise RuntimeError(f"{label} clean build did not stage {executable}.")
+
+    return AuthoritativeBuilds(
+        rust_repo=rust_repo,
+        rust_exe=rust_exe,
+        server_exe=server_exe,
+        report={
+            "runner": {
+                "sourceRevision": runner_state.revision,
+                "sourceClean": runner_state.clean,
+            },
+            "rustDiagnostics": {
+                "path": str(rust_exe),
+                "sha256": dtt.file_sha256(rust_exe),
+                "build": rust_build,
+            },
+            "mfcDiagnostics": {
+                "path": str(mfc_exe),
+                "sha256": dtt.file_sha256(mfc_exe),
+                "build": mfc_build,
+            },
+            "ed2kServer": {
+                "path": str(server_exe),
+                "sha256": dtt.file_sha256(server_exe),
+                "build": server_build,
+            },
+        },
+    )
 
 
 def start_rust(
@@ -730,7 +829,7 @@ def start_rust(
     used_ports,
     label,
     enable_reask,
-    diagnostics=False,
+    obfuscation_enabled,
     upload_limit_kibps=None,
     base_upload_slots=None,
     upload_slot_elastic_percent=None,
@@ -755,37 +854,25 @@ def start_rust(
         kad_port=kad_port,
         server_endpoint=server_endpoint,
         enable_udp_reask=enable_reask,
-        # Plaintext locally: the client-UDP reask obfuscation keys on our public
-        # IP, but the ed2k_server lab server reports a fake one (2.0.0.1) that does not
-        # match our LAN IP, so an obfuscated reask can't be deobfuscated by the
-        # peer. Real networks report the true public IP (no mismatch); the
-        # obfuscated path is covered by unit tests. Plaintext isolates the reask
-        # logic for this local cross-client check.
-        obfuscation_enabled=False,
+        # The hairpin server reports each client's actual TEST-NET bind address,
+        # so this selects the production clear or user-hash-keyed UDP path.
+        obfuscation_enabled=obfuscation_enabled,
         local_only_discovery=True,
         upload_limit_kibps=upload_limit_kibps,
         base_upload_slots=base_upload_slots,
         upload_slot_elastic_percent=upload_slot_elastic_percent,
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
-    output_root = get_workspace_output_root()
-    executable = (
-        converged_live_wire.resolve_rust_diagnostics_exe(output_root)
-        if diagnostics
-        else converged_live_wire.resolve_rust_regular_exe(output_root)
+    executable = converged_live_wire.resolve_rust_diagnostics_exe(
+        get_workspace_output_root()
     )
-    packet_dir = None
-    if diagnostics:
-        packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
-        packet_dir.mkdir(parents=True, exist_ok=True)
+    packet_dir = paths.source_artifacts_dir / f"rust-{label}-packet-dump"
+    packet_dir.mkdir(parents=True, exist_ok=True)
     previous_rust_log = os.environ.get("RUST_LOG")
     previous_diagnostic_dir = os.environ.get("EMULEBB_RUST_LOG_DIR")
     try:
         os.environ["RUST_LOG"] = RUST_LOG
-        if packet_dir is not None:
-            os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
-        else:
-            os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
+        os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
         process = rust_client.start_rust_client_executable(
             executable, profile, out_path
         )
@@ -1419,6 +1506,7 @@ def start_mfc(
     p2p_address: str,
     server_address: str,
     ports: dict[str, int],
+    obfuscation_enabled: bool,
     saturate_upload_queue: bool = False,
 ) -> dict[str, object]:
     profile_root = paths.source_artifacts_dir / artifact_label
@@ -1443,8 +1531,8 @@ def start_mfc(
         enable_diagnostic_rest_endpoints=True,
         p2p_bind_interface_name=args.p2p_bind_interface_name,
         p2p_bind_addr=p2p_address,
-        crypt_layer_supported=False,
-        crypt_layer_requested=False,
+        crypt_layer_supported=obfuscation_enabled,
+        crypt_layer_requested=obfuscation_enabled,
         crypt_layer_required=False,
     )
     if saturate_upload_queue:
@@ -1533,6 +1621,7 @@ def run_rust_requester_phase(
     rust_clients: list[RustRuntime] = []
     withdrawn_fixture_path = None
     try:
+        obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
         mfc = start_mfc(
             args=args,
             paths=paths,
@@ -1541,6 +1630,7 @@ def run_rust_requester_phase(
             p2p_address=mfc_responder_ip,
             server_address=server_address,
             ports=ports,
+            obfuscation_enabled=obfuscation_enabled,
             saturate_upload_queue=True,
         )
         dtt.add_emule_shared_file(mfc["baseUrl"], args.api_key, fixture_path)
@@ -1574,6 +1664,7 @@ def run_rust_requester_phase(
                 used_ports=used_ports,
                 label=f"{scenario}-occupier-{index + 1}",
                 enable_reask=False,
+                obfuscation_enabled=obfuscation_enabled,
             )
             for index in range(2)
         ]
@@ -1588,7 +1679,7 @@ def run_rust_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-rust-requester",
             enable_reask=True,
-            diagnostics=True,
+            obfuscation_enabled=obfuscation_enabled,
         )
         rust_clients.append(requester)
         rust_high_id_clients = [
@@ -1795,6 +1886,7 @@ def run_mfc_requester_phase(
     occupier = None
     withdrawn_fixture_path = None
     try:
+        obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
         uploader = start_rust(
             repo=rust_repo,
             paths=paths,
@@ -1805,7 +1897,7 @@ def run_mfc_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-rust-responder",
             enable_reask=True,
-            diagnostics=True,
+            obfuscation_enabled=obfuscation_enabled,
             upload_limit_kibps=4,
             base_upload_slots=1,
             upload_slot_elastic_percent=0,
@@ -1842,6 +1934,7 @@ def run_mfc_requester_phase(
             used_ports=used_ports,
             label=f"{scenario}-responder-occupier",
             enable_reask=False,
+            obfuscation_enabled=obfuscation_enabled,
         )
         occupier_high_id_client = wait_for_server_high_id_client(
             admin_base_url,
@@ -1871,6 +1964,7 @@ def run_mfc_requester_phase(
             p2p_address=p2p_address,
             server_address=server_address,
             ports=ports,
+            obfuscation_enabled=obfuscation_enabled,
         )
         mfc_high_id_client = wait_for_server_high_id_client(
             admin_base_url,
@@ -2028,21 +2122,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.fixture_size_bytes <= 0:
         raise ValueError("--fixture-size-bytes must be greater than zero")
-    app_exe = args.app_exe or str(
+    app_exe = str(
         converged_live_wire.resolve_mfc_diagnostics_exe(
             get_workspace_output_root(),
-            configuration=args.configuration,
+            configuration="Release",
+            require_exists=False,
         )
     )
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
-        configuration=args.configuration,
+        configuration="Release",
         workspace_root=None,
-        app_root=args.app_root,
+        app_root=None,
         app_exe=app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=False,
     )
     profile_seed_dir = (
         Path(args.profile_seed_dir).resolve()
@@ -2067,6 +2163,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"{coverage_id} owns its deterministic HighID route; "
                 "do not pass a P2P bind override"
             )
+        builds = prepare_authoritative_builds(paths)
+        report["builds"] = builds.report
         (
             high_id_pool,
             high_id_address,
@@ -2075,24 +2173,6 @@ def main(argv: list[str] | None = None) -> int:
         peer_ips = high_id_pool.acquire(3)
         ports = dtt.choose_distinct_ports(args.lan_bind_addr)
         used_ports = set(ports.values())
-        rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_diagnostics_exe = converged_live_wire.resolve_rust_diagnostics_exe(
-            get_workspace_output_root()
-        )
-        report["builds"] = {
-            "rustDiagnostics": {
-                "path": str(rust_diagnostics_exe),
-                "sha256": dtt.file_sha256(rust_diagnostics_exe),
-                "sourceRevision": dtt.git_head_revision(rust_repo),
-            },
-            "mfcDiagnostics": {
-                "path": str(paths.app_exe),
-                "sha256": dtt.file_sha256(paths.app_exe),
-                "sourceRevision": dtt.git_head_revision(paths.app_root),
-            },
-            "runnerRevision": dtt.git_head_revision(REPO_ROOT),
-        }
-
         ed2k_server = ed2k_harness.launch_ed2k_server(
             workspace_root=paths.workspace_root,
             server_dir=paths.source_artifacts_dir / "ed2k-server",
@@ -2101,8 +2181,7 @@ def main(argv: list[str] | None = None) -> int:
             token=args.api_key,
             admin_address=args.lan_bind_addr,
             ed2k_address=high_id_address,
-            repo_override=args.ed2k_server_repo,
-            exe_override=args.ed2k_server_exe,
+            exe_override=str(builds.server_exe),
             advertised_address_override=high_id_address,
             hairpin_lan_clients=True,
         )
@@ -2114,14 +2193,15 @@ def main(argv: list[str] | None = None) -> int:
             "serverAddress": server_address,
             "mfcResponderAddress": high_id_address,
             "rustPeerAddresses": peer_ips,
-            "transportMode": "plaintext",
+            "transportMode": (
+                "obfuscated" if SCENARIO_OBFUSCATION[args.scenario] else "plaintext"
+            ),
             "publicTraffic": False,
         }
-        report["builds"]["ed2kServer"] = {
-            "path": str(ed2k_server.server_exe),
-            "sha256": dtt.file_sha256(ed2k_server.server_exe),
-            "build": ed2k_server.build,
-        }
+        if ed2k_server.server_exe.resolve() != builds.server_exe:
+            raise RuntimeError(
+                "ed2k-server launch did not use the clean-built executable"
+            )
 
         fixture_path = (
             paths.source_artifacts_dir / "fixture" / f"client-udp-{args.scenario}.bin"
@@ -2148,7 +2228,7 @@ def main(argv: list[str] | None = None) -> int:
             scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
-            rust_repo=rust_repo,
+            rust_repo=builds.rust_repo,
             mfc_responder_ip=high_id_address,
             server_address=server_address,
             peer_ips=peer_ips,
@@ -2166,7 +2246,7 @@ def main(argv: list[str] | None = None) -> int:
             scenario=args.scenario,
             paths=paths,
             profile_seed_dir=profile_seed_dir,
-            rust_repo=rust_repo,
+            rust_repo=builds.rust_repo,
             uploader_ip=high_id_address,
             occupier_ip=peer_ips[0],
             p2p_address=peer_ips[1],
@@ -2182,13 +2262,15 @@ def main(argv: list[str] | None = None) -> int:
 
         report["currentPhase"] = "causal-evidence"
         transitions = [rust_transition, mfc_transition]
-        if args.scenario == "clear":
+        if args.scenario in SCENARIO_RAW_EVIDENCE_SCHEMAS:
             raw_evidence_path = (
-                paths.source_artifacts_dir / "client-udp-clear-raw-evidence.json"
+                paths.source_artifacts_dir
+                / f"client-udp-{args.scenario}-raw-evidence.json"
             )
             harness_cli_common.write_json_file(
                 raw_evidence_path,
-                build_clear_raw_evidence(
+                build_ack_raw_evidence(
+                    scenario=args.scenario,
                     file_hash=rust_check["fileHash"],
                     part_count=part_count,
                     transitions=transitions,
@@ -2208,6 +2290,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["evidence"] = evidence
         SCENARIO_EVIDENCE_REQUIREMENTS[args.scenario](evidence)
+        runner_after = build_provenance.require_clean_git_source(
+            REPO_ROOT,
+            label="client-UDP campaign runner",
+        )
+        if runner_after.revision != report["builds"]["runner"]["sourceRevision"]:
+            raise RuntimeError(
+                "client-UDP campaign runner revision changed during the run"
+            )
         report["currentPhase"] = "complete"
         report["status"] = "passed"
         return 0

@@ -49,6 +49,7 @@ CATALOG_AUTHORITY_ROLES = frozenset(
         "frozen-independent-parity-reference",
         "preferred-observable-runtime-oracle",
         "product-under-test",
+        "upstream-clean-deterministic-dependency",
         "wire-and-state-intent",
     }
 )

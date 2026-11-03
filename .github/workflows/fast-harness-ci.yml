@@ -110,6 +110,13 @@ jobs:
           repository: emulebb/emulebb-rust
           path: repos/emulebb-rust
 
+      - name: Checkout upstream-clean ed2k-server dependency
+        uses: actions/checkout@v7
+        with:
+          repository: emulebb/ed2k-server
+          ref: d6a6dd672815a13265393ff22622c7fd97b58eee
+          path: repos/ed2k-server
+
       # The emulebb-miniupnpc-sys crate's build script compiles the bundled
       # MiniUPnP source from repos/third_party/emulebb-miniupnp/miniupnpc, so the
       # Rust cargo integration tests need that third-party source materialized.

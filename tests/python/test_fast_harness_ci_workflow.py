@@ -55,6 +55,7 @@ def test_fast_harness_ci_materializes_pinned_protocol_authorities() -> None:
     expected_repositories = {
         "stock-source": "irwir/eMule",
         "stock-instrumented": "emulebb/emulebb",
+        "ed2k-server-dependency": "emulebb/ed2k-server",
         "amule-stable": "amule-org/amule",
         "amule-head": "amule-org/amule",
     }
