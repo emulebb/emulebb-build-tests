@@ -146,9 +146,7 @@ def sched_record(
     }
 
 
-def requester_records(
-    requester: str, *, udp_version: int = 4
-) -> list[dict[str, Any]]:
+def requester_records(requester: str, *, udp_version: int = 4) -> list[dict[str, Any]]:
     endpoints = ENDPOINTS[requester]
     request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
     ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
@@ -290,9 +288,7 @@ def requester_records(
     ]
 
 
-def responder_records(
-    requester: str, *, udp_version: int = 4
-) -> list[dict[str, Any]]:
+def responder_records(requester: str, *, udp_version: int = 4) -> list[dict[str, Any]]:
     requester_endpoint = ENDPOINTS[requester]["requesterUdp"]
     request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
     ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
@@ -922,7 +918,8 @@ def immutable_campaign_report(
     *,
     scenario: str = "v4",
 ) -> tuple[Path, Path, dict[str, Any]]:
-    assert scenario in {"v4", "clear", "encrypted"}
+    assert scenario in {"v3", "v4", "clear", "encrypted"}
+    udp_version = 3 if scenario == "v3" else 4
     output_root = tmp_path / "output"
     run_dir = (
         output_root
@@ -936,7 +933,10 @@ def immutable_campaign_report(
     transitions = (
         [encrypted_transition("rust"), encrypted_transition("mfc")]
         if scenario == "encrypted"
-        else [transition("rust"), transition("mfc")]
+        else [
+            transition("rust", udp_version=udp_version),
+            transition("mfc", udp_version=udp_version),
+        ]
     )
     diagnostics = (
         evidence.build_client_udp_encrypted_diagnostic_evidence(
@@ -953,6 +953,13 @@ def immutable_campaign_report(
             transitions=transitions,
         )
         if scenario == "clear"
+        else evidence.build_client_udp_v3_diagnostic_evidence(
+            file_hash=FILE_HASH,
+            part_count=PART_COUNT,
+            stock_record=STOCK_RECORD,
+            transitions=transitions,
+        )
+        if scenario == "v3"
         else evidence.build_client_udp_v4_diagnostic_evidence(
             file_hash=FILE_HASH,
             part_count=PART_COUNT,
@@ -966,6 +973,7 @@ def immutable_campaign_report(
         "schema": f"emulebb-build-tests.client-udp-{scenario}-campaign.v1",
         "suite": "emulebb-rust-reask-cross-client",
         "scenario": scenario,
+        "clientUdpVersion": udp_version,
         "coverageId": f"client-udp.{scenario}",
         "status": "passed",
         "currentPhase": "complete",
@@ -1021,7 +1029,7 @@ def immutable_campaign_report(
                     "sourceTcpEndpoint": rust["sourceTcpEndpoint"],
                     "sourceUdpEndpoint": rust["sourceUdpEndpoint"],
                     "sourceUserHash": rust["sourceUserHash"],
-                    "sourceUdpVersion": 4,
+                    "sourceUdpVersion": udp_version,
                 },
             },
             "mfcRequesterRustResponder": {
@@ -1074,15 +1082,16 @@ def immutable_campaign_report(
         },
         "evidence": diagnostics,
     }
-    if scenario in {"clear", "encrypted"}:
+    if scenario in {"v3", "clear", "encrypted"}:
         raw_path = run_dir / f"client-udp-{scenario}-raw-evidence.json"
         raw_payload = {
-            "schema": (
-                evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA
-                if scenario == "encrypted"
-                else evidence.CLEAR_RAW_EVIDENCE_SCHEMA
-            ),
+            "schema": {
+                "v3": evidence.V3_RAW_EVIDENCE_SCHEMA,
+                "clear": evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
+                "encrypted": evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,
+            }[scenario],
             "scenario": scenario,
+            "clientUdpVersion": udp_version,
             "fileHash": FILE_HASH.hex(),
             "partCount": PART_COUNT,
             "transitions": [
@@ -1135,6 +1144,7 @@ def immutable_queue_full_campaign_report(
         "schema": "emulebb-build-tests.client-udp-queue-full-campaign.v1",
         "suite": "emulebb-rust-reask-cross-client",
         "scenario": "queue-full",
+        "clientUdpVersion": 4,
         "coverageId": "client-udp.queue-full",
         "status": "passed",
         "currentPhase": "complete",
@@ -1285,6 +1295,7 @@ def immutable_file_not_found_campaign_report(
         "schema": "emulebb-build-tests.client-udp-file-not-found-campaign.v1",
         "suite": "emulebb-rust-reask-cross-client",
         "scenario": "file-not-found",
+        "clientUdpVersion": 4,
         "coverageId": "client-udp.file-not-found",
         "status": "passed",
         "currentPhase": "complete",
@@ -1913,6 +1924,95 @@ def test_file_not_found_requires_source_removal_without_swap() -> None:
     assert client["sourceAbsence"]["ok"] is False
     assert client["diagnostics"]["counts"]["dropped"] == 0
     assert client["diagnostics"]["counts"]["forbiddenSwap"] == 1
+
+
+@pytest.mark.unit
+def test_immutable_client_udp_v3_campaign_builds_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, _report = immutable_campaign_report(
+        tmp_path,
+        scenario="v3",
+    )
+
+    result = registration.build_client_udp_registration(
+        report_path,
+        scenario="v3",
+        output_root=output_root,
+    )
+
+    receipt = result["evidenceReceipt"]
+    assert receipt["receiptId"] == "rust-mfc-client-udp-v3-20261102t123752z"
+    assert receipt["coverageIds"] == ["client-udp.v3"]
+    assert result["coverageEvidence"] == [
+        {
+            "coverageId": "client-udp.v3",
+            "evidenceLayers": [
+                "codec-transcript",
+                "deterministic-state-machine",
+                "local-cross-client",
+            ],
+            "reason": (
+                "Rust and MFC advertised client UDP v3, emitted byte-identical "
+                "direct v3 reasks and ACKs without v4 part-status fields, then "
+                "causally applied the same queue rank without synthesizing part "
+                "availability."
+            ),
+            "receiptIds": ["rust-mfc-client-udp-v3-20261102t123752z"],
+            "verdict": "parity",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_client_udp_v3_registration_rereduces_hashed_raw_diagnostics(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="v3",
+    )
+    raw_path = Path(report["rawEvidence"]["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    request = raw["transitions"][0]["requesterRecords"][3]["body"]
+    request.update(
+        {
+            "rawHex": REQUEST_RAW.hex(),
+            "rawLen": len(REQUEST_RAW),
+            "payloadHex": REQUEST_RAW[2:].hex(),
+            "payloadLen": len(REQUEST_RAW) - 2,
+        }
+    )
+    raw_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    report["rawEvidence"]["sizeBytes"] = raw_path.stat().st_size
+    report["rawEvidence"]["sha256"] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw client-UDP v3 diagnostics"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v3",
+            output_root=output_root,
+        )
+
+
+@pytest.mark.unit
+def test_client_udp_v3_registration_rejects_campaign_version_mismatch(
+    tmp_path: Path,
+) -> None:
+    output_root, report_path, report = immutable_campaign_report(
+        tmp_path,
+        scenario="v3",
+    )
+    report["clientUdpVersion"] = 4
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="completed client-UDP v3 campaign"):
+        registration.build_client_udp_registration(
+            report_path,
+            scenario="v3",
+            output_root=output_root,
+        )
 
 
 @pytest.mark.unit
