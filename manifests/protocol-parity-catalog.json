@@ -278,6 +278,13 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "client-udp.v1",
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "reason": "Rust and MFC advertised client UDP v1, emitted byte-identical direct v1 hash-only reasks and rank-only ACKs, then causally applied the same queue rank without complete-source or part-status fields.",
+      "receiptIds": ["rust-mfc-client-udp-v1-20261103t200530z"],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "client-udp.v2",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC advertised client UDP v2, emitted byte-identical direct v2 hash-only reasks and rank-only ACKs, then causally applied the same queue rank without complete-source or part-status fields.",
@@ -2184,6 +2191,33 @@
           "authorityId": "rust-product",
           "executableSha256": "3705c0d676f6e4be39092449db829c6d817bebeef174940e6cf6047748233b7f",
           "sourceRevision": "d3991b08cd37ea6fbd11cd466671397b9fb7d9a8"
+        },
+        {
+          "authorityId": "ed2k-server-dependency",
+          "executableSha256": "ffb5655198a882156627e0ff6d5d5a3a94ce02a423023f3b94f0bd8c00569886",
+          "sourceRevision": "d6a6dd672815a13265393ff22622c7fd97b58eee"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261103T200530Z-emulebb-main-release-11272/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "a690921d345c279bbbb6a4bda4f5d5443389e86e32814ff61bf4bc38c93b6b30",
+      "coverageIds": ["client-udp.v1"],
+      "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-mfc-client-udp-v1-20261103t200530z",
+      "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
+      "runnerRevision": "8775705f896cf12dc5f6856864e10eb5694c9897",
+      "subjects": [
+        {
+          "authorityId": "mfc-oracle",
+          "executableSha256": "a6187b300a8dfa9f6368e37a47a918ee83b1376f7eb295fe12428651051b662f",
+          "sourceRevision": "e85415047c6648a2ce40d1b1ec7689987f2612ea"
+        },
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "357efa225e51c303f385f2ac84bbf8f9f6483c677118d3194f7e62dd86892398",
+          "sourceRevision": "3f51f2792b8a43e184016ba667e2b006f1321058"
         },
         {
           "authorityId": "ed2k-server-dependency",
