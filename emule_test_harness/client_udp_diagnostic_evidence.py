@@ -9,6 +9,8 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
+V1_SCHEMA = "emulebb-build-tests.client-udp-v1-diagnostics.v1"
+V1_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-v1-raw-evidence.v1"
 V2_SCHEMA = "emulebb-build-tests.client-udp-v2-diagnostics.v1"
 V2_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-v2-raw-evidence.v1"
 V3_SCHEMA = "emulebb-build-tests.client-udp-v3-diagnostics.v1"
@@ -23,6 +25,7 @@ QUEUE_FULL_SCHEMA = "emulebb-build-tests.client-udp-queue-full-diagnostics.v1"
 FILE_NOT_FOUND_SCHEMA = "emulebb-build-tests.client-udp-file-not-found-diagnostics.v1"
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 COVERAGE_ID = "client-udp.v4"
+V1_COVERAGE_ID = "client-udp.v1"
 V2_COVERAGE_ID = "client-udp.v2"
 V3_COVERAGE_ID = "client-udp.v3"
 CLEAR_COVERAGE_ID = "client-udp.clear"
@@ -2048,6 +2051,28 @@ def build_client_udp_v4_diagnostic_evidence(
     )
 
 
+def build_client_udp_v1_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpAckTransition],
+) -> dict[str, Any]:
+    """Prove both clients originate, answer, and apply one exact direct V1 reask."""
+
+    return _build_client_udp_ack_diagnostic_evidence(
+        file_hash=file_hash,
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+        schema=V1_SCHEMA,
+        coverage_id=V1_COVERAGE_ID,
+        udp_version=1,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
+    )
+
+
 def build_client_udp_v2_diagnostic_evidence(
     *,
     file_hash: bytes,
@@ -2166,6 +2191,17 @@ def require_client_udp_v4_diagnostic_evidence(report: dict[str, Any]) -> None:
         schema=SCHEMA,
         coverage_id=COVERAGE_ID,
         label="V4",
+    )
+
+
+def require_client_udp_v1_diagnostic_evidence(report: dict[str, Any]) -> None:
+    """Raise unless both clients causally completed the exact direct V1 transition."""
+
+    _require_client_udp_ack_diagnostic_evidence(
+        report,
+        schema=V1_SCHEMA,
+        coverage_id=V1_COVERAGE_ID,
+        label="V1",
     )
 
 
