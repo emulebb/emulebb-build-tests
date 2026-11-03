@@ -60,7 +60,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert report["valid"] is True
     assert report["coverage"] == {
         "coveredGroupCount": 5,
-        "coveredIdCount": 32,
+        "coveredIdCount": 33,
         "groupVerdictCounts": {
             "parity": 5,
             "divergence": 0,
@@ -69,9 +69,9 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 32,
+            "parity": 33,
             "divergence": 0,
-            "evidence-incomplete": 68,
+            "evidence-incomplete": 67,
             "not-observed": 0,
             "intentional-difference": 0,
         },
@@ -111,6 +111,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "client-udp.encrypted",
         "client-udp.file-not-found",
         "client-udp.queue-full",
+        "client-udp.v3",
         "client-udp.v4",
         "lowid.buddy-callback",
         "lowid.direct-callback",
@@ -276,13 +277,14 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.login.request",
         "transfer.block.uncompressed",
     ]
-    assert len(payload["evidenceReceipts"]) == 25
+    assert len(payload["evidenceReceipts"]) == 26
     assert payload["evidenceReceipts"][21]["coverageIds"] == ["client-udp.queue-full"]
     assert payload["evidenceReceipts"][22]["coverageIds"] == [
         "client-udp.file-not-found"
     ]
     assert payload["evidenceReceipts"][23]["coverageIds"] == ["client-udp.clear"]
     assert payload["evidenceReceipts"][24]["coverageIds"] == ["client-udp.encrypted"]
+    assert payload["evidenceReceipts"][25]["coverageIds"] == ["client-udp.v3"]
     assert [
         subject["authorityId"]
         for subject in payload["evidenceReceipts"][24]["subjects"]

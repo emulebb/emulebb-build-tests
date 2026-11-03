@@ -4356,6 +4356,7 @@ def _rebuild_client_udp_ack_evidence(
     part_count: int,
     stock_record: dict[str, Any],
     scenario: str,
+    client_udp_version: int,
     raw_evidence_schema: str,
     evidence_builder: Callable[..., dict[str, Any]],
     evidence_requirement: Callable[[dict[str, Any]], None],
@@ -4370,11 +4371,19 @@ def _rebuild_client_udp_ack_evidence(
         raise ValueError("rawEvidence bytes do not match the immutable receipt")
 
     raw = _json_object_file(raw_path, f"client-UDP {scenario} raw evidence")
-    if set(raw) != {"schema", "scenario", "fileHash", "partCount", "transitions"}:
+    if set(raw) != {
+        "schema",
+        "scenario",
+        "clientUdpVersion",
+        "fileHash",
+        "partCount",
+        "transitions",
+    }:
         raise ValueError(f"client-UDP {scenario} raw evidence envelope is not exact")
     if (
         raw.get("schema") != raw_evidence_schema
         or raw.get("scenario") != scenario
+        or raw.get("clientUdpVersion") != client_udp_version
         or raw.get("fileHash") != file_hash
         or raw.get("partCount") != part_count
     ):
@@ -4396,7 +4405,7 @@ def _rebuild_client_udp_ack_evidence(
         "requesterRecords",
         "responderRecords",
     }
-    transitions: list[client_udp_diagnostic_evidence.ClientUdpV4Transition] = []
+    transitions: list[client_udp_diagnostic_evidence.ClientUdpAckTransition] = []
     for index, value in enumerate(raw_transitions):
         transition = _object(value, f"rawEvidence.transitions[{index}]")
         if set(transition) != expected_fields:
@@ -4415,7 +4424,7 @@ def _rebuild_client_udp_ack_evidence(
                 f"rawEvidence.transitions[{index}] diagnostic records are invalid"
             )
         transitions.append(
-            client_udp_diagnostic_evidence.ClientUdpV4Transition(
+            client_udp_diagnostic_evidence.ClientUdpAckTransition(
                 requester=str(transition.get("requester") or ""),
                 responder=str(transition.get("responder") or ""),
                 source_tcp_endpoint=str(transition.get("sourceTcpEndpoint") or ""),
@@ -4497,6 +4506,7 @@ def _validate_client_udp_ack_client(
     *,
     file_hash: str,
     part_count: int,
+    client_udp_version: int,
     expected_should_crypt: bool | None,
 ) -> dict[str, Any]:
     client = _object(value, f"evidence.clients.{client_id}")
@@ -4535,7 +4545,7 @@ def _validate_client_udp_ack_client(
         "sourceTcpPort": source_tcp_port,
         "sourceUdpPort": source_udp_port,
         "sourceUserHash": source_user_hash,
-        "sourceUdpVersion": 4,
+        "sourceUdpVersion": client_udp_version,
     }
     expected_control_response = {
         "status": 200,
@@ -4545,7 +4555,7 @@ def _validate_client_udp_ack_client(
             "sourceEndpoint": source_udp_endpoint,
             "sourceTcpPort": source_tcp_port,
             "sourceUserHash": source_user_hash,
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": client_udp_version,
             "state": "queued-source-reask-pending",
         },
     }
@@ -4568,8 +4578,11 @@ def _validate_client_udp_ack_client(
             )
         )
         + bytes.fromhex(file_hash)
-        + part_count.to_bytes(2, "little")
-        + bytes((0,))
+        + (
+            part_count.to_bytes(2, "little") + bytes((0,))
+            if client_udp_version > 3
+            else b""
+        )
         + bytes((1, 0))
     )
     wire = _object(client.get("wire"), f"evidence.clients.{client_id}.wire")
@@ -4582,35 +4595,47 @@ def _validate_client_udp_ack_client(
     )
     if queue_rank > 0xFFFF:
         raise ValueError(f"evidence.clients.{client_id} queue rank exceeds u16")
-    ack_raw = bytes(
-        (
-            client_udp_diagnostic_evidence.OP_EMULEPROT,
-            client_udp_diagnostic_evidence.OP_REASKACK,
-            0,
-            0,
+    ack_raw = (
+        bytes(
+            (
+                client_udp_diagnostic_evidence.OP_EMULEPROT,
+                client_udp_diagnostic_evidence.OP_REASKACK,
+            )
         )
-    ) + queue_rank.to_bytes(2, "little")
+        + (bytes((0, 0)) if client_udp_version > 3 else b"")
+        + queue_rank.to_bytes(2, "little")
+    )
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": client_udp_version,
         "fileHash": file_hash,
-        "partStatus": {
-            "wirePartCount": part_count,
-            "partStatusBits": "0" * part_count,
-            "completeSource": False,
-            "rawHex": (part_count.to_bytes(2, "little") + bytes((0,))).hex(),
-        },
+        "partStatus": (
+            {
+                "wirePartCount": part_count,
+                "partStatusBits": "0" * part_count,
+                "completeSource": False,
+                "rawHex": (part_count.to_bytes(2, "little") + bytes((0,))).hex(),
+            }
+            if client_udp_version > 3
+            else None
+        ),
         "completeSourceCount": 1,
     }
     expected_ack = {
         "ok": True,
         "rawHex": ack_raw.hex(),
-        "partStatus": {
-            "wirePartCount": 0,
-            "partStatusBits": None,
-            "completeSource": True,
-            "rawHex": "0000",
-        },
+        "udpVersion": client_udp_version,
+        "partStatus": (
+            {
+                "wirePartCount": 0,
+                "partStatusBits": None,
+                "completeSource": True,
+                "rawHex": "0000",
+            }
+            if client_udp_version > 3
+            else None
+        ),
         "queueRank": queue_rank,
     }
     _require_exact_value(
@@ -4767,21 +4792,21 @@ def _validate_client_udp_ack_client(
     )
 
     application = {
-        "availablePartsAfter": part_count,
-        "noNeededPartsAfter": False,
+        "availablePartsAfter": (part_count if client_udp_version > 3 else None),
+        "noNeededPartsAfter": False if client_udp_version > 3 else None,
         "outcome": "applied",
-        "partCountAfter": part_count,
-        "partStatusApplied": True,
-        "partStatusBitsAfter": "1" * part_count,
-        "partStatusIncluded": True,
+        "partCountAfter": part_count if client_udp_version > 3 else None,
+        "partStatusApplied": client_udp_version > 3,
+        "partStatusBitsAfter": ("1" * part_count if client_udp_version > 3 else None),
+        "partStatusIncluded": client_udp_version > 3,
         "queueRank": queue_rank,
         "queueRankApplied": True,
         "remoteQueueFullAfter": False,
         "replyOpcode": client_udp_diagnostic_evidence.OP_REASKACK,
         "requestPendingAfter": False,
         "sourceUdpEndpoint": source_udp_endpoint,
-        "sourceUdpVersion": 4,
-        "wirePartCount": 0,
+        "sourceUdpVersion": client_udp_version,
+        "wirePartCount": 0 if client_udp_version > 3 else None,
     }
     _require_exact_value(
         client.get("application"),
@@ -4991,6 +5016,7 @@ def _validate_client_udp_queue_full_client(
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": 4,
         "fileHash": file_hash,
         "partStatus": {
             "wirePartCount": part_count,
@@ -5338,6 +5364,7 @@ def _validate_client_udp_file_not_found_client(
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": 4,
         "fileHash": file_hash,
         "partStatus": {
             "wirePartCount": part_count,
@@ -5623,6 +5650,7 @@ def _build_client_udp_ack_registration(
     campaign_schema: str,
     evidence_schema: str,
     coverage_id: str,
+    client_udp_version: int,
     receipt_suffix: str,
     reason: str,
     expected_transport_mode: str,
@@ -5653,10 +5681,13 @@ def _build_client_udp_ack_registration(
         raise ValueError("report parent must be a timestamped client-UDP run directory")
 
     report = _json_object_file(resolved_report, "client-UDP campaign report")
+    if type(client_udp_version) is not int or client_udp_version not in (3, 4):
+        raise ValueError("ACK campaign client UDP version must be exactly 3 or 4")
     if (
         report.get("schema") != campaign_schema
         or report.get("suite") != CLIENT_UDP_SUITE
         or report.get("scenario") != scenario
+        or report.get("clientUdpVersion") != client_udp_version
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
         or report.get("coverageId") != coverage_id
@@ -5725,6 +5756,7 @@ def _build_client_udp_ack_registration(
             part_count=part_count,
             stock_record=stock_record,
             scenario=scenario,
+            client_udp_version=client_udp_version,
             raw_evidence_schema=raw_evidence_schema,
             evidence_builder=evidence_builder,
             evidence_requirement=evidence_requirement,
@@ -5742,6 +5774,7 @@ def _build_client_udp_ack_registration(
             clients[client_id],
             file_hash=file_hash,
             part_count=part_count,
+            client_udp_version=client_udp_version,
             expected_should_crypt=expected_should_crypt,
         )
         for client_id in ("rust", "mfc")
@@ -5834,7 +5867,7 @@ def _build_client_udp_ack_registration(
             "sourceTcpEndpoint": validated["rust"]["sourceTcpEndpoint"],
             "sourceUdpEndpoint": validated["rust"]["sourceUdpEndpoint"],
             "sourceUserHash": validated["rust"]["sourceUserHash"],
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": client_udp_version,
         },
         "checks.rust.registration",
     )
@@ -5928,6 +5961,41 @@ def _build_client_udp_ack_registration(
     return {"coverageEvidence": [coverage_evidence], "evidenceReceipt": receipt}
 
 
+def _build_client_udp_v3_registration(
+    report_path: Path,
+    *,
+    output_root: Path,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Independently validates one immutable bilateral V3 campaign receipt."""
+
+    return _build_client_udp_ack_registration(
+        report_path,
+        output_root=output_root,
+        catalog_path=catalog_path,
+        scenario="v3",
+        campaign_schema="emulebb-build-tests.client-udp-v3-campaign.v1",
+        evidence_schema=client_udp_diagnostic_evidence.V3_SCHEMA,
+        coverage_id=client_udp_diagnostic_evidence.V3_COVERAGE_ID,
+        client_udp_version=3,
+        receipt_suffix="v3",
+        reason=(
+            "Rust and MFC advertised client UDP v3, emitted byte-identical direct "
+            "v3 reasks and ACKs without v4 part-status fields, then causally "
+            "applied the same queue rank without synthesizing part availability."
+        ),
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
+        raw_evidence_schema=client_udp_diagnostic_evidence.V3_RAW_EVIDENCE_SCHEMA,
+        evidence_builder=(
+            client_udp_diagnostic_evidence.build_client_udp_v3_diagnostic_evidence
+        ),
+        evidence_requirement=(
+            client_udp_diagnostic_evidence.require_client_udp_v3_diagnostic_evidence
+        ),
+    )
+
+
 def _build_client_udp_v4_registration(
     report_path: Path,
     *,
@@ -5944,6 +6012,7 @@ def _build_client_udp_v4_registration(
         campaign_schema="emulebb-build-tests.client-udp-v4-campaign.v1",
         evidence_schema=client_udp_diagnostic_evidence.SCHEMA,
         coverage_id=client_udp_diagnostic_evidence.COVERAGE_ID,
+        client_udp_version=4,
         receipt_suffix="v4",
         reason=(
             "Rust and MFC emitted byte-identical direct V4 reasks and ACKs, then "
@@ -5971,6 +6040,7 @@ def _build_client_udp_clear_registration(
         campaign_schema="emulebb-build-tests.client-udp-clear-campaign.v1",
         evidence_schema=client_udp_diagnostic_evidence.CLEAR_SCHEMA,
         coverage_id=client_udp_diagnostic_evidence.CLEAR_COVERAGE_ID,
+        client_udp_version=4,
         receipt_suffix="clear",
         reason=(
             "Rust and MFC each selected the non-crypt client-UDP path, emitted the "
@@ -6005,6 +6075,7 @@ def _build_client_udp_encrypted_registration(
         campaign_schema="emulebb-build-tests.client-udp-encrypted-campaign.v1",
         evidence_schema=client_udp_diagnostic_evidence.ENCRYPTED_SCHEMA,
         coverage_id=client_udp_diagnostic_evidence.ENCRYPTED_COVERAGE_ID,
+        client_udp_version=4,
         receipt_suffix="encrypted",
         reason=(
             "Rust and MFC each selected the crypt client-UDP path, exchanged "
@@ -6058,6 +6129,7 @@ def _build_client_udp_queue_full_registration(
         report.get("schema") != "emulebb-build-tests.client-udp-queue-full-campaign.v1"
         or report.get("suite") != CLIENT_UDP_SUITE
         or report.get("scenario") != "queue-full"
+        or report.get("clientUdpVersion") != 4
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
         or report.get("coverageId") != coverage_id
@@ -6327,6 +6399,7 @@ def _build_client_udp_file_not_found_registration(
         != "emulebb-build-tests.client-udp-file-not-found-campaign.v1"
         or report.get("suite") != CLIENT_UDP_SUITE
         or report.get("scenario") != "file-not-found"
+        or report.get("clientUdpVersion") != 4
         or report.get("status") != "passed"
         or report.get("currentPhase") != "complete"
         or report.get("coverageId") != coverage_id
@@ -6594,6 +6667,12 @@ def build_client_udp_registration(
 ) -> dict[str, Any]:
     """Independently validates one explicit canonical client-UDP scenario."""
 
+    if scenario == "v3":
+        return _build_client_udp_v3_registration(
+            report_path,
+            output_root=output_root,
+            catalog_path=catalog_path,
+        )
     if scenario == "v4":
         return _build_client_udp_v4_registration(
             report_path,
@@ -6882,7 +6961,7 @@ def run_client_udp_registration_cli(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["v4", "clear", "encrypted", "queue-full", "file-not-found"],
+        choices=["v3", "v4", "clear", "encrypted", "queue-full", "file-not-found"],
         required=True,
     )
     parser.add_argument("--report", type=Path, required=True)
