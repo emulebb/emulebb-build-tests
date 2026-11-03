@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable
 
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
 V3_SCHEMA = "emulebb-build-tests.client-udp-v3-diagnostics.v1"
+V3_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-v3-raw-evidence.v1"
 CLEAR_SCHEMA = "emulebb-build-tests.client-udp-clear-diagnostics.v1"
 CLEAR_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-clear-raw-evidence.v1"
 ENCRYPTED_SCHEMA = "emulebb-build-tests.client-udp-encrypted-diagnostics.v1"

@@ -70,7 +70,7 @@ def _write_mfc_run(log_dir: Path) -> None:
     )
 
 
-def _registration_record() -> dict[str, object]:
+def _registration_record(*, udp_version: int = 4) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
         "family": "sched",
@@ -83,7 +83,7 @@ def _registration_record() -> dict[str, object]:
         "body": {
             "outcome": "accepted",
             "sourceUdpEndpoint": SOURCE_UDP_ENDPOINT,
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": udp_version,
             "lowId": False,
             "buddyEndpoint": None,
             "buddyId": None,
@@ -91,7 +91,7 @@ def _registration_record() -> dict[str, object]:
     }
 
 
-def _applied_record() -> dict[str, object]:
+def _applied_record(*, udp_version: int = 4) -> dict[str, object]:
     return {
         "schema": "diag_event_v2",
         "family": "sched",
@@ -104,7 +104,7 @@ def _applied_record() -> dict[str, object]:
         "body": {
             "outcome": "applied",
             "replyOpcode": 0x91,
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": udp_version,
             "requestPendingAfter": False,
         },
     }
@@ -125,6 +125,26 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
         ]
     )
     assert args.scenario == "queue-full"
+
+    v3 = module.parse_args(
+        [
+            "--scenario",
+            "v3",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert module.SCENARIO_COVERAGE_IDS[v3.scenario] == "client-udp.v3"
+    assert module.SCENARIO_CLIENT_UDP_VERSIONS[v3.scenario] == 3
+    assert module.SCENARIO_CAMPAIGN_SCHEMAS[v3.scenario] == (
+        "emulebb-build-tests.client-udp-v3-campaign.v1"
+    )
+    assert module.SCENARIO_EVIDENCE_BUILDERS[v3.scenario] is (
+        module.udp_evidence.build_client_udp_v3_diagnostic_evidence
+    )
+    assert module.SCENARIO_EVIDENCE_REQUIREMENTS[v3.scenario] is (
+        module.udp_evidence.require_client_udp_v3_diagnostic_evidence
+    )
 
     file_not_found = module.parse_args(
         [
@@ -285,6 +305,15 @@ def test_every_campaign_rust_process_uses_the_authoritative_diagnostics_binary()
     assert "resolve_rust_diagnostics_exe" in source
     assert "resolve_rust_regular_exe" not in source
     assert "EMULEBB_RUST_LOG_DIR" in source
+    assert "DIAGNOSTIC_CLIENT_UDP_VERSION_ENV" in source
+
+
+def test_every_campaign_mfc_process_selects_the_exact_client_udp_version() -> None:
+    module = _load_module()
+    source = inspect.getsource(module.start_mfc)
+
+    assert "DIAGNOSTIC_CLIENT_UDP_VERSION_ENV" in source
+    assert "selected_udp_version" in source
 
 
 def test_authoritative_runner_defers_mfc_executable_validation_until_clean_build() -> (
@@ -321,15 +350,17 @@ def test_authoritative_runner_has_no_binary_or_source_overrides(override: str) -
 
 
 @pytest.mark.parametrize(
-    ("scenario", "schema"),
+    ("scenario", "schema", "udp_version"),
     [
-        ("clear", "CLEAR_RAW_EVIDENCE_SCHEMA"),
-        ("encrypted", "ENCRYPTED_RAW_EVIDENCE_SCHEMA"),
+        ("v3", "V3_RAW_EVIDENCE_SCHEMA", 3),
+        ("clear", "CLEAR_RAW_EVIDENCE_SCHEMA", 4),
+        ("encrypted", "ENCRYPTED_RAW_EVIDENCE_SCHEMA", 4),
     ],
 )
 def test_ack_raw_evidence_serializes_complete_reducer_inputs(
     scenario: str,
     schema: str,
+    udp_version: int,
 ) -> None:
     module = _load_module()
     transition = module.udp_evidence.ClientUdpAckTransition(
@@ -346,6 +377,7 @@ def test_ack_raw_evidence_serializes_complete_reducer_inputs(
 
     payload = module.build_ack_raw_evidence(
         scenario=scenario,
+        client_udp_version=udp_version,
         file_hash=FILE_HASH,
         part_count=1,
         transitions=[transition],
@@ -354,6 +386,7 @@ def test_ack_raw_evidence_serializes_complete_reducer_inputs(
     assert payload == {
         "schema": getattr(module.udp_evidence, schema),
         "scenario": scenario,
+        "clientUdpVersion": udp_version,
         "fileHash": FILE_HASH,
         "partCount": 1,
         "transitions": [
@@ -514,6 +547,7 @@ def test_exact_direct_v4_registration_builds_control_identity() -> None:
         file_hash=FILE_HASH.upper(),
         source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
         source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_udp_version=4,
     )
 
     assert identity == {
@@ -528,6 +562,7 @@ def test_exact_direct_v4_registration_builds_control_identity() -> None:
         source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
         source_udp_endpoint=SOURCE_UDP_ENDPOINT,
         source_user_hash=SOURCE_USER_HASH,
+        source_udp_version=4,
     ) == {
         "fileHash": FILE_HASH,
         "sourceIp": "127.0.0.10",
@@ -538,15 +573,38 @@ def test_exact_direct_v4_registration_builds_control_identity() -> None:
     }
 
 
+def test_exact_direct_v3_registration_builds_control_identity() -> None:
+    module = _load_module()
+
+    identity = module.find_udp_reask_registration(
+        [_registration_record(udp_version=3)],
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_udp_version=3,
+    )
+
+    assert identity is not None
+    assert identity["sourceUdpVersion"] == 3
+    assert module.queued_source_reask_request(
+        file_hash=FILE_HASH,
+        source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
+        source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+        source_user_hash=SOURCE_USER_HASH,
+        source_udp_version=3,
+    )["sourceUdpVersion"] == 3
+
+
 def test_registration_rejects_duplicate_exact_identity() -> None:
     module = _load_module()
 
-    with pytest.raises(RuntimeError, match="multiple exact direct V4"):
+    with pytest.raises(RuntimeError, match="multiple exact direct client-UDP"):
         module.find_udp_reask_registration(
             [_registration_record(), _registration_record()],
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_udp_endpoint=SOURCE_UDP_ENDPOINT,
+            source_udp_version=4,
         )
 
 
@@ -937,6 +995,7 @@ def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None
         file_hash=FILE_HASH,
         source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
         source_user_hash=SOURCE_USER_HASH,
+        source_udp_version=4,
     )
 
     assert completion == {
@@ -956,6 +1015,7 @@ def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            source_udp_version=4,
         )
 
 
@@ -1002,6 +1062,7 @@ def test_control_receipt_unwraps_only_the_api_data_envelope() -> None:
         source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
         source_udp_endpoint=SOURCE_UDP_ENDPOINT,
         source_user_hash=SOURCE_USER_HASH,
+        source_udp_version=4,
     )
     response_payload = {
         "accepted": True,
@@ -1031,6 +1092,7 @@ def test_exact_v4_application_is_required_once() -> None:
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            source_udp_version=4,
             reply_opcode=0x91,
         )
         == _applied_record()
@@ -1042,6 +1104,7 @@ def test_exact_v4_application_is_required_once() -> None:
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            source_udp_version=4,
             reply_opcode=0x93,
         )
         is None
@@ -1053,6 +1116,7 @@ def test_exact_v4_application_is_required_once() -> None:
             file_hash=FILE_HASH,
             source_tcp_endpoint=SOURCE_TCP_ENDPOINT,
             source_user_hash=SOURCE_USER_HASH,
+            source_udp_version=4,
             reply_opcode=0x91,
         )
 

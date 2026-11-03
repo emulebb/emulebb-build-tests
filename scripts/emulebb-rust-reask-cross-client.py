@@ -84,8 +84,10 @@ RUST_LOG = (
     ",emulebb_ed2k::ed2k_tcp=debug,emulebb_ed2k::ed2k_transfer=debug"
     ",emulebb_ed2k::ed2k_client_udp=trace"
 )
+DIAGNOSTIC_CLIENT_UDP_VERSION_ENV = "EMULEBB_DIAGNOSTIC_CLIENT_UDP_VERSION"
 
 SCENARIO_COVERAGE_IDS = {
+    "v3": udp_evidence.V3_COVERAGE_ID,
     "v4": udp_evidence.COVERAGE_ID,
     "clear": udp_evidence.CLEAR_COVERAGE_ID,
     "encrypted": udp_evidence.ENCRYPTED_COVERAGE_ID,
@@ -93,6 +95,7 @@ SCENARIO_COVERAGE_IDS = {
     "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
 }
 SCENARIO_CAMPAIGN_SCHEMAS = {
+    "v3": "emulebb-build-tests.client-udp-v3-campaign.v1",
     "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
     "clear": "emulebb-build-tests.client-udp-clear-campaign.v1",
     "encrypted": "emulebb-build-tests.client-udp-encrypted-campaign.v1",
@@ -100,6 +103,7 @@ SCENARIO_CAMPAIGN_SCHEMAS = {
     "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
 }
 SCENARIO_REPLY_OPCODES = {
+    "v3": udp_evidence.OP_REASKACK,
     "v4": udp_evidence.OP_REASKACK,
     "clear": udp_evidence.OP_REASKACK,
     "encrypted": udp_evidence.OP_REASKACK,
@@ -107,6 +111,7 @@ SCENARIO_REPLY_OPCODES = {
     "file-not-found": udp_evidence.OP_FILENOTFOUND,
 }
 SCENARIO_EVIDENCE_BUILDERS = {
+    "v3": udp_evidence.build_client_udp_v3_diagnostic_evidence,
     "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.build_client_udp_clear_diagnostic_evidence,
     "encrypted": udp_evidence.build_client_udp_encrypted_diagnostic_evidence,
@@ -116,6 +121,7 @@ SCENARIO_EVIDENCE_BUILDERS = {
     ),
 }
 SCENARIO_EVIDENCE_REQUIREMENTS = {
+    "v3": udp_evidence.require_client_udp_v3_diagnostic_evidence,
     "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.require_client_udp_clear_diagnostic_evidence,
     "encrypted": udp_evidence.require_client_udp_encrypted_diagnostic_evidence,
@@ -127,7 +133,11 @@ SCENARIO_EVIDENCE_REQUIREMENTS = {
 SCENARIO_OBFUSCATION = {
     scenario: scenario == "encrypted" for scenario in SCENARIO_COVERAGE_IDS
 }
+SCENARIO_CLIENT_UDP_VERSIONS = {
+    scenario: 3 if scenario == "v3" else 4 for scenario in SCENARIO_COVERAGE_IDS
+}
 SCENARIO_RAW_EVIDENCE_SCHEMAS = {
+    "v3": udp_evidence.V3_RAW_EVIDENCE_SCHEMA,
     "clear": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
     "encrypted": udp_evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,
 }
@@ -136,6 +146,7 @@ SCENARIO_RAW_EVIDENCE_SCHEMAS = {
 def build_ack_raw_evidence(
     *,
     scenario: str,
+    client_udp_version: int,
     file_hash: str,
     part_count: int,
     transitions: list[udp_evidence.ClientUdpAckTransition],
@@ -152,6 +163,7 @@ def build_ack_raw_evidence(
     return {
         "schema": schema,
         "scenario": scenario,
+        "clientUdpVersion": _require_client_udp_version(client_udp_version),
         "fileHash": _canonical_hash(file_hash, field="file_hash"),
         "partCount": part_count,
         "transitions": [
@@ -218,6 +230,12 @@ def _canonical_hash(value: object, *, field: str) -> str:
     ):
         raise RuntimeError(f"{field} must be a 32-character hexadecimal value")
     return normalized
+
+
+def _require_client_udp_version(value: object) -> int:
+    if type(value) is not int or value not in range(1, 5):
+        raise ValueError("client UDP version must be an integer from 1 through 4")
+    return value
 
 
 def _split_endpoint(value: object, *, field: str) -> tuple[str, int]:
@@ -290,10 +308,12 @@ def find_udp_reask_registration(
     file_hash: str,
     source_tcp_endpoint: str,
     source_udp_endpoint: str,
+    source_udp_version: int,
 ) -> dict[str, object] | None:
-    """Resolve one exact naturally registered direct V4 queued source."""
+    """Resolve one exact naturally registered direct queued source."""
 
     normalized_file_hash = _canonical_hash(file_hash, field="file_hash")
+    expected_udp_version = _require_client_udp_version(source_udp_version)
     matches: list[dict[str, Any]] = []
     for record in records:
         keys = record.get("keys") if isinstance(record.get("keys"), dict) else {}
@@ -306,7 +326,7 @@ def find_udp_reask_registration(
             and str(keys.get("peer") or "").lower() == source_tcp_endpoint.lower()
             and body.get("outcome") == "accepted"
             and body.get("sourceUdpEndpoint") == source_udp_endpoint
-            and body.get("sourceUdpVersion") == 4
+            and body.get("sourceUdpVersion") == expected_udp_version
             and body.get("lowId") is False
             and body.get("buddyEndpoint") is None
             and body.get("buddyId") is None
@@ -314,7 +334,7 @@ def find_udp_reask_registration(
             matches.append(record)
     if len(matches) > 1:
         raise RuntimeError(
-            "multiple exact direct V4 source registrations were recorded"
+            "multiple exact direct client-UDP source registrations were recorded"
         )
     if not matches:
         return None
@@ -326,7 +346,7 @@ def find_udp_reask_registration(
         "sourceUserHash": _canonical_hash(
             keys.get("peerHash"), field="source peerHash"
         ),
-        "sourceUdpVersion": 4,
+        "sourceUdpVersion": expected_udp_version,
     }
 
 
@@ -555,6 +575,7 @@ def queued_source_reask_request(
     source_tcp_endpoint: str,
     source_udp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int,
 ) -> dict[str, object]:
     tcp_host, tcp_port = _split_endpoint(
         source_tcp_endpoint, field="source_tcp_endpoint"
@@ -572,7 +593,7 @@ def queued_source_reask_request(
         "sourceTcpPort": tcp_port,
         "sourceUdpPort": udp_port,
         "sourceUserHash": _canonical_hash(source_user_hash, field="source_user_hash"),
-        "sourceUdpVersion": 4,
+        "sourceUdpVersion": _require_client_udp_version(source_udp_version),
     }
 
 
@@ -597,10 +618,12 @@ def find_udp_reask_applied(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int,
     reply_opcode: int,
 ) -> dict[str, Any] | None:
     normalized_file_hash = _canonical_hash(file_hash, field="file_hash")
     normalized_user_hash = _canonical_hash(source_user_hash, field="source_user_hash")
+    expected_udp_version = _require_client_udp_version(source_udp_version)
     matches: list[dict[str, Any]] = []
     for record in records:
         keys = record.get("keys") if isinstance(record.get("keys"), dict) else {}
@@ -614,7 +637,7 @@ def find_udp_reask_applied(
             and str(keys.get("peerHash") or "").lower() == normalized_user_hash
             and body.get("outcome") == "applied"
             and body.get("replyOpcode") == reply_opcode
-            and body.get("sourceUdpVersion") == 4
+            and body.get("sourceUdpVersion") == expected_udp_version
             and body.get("requestPendingAfter") is False
         ):
             matches.append(record)
@@ -629,6 +652,7 @@ def find_file_not_found_completion(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int,
 ) -> dict[str, dict[str, Any]] | None:
     """Resolve one ordered FNF application, dead-list, and source drop."""
 
@@ -653,6 +677,7 @@ def find_file_not_found_completion(
         file_hash=normalized_file_hash,
         source_tcp_endpoint=source_tcp_endpoint,
         source_user_hash=normalized_user_hash,
+        source_udp_version=source_udp_version,
         reply_opcode=udp_evidence.OP_FILENOTFOUND,
     )
     dead_listed = [
@@ -828,6 +853,7 @@ def start_rust(
     server_endpoint,
     used_ports,
     label,
+    client_udp_version,
     enable_reask,
     obfuscation_enabled,
     upload_limit_kibps=None,
@@ -837,7 +863,8 @@ def start_rust(
 ) -> RustRuntime:
     """Launch one staged Rust client with an isolated deterministic profile."""
 
-    nickname = f"client-udp-v4-{label}"
+    selected_udp_version = _require_client_udp_version(client_udp_version)
+    nickname = f"client-udp-v{selected_udp_version}-{label}"
     rest_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     ed2k_port = cc.choose_extra_port(lan_bind_addr, used_ports)
     kad_port = cc.choose_extra_port(lan_bind_addr, used_ports, udp=True)
@@ -870,9 +897,11 @@ def start_rust(
     packet_dir.mkdir(parents=True, exist_ok=True)
     previous_rust_log = os.environ.get("RUST_LOG")
     previous_diagnostic_dir = os.environ.get("EMULEBB_RUST_LOG_DIR")
+    previous_udp_version = os.environ.get(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV)
     try:
         os.environ["RUST_LOG"] = RUST_LOG
         os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dir)
+        os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = str(selected_udp_version)
         process = rust_client.start_rust_client_executable(
             executable, profile, out_path
         )
@@ -885,6 +914,10 @@ def start_rust(
             os.environ.pop("EMULEBB_RUST_LOG_DIR", None)
         else:
             os.environ["EMULEBB_RUST_LOG_DIR"] = previous_diagnostic_dir
+        if previous_udp_version is None:
+            os.environ.pop(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV, None)
+        else:
+            os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = previous_udp_version
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     try:
         cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
@@ -1354,6 +1387,7 @@ def wait_for_udp_reask_registration(
     file_hash: str,
     source_tcp_endpoint: str,
     source_udp_endpoint: str,
+    source_udp_version: int,
     timeout: float,
     process: object | None = None,
 ) -> dict[str, object]:
@@ -1370,11 +1404,15 @@ def wait_for_udp_reask_registration(
             file_hash=file_hash,
             source_tcp_endpoint=source_tcp_endpoint,
             source_udp_endpoint=source_udp_endpoint,
+            source_udp_version=source_udp_version,
         )
         if registration is not None:
             return registration
         time.sleep(1.0)
-    raise RuntimeError(f"{side} requester never registered the exact direct V4 source")
+    raise RuntimeError(
+        f"{side} requester never registered the exact direct "
+        f"client-UDP v{source_udp_version} source"
+    )
 
 
 def wait_for_mfc_queued_source(
@@ -1436,6 +1474,7 @@ def wait_for_udp_reask_applied(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int,
     reply_opcode: int,
     timeout: float,
     process: object | None = None,
@@ -1443,7 +1482,10 @@ def wait_for_udp_reask_applied(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
-            raise RuntimeError(f"{side} requester exited before applying the V4 reply")
+            raise RuntimeError(
+                f"{side} requester exited before applying the "
+                f"client-UDP v{source_udp_version} reply"
+            )
         try:
             records = current_diag_records(log_dir, side=side)
         except ValueError:
@@ -1453,6 +1495,7 @@ def wait_for_udp_reask_applied(
             file_hash=file_hash,
             source_tcp_endpoint=source_tcp_endpoint,
             source_user_hash=source_user_hash,
+            source_udp_version=source_udp_version,
             reply_opcode=reply_opcode,
         )
         if applied is not None:
@@ -1470,6 +1513,7 @@ def wait_for_file_not_found_completion(
     file_hash: str,
     source_tcp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int,
     timeout: float,
     process: object | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
@@ -1490,6 +1534,7 @@ def wait_for_file_not_found_completion(
             file_hash=file_hash,
             source_tcp_endpoint=source_tcp_endpoint,
             source_user_hash=source_user_hash,
+            source_udp_version=source_udp_version,
         )
         if completion is not None:
             return completion, records
@@ -1506,6 +1551,7 @@ def start_mfc(
     p2p_address: str,
     server_address: str,
     ports: dict[str, int],
+    client_udp_version: int,
     obfuscation_enabled: bool,
     saturate_upload_queue: bool = False,
 ) -> dict[str, object]:
@@ -1554,11 +1600,20 @@ def start_mfc(
         port=ports["ed2k_tcp"],
         name="client-udp-local",
     )
-    app = live_common.launch_app(
-        paths.app_exe,
-        Path(profile["profile_base"]),
-        minimized_to_tray=True,
-    )
+    selected_udp_version = _require_client_udp_version(client_udp_version)
+    previous_udp_version = os.environ.get(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV)
+    try:
+        os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = str(selected_udp_version)
+        app = live_common.launch_app(
+            paths.app_exe,
+            Path(profile["profile_base"]),
+            minimized_to_tray=True,
+        )
+    finally:
+        if previous_udp_version is None:
+            os.environ.pop(DIAGNOSTIC_CLIENT_UDP_VERSION_ENV, None)
+        else:
+            os.environ[DIAGNOSTIC_CLIENT_UDP_VERSION_ENV] = previous_udp_version
     base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
     try:
         dtt.rest_smoke.wait_for_rest_ready(
@@ -1622,6 +1677,7 @@ def run_rust_requester_phase(
     withdrawn_fixture_path = None
     try:
         obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
+        client_udp_version = SCENARIO_CLIENT_UDP_VERSIONS[scenario]
         mfc = start_mfc(
             args=args,
             paths=paths,
@@ -1630,6 +1686,7 @@ def run_rust_requester_phase(
             p2p_address=mfc_responder_ip,
             server_address=server_address,
             ports=ports,
+            client_udp_version=client_udp_version,
             obfuscation_enabled=obfuscation_enabled,
             saturate_upload_queue=True,
         )
@@ -1663,6 +1720,7 @@ def run_rust_requester_phase(
                 server_endpoint=server_endpoint,
                 used_ports=used_ports,
                 label=f"{scenario}-occupier-{index + 1}",
+                client_udp_version=client_udp_version,
                 enable_reask=False,
                 obfuscation_enabled=obfuscation_enabled,
             )
@@ -1678,6 +1736,7 @@ def run_rust_requester_phase(
             server_endpoint=server_endpoint,
             used_ports=used_ports,
             label=f"{scenario}-rust-requester",
+            client_udp_version=client_udp_version,
             enable_reask=True,
             obfuscation_enabled=obfuscation_enabled,
         )
@@ -1717,6 +1776,7 @@ def run_rust_requester_phase(
             file_hash=file_hash,
             source_tcp_endpoint=mfc["tcpEndpoint"],
             source_udp_endpoint=mfc["udpEndpoint"],
+            source_udp_version=client_udp_version,
             timeout=args.reask_observe_timeout_seconds,
             process=requester.process,
         )
@@ -1767,6 +1827,7 @@ def run_rust_requester_phase(
             source_tcp_endpoint=registration["sourceTcpEndpoint"],
             source_udp_endpoint=registration["sourceUdpEndpoint"],
             source_user_hash=registration["sourceUserHash"],
+            source_udp_version=client_udp_version,
         )
         control_receipt = trigger_queued_source_reask(
             requester.base_url,
@@ -1780,6 +1841,7 @@ def run_rust_requester_phase(
                 file_hash=file_hash,
                 source_tcp_endpoint=mfc["tcpEndpoint"],
                 source_user_hash=registration["sourceUserHash"],
+                source_udp_version=client_udp_version,
                 timeout=args.reask_observe_timeout_seconds,
                 process=requester.process,
             )
@@ -1799,6 +1861,7 @@ def run_rust_requester_phase(
                 file_hash=file_hash,
                 source_tcp_endpoint=mfc["tcpEndpoint"],
                 source_user_hash=registration["sourceUserHash"],
+                source_udp_version=client_udp_version,
                 reply_opcode=SCENARIO_REPLY_OPCODES[scenario],
                 timeout=args.reask_observe_timeout_seconds,
                 process=requester.process,
@@ -1887,6 +1950,7 @@ def run_mfc_requester_phase(
     withdrawn_fixture_path = None
     try:
         obfuscation_enabled = SCENARIO_OBFUSCATION[scenario]
+        client_udp_version = SCENARIO_CLIENT_UDP_VERSIONS[scenario]
         uploader = start_rust(
             repo=rust_repo,
             paths=paths,
@@ -1896,6 +1960,7 @@ def run_mfc_requester_phase(
             server_endpoint=server_endpoint,
             used_ports=used_ports,
             label=f"{scenario}-rust-responder",
+            client_udp_version=client_udp_version,
             enable_reask=True,
             obfuscation_enabled=obfuscation_enabled,
             upload_limit_kibps=4,
@@ -1933,6 +1998,7 @@ def run_mfc_requester_phase(
             server_endpoint=server_endpoint,
             used_ports=used_ports,
             label=f"{scenario}-responder-occupier",
+            client_udp_version=client_udp_version,
             enable_reask=False,
             obfuscation_enabled=obfuscation_enabled,
         )
@@ -1964,6 +2030,7 @@ def run_mfc_requester_phase(
             p2p_address=p2p_address,
             server_address=server_address,
             ports=ports,
+            client_udp_version=client_udp_version,
             obfuscation_enabled=obfuscation_enabled,
         )
         mfc_high_id_client = wait_for_server_high_id_client(
@@ -2023,6 +2090,7 @@ def run_mfc_requester_phase(
             source_tcp_endpoint=uploader.tcp_endpoint,
             source_udp_endpoint=uploader.udp_endpoint,
             source_user_hash=source["sourceUserHash"],
+            source_udp_version=client_udp_version,
         )
         control_receipt = trigger_queued_source_reask(
             mfc["baseUrl"],
@@ -2036,6 +2104,7 @@ def run_mfc_requester_phase(
                 file_hash=file_hash,
                 source_tcp_endpoint=uploader.tcp_endpoint,
                 source_user_hash=source["sourceUserHash"],
+                source_udp_version=client_udp_version,
                 timeout=args.reask_observe_timeout_seconds,
             )
             applied = completion["applied"]
@@ -2054,6 +2123,7 @@ def run_mfc_requester_phase(
                 file_hash=file_hash,
                 source_tcp_endpoint=uploader.tcp_endpoint,
                 source_user_hash=source["sourceUserHash"],
+                source_udp_version=client_udp_version,
                 reply_opcode=SCENARIO_REPLY_OPCODES[scenario],
                 timeout=args.reask_observe_timeout_seconds,
             )
@@ -2147,10 +2217,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     coverage_id = SCENARIO_COVERAGE_IDS[args.scenario]
     campaign_schema = SCENARIO_CAMPAIGN_SCHEMAS[args.scenario]
+    client_udp_version = SCENARIO_CLIENT_UDP_VERSIONS[args.scenario]
     report: dict[str, object] = {
         "schema": campaign_schema,
         "suite": SUITE_NAME,
         "scenario": args.scenario,
+        "clientUdpVersion": client_udp_version,
         "coverageId": coverage_id,
         "status": "running",
         "checks": {},
@@ -2271,6 +2343,7 @@ def main(argv: list[str] | None = None) -> int:
                 raw_evidence_path,
                 build_ack_raw_evidence(
                     scenario=args.scenario,
+                    client_udp_version=client_udp_version,
                     file_hash=rust_check["fileHash"],
                     part_count=part_count,
                     transitions=transitions,
