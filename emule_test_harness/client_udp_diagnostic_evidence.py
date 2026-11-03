@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA = "emulebb-build-tests.client-udp-v4-diagnostics.v1"
+V3_SCHEMA = "emulebb-build-tests.client-udp-v3-diagnostics.v1"
 CLEAR_SCHEMA = "emulebb-build-tests.client-udp-clear-diagnostics.v1"
 CLEAR_RAW_EVIDENCE_SCHEMA = "emulebb-build-tests.client-udp-clear-raw-evidence.v1"
 ENCRYPTED_SCHEMA = "emulebb-build-tests.client-udp-encrypted-diagnostics.v1"
@@ -19,6 +20,7 @@ QUEUE_FULL_SCHEMA = "emulebb-build-tests.client-udp-queue-full-diagnostics.v1"
 FILE_NOT_FOUND_SCHEMA = "emulebb-build-tests.client-udp-file-not-found-diagnostics.v1"
 DIAGNOSTIC_SCHEMA = "diag_event_v2"
 COVERAGE_ID = "client-udp.v4"
+V3_COVERAGE_ID = "client-udp.v3"
 CLEAR_COVERAGE_ID = "client-udp.clear"
 ENCRYPTED_COVERAGE_ID = "client-udp.encrypted"
 QUEUE_FULL_COVERAGE_ID = "client-udp.queue-full"
@@ -42,7 +44,7 @@ CLIENT_UDP_RESERVED_MARKERS = frozenset((0xC5, 0xD4, 0xE4, 0xE5, 0xA3, 0xB2))
 
 
 @dataclass(frozen=True)
-class ClientUdpV4Transition:
+class ClientUdpAckTransition:
     requester: str
     responder: str
     source_tcp_endpoint: str
@@ -173,31 +175,48 @@ def _encode_part_status(bits: str | None) -> bytes:
     return bytes(encoded)
 
 
-def _decode_request(raw_hex: object) -> dict[str, Any]:
+def _decode_request(raw_hex: object, *, udp_version: int = 4) -> dict[str, Any]:
     try:
         raw = bytes.fromhex(str(raw_hex))
-        if len(raw) < 22 or raw[:2] != bytes((OP_EMULEPROT, OP_REASKFILEPING)):
-            raise ValueError("not a version-4 OP_REASKFILEPING frame")
-        part_status, offset = _decode_part_status(raw, 18)
-        if len(raw) != offset + 2:
+        if udp_version not in range(1, 5):
+            raise ValueError("unsupported client-UDP version")
+        if len(raw) < 18 or raw[:2] != bytes((OP_EMULEPROT, OP_REASKFILEPING)):
+            raise ValueError(f"not a version-{udp_version} OP_REASKFILEPING frame")
+        offset = 18
+        part_status = None
+        if udp_version > 3:
+            part_status, offset = _decode_part_status(raw, offset)
+        complete_source_count = None
+        if udp_version > 2:
+            if len(raw) < offset + 2:
+                raise ValueError("short OP_REASKFILEPING complete-source count")
+            complete_source_count = int.from_bytes(raw[offset : offset + 2], "little")
+            offset += 2
+        if len(raw) != offset:
             raise ValueError("unexpected OP_REASKFILEPING tail")
         return {
             "ok": True,
             "rawHex": raw.hex(),
+            "udpVersion": udp_version,
             "fileHash": raw[2:18].hex(),
             "partStatus": part_status,
-            "completeSourceCount": int.from_bytes(raw[offset : offset + 2], "little"),
+            "completeSourceCount": complete_source_count,
         }
     except (TypeError, ValueError) as error:
         return {"ok": False, "error": str(error)}
 
 
-def _decode_ack(raw_hex: object) -> dict[str, Any]:
+def _decode_ack(raw_hex: object, *, udp_version: int = 4) -> dict[str, Any]:
     try:
         raw = bytes.fromhex(str(raw_hex))
-        if len(raw) < 6 or raw[:2] != bytes((OP_EMULEPROT, OP_REASKACK)):
-            raise ValueError("not a version-4 OP_REASKACK frame")
-        part_status, offset = _decode_part_status(raw, 2)
+        if udp_version not in range(1, 5):
+            raise ValueError("unsupported client-UDP version")
+        if len(raw) < 4 or raw[:2] != bytes((OP_EMULEPROT, OP_REASKACK)):
+            raise ValueError(f"not a version-{udp_version} OP_REASKACK frame")
+        offset = 2
+        part_status = None
+        if udp_version > 3:
+            part_status, offset = _decode_part_status(raw, offset)
         if len(raw) != offset + 2:
             raise ValueError("unexpected OP_REASKACK tail")
         rank = int.from_bytes(raw[offset : offset + 2], "little")
@@ -206,6 +225,7 @@ def _decode_ack(raw_hex: object) -> dict[str, Any]:
         return {
             "ok": True,
             "rawHex": raw.hex(),
+            "udpVersion": udp_version,
             "partStatus": part_status,
             "queueRank": rank,
         }
@@ -377,6 +397,7 @@ def _control_evidence(
     source_tcp_endpoint: str,
     source_udp_endpoint: str,
     source_user_hash: str,
+    source_udp_version: int = 4,
 ) -> dict[str, Any]:
     receipt = value if isinstance(value, dict) else {}
     request = receipt.get("request") if isinstance(receipt.get("request"), dict) else {}
@@ -392,7 +413,7 @@ def _control_evidence(
             "sourceTcpPort": tcp[1],
             "sourceUdpPort": udp[1],
             "sourceUserHash": source_user_hash,
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": source_udp_version,
         }
         if tcp is not None and udp is not None and tcp[0] == udp[0]
         else None
@@ -404,7 +425,7 @@ def _control_evidence(
             "sourceEndpoint": source_udp_endpoint,
             "sourceTcpPort": tcp[1],
             "sourceUserHash": source_user_hash,
-            "sourceUdpVersion": 4,
+            "sourceUdpVersion": source_udp_version,
             "state": "queued-source-reask-pending",
         }
         if tcp is not None
@@ -661,11 +682,41 @@ def _sched_identity(
     )
 
 
-def _transition_evidence(
-    transition: ClientUdpV4Transition,
+def _ack_application_semantics(
+    body: dict[str, Any],
+    *,
+    udp_version: int,
+    part_count: int,
+) -> bool:
+    if udp_version > 3:
+        expected = {
+            "partStatusIncluded": True,
+            "wirePartCount": 0,
+            "partStatusApplied": True,
+            "partCountAfter": part_count,
+            "availablePartsAfter": part_count,
+            "partStatusBitsAfter": "1" * part_count,
+            "noNeededPartsAfter": False,
+        }
+    else:
+        expected = {
+            "partStatusIncluded": False,
+            "wirePartCount": None,
+            "partStatusApplied": False,
+            "partCountAfter": None,
+            "availablePartsAfter": None,
+            "partStatusBitsAfter": None,
+            "noNeededPartsAfter": None,
+        }
+    return all(body.get(field) == value for field, value in expected.items())
+
+
+def _ack_transition_evidence(
+    transition: ClientUdpAckTransition,
     *,
     file_hash: str,
     part_count: int,
+    udp_version: int,
     expected_transport_mode: str = "plaintext",
     expected_should_crypt: bool | None = None,
 ) -> dict[str, Any]:
@@ -678,6 +729,7 @@ def _transition_evidence(
         source_tcp_endpoint=transition.source_tcp_endpoint,
         source_udp_endpoint=transition.source_udp_endpoint,
         source_user_hash=source_hash,
+        source_udp_version=udp_version,
     )
 
     def identity(record: dict[str, Any]) -> bool:
@@ -699,7 +751,7 @@ def _transition_evidence(
         and _body(registration).get("outcome") == "accepted"
         and _body(registration).get("sourceUdpEndpoint")
         == transition.source_udp_endpoint
-        and _body(registration).get("sourceUdpVersion") == 4
+        and _body(registration).get("sourceUdpVersion") == udp_version
         and (
             expected_should_crypt is None
             or _body(registration).get("shouldCrypt") is expected_should_crypt
@@ -864,10 +916,16 @@ def _transition_evidence(
         and ack_in_transport["ok"] is True
     )
 
-    request = _decode_request(request_out_transport["clearFrameHex"])
-    responder_request = _decode_request(request_in_transport["clearFrameHex"])
-    ack = _decode_ack(ack_out_transport["clearFrameHex"])
-    requester_ack = _decode_ack(ack_in_transport["clearFrameHex"])
+    request = _decode_request(
+        request_out_transport["clearFrameHex"], udp_version=udp_version
+    )
+    responder_request = _decode_request(
+        request_in_transport["clearFrameHex"], udp_version=udp_version
+    )
+    ack = _decode_ack(ack_out_transport["clearFrameHex"], udp_version=udp_version)
+    requester_ack = _decode_ack(
+        ack_in_transport["clearFrameHex"], udp_version=udp_version
+    )
     queue_rank = ack.get("queueRank") if ack.get("ok") is True else None
     applied, applied_count = _single(
         requester_records,
@@ -880,15 +938,11 @@ def _transition_evidence(
             and _body(record).get("requestPendingAfter") is False
             and _body(record).get("remoteQueueFullAfter") is False
             and _body(record).get("sourceUdpEndpoint") == transition.source_udp_endpoint
-            and _body(record).get("sourceUdpVersion") == 4
+            and _body(record).get("sourceUdpVersion") == udp_version
             and _body(record).get("queueRankApplied") is True
-            and _body(record).get("partStatusIncluded") is True
-            and _body(record).get("wirePartCount") == 0
-            and _body(record).get("partStatusApplied") is True
-            and _body(record).get("partCountAfter") == part_count
-            and _body(record).get("availablePartsAfter") == part_count
-            and _body(record).get("partStatusBitsAfter") == "1" * part_count
-            and _body(record).get("noNeededPartsAfter") is False
+            and _ack_application_semantics(
+                _body(record), udp_version=udp_version, part_count=part_count
+            )
         ),
     )
     applied_ok = bool(
@@ -899,15 +953,11 @@ def _transition_evidence(
         and _body(applied).get("requestPendingAfter") is False
         and _body(applied).get("remoteQueueFullAfter") is False
         and _body(applied).get("sourceUdpEndpoint") == transition.source_udp_endpoint
-        and _body(applied).get("sourceUdpVersion") == 4
+        and _body(applied).get("sourceUdpVersion") == udp_version
         and _body(applied).get("queueRankApplied") is True
-        and _body(applied).get("partStatusIncluded") is True
-        and _body(applied).get("wirePartCount") == 0
-        and _body(applied).get("partStatusApplied") is True
-        and _body(applied).get("partCountAfter") == part_count
-        and _body(applied).get("availablePartsAfter") == part_count
-        and _body(applied).get("partStatusBitsAfter") == "1" * part_count
-        and _body(applied).get("noNeededPartsAfter") is False
+        and _ack_application_semantics(
+            _body(applied), udp_version=udp_version, part_count=part_count
+        )
     )
 
     requester_sequences = {
@@ -955,14 +1005,18 @@ def _transition_evidence(
     expected_request = (
         bytes((OP_EMULEPROT, OP_REASKFILEPING))
         + bytes.fromhex(file_hash)
-        + _encode_part_status("0" * part_count)
-        + int(request.get("completeSourceCount") or 0).to_bytes(2, "little")
+        + (_encode_part_status("0" * part_count) if udp_version > 3 else b"")
+        + (
+            int(request.get("completeSourceCount") or 0).to_bytes(2, "little")
+            if udp_version > 2
+            else b""
+        )
         if request.get("ok") is True
         else b""
     )
     expected_ack = (
         bytes((OP_EMULEPROT, OP_REASKACK))
-        + _encode_part_status(None)
+        + (_encode_part_status(None) if udp_version > 3 else b"")
         + int(queue_rank or 0).to_bytes(2, "little")
         if queue_rank
         else b""
@@ -974,12 +1028,26 @@ def _transition_evidence(
         and ack_in_ok
         and request.get("ok") is True
         and request.get("fileHash") == file_hash
-        and request.get("partStatus", {}).get("wirePartCount") == part_count
-        and request.get("partStatus", {}).get("partStatusBits") == "0" * part_count
+        and (
+            request.get("partStatus", {}).get("wirePartCount") == part_count
+            and request.get("partStatus", {}).get("partStatusBits")
+            == "0" * part_count
+            if udp_version > 3
+            else request.get("partStatus") is None
+        )
+        and (
+            isinstance(request.get("completeSourceCount"), int)
+            if udp_version > 2
+            else request.get("completeSourceCount") is None
+        )
         and request.get("rawHex") == expected_request.hex()
         and responder_request == request
         and ack.get("ok") is True
-        and ack.get("partStatus", {}).get("completeSource") is True
+        and (
+            ack.get("partStatus", {}).get("completeSource") is True
+            if udp_version > 3
+            else ack.get("partStatus") is None
+        )
         and ack.get("rawHex") == expected_ack.hex()
         and requester_ack == ack
     )
@@ -1858,9 +1926,10 @@ def _build_client_udp_ack_diagnostic_evidence(
     file_hash: bytes,
     part_count: int,
     stock_record: object,
-    transitions: Iterable[ClientUdpV4Transition],
+    transitions: Iterable[ClientUdpAckTransition],
     schema: str,
     coverage_id: str,
+    udp_version: int,
     expected_transport_mode: str,
     expected_should_crypt: bool | None,
 ) -> dict[str, Any]:
@@ -1875,10 +1944,11 @@ def _build_client_udp_ack_diagnostic_evidence(
         if transition.requester in clients:
             duplicate_requesters.append(transition.requester)
             continue
-        clients[transition.requester] = _transition_evidence(
+        clients[transition.requester] = _ack_transition_evidence(
             transition,
             file_hash=file_hash_hex,
             part_count=part_count,
+            udp_version=udp_version,
             expected_transport_mode=expected_transport_mode,
             expected_should_crypt=expected_should_crypt,
         )
@@ -1958,7 +2028,7 @@ def build_client_udp_v4_diagnostic_evidence(
     file_hash: bytes,
     part_count: int,
     stock_record: object,
-    transitions: Iterable[ClientUdpV4Transition],
+    transitions: Iterable[ClientUdpAckTransition],
 ) -> dict[str, Any]:
     """Prove both clients originate, answer, and apply one exact direct V4 reask."""
 
@@ -1969,6 +2039,29 @@ def build_client_udp_v4_diagnostic_evidence(
         transitions=transitions,
         schema=SCHEMA,
         coverage_id=COVERAGE_ID,
+        udp_version=4,
+        expected_transport_mode="plaintext",
+        expected_should_crypt=None,
+    )
+
+
+def build_client_udp_v3_diagnostic_evidence(
+    *,
+    file_hash: bytes,
+    part_count: int,
+    stock_record: object,
+    transitions: Iterable[ClientUdpAckTransition],
+) -> dict[str, Any]:
+    """Prove both clients originate, answer, and apply one exact direct V3 reask."""
+
+    return _build_client_udp_ack_diagnostic_evidence(
+        file_hash=file_hash,
+        part_count=part_count,
+        stock_record=stock_record,
+        transitions=transitions,
+        schema=V3_SCHEMA,
+        coverage_id=V3_COVERAGE_ID,
+        udp_version=3,
         expected_transport_mode="plaintext",
         expected_should_crypt=None,
     )
@@ -1979,7 +2072,7 @@ def build_client_udp_clear_diagnostic_evidence(
     file_hash: bytes,
     part_count: int,
     stock_record: object,
-    transitions: Iterable[ClientUdpV4Transition],
+    transitions: Iterable[ClientUdpAckTransition],
 ) -> dict[str, Any]:
     """Prove the direct V4 request/ACK path was selected and carried in clear."""
 
@@ -1990,6 +2083,7 @@ def build_client_udp_clear_diagnostic_evidence(
         transitions=transitions,
         schema=CLEAR_SCHEMA,
         coverage_id=CLEAR_COVERAGE_ID,
+        udp_version=4,
         expected_transport_mode="plaintext",
         expected_should_crypt=False,
     )
@@ -2000,7 +2094,7 @@ def build_client_udp_encrypted_diagnostic_evidence(
     file_hash: bytes,
     part_count: int,
     stock_record: object,
-    transitions: Iterable[ClientUdpV4Transition],
+    transitions: Iterable[ClientUdpAckTransition],
 ) -> dict[str, Any]:
     """Prove the direct V4 request/ACK path used stock obfuscated transport."""
 
@@ -2011,6 +2105,7 @@ def build_client_udp_encrypted_diagnostic_evidence(
         transitions=transitions,
         schema=ENCRYPTED_SCHEMA,
         coverage_id=ENCRYPTED_COVERAGE_ID,
+        udp_version=4,
         expected_transport_mode="obfuscated",
         expected_should_crypt=True,
     )
@@ -2046,6 +2141,17 @@ def require_client_udp_v4_diagnostic_evidence(report: dict[str, Any]) -> None:
         schema=SCHEMA,
         coverage_id=COVERAGE_ID,
         label="V4",
+    )
+
+
+def require_client_udp_v3_diagnostic_evidence(report: dict[str, Any]) -> None:
+    """Raise unless both clients causally completed the exact direct V3 transition."""
+
+    _require_client_udp_ack_diagnostic_evidence(
+        report,
+        schema=V3_SCHEMA,
+        coverage_id=V3_COVERAGE_ID,
+        label="V3",
     )
 
 

@@ -4396,7 +4396,7 @@ def _rebuild_client_udp_ack_evidence(
         "requesterRecords",
         "responderRecords",
     }
-    transitions: list[client_udp_diagnostic_evidence.ClientUdpV4Transition] = []
+    transitions: list[client_udp_diagnostic_evidence.ClientUdpAckTransition] = []
     for index, value in enumerate(raw_transitions):
         transition = _object(value, f"rawEvidence.transitions[{index}]")
         if set(transition) != expected_fields:
@@ -4415,7 +4415,7 @@ def _rebuild_client_udp_ack_evidence(
                 f"rawEvidence.transitions[{index}] diagnostic records are invalid"
             )
         transitions.append(
-            client_udp_diagnostic_evidence.ClientUdpV4Transition(
+            client_udp_diagnostic_evidence.ClientUdpAckTransition(
                 requester=str(transition.get("requester") or ""),
                 responder=str(transition.get("responder") or ""),
                 source_tcp_endpoint=str(transition.get("sourceTcpEndpoint") or ""),
@@ -4593,6 +4593,7 @@ def _validate_client_udp_ack_client(
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": 4,
         "fileHash": file_hash,
         "partStatus": {
             "wirePartCount": part_count,
@@ -4605,6 +4606,7 @@ def _validate_client_udp_ack_client(
     expected_ack = {
         "ok": True,
         "rawHex": ack_raw.hex(),
+        "udpVersion": 4,
         "partStatus": {
             "wirePartCount": 0,
             "partStatusBits": None,
@@ -4991,6 +4993,7 @@ def _validate_client_udp_queue_full_client(
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": 4,
         "fileHash": file_hash,
         "partStatus": {
             "wirePartCount": part_count,
@@ -5338,6 +5341,7 @@ def _validate_client_udp_file_not_found_client(
     expected_request = {
         "ok": True,
         "rawHex": request_raw.hex(),
+        "udpVersion": 4,
         "fileHash": file_hash,
         "partStatus": {
             "wirePartCount": part_count,

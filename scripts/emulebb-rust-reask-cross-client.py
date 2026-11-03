@@ -138,7 +138,7 @@ def build_ack_raw_evidence(
     scenario: str,
     file_hash: str,
     part_count: int,
-    transitions: list[udp_evidence.ClientUdpV4Transition],
+    transitions: list[udp_evidence.ClientUdpAckTransition],
 ) -> dict[str, object]:
     """Serialize complete ACK reducer inputs for independent receipt validation."""
 
@@ -1612,7 +1612,7 @@ def run_rust_requester_phase(
     admin_base_url: str,
     fixture_path: Path,
 ) -> tuple[
-    udp_evidence.ClientUdpV4Transition
+    udp_evidence.ClientUdpAckTransition
     | udp_evidence.ClientUdpQueueFullTransition
     | udp_evidence.ClientUdpFileNotFoundTransition,
     dict[str, object],
@@ -1828,7 +1828,7 @@ def run_rust_requester_phase(
                 source_absence_receipt=source_absence_receipt,
             )
         else:
-            transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
+            transition = udp_evidence.ClientUdpAckTransition(**transition_arguments)
         check = {
             "fileHash": file_hash,
             "publication": publication,
@@ -1876,7 +1876,7 @@ def run_mfc_requester_phase(
     fixture_path: Path,
     expected_file_hash: str,
 ) -> tuple[
-    udp_evidence.ClientUdpV4Transition
+    udp_evidence.ClientUdpAckTransition
     | udp_evidence.ClientUdpQueueFullTransition
     | udp_evidence.ClientUdpFileNotFoundTransition,
     dict[str, object],
@@ -2085,7 +2085,7 @@ def run_mfc_requester_phase(
                 source_absence_receipt=source_absence_receipt,
             )
         else:
-            transition = udp_evidence.ClientUdpV4Transition(**transition_arguments)
+            transition = udp_evidence.ClientUdpAckTransition(**transition_arguments)
         check = {
             "fileHash": file_hash,
             "publication": publication,

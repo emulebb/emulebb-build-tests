@@ -332,7 +332,7 @@ def test_ack_raw_evidence_serializes_complete_reducer_inputs(
     schema: str,
 ) -> None:
     module = _load_module()
-    transition = module.udp_evidence.ClientUdpV4Transition(
+    transition = module.udp_evidence.ClientUdpAckTransition(
         requester="rust",
         responder="mfc",
         source_tcp_endpoint=SOURCE_TCP_ENDPOINT,

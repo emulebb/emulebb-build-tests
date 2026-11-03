@@ -22,6 +22,12 @@ REQUEST_RAW = (
     + bytes.fromhex("0100")
 )
 ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0))
+V3_REQUEST_RAW = (
+    bytes((evidence.OP_EMULEPROT, evidence.OP_REASKFILEPING))
+    + FILE_HASH
+    + bytes.fromhex("0100")
+)
+V3_ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, QUEUE_RANK, 0))
 QUEUE_FULL_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_QUEUEFULL))
 FILE_NOT_FOUND_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_FILENOTFOUND))
 STOCK_RECORD = {
@@ -140,8 +146,33 @@ def sched_record(
     }
 
 
-def requester_records(requester: str) -> list[dict[str, Any]]:
+def requester_records(
+    requester: str, *, udp_version: int = 4
+) -> list[dict[str, Any]]:
     endpoints = ENDPOINTS[requester]
+    request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
+    ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
+    applied_part_status = (
+        {
+            "partStatusIncluded": True,
+            "wirePartCount": 0,
+            "partStatusApplied": True,
+            "partCountAfter": PART_COUNT,
+            "availablePartsAfter": PART_COUNT,
+            "partStatusBitsAfter": "1",
+            "noNeededPartsAfter": False,
+        }
+        if udp_version == 4
+        else {
+            "partStatusIncluded": False,
+            "wirePartCount": None,
+            "partStatusApplied": False,
+            "partCountAfter": None,
+            "availablePartsAfter": None,
+            "partStatusBitsAfter": None,
+            "noNeededPartsAfter": None,
+        }
+    )
     return [
         sched_record(
             1,
@@ -149,7 +180,7 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
             {
                 "outcome": "accepted",
                 "sourceUdpEndpoint": endpoints["sourceUdp"],
-                "sourceUdpVersion": 4,
+                "sourceUdpVersion": udp_version,
                 "shouldCrypt": False,
                 "lowId": False,
                 "buddyEndpoint": None,
@@ -194,10 +225,10 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "phase": "reask_request",
                 "transportMode": "plaintext",
                 "obfuscated": False,
-                "rawHex": REQUEST_RAW.hex(),
-                "rawLen": len(REQUEST_RAW),
-                "payloadHex": REQUEST_RAW[2:].hex(),
-                "payloadLen": len(REQUEST_RAW) - 2,
+                "rawHex": request_raw.hex(),
+                "rawLen": len(request_raw),
+                "payloadHex": request_raw[2:].hex(),
+                "payloadLen": len(request_raw) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -233,10 +264,10 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "phase": "reask_reply",
                 "transportMode": "plaintext",
                 "obfuscated": False,
-                "rawHex": ACK_RAW.hex(),
-                "rawLen": len(ACK_RAW),
-                "payloadHex": ACK_RAW[2:].hex(),
-                "payloadLen": len(ACK_RAW) - 2,
+                "rawHex": ack_raw.hex(),
+                "rawLen": len(ack_raw),
+                "payloadHex": ack_raw[2:].hex(),
+                "payloadLen": len(ack_raw) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -249,15 +280,9 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
                 "requestPendingAfter": False,
                 "remoteQueueFullAfter": False,
                 "sourceUdpEndpoint": endpoints["sourceUdp"],
-                "sourceUdpVersion": 4,
+                "sourceUdpVersion": udp_version,
                 "queueRankApplied": True,
-                "partStatusIncluded": True,
-                "wirePartCount": 0,
-                "partStatusApplied": True,
-                "partCountAfter": PART_COUNT,
-                "availablePartsAfter": PART_COUNT,
-                "partStatusBitsAfter": "1",
-                "noNeededPartsAfter": False,
+                **applied_part_status,
                 "outcome": "applied",
             },
             requester=requester,
@@ -265,8 +290,12 @@ def requester_records(requester: str) -> list[dict[str, Any]]:
     ]
 
 
-def responder_records(requester: str) -> list[dict[str, Any]]:
+def responder_records(
+    requester: str, *, udp_version: int = 4
+) -> list[dict[str, Any]]:
     requester_endpoint = ENDPOINTS[requester]["requesterUdp"]
+    request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
+    ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
     return [
         {
             "schema": "diag_event_v2",
@@ -284,10 +313,10 @@ def responder_records(requester: str) -> list[dict[str, Any]]:
                 "phase": "reask_request",
                 "transportMode": "plaintext",
                 "obfuscated": False,
-                "rawHex": REQUEST_RAW.hex(),
-                "rawLen": len(REQUEST_RAW),
-                "payloadHex": REQUEST_RAW[2:].hex(),
-                "payloadLen": len(REQUEST_RAW) - 2,
+                "rawHex": request_raw.hex(),
+                "rawLen": len(request_raw),
+                "payloadHex": request_raw[2:].hex(),
+                "payloadLen": len(request_raw) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -310,10 +339,10 @@ def responder_records(requester: str) -> list[dict[str, Any]]:
                 "phase": "reciprocity_reply",
                 "transportMode": "plaintext",
                 "obfuscated": False,
-                "rawHex": ACK_RAW.hex(),
-                "rawLen": len(ACK_RAW),
-                "payloadHex": ACK_RAW[2:].hex(),
-                "payloadLen": len(ACK_RAW) - 2,
+                "rawHex": ack_raw.hex(),
+                "rawLen": len(ack_raw),
+                "payloadHex": ack_raw[2:].hex(),
+                "payloadLen": len(ack_raw) - 2,
                 "payloadHexTruncated": False,
             },
         },
@@ -336,7 +365,7 @@ def responder_records(requester: str) -> list[dict[str, Any]]:
     ]
 
 
-def control(requester: str) -> dict[str, object]:
+def control(requester: str, *, udp_version: int = 4) -> dict[str, object]:
     endpoints = ENDPOINTS[requester]
     host, tcp_port = str(endpoints["sourceTcp"]).split(":")
     _, udp_port = str(endpoints["sourceUdp"]).split(":")
@@ -346,7 +375,7 @@ def control(requester: str) -> dict[str, object]:
         "sourceTcpPort": int(tcp_port),
         "sourceUdpPort": int(udp_port),
         "sourceUserHash": endpoints["sourceHash"].hex(),
-        "sourceUdpVersion": 4,
+        "sourceUdpVersion": udp_version,
     }
     return {
         "request": request,
@@ -358,30 +387,32 @@ def control(requester: str) -> dict[str, object]:
                 "sourceEndpoint": endpoints["sourceUdp"],
                 "sourceTcpPort": int(tcp_port),
                 "sourceUserHash": endpoints["sourceHash"].hex(),
-                "sourceUdpVersion": 4,
+                "sourceUdpVersion": udp_version,
                 "state": "queued-source-reask-pending",
             },
         },
     }
 
 
-def transition(requester: str) -> evidence.ClientUdpV4Transition:
+def transition(
+    requester: str, *, udp_version: int = 4
+) -> evidence.ClientUdpAckTransition:
     endpoints = ENDPOINTS[requester]
     responder = "mfc" if requester == "rust" else "rust"
-    return evidence.ClientUdpV4Transition(
+    return evidence.ClientUdpAckTransition(
         requester=requester,
         responder=responder,
         source_tcp_endpoint=str(endpoints["sourceTcp"]),
         source_udp_endpoint=str(endpoints["sourceUdp"]),
         source_user_hash=endpoints["sourceHash"],
         requester_udp_endpoint=str(endpoints["requesterUdp"]),
-        control_receipt=control(requester),
-        requester_records=requester_records(requester),
-        responder_records=responder_records(requester),
+        control_receipt=control(requester, udp_version=udp_version),
+        requester_records=requester_records(requester, udp_version=udp_version),
+        responder_records=responder_records(requester, udp_version=udp_version),
     )
 
 
-def encrypted_transition(requester: str) -> evidence.ClientUdpV4Transition:
+def encrypted_transition(requester: str) -> evidence.ClientUdpAckTransition:
     original = transition(requester)
     requester_rows = copy.deepcopy(list(original.requester_records))
     responder_rows = copy.deepcopy(list(original.responder_records))
@@ -401,7 +432,7 @@ def encrypted_transition(requester: str) -> evidence.ClientUdpV4Transition:
     mark_obfuscated(requester_rows[5], ack_wire)
     mark_obfuscated(responder_rows[0], request_wire)
     mark_obfuscated(responder_rows[1], ack_wire)
-    return evidence.ClientUdpV4Transition(
+    return evidence.ClientUdpAckTransition(
         **{
             **original.__dict__,
             "requester_records": requester_rows,
@@ -830,7 +861,7 @@ def passing_file_not_found_report(
 
 def passing_report(
     *,
-    rust_transition: evidence.ClientUdpV4Transition | None = None,
+    rust_transition: evidence.ClientUdpAckTransition | None = None,
     stock_record: object = STOCK_RECORD,
 ) -> dict[str, Any]:
     return evidence.build_client_udp_v4_diagnostic_evidence(
@@ -841,9 +872,25 @@ def passing_report(
     )
 
 
+def passing_v3_report(
+    *,
+    rust_transition: evidence.ClientUdpAckTransition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_v3_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[
+            rust_transition or transition("rust", udp_version=3),
+            transition("mfc", udp_version=3),
+        ],
+    )
+
+
 def passing_clear_report(
     *,
-    rust_transition: evidence.ClientUdpV4Transition | None = None,
+    rust_transition: evidence.ClientUdpAckTransition | None = None,
     stock_record: object = STOCK_RECORD,
 ) -> dict[str, Any]:
     return evidence.build_client_udp_clear_diagnostic_evidence(
@@ -856,7 +903,7 @@ def passing_clear_report(
 
 def passing_encrypted_report(
     *,
-    rust_transition: evidence.ClientUdpV4Transition | None = None,
+    rust_transition: evidence.ClientUdpAckTransition | None = None,
     stock_record: object = STOCK_RECORD,
 ) -> dict[str, Any]:
     return evidence.build_client_udp_encrypted_diagnostic_evidence(
@@ -1360,6 +1407,77 @@ def test_bilateral_client_udp_v4_is_claimable() -> None:
 
 
 @pytest.mark.unit
+def test_bilateral_client_udp_v3_is_claimable() -> None:
+    report = passing_v3_report()
+
+    evidence.require_client_udp_v3_diagnostic_evidence(report)
+    assert report["schema"] == evidence.V3_SCHEMA
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["client-udp.v3"]
+    assert report["comparison"]["requestBytesEqual"] is True
+    assert report["comparison"]["ackBytesEqual"] is True
+    assert report["clients"]["rust"]["wire"] == {
+        "ok": True,
+        "request": {
+            "ok": True,
+            "rawHex": V3_REQUEST_RAW.hex(),
+            "udpVersion": 3,
+            "fileHash": FILE_HASH.hex(),
+            "partStatus": None,
+            "completeSourceCount": 1,
+        },
+        "ack": {
+            "ok": True,
+            "rawHex": V3_ACK_RAW.hex(),
+            "udpVersion": 3,
+            "partStatus": None,
+            "queueRank": QUEUE_RANK,
+        },
+        "expectedRequestRawHex": V3_REQUEST_RAW.hex(),
+        "expectedAckRawHex": V3_ACK_RAW.hex(),
+    }
+    assert report["clients"]["rust"]["application"]["partStatusIncluded"] is False
+
+
+@pytest.mark.unit
+def test_client_udp_v3_rejects_v4_registration() -> None:
+    original = transition("rust", udp_version=3)
+    records = copy.deepcopy(list(original.requester_records))
+    records[0]["body"]["sourceUdpVersion"] = 4
+    wrong = evidence.ClientUdpAckTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_v3_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["registration"] == 1
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_client_udp_v3_rejects_part_status_bytes() -> None:
+    original = transition("rust", udp_version=3)
+    records = copy.deepcopy(list(original.requester_records))
+    records[3]["body"].update(
+        {
+            "rawHex": REQUEST_RAW.hex(),
+            "rawLen": len(REQUEST_RAW),
+            "payloadHex": REQUEST_RAW[2:].hex(),
+            "payloadLen": len(REQUEST_RAW) - 2,
+        }
+    )
+    wrong = evidence.ClientUdpAckTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_v3_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["wire"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
 def test_bilateral_client_udp_clear_is_claimable() -> None:
     report = passing_clear_report()
 
@@ -1397,7 +1515,7 @@ def test_encrypted_requires_true_registered_crypt_decision() -> None:
     original = encrypted_transition("rust")
     records = copy.deepcopy(list(original.requester_records))
     records[0]["body"]["shouldCrypt"] = False
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -1446,7 +1564,7 @@ def test_encrypted_rejects_invalid_wire_evidence(
         raw = bytearray.fromhex(responder_rows[0]["body"]["rawHex"])
         raw[1] ^= 0xFF
         responder_rows[0]["body"]["rawHex"] = raw.hex()
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{
             **original.__dict__,
             "requester_records": requester_rows,
@@ -1480,7 +1598,7 @@ def test_clear_allows_prior_noneligible_scheduler_observation() -> None:
             requester="mfc",
         ),
     )
-    mfc_transition = evidence.ClientUdpV4Transition(
+    mfc_transition = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
     report = evidence.build_client_udp_clear_diagnostic_evidence(
@@ -1508,7 +1626,7 @@ def test_clear_requires_false_registered_crypt_decision(
         records[0]["body"].pop("shouldCrypt")
     else:
         records[0]["body"]["shouldCrypt"] = should_crypt
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -1526,7 +1644,7 @@ def test_clear_rejects_obfuscated_packet_evidence() -> None:
     records = copy.deepcopy(list(original.requester_records))
     records[3]["body"]["transportMode"] = "obfuscated"
     records[3]["body"]["obfuscated"] = True
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -1546,7 +1664,7 @@ def test_clear_rejects_contradictory_registered_crypt_decision() -> None:
     contradictory["seq"] = 8
     contradictory["body"]["shouldCrypt"] = True
     records.append(contradictory)
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -1566,7 +1684,7 @@ def test_clear_rejects_contradictory_obfuscated_packet() -> None:
     contradictory["body"]["transportMode"] = "obfuscated"
     contradictory["body"]["obfuscated"] = True
     records.append(contradictory)
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -2274,7 +2392,7 @@ def test_request_terminal_must_join_the_exact_attempt() -> None:
     records[4]["keys"]["sendAttemptId"] = 10
     records[4]["body"]["sendAttemptId"] = 10
     original = transition("rust")
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
@@ -2289,7 +2407,7 @@ def test_responder_receive_must_match_the_exact_request_bytes() -> None:
     records = responder_records("rust")
     records[0]["body"]["rawHex"] = (REQUEST_RAW[:-1] + b"\x02").hex()
     original = transition("rust")
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "responder_records": records}
     )
 
@@ -2304,7 +2422,7 @@ def test_reply_application_must_include_exact_v4_state() -> None:
     records = requester_records("rust")
     records[-1]["body"]["partStatusBitsAfter"] = "0"
     original = transition("rust")
-    wrong = evidence.ClientUdpV4Transition(
+    wrong = evidence.ClientUdpAckTransition(
         **{**original.__dict__, "requester_records": records}
     )
 
