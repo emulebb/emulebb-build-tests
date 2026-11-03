@@ -281,7 +281,7 @@
       "coverageId": "client-udp.v3",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC advertised client UDP v3, emitted byte-identical direct v3 reasks and ACKs without v4 part-status fields, then causally applied the same queue rank without synthesizing part availability.",
-      "receiptIds": ["rust-mfc-client-udp-v3-20261103t173903z"],
+      "receiptIds": ["rust-mfc-client-udp-v3-20261103t180856z"],
       "verdict": "parity"
     },
     {
@@ -2132,24 +2132,24 @@
       ]
     },
     {
-      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261103T173903Z-emulebb-main-release-9396/emulebb-rust-reask-cross-client-result.json",
-      "artifactSha256": "10ffc2594447a1cafa8db0be302511e190ba3294375de6260af35ab0ad3c5d2f",
+      "artifactLocator": "output-root:artifacts/emulebb-rust-reask-cross-client/20261103T180856Z-emulebb-main-release-11240/emulebb-rust-reask-cross-client-result.json",
+      "artifactSha256": "8b66f9f58a4dcbc8f1ca3e5161065a63ad8b8e16af3a36de6b7b73b20c06c20a",
       "coverageIds": ["client-udp.v3"],
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "profileAuthority": "harness-generated-ephemeral-local-profiles",
-      "receiptId": "rust-mfc-client-udp-v3-20261103t173903z",
+      "receiptId": "rust-mfc-client-udp-v3-20261103t180856z",
       "runnerPath": "scripts/emulebb-rust-reask-cross-client.py",
-      "runnerRevision": "906218a843705ddc68f9767ad21dc75bcc04a87a",
+      "runnerRevision": "1ba31ac6e834f528c9ae537145e79ee537afca82",
       "subjects": [
         {
           "authorityId": "mfc-oracle",
-          "executableSha256": "01c9a86b8725ea2c0f4e522d13bad245ed6fcea11695bdfd485576be7f268465",
+          "executableSha256": "f565c8085f465aa42cb53fa0c47b59c4c17512139f67cb8401505a6416abb06b",
           "sourceRevision": "53070f48af0d6e7650cb1021eceb938b9f35041b"
         },
         {
           "authorityId": "rust-product",
-          "executableSha256": "9128c566db4c6d300a581289729e07fe208a4e67e0f7879885d08e5d547885ca",
-          "sourceRevision": "84a58d2228dcf7800c3ec56c3de2f68724850fab"
+          "executableSha256": "1e7f665f4456f8590bd98f824537498bf581d1253ce748b562b1810c5b0b657d",
+          "sourceRevision": "c0941a3eb559b3337d6e16abd816087f0500d816"
         },
         {
           "authorityId": "ed2k-server-dependency",
