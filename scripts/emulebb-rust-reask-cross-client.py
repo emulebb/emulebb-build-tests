@@ -87,6 +87,7 @@ RUST_LOG = (
 DIAGNOSTIC_CLIENT_UDP_VERSION_ENV = "EMULEBB_DIAGNOSTIC_CLIENT_UDP_VERSION"
 
 SCENARIO_COVERAGE_IDS = {
+    "v2": udp_evidence.V2_COVERAGE_ID,
     "v3": udp_evidence.V3_COVERAGE_ID,
     "v4": udp_evidence.COVERAGE_ID,
     "clear": udp_evidence.CLEAR_COVERAGE_ID,
@@ -95,6 +96,7 @@ SCENARIO_COVERAGE_IDS = {
     "file-not-found": udp_evidence.FILE_NOT_FOUND_COVERAGE_ID,
 }
 SCENARIO_CAMPAIGN_SCHEMAS = {
+    "v2": "emulebb-build-tests.client-udp-v2-campaign.v1",
     "v3": "emulebb-build-tests.client-udp-v3-campaign.v1",
     "v4": "emulebb-build-tests.client-udp-v4-campaign.v1",
     "clear": "emulebb-build-tests.client-udp-clear-campaign.v1",
@@ -103,6 +105,7 @@ SCENARIO_CAMPAIGN_SCHEMAS = {
     "file-not-found": ("emulebb-build-tests.client-udp-file-not-found-campaign.v1"),
 }
 SCENARIO_REPLY_OPCODES = {
+    "v2": udp_evidence.OP_REASKACK,
     "v3": udp_evidence.OP_REASKACK,
     "v4": udp_evidence.OP_REASKACK,
     "clear": udp_evidence.OP_REASKACK,
@@ -111,6 +114,7 @@ SCENARIO_REPLY_OPCODES = {
     "file-not-found": udp_evidence.OP_FILENOTFOUND,
 }
 SCENARIO_EVIDENCE_BUILDERS = {
+    "v2": udp_evidence.build_client_udp_v2_diagnostic_evidence,
     "v3": udp_evidence.build_client_udp_v3_diagnostic_evidence,
     "v4": udp_evidence.build_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.build_client_udp_clear_diagnostic_evidence,
@@ -121,6 +125,7 @@ SCENARIO_EVIDENCE_BUILDERS = {
     ),
 }
 SCENARIO_EVIDENCE_REQUIREMENTS = {
+    "v2": udp_evidence.require_client_udp_v2_diagnostic_evidence,
     "v3": udp_evidence.require_client_udp_v3_diagnostic_evidence,
     "v4": udp_evidence.require_client_udp_v4_diagnostic_evidence,
     "clear": udp_evidence.require_client_udp_clear_diagnostic_evidence,
@@ -134,9 +139,16 @@ SCENARIO_OBFUSCATION = {
     scenario: scenario == "encrypted" for scenario in SCENARIO_COVERAGE_IDS
 }
 SCENARIO_CLIENT_UDP_VERSIONS = {
-    scenario: 3 if scenario == "v3" else 4 for scenario in SCENARIO_COVERAGE_IDS
+    "v2": 2,
+    "v3": 3,
+    "v4": 4,
+    "clear": 4,
+    "encrypted": 4,
+    "queue-full": 4,
+    "file-not-found": 4,
 }
 SCENARIO_RAW_EVIDENCE_SCHEMAS = {
+    "v2": udp_evidence.V2_RAW_EVIDENCE_SCHEMA,
     "v3": udp_evidence.V3_RAW_EVIDENCE_SCHEMA,
     "clear": udp_evidence.CLEAR_RAW_EVIDENCE_SCHEMA,
     "encrypted": udp_evidence.ENCRYPTED_RAW_EVIDENCE_SCHEMA,

@@ -126,6 +126,26 @@ def test_runner_requires_one_explicit_supported_scenario() -> None:
     )
     assert args.scenario == "queue-full"
 
+    v2 = module.parse_args(
+        [
+            "--scenario",
+            "v2",
+            "--lan-bind-addr",
+            "127.0.0.1",
+        ]
+    )
+    assert module.SCENARIO_COVERAGE_IDS[v2.scenario] == "client-udp.v2"
+    assert module.SCENARIO_CLIENT_UDP_VERSIONS[v2.scenario] == 2
+    assert module.SCENARIO_CAMPAIGN_SCHEMAS[v2.scenario] == (
+        "emulebb-build-tests.client-udp-v2-campaign.v1"
+    )
+    assert module.SCENARIO_EVIDENCE_BUILDERS[v2.scenario] is (
+        module.udp_evidence.build_client_udp_v2_diagnostic_evidence
+    )
+    assert module.SCENARIO_EVIDENCE_REQUIREMENTS[v2.scenario] is (
+        module.udp_evidence.require_client_udp_v2_diagnostic_evidence
+    )
+
     v3 = module.parse_args(
         [
             "--scenario",
@@ -352,6 +372,7 @@ def test_authoritative_runner_has_no_binary_or_source_overrides(override: str) -
 @pytest.mark.parametrize(
     ("scenario", "schema", "udp_version"),
     [
+        ("v2", "V2_RAW_EVIDENCE_SCHEMA", 2),
         ("v3", "V3_RAW_EVIDENCE_SCHEMA", 3),
         ("clear", "CLEAR_RAW_EVIDENCE_SCHEMA", 4),
         ("encrypted", "ENCRYPTED_RAW_EVIDENCE_SCHEMA", 4),

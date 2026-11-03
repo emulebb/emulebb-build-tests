@@ -22,12 +22,16 @@ REQUEST_RAW = (
     + bytes.fromhex("0100")
 )
 ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, 0, 0, QUEUE_RANK, 0))
+V2_REQUEST_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKFILEPING)) + FILE_HASH
+V2_ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, QUEUE_RANK, 0))
 V3_REQUEST_RAW = (
     bytes((evidence.OP_EMULEPROT, evidence.OP_REASKFILEPING))
     + FILE_HASH
     + bytes.fromhex("0100")
 )
 V3_ACK_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_REASKACK, QUEUE_RANK, 0))
+REQUEST_RAW_BY_VERSION = {2: V2_REQUEST_RAW, 3: V3_REQUEST_RAW, 4: REQUEST_RAW}
+ACK_RAW_BY_VERSION = {2: V2_ACK_RAW, 3: V3_ACK_RAW, 4: ACK_RAW}
 QUEUE_FULL_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_QUEUEFULL))
 FILE_NOT_FOUND_RAW = bytes((evidence.OP_EMULEPROT, evidence.OP_FILENOTFOUND))
 STOCK_RECORD = {
@@ -148,8 +152,8 @@ def sched_record(
 
 def requester_records(requester: str, *, udp_version: int = 4) -> list[dict[str, Any]]:
     endpoints = ENDPOINTS[requester]
-    request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
-    ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
+    request_raw = REQUEST_RAW_BY_VERSION[udp_version]
+    ack_raw = ACK_RAW_BY_VERSION[udp_version]
     applied_part_status = (
         {
             "partStatusIncluded": True,
@@ -290,8 +294,8 @@ def requester_records(requester: str, *, udp_version: int = 4) -> list[dict[str,
 
 def responder_records(requester: str, *, udp_version: int = 4) -> list[dict[str, Any]]:
     requester_endpoint = ENDPOINTS[requester]["requesterUdp"]
-    request_raw = V3_REQUEST_RAW if udp_version == 3 else REQUEST_RAW
-    ack_raw = V3_ACK_RAW if udp_version == 3 else ACK_RAW
+    request_raw = REQUEST_RAW_BY_VERSION[udp_version]
+    ack_raw = ACK_RAW_BY_VERSION[udp_version]
     return [
         {
             "schema": "diag_event_v2",
@@ -884,6 +888,22 @@ def passing_v3_report(
     )
 
 
+def passing_v2_report(
+    *,
+    rust_transition: evidence.ClientUdpAckTransition | None = None,
+    stock_record: object = STOCK_RECORD,
+) -> dict[str, Any]:
+    return evidence.build_client_udp_v2_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        part_count=PART_COUNT,
+        stock_record=stock_record,
+        transitions=[
+            rust_transition or transition("rust", udp_version=2),
+            transition("mfc", udp_version=2),
+        ],
+    )
+
+
 def passing_clear_report(
     *,
     rust_transition: evidence.ClientUdpAckTransition | None = None,
@@ -918,8 +938,8 @@ def immutable_campaign_report(
     *,
     scenario: str = "v4",
 ) -> tuple[Path, Path, dict[str, Any]]:
-    assert scenario in {"v3", "v4", "clear", "encrypted"}
-    udp_version = 3 if scenario == "v3" else 4
+    assert scenario in {"v2", "v3", "v4", "clear", "encrypted"}
+    udp_version = 2 if scenario == "v2" else 3 if scenario == "v3" else 4
     output_root = tmp_path / "output"
     run_dir = (
         output_root
@@ -953,6 +973,13 @@ def immutable_campaign_report(
             transitions=transitions,
         )
         if scenario == "clear"
+        else evidence.build_client_udp_v2_diagnostic_evidence(
+            file_hash=FILE_HASH,
+            part_count=PART_COUNT,
+            stock_record=STOCK_RECORD,
+            transitions=transitions,
+        )
+        if scenario == "v2"
         else evidence.build_client_udp_v3_diagnostic_evidence(
             file_hash=FILE_HASH,
             part_count=PART_COUNT,
@@ -1415,6 +1442,77 @@ def test_bilateral_client_udp_v4_is_claimable() -> None:
         report["clients"]["rust"]["wire"]["request"]["partStatus"]["partStatusBits"]
         == "0"
     )
+
+
+@pytest.mark.unit
+def test_bilateral_client_udp_v2_is_claimable() -> None:
+    report = passing_v2_report()
+
+    evidence.require_client_udp_v2_diagnostic_evidence(report)
+    assert report["schema"] == evidence.V2_SCHEMA
+    assert report["coverageClaims"]["eligibleCoverageIds"] == ["client-udp.v2"]
+    assert report["comparison"]["requestBytesEqual"] is True
+    assert report["comparison"]["ackBytesEqual"] is True
+    assert report["clients"]["rust"]["wire"] == {
+        "ok": True,
+        "request": {
+            "ok": True,
+            "rawHex": V2_REQUEST_RAW.hex(),
+            "udpVersion": 2,
+            "fileHash": FILE_HASH.hex(),
+            "partStatus": None,
+            "completeSourceCount": None,
+        },
+        "ack": {
+            "ok": True,
+            "rawHex": V2_ACK_RAW.hex(),
+            "udpVersion": 2,
+            "partStatus": None,
+            "queueRank": QUEUE_RANK,
+        },
+        "expectedRequestRawHex": V2_REQUEST_RAW.hex(),
+        "expectedAckRawHex": V2_ACK_RAW.hex(),
+    }
+    assert report["clients"]["rust"]["application"]["partStatusIncluded"] is False
+
+
+@pytest.mark.unit
+def test_client_udp_v2_rejects_v3_registration() -> None:
+    original = transition("rust", udp_version=2)
+    records = copy.deepcopy(list(original.requester_records))
+    records[0]["body"]["sourceUdpVersion"] = 3
+    wrong = evidence.ClientUdpAckTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_v2_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["diagnostics"]["counts"]["registration"] == 1
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
+
+
+@pytest.mark.unit
+def test_client_udp_v2_rejects_complete_source_count_bytes() -> None:
+    original = transition("rust", udp_version=2)
+    records = copy.deepcopy(list(original.requester_records))
+    records[3]["body"].update(
+        {
+            "rawHex": V3_REQUEST_RAW.hex(),
+            "rawLen": len(V3_REQUEST_RAW),
+            "payloadHex": V3_REQUEST_RAW[2:].hex(),
+            "payloadLen": len(V3_REQUEST_RAW) - 2,
+        }
+    )
+    wrong = evidence.ClientUdpAckTransition(
+        **{**original.__dict__, "requester_records": records}
+    )
+
+    report = passing_v2_report(rust_transition=wrong)
+
+    assert report["ok"] is False
+    assert report["clients"]["rust"]["wire"]["request"]["ok"] is False
+    assert report["coverageClaims"]["eligibleCoverageIds"] == []
 
 
 @pytest.mark.unit
