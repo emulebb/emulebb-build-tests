@@ -302,14 +302,23 @@ def test_offerfiles_server_stats_uses_policy_and_counter_endpoint(monkeypatch) -
 
 
 @pytest.mark.unit
-def test_offerfiles_campaign_uses_launcher_selected_server_endpoint() -> None:
+def test_offerfiles_campaign_uses_launcher_selected_server_endpoint(monkeypatch) -> None:
     server = SimpleNamespace(ed2k_host="172.20.0.2", ed2k_port=4661)
+    route_calls = []
+
+    def fake_resolve_route_bind_ip(host, port):
+        route_calls.append((host, port))
+        return "172.20.0.1"
+
+    monkeypatch.setattr(subject.ed2k_harness, "resolve_route_bind_ip", fake_resolve_route_bind_ip)
 
     assert subject.launched_server_endpoint(server) == "172.20.0.2:4661"
-    assert subject.launched_client_bind_address(server, "192.0.2.10") == "192.0.2.10"
+    assert subject.launched_client_bind_address(server) == "172.20.0.1"
+    assert route_calls == [("172.20.0.2", 4661)]
 
     forwarded = SimpleNamespace(ed2k_host="127.0.0.1", ed2k_port=4661)
-    assert subject.launched_client_bind_address(forwarded, "192.0.2.10") == "127.0.0.1"
+    assert subject.launched_client_bind_address(forwarded) == "127.0.0.1"
+    assert route_calls == [("172.20.0.2", 4661)]
 
 
 @pytest.mark.unit

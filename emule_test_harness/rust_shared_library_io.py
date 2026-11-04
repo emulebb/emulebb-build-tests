@@ -1242,12 +1242,12 @@ def launched_server_endpoint(server: ed2k_harness.Ed2kServerLaunch) -> str:
     return f"{server.ed2k_host}:{server.ed2k_port}"
 
 
-def launched_client_bind_address(
-    server: ed2k_harness.Ed2kServerLaunch, lan_bind_addr: str
-) -> str:
+def launched_client_bind_address(server: ed2k_harness.Ed2kServerLaunch) -> str:
     """Select a source binding compatible with the managed server route."""
 
-    return server.ed2k_host if server.ed2k_host == "127.0.0.1" else lan_bind_addr
+    if server.ed2k_host == "127.0.0.1":
+        return server.ed2k_host
+    return ed2k_harness.resolve_route_bind_ip(server.ed2k_host, server.ed2k_port)
 
 
 def load_offerfiles_scale_resume(
@@ -1974,7 +1974,7 @@ def run_offerfiles_scale_campaign(
         )
         server_process = server.process
         server_endpoint = launched_server_endpoint(server)
-        p2p_bind_ip = launched_client_bind_address(server, lan_bind_addr)
+        p2p_bind_ip = launched_client_bind_address(server)
         control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
         initial_server_status = read_offerfiles_server_stats(server.admin_base_url)
         report["server"] = {
