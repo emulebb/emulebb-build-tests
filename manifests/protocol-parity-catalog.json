@@ -950,7 +950,7 @@
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
-          "selector": "fn hash_only_small_file_download_learns_metadata_from_startup_answer"
+          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
         }
       ],
       "sourceAnchors": [
@@ -1248,11 +1248,19 @@
       "rustProofs": [
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/established_peer.rs",
-          "selector": "fn apply_client_id_change"
+          "selector": "fn known_server_change_updates_low_id_and_route"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
+          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_established_session_tolerates_unknown_opcodes_and_continues"
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/listener/session.rs",
-          "selector": "fn buddy_pingpong_gate_is_thirteen_minutes_and_pongs_every_other_ping"
+          "selector": "fn held_buddy_uses_receive_lease_instead_of_upload_queue_timeout"
         }
       ],
       "sourceAnchors": [
