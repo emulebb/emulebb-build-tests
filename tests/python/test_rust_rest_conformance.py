@@ -249,6 +249,38 @@ def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -
     }
 
 
+def test_rust_openapi_smoke_uses_ed2k_owned_server_controls() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    removed_core_fields = {"reconnect", "safeServerConnect", "addServersFromServer"}
+    for component in ("CoreSettings", "CoreSettingsUpdate"):
+        assert removed_core_fields.isdisjoint(schemas[component]["properties"])
+    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
+        properties = schemas[component]["properties"]
+        assert properties["reconnectEnabled"]["type"] == "boolean"
+        assert properties["safeServerConnect"]["type"] == "boolean"
+        assert properties["addServersFromServer"]["type"] == "boolean"
+        assert properties["serverKeepaliveMinutes"]["type"] == "integer"
+        assert properties["serverKeepaliveMinutes"]["minimum"] == 0
+        assert properties["serverKeepaliveMinutes"]["maximum"] == 1_440
+        assert "keepaliveSecs" not in properties
+
+    assert removed_core_fields.isdisjoint(module.REST_CORE_SETTING_KEYS)
+    assert module.REST_RUST_ED2K_SERVER_SETTING_KEYS == {
+        "reconnectEnabled",
+        "safeServerConnect",
+        "addServersFromServer",
+        "serverKeepaliveMinutes",
+    }
+    assert module.get_contract_route_body("patchSettings") == {
+        "ed2k": {"safeServerConnect": True}
+    }
+    assert module.get_contract_route_body("app_preferences_patch") == {
+        "safeServerConnect": True
+    }
+
+
 def test_rust_openapi_documents_all_supported_nat_backends() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]

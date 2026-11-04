@@ -49,6 +49,7 @@ from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.rust_client import (
     RUST_PROFILE_METADATA_FILE,
     RUST_PROFILE_SETTINGS_FILE,
+    rust_network_settings_patch,
     spawn_rust_daemon,
 )
 from emule_test_harness.soak_launch import (
@@ -2304,14 +2305,12 @@ def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
                 "/app/settings",
                 api_key=args.api_key,
                 method="PATCH",
-                body={
-                    "core": {
-                        "autoConnect": True,
-                        "reconnect": True,
-                        "networkKademlia": True,
-                        "networkEd2k": True,
-                    },
-                },
+                body=rust_network_settings_patch(
+                    auto_connect=True,
+                    reconnect_enabled=True,
+                    network_ed2k=True,
+                    network_kademlia=True,
+                ),
                 timeout_seconds=args.timeout_seconds,
             )
         )

@@ -25,7 +25,7 @@
     {
       "authorityId": "ed2k-server-dependency",
       "path": "repos/ed2k-server",
-      "revision": "d6a6dd672815a13265393ff22622c7fd97b58eee",
+      "revision": "2af36de86368dde590abad980bcb5c92e9bce696",
       "role": "upstream-clean-deterministic-dependency"
     },
     {
@@ -37,7 +37,7 @@
     {
       "authorityId": "amule-head",
       "path": "repos/amule",
-      "revision": "59425b0c7d9f0e661dd57e7c42b5e92069cf0774",
+      "revision": "8e2afa46b1a73177e6eff3a8a7a4ab6ce91a89ec",
       "role": "analysis-only"
     }
   ],
@@ -174,6 +174,7 @@
       "campaignId": "server-session-source",
       "coverageGroupIds": [
         "server-session",
+        "server-publication-budget",
         "server-query-reply",
         "server-tcp-metadata",
         "server-udp-metadata"
@@ -185,7 +186,8 @@
         "peer-framing",
         "tag-vocabulary",
         "peer-startup-profiles",
-        "secure-ident"
+        "secure-ident",
+        "peer-established-control"
       ]
     },
     {
@@ -219,7 +221,8 @@
     {
       "campaignId": "kad-search-publish-firewall",
       "coverageGroupIds": [
-        "kad-crypto-flows"
+        "kad-crypto-flows",
+        "kad-ingress-admission"
       ]
     }
   ],
@@ -632,6 +635,41 @@
       ]
     },
     {
+      "coverageIds": ["server.offer.legacy-soft-budget"],
+      "groupId": "server-publication-budget",
+      "authorityIds": ["stock-source", "mfc-oracle", "ed2k-server-dependency"],
+      "campaignIds": ["server-session-source"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.server.publication",
+      "publicDiscoveryRunner": "scripts/persisted-soak-control.py",
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
+      "stateModel": {
+        "expected": "legacy OP_OFFERFILES packets contain 200 then 150 raw candidates, stop at the cumulative soft limit, and reset only on reconnect",
+        "start": "authenticated legacy server session with ST_SOFTFILES 350 and 1000 raw catalog candidates",
+        "stimulus": "pump publication to exhaustion, then establish one new server connection epoch"
+      },
+      "recordIds": ["stock.server.offer-budget-state"],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_server/startup/tests.rs",
+          "selector": "fn legacy_soft_budget_sends_200_then_150_and_resets_for_a_new_epoch"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "uint32 limit = pCurServer ? pCurServer->GetSoftFiles() : 0;",
+            "packet->opcode = OP_OFFERFILES;"
+          ],
+          "path": "srchybrid/SharedFileList.cpp"
+        },
+        {
+          "contains": ["#define ST_SOFTFILES", "#define\tOP_OFFERFILES"],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
       "coverageIds": [
         "server.search.keyword",
         "server.search.advanced",
@@ -912,7 +950,7 @@
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
-          "selector": "fn hash_only_small_file_download_learns_metadata_from_startup_answer"
+          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
         }
       ],
       "sourceAnchors": [
@@ -1188,6 +1226,64 @@
     },
     {
       "coverageIds": [
+        "peer.identity.change-client-id",
+        "peer.control.callback",
+        "peer.control.firewall-ack",
+        "peer.control.unknown-opcode",
+        "peer.buddy.receive-liveness"
+      ],
+      "groupId": "peer-established-control",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["peer-handshake-ident"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.peer.established-control",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "both established directions apply mutable identity and callback/firewall controls, tolerate a valid unknown opcode, and retain a held buddy until its receive lease expires",
+        "start": "HELLO-complete inbound and outbound peer connections with an accepted buddy socket",
+        "stimulus": "deliver CHANGE_CLIENT_ID, CALLBACK, firewall ACK, one valid unknown frame, and deterministic buddy silence"
+      },
+      "recordIds": ["stock.peer.established-control-state"],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/established_peer.rs",
+          "selector": "fn known_server_change_updates_low_id_and_route"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
+          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
+          "selector": "fn listener_established_session_tolerates_unknown_opcodes_and_continues"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/listener/session.rs",
+          "selector": "fn held_buddy_uses_receive_lease_instead_of_upload_queue_timeout"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "case OP_CHANGE_CLIENT_ID:",
+            "case OP_CALLBACK:",
+            "case OP_KAD_FWTCPCHECK_ACK:"
+          ],
+          "path": "srchybrid/ListenSocket.cpp"
+        },
+        {
+          "contains": [
+            "#define OP_CHANGE_CLIENT_ID",
+            "#define OP_CALLBACK",
+            "#define OP_KAD_FWTCPCHECK_ACK"
+          ],
+          "path": "srchybrid/Opcodes.h"
+        }
+      ]
+    },
+    {
+      "coverageIds": [
         "client-udp.v1",
         "client-udp.v2",
         "client-udp.v3",
@@ -1355,6 +1451,48 @@
             "case KADEMLIA_CALLBACK_REQ:"
           ],
           "path": "srchybrid/kademlia/net/KademliaUDPListener.cpp"
+        }
+      ]
+    },
+    {
+      "coverageIds": ["kad.ingress.admission", "kad.ingress.port53-verify-key"],
+      "groupId": "kad-ingress-admission",
+      "authorityIds": ["stock-source", "stock-instrumented", "mfc-oracle"],
+      "campaignIds": ["kad-search-publish-firewall"],
+      "deterministicRunner": "scripts/local-kad-mixed-client-swarm.py",
+      "protocolDomain": "kad.transport.ingress",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "rejected datagrams mutate neither sender metadata nor pending state; admitted correlated traffic learns metadata, consumes once, and dispatches",
+        "start": "known sender metadata, one pending request, and empty flood accounting for the valid endpoint",
+        "stimulus": "deliver spoofed, banned, flooded, source-port-53 zero-key, and valid correlated datagrams"
+      },
+      "recordIds": ["stock.kad.ingress-admission-state"],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-kad-net/src/rpc/tests/admission.rs",
+          "selector": "fn flood_rejected_request_cannot_replace_peer_metadata_or_dispatch"
+        },
+        {
+          "path": "crates/emulebb-kad-net/src/rpc/receive_loop.rs",
+          "selector": "fn sender_port_53_requires_an_effective_nonzero_key"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": [
+            "if (uUDPPort == 53 && senderUDPKey.IsEmpty())",
+            "switch (InTrackListIsAllowedPacket(uIP, byOpcode, bValidReceiverKey))"
+          ],
+          "path": "srchybrid/kademlia/net/KademliaUDPListener.cpp"
+        },
+        {
+          "contains": [
+            "this tracklist monitors _incoming_ request packets",
+            "Massive request flood detected"
+          ],
+          "path": "srchybrid/kademlia/net/PacketTracking.cpp"
         }
       ]
     },
@@ -2793,6 +2931,51 @@
       "scenarioId": "stock.17.queue-upload.v1",
       "sequence": "waiting/ranked/granted/uploading/recycled; refused/silent; rank-flood/disconnect/ban; out-of-part/cooldown/quarantine",
       "transport": "state"
+    },
+    {
+      "coverageIds": ["server.offer.legacy-soft-budget"],
+      "fixtureBase64": "bGVnYWN5LWxvZ2luO3NvZnQ9MzUwO2NhdGFsb2c9MTAwMDtvZmZlcj0yMDA7b2ZmZXI9MTUwO3N0b3A7cmVjb25uZWN0O2J1ZGdldC1yZXNldA==",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 82,
+      "payloadDigest": "sha256:47868e0391f3cbc75ef2bfd4597ee1c8e1b77c945d7fd4d80b9a42c5667c1d7e",
+      "protocol": "ed2k",
+      "recordId": "stock.server.offer-budget-state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.18.server-offer-budget.v1",
+      "sequence": "legacy-login;soft=350;catalog=1000;offer=200;offer=150;stop;reconnect;budget-reset",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "peer.identity.change-client-id",
+        "peer.control.callback",
+        "peer.control.firewall-ack",
+        "peer.control.unknown-opcode",
+        "peer.buddy.receive-liveness"
+      ],
+      "fixtureBase64": "aGVsbG8tY29tcGxldGU7Y2hhbmdlLWNsaWVudC1pZDtjYWxsYmFjaztmaXJld2FsbC1hY2s7dW5rbm93bi12YWxpZDtjb250aW51ZTtidWRkeS1zaWxlbmNlLTI1bTtleHBpcmU=",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 101,
+      "payloadDigest": "sha256:dba27694c655bdf4ff510b09dd3439ce35d11e4df3f42591630d1a020e04ac7e",
+      "protocol": "ed2k",
+      "recordId": "stock.peer.established-control-state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.19.peer-established-control.v1",
+      "sequence": "hello-complete;change-client-id;callback;firewall-ack;unknown-valid;continue;buddy-silence-25m;expire",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": ["kad.ingress.admission", "kad.ingress.port53-verify-key"],
+      "fixtureBase64": "ZGVjb2RlO2NvcnJlbGF0ZS13aXRob3V0LWNvbnN1bWU7YmFuLWZsb29kLXBvcnQ1My1hZG1pdDtyZWplY3Qtbm8tbXV0YXRpb247dmFsaWQtbGVhcm4tY29uc3VtZS1kaXNwYXRjaA==",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 103,
+      "payloadDigest": "sha256:1e64ca78c3cc788d1eb2617c4a4496721f92f4f968b07a626bd1c2701d549c01",
+      "protocol": "kad2",
+      "recordId": "stock.kad.ingress-admission-state",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.20.kad-ingress-admission.v1",
+      "sequence": "decode;correlate-without-consume;ban-flood-port53-admit;reject-no-mutation;valid-learn-consume-dispatch",
+      "transport": "udp"
     }
   ],
   "scenarioSource": "stock/community source anchors, native protocol fixtures, and diagnostic evidence normalization",
@@ -2916,12 +3099,30 @@
       "protocol": "ed2k",
       "scenarioId": "stock.17.queue-upload.v1",
       "source": "community-stock-source"
+    },
+    {
+      "description": "Legacy server publication soft-budget, packet-boundary, and reconnect state sequence.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.18.server-offer-budget.v1",
+      "source": "community-stock-source plus maintained server contract"
+    },
+    {
+      "description": "Established peer mutable identity, callback/firewall control, unknown-frame, and buddy receive-liveness state sequence.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.19.peer-established-control.v1",
+      "source": "community-stock-source"
+    },
+    {
+      "description": "Kad admission-before-mutation, pending-correlation, flood, and source-port-53 verify-key state sequence.",
+      "protocol": "kad2",
+      "scenarioId": "stock.20.kad-ingress-admission.v1",
+      "source": "community-stock-source"
     }
   ],
   "schema": "emulebb-build-tests.protocol-parity-catalog",
   "stockAuthority": {
     "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 100,
+    "requiredCoverageCount": 108,
     "sourcePath": "repos/emule-stock",
     "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }

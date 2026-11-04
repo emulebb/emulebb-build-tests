@@ -46,6 +46,7 @@ DEFAULT_WATCHER_POLL_SECONDS = 0.5
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
+SHARED_FILES_PROBE_PATH = "/shared-files?limit=1"
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
@@ -740,7 +741,7 @@ def wait_for_reload(
     disk_after = disk_io_snapshot(disk_counter_key)
     shared = client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
@@ -863,7 +864,7 @@ def run_dynamic_reload_phase(
     disk_after = disk_io_snapshots(counter_keys)
     shared = client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
@@ -1241,12 +1242,12 @@ def launched_server_endpoint(server: ed2k_harness.Ed2kServerLaunch) -> str:
     return f"{server.ed2k_host}:{server.ed2k_port}"
 
 
-def launched_client_bind_address(
-    server: ed2k_harness.Ed2kServerLaunch, lan_bind_addr: str
-) -> str:
+def launched_client_bind_address(server: ed2k_harness.Ed2kServerLaunch) -> str:
     """Select a source binding compatible with the managed server route."""
 
-    return server.ed2k_host if server.ed2k_host == "127.0.0.1" else lan_bind_addr
+    if server.ed2k_host == "127.0.0.1":
+        return server.ed2k_host
+    return ed2k_harness.resolve_route_bind_ip(server.ed2k_host, server.ed2k_port)
 
 
 def load_offerfiles_scale_resume(
@@ -1448,7 +1449,7 @@ def _lan_startup_observation(
     )
     shared = target_client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     status = target_client.request(
@@ -1973,7 +1974,7 @@ def run_offerfiles_scale_campaign(
         )
         server_process = server.process
         server_endpoint = launched_server_endpoint(server)
-        p2p_bind_ip = launched_client_bind_address(server, lan_bind_addr)
+        p2p_bind_ip = launched_client_bind_address(server)
         control = ed2k_harness.ed2k_server_control(server.admin_base_url, API_KEY)
         initial_server_status = read_offerfiles_server_stats(server.admin_base_url)
         report["server"] = {
@@ -2494,7 +2495,7 @@ def run_watcher_phase(
         try:
             shared = client.request(
                 "GET",
-                "/shared-files?offset=0&limit=1",
+                SHARED_FILES_PROBE_PATH,
                 timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
             )
             shared_total = int(shared.get("total") or 0)
@@ -2862,7 +2863,7 @@ def run_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
@@ -2971,7 +2972,7 @@ def run_campaign(
         clients.append(client)
         final_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         final_dirs = client.request(
@@ -3204,7 +3205,7 @@ def run_media_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(

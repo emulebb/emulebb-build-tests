@@ -2396,10 +2396,10 @@ def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> No
             {
                 "core": {
                     "autoConnect": True,
-                    "reconnect": True,
                     "networkKademlia": True,
                     "networkEd2k": True,
                 },
+                "ed2k": {"reconnectEnabled": True},
             },
         ),
         ("POST", "/kad/operations/start", {}),

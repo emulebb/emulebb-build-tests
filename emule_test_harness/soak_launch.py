@@ -25,7 +25,12 @@ from types import ModuleType
 from typing import Any, Mapping
 
 from . import bounded_process_output, diag_event_runs, hideme_split_tunnel, hideme_vpn, soak_storage, vpn_guard_live
-from .rust_client import start_rust_client_executable_with_output, stop_process_tree, write_rust_profile
+from .rust_client import (
+    STOCK_SERVER_KEEPALIVE_MINUTES,
+    start_rust_client_executable_with_output,
+    stop_process_tree,
+    write_rust_profile,
+)
 from .ini import read_ini_text
 from .vm_guest_profiles import api_data, retry_http_json, wait_until
 
@@ -1107,6 +1112,7 @@ def bring_up_rust(
         kad_port=kad_port,
         server_endpoint=server_endpoint,
         obfuscation_enabled=obfuscation,
+        server_keepalive_minutes=STOCK_SERVER_KEEPALIVE_MINUTES,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_udp_reask,

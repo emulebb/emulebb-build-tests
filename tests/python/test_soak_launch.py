@@ -488,6 +488,11 @@ def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeyp
     assert captured["p2p_bind_ip"] == "192.0.2.10"
     assert captured["p2p_bind_interface"] is None
     assert captured["nat_enabled"] is False
+    assert (
+        captured["server_keepalive_minutes"]
+        == soak_launch.STOCK_SERVER_KEEPALIVE_MINUTES
+        == 20
+    )
     result["logHandle"].close()
 
 

@@ -108,16 +108,14 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0) -> tuple[dict[str, Any]
         local_only_discovery=True,
         vpn_guard_mode="off",
     )
-    rust_metadata.replace_settings_section(
-        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        "core",
-        {
-            "autoConnect": False,
-            "networkEd2k": False,
-            "networkKademlia": False,
-            "reconnect": False,
-        },
-    )
+    metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    for section, settings in rust_client.rust_network_settings_patch(
+        auto_connect=False,
+        reconnect_enabled=False,
+        network_ed2k=False,
+        network_kademlia=False,
+    ).items():
+        rust_metadata.replace_settings_section(metadata_path, section, settings)
 
     report: dict[str, Any] = {
         "schema": "emulebb.rust-rest-openapi-ci.v1",

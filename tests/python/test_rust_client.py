@@ -41,6 +41,22 @@ def setting_value(profile_dir: Path, section: str, key: str) -> object:
     return json.loads(row[0])
 
 
+def test_rust_network_settings_patch_keeps_server_reconnect_under_ed2k() -> None:
+    assert rust_client.rust_network_settings_patch(
+        auto_connect=False,
+        reconnect_enabled=True,
+        network_ed2k=True,
+        network_kademlia=False,
+    ) == {
+        "core": {
+            "autoConnect": False,
+            "networkEd2k": True,
+            "networkKademlia": False,
+        },
+        "ed2k": {"reconnectEnabled": True},
+    }
+
+
 def test_request_ctrl_c_sends_sigint_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     signals: list[int] = []
 
@@ -79,6 +95,11 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert metadata_path(profile_dir).is_file()
     assert setting_value(profile_dir, "core", "autoConnect") is False
     assert setting_value(profile_dir, "nat", "enabled") is False
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        keepalive = conn.execute(
+            "SELECT value_json FROM settings WHERE section = 'ed2k' AND key = 'serverKeepaliveMinutes'"
+        ).fetchone()
+    assert keepalive is None
     if os.name == "posix":
         mode = stat.S_IMODE((profile_dir / rust_client.RUST_PROFILE_SETTINGS_FILE).stat().st_mode)
         assert mode == 0o600
@@ -341,6 +362,39 @@ def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path)
     )
 
     assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 300
+
+
+@pytest.mark.parametrize("minutes", [0, 20, 1_440])
+def test_write_rust_profile_uses_explicit_server_keepalive_minutes(
+    tmp_path: Path, minutes: int
+) -> None:
+    profile_dir = tmp_path / f"profile-{minutes}"
+
+    rust_client.write_rust_profile(
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        server_keepalive_minutes=minutes,
+    )
+
+    assert setting_value(profile_dir, "ed2k", "serverKeepaliveMinutes") == minutes
+
+
+@pytest.mark.parametrize("minutes", [-1, 1_441, True, 20.5])
+def test_write_rust_profile_rejects_invalid_server_keepalive_minutes(
+    tmp_path: Path, minutes: object
+) -> None:
+    with pytest.raises(ValueError, match="integer in the range 0..1440"):
+        rust_client.write_rust_profile(
+            tmp_path / "profile",
+            rust_repo=rust_repo(),
+            rest_addr="192.0.2.10",
+            rest_port=4711,
+            api_key="key",
+            server_keepalive_minutes=minutes,  # type: ignore[arg-type]
+        )
 
 
 def test_write_rust_profile_can_request_stock_server_list_on_connect(tmp_path: Path) -> None:

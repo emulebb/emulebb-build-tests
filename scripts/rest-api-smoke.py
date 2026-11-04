@@ -221,7 +221,7 @@ REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_SURFACE_QBIT_DOWNLOAD_HASH = "11223344556677889900aabbccddeeff"
 REST_CONTRACT_VERSION = rust_rest_contract.REST_CONTRACT_VERSION
 REST_CONTRACT_VERSION_HEADER = rust_rest_contract.REST_CONTRACT_VERSION_HEADER
-REST_CORE_SETTING_KEYS = {
+REST_MFC_CORE_SETTING_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
     "maxConnections",
@@ -239,6 +239,27 @@ REST_CORE_SETTING_KEYS = {
     "networkKademlia",
     "networkEd2k",
 }
+REST_RUST_CORE_SETTING_KEYS = REST_MFC_CORE_SETTING_KEYS.difference(
+    {"reconnect", "safeServerConnect", "addServersFromServer"}
+)
+REST_RUST_ED2K_SERVER_SETTING_KEYS = {
+    "reconnectEnabled",
+    "safeServerConnect",
+    "addServersFromServer",
+    "serverKeepaliveMinutes",
+}
+REST_CORE_SETTING_KEYS = (
+    REST_RUST_CORE_SETTING_KEYS if RUST_CONTRACT_ONLY else REST_MFC_CORE_SETTING_KEYS
+)
+
+
+def safe_server_connect_settings_patch(value: object) -> dict[str, dict[str, object]]:
+    """Return the selected product's settings owner for safe server connect."""
+
+    section = "ed2k" if RUST_CONTRACT_ONLY else "core"
+    return {section: {"safeServerConnect": value}}
+
+
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_SOCKET_ADVERSITY_BUDGETS = ("off", "smoke")
@@ -1157,7 +1178,7 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "PATCH",
         "path": "/api/v1/app/settings",
-        "json_body": {"core": {"safeServerConnect": True}},
+        "json_body": safe_server_connect_settings_patch(True),
         "family": "app",
         "scenario": "safe_mutation",
         "expected_statuses": (200,),
@@ -3777,7 +3798,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name == "triggerDiagnosticCrashTest":
         return {"confirmCrash": True}
     if route_name == "patchSettings":
-        return {"core": {"safeServerConnect": True}}
+        return safe_server_connect_settings_patch(True)
     if route_name in {"app_preferences_patch", "patchPreferences"}:
         return {"safeServerConnect": True}
     if route_name in {"categories_create", "createCategory"}:
@@ -4226,9 +4247,17 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert isinstance(core_settings, dict), compact_http_result(settings)
     missing_core_keys = sorted(REST_CORE_SETTING_KEYS.difference(core_settings.keys()))
     assert not missing_core_keys, missing_core_keys
+    ed2k_settings = settings_payload.get("ed2k")
+    if RUST_CONTRACT_ONLY:
+        assert isinstance(ed2k_settings, dict), compact_http_result(settings)
+        missing_ed2k_keys = sorted(
+            REST_RUST_ED2K_SERVER_SETTING_KEYS.difference(ed2k_settings.keys())
+        )
+        assert not missing_ed2k_keys, missing_ed2k_keys
     surface["app_settings_get"] = {
         "status": settings["status"],
         "coreKeys": sorted(core_settings.keys()),
+        "ed2kKeys": sorted(ed2k_settings.keys()) if isinstance(ed2k_settings, dict) else [],
     }
 
     invalid_setting = http_request(
@@ -4250,7 +4279,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body={"core": {"safeServerConnect": "true"}},
+        json_body=safe_server_connect_settings_patch("true"),
     )
     invalid_setting_empty = http_request(
         base_url,
@@ -4288,21 +4317,34 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     }
 
     safe_core_update = {key: core_settings[key] for key in REST_CORE_SETTING_KEYS}
+    safe_settings_update: dict[str, object] = {"core": safe_core_update}
+    safe_ed2k_update: dict[str, object] = {}
+    if RUST_CONTRACT_ONLY:
+        assert isinstance(ed2k_settings, dict)
+        safe_ed2k_update = {
+            key: ed2k_settings[key] for key in REST_RUST_ED2K_SERVER_SETTING_KEYS
+        }
+        safe_settings_update["ed2k"] = safe_ed2k_update
     settings_set = http_request(
         base_url,
         "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        json_body={"core": safe_core_update},
+        json_body=safe_settings_update,
     )
     settings_set_payload = require_json_object(settings_set, 200)
     updated_core = settings_set_payload.get("core")
     assert isinstance(updated_core, dict), compact_http_result(settings_set)
     for key, expected_value in safe_core_update.items():
         assert updated_core.get(key) == expected_value, compact_http_result(settings_set)
+    if RUST_CONTRACT_ONLY:
+        updated_ed2k = settings_set_payload.get("ed2k")
+        assert isinstance(updated_ed2k, dict), compact_http_result(settings_set)
+        for key, expected_value in safe_ed2k_update.items():
+            assert updated_ed2k.get(key) == expected_value, compact_http_result(settings_set)
     surface["app_settings_set_noop"] = {
         "status": settings_set["status"],
-        "updated": safe_core_update,
+        "updated": safe_settings_update,
     }
 
     transfers = http_request(base_url, "/api/v1/transfers", api_key=api_key)
@@ -5071,7 +5113,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/app/settings",
         method="PATCH",
         api_key=api_key,
-        raw_body=json.dumps({"core": {"safeServerConnect": True}}),
+        raw_body=json.dumps(safe_server_connect_settings_patch(True)),
         content_type="text/plain",
     )
     search_bad_method = http_request(

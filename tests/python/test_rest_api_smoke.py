@@ -43,6 +43,18 @@ def section_text(text: str, section: str) -> str:
     return text[start:] if next_section == -1 else text[start:next_section]
 
 
+def test_mfc_rest_smoke_keeps_existing_server_preference_owner() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.RUST_CONTRACT_ONLY is False
+    assert module.safe_server_connect_settings_patch(True) == {
+        "core": {"safeServerConnect": True}
+    }
+    assert module.get_contract_route_body("app_preferences_patch") == {
+        "safeServerConnect": True
+    }
+
+
 def test_nat_backend_order_accepts_upnp_first() -> None:
     module = load_rest_api_smoke_module()
 
