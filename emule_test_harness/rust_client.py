@@ -14,6 +14,26 @@ from . import rust_metadata
 CARGO_TARGET_DIR_ENV = "CARGO_TARGET_DIR"
 RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
 RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
+STOCK_SERVER_KEEPALIVE_MINUTES = 20
+
+
+def rust_network_settings_patch(
+    *,
+    auto_connect: bool,
+    reconnect_enabled: bool,
+    network_ed2k: bool,
+    network_kademlia: bool,
+) -> dict[str, dict[str, bool]]:
+    """Build a current-schema Rust network settings PATCH body."""
+
+    return {
+        "core": {
+            "autoConnect": auto_connect,
+            "networkEd2k": network_ed2k,
+            "networkKademlia": network_kademlia,
+        },
+        "ed2k": {"reconnectEnabled": reconnect_enabled},
+    }
 
 
 def write_private_text(path: Path, contents: str) -> None:
@@ -78,6 +98,7 @@ def write_rust_profile(
     connect_timeout_secs: int = 10,
     reconnect_interval_secs: int = 60,
     add_servers_from_server: bool | None = None,
+    server_keepalive_minutes: int | None = None,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
     enable_udp_reask: bool = False,
@@ -209,6 +230,16 @@ def write_rust_profile(
         )
     if add_servers_from_server is not None:
         ed2k_settings["addServersFromServer"] = add_servers_from_server
+    if server_keepalive_minutes is not None:
+        if (
+            isinstance(server_keepalive_minutes, bool)
+            or not isinstance(server_keepalive_minutes, int)
+            or not 0 <= server_keepalive_minutes <= 1_440
+        ):
+            raise ValueError(
+                "Rust profile server_keepalive_minutes must be an integer in the range 0..1440."
+            )
+        ed2k_settings["serverKeepaliveMinutes"] = server_keepalive_minutes
     if ed2k_settings:
         rust_metadata.replace_settings_section(metadata_path, "ed2k", ed2k_settings)
 

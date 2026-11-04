@@ -36,6 +36,7 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.rust_client import (
+    STOCK_SERVER_KEEPALIVE_MINUTES,
     start_rust_client_executable_with_output,
     stop_process_tree,
     write_rust_profile,
@@ -778,6 +779,7 @@ def run_pass(
         server_endpoint=OPERATOR_SERVER,
         obfuscation_enabled=obfuscation,
         reconnect_interval_secs=int(CONNECT_COOLDOWN_SECONDS),
+        server_keepalive_minutes=STOCK_SERVER_KEEPALIVE_MINUTES,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_reask,
