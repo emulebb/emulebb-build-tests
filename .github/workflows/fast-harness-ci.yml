@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: amule-org/amule
-          ref: 59425b0c7d9f0e661dd57e7c42b5e92069cf0774
+          ref: 8e2afa46b1a73177e6eff3a8a7a4ab6ce91a89ec
           path: repos/amule
 
       - name: Checkout tooling docs
@@ -114,7 +114,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: emulebb/ed2k-server
-          ref: d6a6dd672815a13265393ff22622c7fd97b58eee
+          ref: 2af36de86368dde590abad980bcb5c92e9bce696
           path: repos/ed2k-server
 
       # The emulebb-miniupnpc-sys crate's build script compiles the bundled
