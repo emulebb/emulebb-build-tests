@@ -46,6 +46,7 @@ DEFAULT_WATCHER_POLL_SECONDS = 0.5
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
+SHARED_FILES_PROBE_PATH = "/shared-files?limit=1"
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
@@ -740,7 +741,7 @@ def wait_for_reload(
     disk_after = disk_io_snapshot(disk_counter_key)
     shared = client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
@@ -863,7 +864,7 @@ def run_dynamic_reload_phase(
     disk_after = disk_io_snapshots(counter_keys)
     shared = client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
@@ -1448,7 +1449,7 @@ def _lan_startup_observation(
     )
     shared = target_client.request(
         "GET",
-        "/shared-files?offset=0&limit=1",
+        SHARED_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     status = target_client.request(
@@ -2494,7 +2495,7 @@ def run_watcher_phase(
         try:
             shared = client.request(
                 "GET",
-                "/shared-files?offset=0&limit=1",
+                SHARED_FILES_PROBE_PATH,
                 timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
             )
             shared_total = int(shared.get("total") or 0)
@@ -2862,7 +2863,7 @@ def run_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
@@ -2971,7 +2972,7 @@ def run_campaign(
         clients.append(client)
         final_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         final_dirs = client.request(
@@ -3204,7 +3205,7 @@ def run_media_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            "/shared-files?offset=0&limit=1",
+            SHARED_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
