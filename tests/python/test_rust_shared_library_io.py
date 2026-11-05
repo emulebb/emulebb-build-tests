@@ -696,40 +696,46 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
         connection.executescript(
             """
             CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, ed2k_hash BLOB, display_name TEXT,
-                size_bytes INTEGER, completed INTEGER,
-                md4_hashset_acquired INTEGER, aich_hashset_acquired INTEGER,
-                aich_root BLOB
+                id INTEGER PRIMARY KEY, ed2k_hash BLOB, size_bytes INTEGER
             );
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE shared_file_sources (
-                known_file_id INTEGER, path_id INTEGER,
-                file_size INTEGER, source_fingerprint BLOB
+            CREATE TABLE verified_local_content (
+                known_file_id INTEGER, display_name TEXT, aich_root BLOB
             );
-            CREATE TABLE unshared_files (known_file_id INTEGER);
+            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
+            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
+            CREATE TABLE local_file_instances (
+                path_id INTEGER, known_file_id INTEGER,
+                file_size INTEGER, verified_fingerprint BLOB
+            );
+            CREATE TABLE shared_directory_roots (
+                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
+                accessible INTEGER, shareable INTEGER
+            );
+            CREATE TABLE shared_file_memberships (
+                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
+            );
             """
         )
         connection.execute(
-            "INSERT INTO known_files VALUES (1, ?, 'watch-probe-0000.bin', 16, 1, 1, 1, ?)",
-            (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20)),
+            "INSERT INTO known_files VALUES (1, ?, 16)",
+            (bytes.fromhex("11" * 16),),
         )
         connection.execute(
-            "INSERT INTO known_files VALUES (2, ?, 'watch-probe-0001.bin', 16, 1, 1, 1, ?)",
-            (bytes.fromhex("33" * 16), bytes.fromhex("44" * 20)),
+            "INSERT INTO known_files VALUES (2, ?, 16)",
+            (bytes.fromhex("33" * 16),),
         )
-        connection.execute(
-            "INSERT INTO local_paths VALUES (1, ?)", (str(tmp_path / "active"),)
-        )
-        connection.execute(
-            "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "removed"),)
-        )
-        connection.execute(
-            "INSERT INTO shared_file_sources VALUES (1, 1, 16, zeroblob(47))"
-        )
-        connection.execute(
-            "INSERT INTO shared_file_sources VALUES (2, 2, 16, zeroblob(47))"
-        )
-        connection.execute("INSERT INTO unshared_files VALUES (2)")
+        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (str(tmp_path / "watch-probe-0000.bin"),))
+        connection.execute("INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "watch-probe-0001.bin"),))
+        connection.execute("INSERT INTO verified_local_content VALUES (1, 'watch-probe-0000.bin', ?)", (bytes.fromhex("22" * 20),))
+        connection.execute("INSERT INTO verified_local_content VALUES (2, 'watch-probe-0001.bin', ?)", (bytes.fromhex("44" * 20),))
+        connection.executemany("INSERT INTO verified_local_md4_hashes VALUES (?)", [(1,), (2,)])
+        connection.executemany("INSERT INTO verified_local_aich_hashes VALUES (?)", [(1,), (2,)])
+        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
+        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 16, zeroblob(47))")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
@@ -747,45 +753,52 @@ def test_storage_snapshot_counts_active_shared_sources_not_transfers(
         connection.executescript(
             """
             CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, size_bytes INTEGER, completed INTEGER,
-                md4_hashset_acquired INTEGER, aich_hashset_acquired INTEGER,
-                aich_root BLOB
+                id INTEGER PRIMARY KEY, size_bytes INTEGER
             );
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE shared_file_sources (
-                known_file_id INTEGER, path_id INTEGER,
-                file_size INTEGER, source_fingerprint BLOB
+            CREATE TABLE verified_local_content (
+                known_file_id INTEGER, part_size INTEGER, aich_root BLOB
             );
-            CREATE TABLE unshared_files (known_file_id INTEGER);
+            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
+            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
+            CREATE TABLE local_file_instances (
+                path_id INTEGER, known_file_id INTEGER,
+                file_size INTEGER, verified_fingerprint BLOB
+            );
+            CREATE TABLE shared_directory_roots (
+                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
+                accessible INTEGER, shareable INTEGER
+            );
             CREATE TABLE transfers (removed_at_ms INTEGER);
-            CREATE TABLE shared_file_memberships (removed_at_ms INTEGER);
+            CREATE TABLE shared_file_memberships (
+                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
+            );
             CREATE TABLE shared_file_scan_failures (id INTEGER);
             """
         )
-        connection.execute(
-            "INSERT INTO known_files VALUES (1, 16, 1, 1, 1, ?)",
-            (bytes.fromhex("11" * 20),),
-        )
-        connection.execute(
-            "INSERT INTO known_files VALUES (2, 32, 1, 1, 1, ?)",
-            (bytes.fromhex("22" * 20),),
-        )
+        connection.execute("INSERT INTO known_files VALUES (1, 16)")
+        connection.execute("INSERT INTO known_files VALUES (2, 32)")
         connection.execute("INSERT INTO local_paths VALUES (1, ?)", (long_path,))
         connection.execute(
             "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
         )
-        connection.execute(
-            "INSERT INTO shared_file_sources VALUES (1, 1, 16, zeroblob(47))"
-        )
-        connection.execute(
-            "INSERT INTO shared_file_sources VALUES (2, 2, 32, zeroblob(47))"
-        )
-        connection.execute("INSERT INTO unshared_files VALUES (2)")
+        connection.execute("INSERT INTO verified_local_content VALUES (1, 16, ?)", (bytes.fromhex("11" * 20),))
+        connection.execute("INSERT INTO verified_local_content VALUES (2, 16, ?)", (bytes.fromhex("22" * 20),))
+        connection.executemany("INSERT INTO verified_local_md4_hashes VALUES (?)", [(1,), (2,)])
+        connection.executemany("INSERT INTO verified_local_aich_hashes VALUES (?)", [(1,), (2,)])
+        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
+        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 32, zeroblob(47))")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES (2, 1, NULL, 1, 1)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES (2, 1, NULL)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
         connection.execute("INSERT INTO transfers VALUES (NULL)")
 
     snapshot = subject.profile_storage_snapshot(profile)
     counts = snapshot["rowCounts"]
-    assert counts["shareSourceRows"] == 2
+    assert counts["localInstanceRows"] == 2
+    assert counts["verifiedContentRows"] == 2
     assert counts["activeShareSources"] == 1
     assert counts["activeShareBytes"] == 16
     assert counts["activeLongPathSources"] == 1
