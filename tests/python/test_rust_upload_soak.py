@@ -43,6 +43,32 @@ def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, t
     assert args.duration_seconds == rust_upload_soak.DEFAULT_DURATION_SECONDS
 
 
+def test_kad_wsl_mode_requires_staged_linux_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
+    stage_dummy_rust_tools(output_root)
+    args = rust_upload_soak.build_parser().parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--discovery-mode", "kad-wsl"]
+    )
+
+    with pytest.raises(ValueError, match="Linux Rust executable"):
+        rust_upload_soak.validate_args(args)
+    args.linux_rust_exe.parent.mkdir(parents=True, exist_ok=True)
+    args.linux_rust_exe.write_bytes(b"linux rust")
+    rust_upload_soak.validate_args(args)
+
+
+def test_wsl_metadata_path_stays_within_output_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
+    profile = output_root / "soak" / "profile"
+
+    mapped = rust_upload_soak.wsl_metadata_path("/mnt/metadata", profile)
+
+    assert mapped.startswith("/mnt/metadata/")
+    assert mapped.endswith("/out/soak/profile")
+    with pytest.raises(ValueError, match="below the workspace output root"):
+        rust_upload_soak.wsl_metadata_path("/mnt/metadata", workspace_root / "profile")
+
+
 def test_canonical_ed2k_server_does_not_use_repo_override() -> None:
     assert rust_upload_soak.resolve_ed2k_server_repo_override(None) is None
 

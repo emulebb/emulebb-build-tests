@@ -508,7 +508,7 @@ def publish_shared_tree(
     base_url: str,
     api_key: str,
     *,
-    root: Path,
+    root: Path | str,
     file_name: str,
     timeout_seconds: float = 60.0,
 ) -> dict[str, object]:
