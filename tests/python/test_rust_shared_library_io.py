@@ -52,6 +52,29 @@ def test_production_fixture_is_exactly_100k_and_ten_gib_decimal() -> None:
 
 
 @pytest.mark.unit
+def test_restart_accepts_validated_cohort_then_requires_full_hydration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert not subject.startup_catalog_cohort_accepted(199, 100_000)
+    assert subject.startup_catalog_cohort_accepted(200, 100_000)
+    assert subject.startup_catalog_cohort_accepted(100_000, 100_000)
+    assert not subject.startup_catalog_cohort_accepted(100_001, 100_000)
+
+    totals = iter((200, 2_248, 100_000))
+    client = SimpleNamespace(request=lambda *_args, **_kwargs: {"total": next(totals)})
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(subject.time, "sleep", lambda _seconds: None)
+    hydrated = subject.wait_for_shared_catalog_hydration(
+        client=client,
+        process=process,
+        expected=100_000,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+    assert hydrated["sharedFilesTotal"] == 100_000
+
+
+@pytest.mark.unit
 def test_production_fixture_reserves_exactly_one_long_path_group() -> None:
     first_long = subject.relative_file_for_index(99_000)
     assert len(str(subject.relative_file_for_index(98_999))) < 300

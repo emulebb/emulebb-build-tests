@@ -33,7 +33,7 @@ from .paths import (
 )
 from .script_modules import load_script_module
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v5"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v6"
 MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v2"
 LAN_STARTUP_REPORT_SCHEMA = "emulebb.rust-shared-library-lan-startup.v1"
 OFFERFILES_SCALE_REPORT_SCHEMA = "emulebb.rust-offerfiles-scale.v1"
@@ -43,6 +43,8 @@ API_KEY = "rust-shared-library-io-local-only-key"
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
+STARTUP_SHARED_CATALOG_COHORT = 200
+CATALOG_HYDRATION_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
@@ -701,6 +703,51 @@ def compact_progress(data: dict[str, object]) -> dict[str, object]:
             if isinstance(disk, dict)
         ]
     }
+
+
+def startup_catalog_cohort_accepted(observed: object, expected: int) -> bool:
+    """Require the validated startup cohort without assuming full hydration."""
+
+    return (
+        type(observed) is int
+        and min(STARTUP_SHARED_CATALOG_COHORT, expected) <= observed <= expected
+    )
+
+
+def wait_for_shared_catalog_hydration(
+    *,
+    client: RestClient,
+    process: subprocess.Popen[str],
+    expected: int,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, object]:
+    """Prove background catalog hydration reaches the durable share count."""
+
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    last_total: object = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"emulebb-rust exited during catalog hydration with code {process.returncode}"
+            )
+        shared = client.request(
+            "GET", SHARED_FILES_PROBE_PATH, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        )
+        last_total = shared.get("total")
+        if last_total == expected:
+            return {
+                "sharedFilesTotal": last_total,
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+            }
+        if type(last_total) is int and last_total > expected:
+            raise RuntimeError("catalog hydration exceeded the expected share count")
+        time.sleep(max(1.0, poll_seconds))
+    raise TimeoutError(
+        f"catalog hydration did not reach {expected} shares within "
+        f"{timeout_seconds:.0f}s (last total {last_total})"
+    )
 
 
 def wait_for_reload(
@@ -2869,6 +2916,13 @@ def run_campaign(
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
         }
+        report["warmRestart"]["hydration"] = wait_for_shared_catalog_hydration(
+            client=client,
+            process=process,
+            expected=PRODUCTION_SPEC.file_count,
+            timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
+            poll_seconds=args.poll_seconds,
+        )
 
         client.request("POST", "/shared-directories/operations/reload", {})
         no_change = wait_for_reload(
@@ -2978,6 +3032,13 @@ def run_campaign(
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
         }
+        report["finalRestart"]["hydration"] = wait_for_shared_catalog_hydration(
+            client=client,
+            process=process,
+            expected=PRODUCTION_SPEC.file_count,
+            timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
+            poll_seconds=args.poll_seconds,
+        )
         report["finalShutdown"] = stop_daemon(process, client)
         process = None
         client = None
@@ -3010,7 +3071,10 @@ def run_campaign(
             "fixtureExact": validation["ok"] is True,
             "longPathBaselineExact": validation["longPathFileCount"]
             == fixture.baseline_long_path_count(),
-            "warmRestartCatalog": warm["sharedFilesTotal"]
+            "warmRestartCatalogCohort": startup_catalog_cohort_accepted(
+                warm["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+            ),
+            "warmRestartCatalogHydrated": warm["hydration"]["sharedFilesTotal"]
             == PRODUCTION_SPEC.file_count,
             "warmRestartIdle": int(warm["hashingCount"] or 0) == 0,
             "warmRestartNoWatcherRows": int(warm["watcherActiveCount"]) == 0,
@@ -3022,7 +3086,10 @@ def run_campaign(
                     expected_minimum_long=fixture.baseline_long_path_count(),
                 ).values()
             ),
-            "finalRestartCatalog": final["sharedFilesTotal"]
+            "finalRestartCatalogCohort": startup_catalog_cohort_accepted(
+                final["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+            ),
+            "finalRestartCatalogHydrated": final["hydration"]["sharedFilesTotal"]
             == PRODUCTION_SPEC.file_count,
             "finalRestartIdle": int(final["hashingCount"] or 0) == 0,
             "finalRestartNoWatcherRows": int(final["watcherActiveCount"]) == 0,
