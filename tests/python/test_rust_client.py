@@ -11,6 +11,7 @@ import pytest
 
 from emule_test_harness import rust_client
 from emule_test_harness.kad_nodes import BootstrapContact
+from emule_test_harness.paths import get_required_emule_workspace_root
 
 
 def load_rust_live_wire_module():
@@ -24,7 +25,7 @@ def load_rust_live_wire_module():
 
 
 def rust_repo() -> Path:
-    return Path(__file__).parents[3] / "emulebb-rust"
+    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
 
 
 def metadata_path(profile_dir: Path) -> Path:
