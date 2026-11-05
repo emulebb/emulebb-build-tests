@@ -43,20 +43,14 @@ def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, t
     assert args.duration_seconds == rust_upload_soak.DEFAULT_DURATION_SECONDS
 
 
-def test_resolve_ed2k_server_repo_override_uses_workspace_rust_repo(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspace"
-    repo = workspace_root / "repos" / "ed2k-server"
-    repo.mkdir(parents=True)
-    (repo / "Cargo.toml").write_text("[package]\nname = 'ed2k-server'\n", encoding="utf-8")
-
-    assert rust_upload_soak.resolve_ed2k_server_repo_override(workspace_root, None) == str(repo)
+def test_canonical_ed2k_server_does_not_use_repo_override() -> None:
+    assert rust_upload_soak.resolve_ed2k_server_repo_override(None) is None
 
 
 def test_resolve_ed2k_server_repo_override_prefers_explicit_path(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspace"
     override = tmp_path / "custom-ed2k-server"
 
-    assert rust_upload_soak.resolve_ed2k_server_repo_override(workspace_root, override) == str(override)
+    assert rust_upload_soak.resolve_ed2k_server_repo_override(override) == str(override)
 
 
 def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -67,6 +61,10 @@ def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, 
     )
 
     with pytest.raises(ValueError, match="duration-seconds"):
+        rust_upload_soak.validate_args(args)
+
+    args = rust_upload_soak.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10", "--api-key", "short"])
+    with pytest.raises(ValueError, match="api-key"):
         rust_upload_soak.validate_args(args)
 
 
@@ -101,16 +99,25 @@ def test_safe_counter_helpers_tolerate_missing_values() -> None:
     assert rust_upload_soak.safe_float("bad") == 0.0
 
 
-def test_verify_download_delivery_checks_completed_delivered_file(tmp_path: Path) -> None:
+def test_find_hash_item_handles_retired_transfer_and_local_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    file_hash = "00112233445566778899aabbccddeeff"
+    responses = {
+        "/api/v1/transfers": {"items": []},
+        "/api/v1/shared-files": {"items": [{"hash": file_hash, "path": "C:\\incoming\\payload.bin"}]},
+    }
+    monkeypatch.setattr(rust_upload_soak, "request_json", lambda _base, _method, path, _key: responses[path])
+
+    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/transfers", file_hash) is None
+    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/shared-files", file_hash) == responses["/api/v1/shared-files"]["items"][0]
+
+
+def test_verify_download_delivery_checks_library_promotion(tmp_path: Path) -> None:
     delivered = tmp_path / "incoming" / "payload.bin"
     payload = rust_upload_soak.write_payload(delivered, 4096)
 
     result = rust_upload_soak.verify_download_delivery(
-        {
-            "state": "completed",
-            "completedBytes": payload["sizeBytes"],
-            "deliveredPath": str(delivered),
-        },
+        None,
+        {"hash": "00112233445566778899aabbccddeeff", "sizeBytes": payload["sizeBytes"], "path": str(delivered)},
         payload,
         require_completion=True,
         require_delivered_path=True,
@@ -127,10 +134,25 @@ def test_verify_download_delivery_checks_completed_delivered_file(tmp_path: Path
 def test_verify_download_delivery_rejects_incomplete_transfer(tmp_path: Path) -> None:
     payload = rust_upload_soak.write_payload(tmp_path / "payload.bin", 4096)
 
-    with pytest.raises(RuntimeError, match="did not complete"):
+    with pytest.raises(RuntimeError, match="did not enter the verified library"):
         rust_upload_soak.verify_download_delivery(
             {"state": "downloading", "completedBytes": 1024},
+            None,
             payload,
             require_completion=True,
             require_delivered_path=False,
+        )
+
+
+def test_delivered_path_requires_retired_transfer(tmp_path: Path) -> None:
+    delivered = tmp_path / "incoming" / "payload.bin"
+    payload = rust_upload_soak.write_payload(delivered, 4096)
+
+    with pytest.raises(RuntimeError, match="still has a transfer row"):
+        rust_upload_soak.verify_download_delivery(
+            {"state": "completed", "completedBytes": 4096},
+            {"sizeBytes": 4096, "path": str(delivered)},
+            payload,
+            require_completion=False,
+            require_delivered_path=True,
         )

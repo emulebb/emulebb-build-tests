@@ -17,6 +17,7 @@ from typing import Any
 from . import ed2k_server as ed2k_harness, live_process_monitor, rust_client
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
+    ed2k_link_with_source,
     file_sha256,
     publish_shared_tree,
     request_json,
@@ -25,7 +26,7 @@ from .rust_local_ed2k import (
     wait_for_rest_ready,
 )
 
-API_KEY = "rust-local-upload-soak-key"
+API_KEY = "rust-local-upload-soak-key-2026-beta"
 DEFAULT_DURATION_SECONDS = 300.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 5.0
 DEFAULT_PAYLOAD_MIB = 64
@@ -51,13 +52,10 @@ def staged_rust_bin(name: str) -> Path:
     return get_workspace_output_root() / "tools" / "emulebb-rust" / "bin" / name
 
 
-def resolve_ed2k_server_repo_override(workspace_root: Path, override: Path | None) -> str | None:
-    """Returns the Rust ED2K server override for the canonical workspace layout."""
+def resolve_ed2k_server_repo_override(override: Path | None) -> str | None:
+    """Passes only an operator-selected ED2K server repo override."""
 
-    if override is not None:
-        return str(override)
-    repo = workspace_root / "repos" / "ed2k-server"
-    return str(repo) if (repo / "Cargo.toml").is_file() else None
+    return str(override) if override is not None else None
 
 
 def free_lan_port(host: str, used: set[int] | None = None) -> int:
@@ -77,19 +75,26 @@ def free_lan_port(host: str, used: set[int] | None = None) -> int:
 def free_lan_port_with_udp_offset(host: str, used: set[int]) -> int:
     """Allocates a TCP port whose stock obfuscation UDP offset is also free."""
 
+    last_error: OSError | None = None
     for _ in range(100):
-        port = free_lan_port(host, used)
+        # Windows often reserves UDP ports adjacent to ephemeral TCP ports.
+        port = random.SystemRandom().randrange(20_000, 40_000)
         udp_port = port + 4
-        if udp_port > 65535 or udp_port in used:
+        if port in used or udp_port in used:
             continue
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.bind((host, udp_port))
-        except OSError:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, socket.socket(
+                socket.AF_INET, socket.SOCK_DGRAM
+            ) as udp:
+                tcp.bind((host, port))
+                udp.bind((host, udp_port))
+        except OSError as error:
+            last_error = error
             continue
+        used.add(port)
         used.add(udp_port)
         return port
-    raise RuntimeError("Could not allocate a free LAN TCP port with UDP offset.")
+    raise RuntimeError(f"Could not allocate a free LAN TCP port with UDP offset on {host}: {last_error}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,6 +122,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
     if not str(args.lan_bind_addr).strip():
         raise ValueError("--lan-bind-addr or X_LOCAL_IP is required.")
+    if len(args.api_key.encode("utf-8")) < 32:
+        raise ValueError("--api-key must contain at least 32 bytes of secret material.")
     if args.duration_seconds <= 0:
         raise ValueError("--duration-seconds must be greater than zero.")
     if args.sample_interval_seconds <= 0:
@@ -279,8 +286,19 @@ def wait_for_transfer_state(
     )
 
 
+def find_hash_item(base_url: str, api_key: str, path: str, file_hash: str) -> dict[str, object] | None:
+    """Finds one file in this isolated fixture's transfer or share list."""
+
+    response = request_json(base_url, "GET", path, api_key)
+    items = response.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError(f"Rust REST {path} did not return an items list.")
+    return next((item for item in items if isinstance(item, dict) and item.get("hash") == file_hash), None)
+
+
 def verify_download_delivery(
-    final_transfer: dict[str, object],
+    final_transfer: dict[str, object] | None,
+    final_share: dict[str, object] | None,
     payload: dict[str, object],
     *,
     require_completion: bool,
@@ -290,13 +308,14 @@ def verify_download_delivery(
 
     expected_size = safe_int(payload.get("sizeBytes"))
     expected_sha256 = str(payload.get("sha256") or "")
-    completed_bytes = safe_int(final_transfer.get("completedBytes"))
-    delivered_path_value = final_transfer.get("deliveredPath")
+    completed = final_transfer is None and final_share is not None and safe_int(final_share.get("sizeBytes")) == expected_size
+    completed_bytes = expected_size if completed else safe_int((final_transfer or {}).get("completedBytes"))
+    delivered_path_value = (final_share or {}).get("path")
     delivered_path = Path(str(delivered_path_value)) if delivered_path_value else None
     result: dict[str, object] = {
         "requireCompletion": require_completion,
         "requireDeliveredPath": require_delivered_path,
-        "state": final_transfer.get("state"),
+        "state": "shared" if completed else (final_transfer or {}).get("state"),
         "completedBytes": completed_bytes,
         "expectedSizeBytes": expected_size,
         "deliveredPathPresent": delivered_path is not None,
@@ -304,15 +323,17 @@ def verify_download_delivery(
         "ok": True,
     }
     if require_completion:
-        complete = final_transfer.get("state") == "completed" and completed_bytes == expected_size
-        result["completed"] = complete
-        if not complete:
+        result["completed"] = completed
+        if not completed:
             result["ok"] = False
             raise RuntimeError(
-                f"Rust local download did not complete: state={final_transfer.get('state')!r} "
+                f"Rust local download did not enter the verified library: state={(final_transfer or {}).get('state')!r} "
                 f"completedBytes={completed_bytes} expected={expected_size}"
             )
     if require_delivered_path:
+        if not completed:
+            result["ok"] = False
+            raise RuntimeError("Rust local download still has a transfer row or no verified library share.")
         if delivered_path is None:
             result["ok"] = False
             raise RuntimeError("Rust local download completed without deliveredPath.")
@@ -343,10 +364,10 @@ def run(argv: list[str] | None = None) -> int:
     server_port = free_lan_port_with_udp_offset(lan, used_ports)
     server_admin_port = free_lan_port(lan, used_ports)
     seeder_rest_port = free_lan_port(lan, used_ports)
-    seeder_ed2k_port = free_lan_port(lan, used_ports)
+    seeder_ed2k_port = free_lan_port_with_udp_offset(lan, used_ports)
     seeder_kad_port = free_lan_port(lan, used_ports)
     leecher_rest_port = free_lan_port(lan, used_ports)
-    leecher_ed2k_port = free_lan_port(lan, used_ports)
+    leecher_ed2k_port = free_lan_port_with_udp_offset(lan, used_ports)
     leecher_kad_port = free_lan_port(lan, used_ports)
     report: dict[str, Any] = {
         "schema": "emulebb-rust.local-upload-soak.v1",
@@ -378,6 +399,9 @@ def run(argv: list[str] | None = None) -> int:
     leecher_log = None
     seeder_metrics = None
     leecher_metrics = None
+    seeder_base = ""
+    leecher_base = ""
+    file_hash = ""
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -392,7 +416,7 @@ def run(argv: list[str] | None = None) -> int:
             token=args.api_key,
             admin_address=lan,
             ed2k_address=lan,
-            repo_override=resolve_ed2k_server_repo_override(workspace_root, args.ed2k_server_repo),
+            repo_override=resolve_ed2k_server_repo_override(args.ed2k_server_repo),
             exe_override=str(args.ed2k_server_exe) if args.ed2k_server_exe else None,
         )
         server_process = ed2k_server.process
@@ -409,9 +433,8 @@ def run(argv: list[str] | None = None) -> int:
             p2p_bind_ip=lan,
             ed2k_port=seeder_ed2k_port,
             kad_port=seeder_kad_port,
-            server_endpoint=f"{lan}:{server_port}",
-            kad_bootstrap_nodes=[f"{lan}:{leecher_kad_port}"],
-            kad_bootstrap_min_routing_contacts=1,
+            server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
+            local_only_discovery=True,
         )
         rust_client.write_rust_profile(
             leecher_profile,
@@ -423,9 +446,8 @@ def run(argv: list[str] | None = None) -> int:
             p2p_bind_ip=lan,
             ed2k_port=leecher_ed2k_port,
             kad_port=leecher_kad_port,
-            server_endpoint=f"{lan}:{server_port}",
-            kad_bootstrap_nodes=[f"{lan}:{seeder_kad_port}"],
-            kad_bootstrap_min_routing_contacts=1,
+            server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
+            local_only_discovery=True,
         )
         seeder_diag = artifacts_dir / "diagnostics" / "seeder"
         leecher_diag = artifacts_dir / "diagnostics" / "leecher"
@@ -461,21 +483,27 @@ def run(argv: list[str] | None = None) -> int:
         shared_files = share.get("sharedFiles") if isinstance(share.get("sharedFiles"), dict) else {}
         file_row = shared_files.get("matched") if isinstance(shared_files.get("matched"), dict) else share
         file_hash = str(file_row["hash"]).lower()
-        ed2k_harness.wait_for_server_file_endpoint(
-            ed2k_server.admin_base_url,
-            args.api_key,
-            file_hash,
-            lan,
-            seeder_ed2k_port,
-            60.0,
-            "local Rust upload soak file published",
+        server_control = ed2k_harness.ed2k_server_control(ed2k_server.admin_base_url, args.api_key)
+        report["checks"]["serverOffer"] = wait_for(
+            lambda: next(
+                (client for client in server_control.list_clients() if int(client.get("shared_files") or 0) >= 1),
+                None,
+            ),
+            timeout_seconds=30.0,
+            interval_seconds=1.0,
+            description="local Rust seeder offer indexed by server",
         )
         transfer = request_json(
             leecher_base,
             "POST",
             "/api/v1/transfers",
             args.api_key,
-            {"link": str(file_row["ed2kLink"]), "paused": bool(args.start_paused_resume)},
+            {
+                "link": ed2k_link_with_source(
+                    str(file_row["ed2kLink"]), lan, seeder_ed2k_port
+                ),
+                "paused": bool(args.start_paused_resume),
+            },
         )
         report["transferCreate"] = transfer
         if args.start_paused_resume:
@@ -521,23 +549,29 @@ def run(argv: list[str] | None = None) -> int:
                 if leecher_process.poll() is not None:
                     raise RuntimeError(f"leecher exited early with code {leecher_process.returncode}")
                 seeder_status = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
-                leecher_transfer = request_json(leecher_base, "GET", f"/api/v1/transfers/{file_hash}", args.api_key)
+                leecher_transfer = find_hash_item(leecher_base, args.api_key, "/api/v1/transfers", file_hash)
+                leecher_share = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
                 seeder_uploads = request_json(seeder_base, "GET", "/api/v1/uploads", args.api_key)
                 seeder_stats = seeder_status.get("stats", {}) if isinstance(seeder_status.get("stats"), dict) else {}
                 upload_items = seeder_uploads.get("items") if isinstance(seeder_uploads.get("items"), list) else []
                 max_active_uploads = max(max_active_uploads, safe_int(seeder_stats.get("activeUploads")))
                 max_upload_speed_kibps = max(max_upload_speed_kibps, safe_float(seeder_stats.get("uploadSpeedKiBps")))
-                max_completed_bytes = max(max_completed_bytes, safe_int(leecher_transfer.get("completedBytes")))
+                max_completed_bytes = max(
+                    max_completed_bytes,
+                    safe_int((leecher_transfer or {}).get("completedBytes")),
+                    safe_int((leecher_share or {}).get("sizeBytes")) if leecher_transfer is None else 0,
+                )
                 upload_rows_observed += len(upload_items)
                 row = {
                     "elapsedSeconds": round(args.duration_seconds - max(0.0, deadline - time.monotonic()), 3),
                     "seederStats": seeder_stats,
                     "leecherTransfer": {
-                        "state": leecher_transfer.get("state"),
-                        "completedBytes": leecher_transfer.get("completedBytes"),
-                        "sizeBytes": leecher_transfer.get("sizeBytes"),
-                        "progress": leecher_transfer.get("progress"),
+                        "state": (leecher_transfer or {}).get("state"),
+                        "completedBytes": (leecher_transfer or {}).get("completedBytes"),
+                        "sizeBytes": (leecher_transfer or {}).get("sizeBytes"),
+                        "progress": (leecher_transfer or {}).get("progress"),
                     },
+                    "leecherSharedFile": leecher_share,
                     "seederUploads": seeder_uploads,
                     "processMetrics": {
                         "seeder": sample_process_metrics(seeder_metrics, args.sample_interval_seconds),
@@ -547,7 +581,7 @@ def run(argv: list[str] | None = None) -> int:
                 samples.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
                 samples.flush()
                 sample_count += 1
-                if leecher_transfer.get("state") == "completed":
+                if leecher_share is not None and leecher_transfer is None:
                     report["completedBeforeDuration"] = True
                     break
                 time.sleep(args.sample_interval_seconds)
@@ -561,9 +595,11 @@ def run(argv: list[str] | None = None) -> int:
             raise RuntimeError("Rust local upload soak did not observe upload progress.")
         report["sampleCount"] = sample_count
         report["finalSeederStatus"] = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
-        report["finalLeecherTransfer"] = request_json(leecher_base, "GET", f"/api/v1/transfers/{file_hash}", args.api_key)
+        report["finalLeecherTransfer"] = find_hash_item(leecher_base, args.api_key, "/api/v1/transfers", file_hash)
+        report["finalLeecherSharedFile"] = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
         report["checks"]["downloadDelivery"] = verify_download_delivery(
             report["finalLeecherTransfer"],
+            report["finalLeecherSharedFile"],
             payload,
             require_completion=bool(args.require_completion),
             require_delivered_path=bool(args.require_delivered_path),
@@ -573,6 +609,17 @@ def run(argv: list[str] | None = None) -> int:
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+        if seeder_base and seeder_process is not None and seeder_process.poll() is None:
+            try:
+                report["failureSeederDiagnostics"] = request_json(seeder_base, "GET", "/api/v1/diagnostics", args.api_key)
+            except Exception as diagnostics_error:
+                report["failureSeederDiagnosticsError"] = str(diagnostics_error)
+        if server_process is not None and server_process.poll() is None and file_hash:
+            try:
+                control = ed2k_harness.ed2k_server_control(ed2k_server.admin_base_url, args.api_key)
+                report["failureServerClients"] = control.list_clients()
+            except Exception as server_error:
+                report["failureServerEvidenceError"] = str(server_error)
         return 1
     finally:
         report["processMetrics"] = {
