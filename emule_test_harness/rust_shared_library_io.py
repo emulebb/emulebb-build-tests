@@ -939,14 +939,10 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
                        OR verified_local_content.part_size <= 0
                        OR known_files.size_bytes != active_sources.file_size
                        OR length(active_sources.verified_fingerprint) = 0
-                       OR NOT EXISTS (
-                           SELECT 1 FROM verified_local_md4_hashes
-                           WHERE known_file_id = known_files.id
-                       )
-                       OR NOT EXISTS (
-                           SELECT 1 FROM verified_local_aich_hashes
-                           WHERE known_file_id = known_files.id
-                       )
+                       OR (SELECT COUNT(*) FROM verified_local_md4_hashes
+                           WHERE known_file_id = known_files.id) != verified_local_content.part_count
+                       OR (SELECT COUNT(*) FROM verified_local_aich_hashes
+                           WHERE known_file_id = known_files.id) != verified_local_content.part_count
                 """,
                 "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_ms IS NULL",
                 "scanFailures": "SELECT COUNT(*) FROM shared_file_scan_failures",
@@ -2289,14 +2285,10 @@ def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
             SELECT lower(hex(known_files.ed2k_hash)),
                    verified_local_content.display_name, known_files.size_bytes,
                    (verified_local_content.known_file_id IS NOT NULL),
-                   EXISTS (
-                       SELECT 1 FROM verified_local_md4_hashes
-                       WHERE known_file_id = known_files.id
-                   ),
-                   EXISTS (
-                       SELECT 1 FROM verified_local_aich_hashes
-                       WHERE known_file_id = known_files.id
-                   ),
+                   (SELECT COUNT(*) FROM verified_local_md4_hashes
+                    WHERE known_file_id = known_files.id) = verified_local_content.part_count,
+                   (SELECT COUNT(*) FROM verified_local_aich_hashes
+                    WHERE known_file_id = known_files.id) = verified_local_content.part_count,
                    length(verified_local_content.aich_root),
                    local_paths.display_path,
                    length(active_sources.verified_fingerprint)

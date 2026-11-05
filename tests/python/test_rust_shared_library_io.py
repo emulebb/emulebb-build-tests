@@ -700,7 +700,8 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
             );
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
             CREATE TABLE verified_local_content (
-                known_file_id INTEGER, display_name TEXT, aich_root BLOB
+                known_file_id INTEGER, display_name TEXT,
+                part_count INTEGER, aich_root BLOB
             );
             CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
             CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
@@ -727,10 +728,8 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
         )
         connection.execute("INSERT INTO local_paths VALUES (1, ?)", (str(tmp_path / "watch-probe-0000.bin"),))
         connection.execute("INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "watch-probe-0001.bin"),))
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 'watch-probe-0000.bin', ?)", (bytes.fromhex("22" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 'watch-probe-0001.bin', ?)", (bytes.fromhex("44" * 20),))
-        connection.executemany("INSERT INTO verified_local_md4_hashes VALUES (?)", [(1,), (2,)])
-        connection.executemany("INSERT INTO verified_local_aich_hashes VALUES (?)", [(1,), (2,)])
+        connection.execute("INSERT INTO verified_local_content VALUES (1, 'watch-probe-0000.bin', 0, ?)", (bytes.fromhex("22" * 20),))
+        connection.execute("INSERT INTO verified_local_content VALUES (2, 'watch-probe-0001.bin', 0, ?)", (bytes.fromhex("44" * 20),))
         connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
         connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 16, zeroblob(47))")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
@@ -757,7 +756,8 @@ def test_storage_snapshot_counts_active_shared_sources_not_transfers(
             );
             CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
             CREATE TABLE verified_local_content (
-                known_file_id INTEGER, part_size INTEGER, aich_root BLOB
+                known_file_id INTEGER, part_size INTEGER,
+                part_count INTEGER, aich_root BLOB
             );
             CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
             CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
@@ -782,10 +782,8 @@ def test_storage_snapshot_counts_active_shared_sources_not_transfers(
         connection.execute(
             "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
         )
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 16, ?)", (bytes.fromhex("11" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 16, ?)", (bytes.fromhex("22" * 20),))
-        connection.executemany("INSERT INTO verified_local_md4_hashes VALUES (?)", [(1,), (2,)])
-        connection.executemany("INSERT INTO verified_local_aich_hashes VALUES (?)", [(1,), (2,)])
+        connection.execute("INSERT INTO verified_local_content VALUES (1, 16, 0, ?)", (bytes.fromhex("11" * 20),))
+        connection.execute("INSERT INTO verified_local_content VALUES (2, 16, 0, ?)", (bytes.fromhex("22" * 20),))
         connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
         connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 32, zeroblob(47))")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
