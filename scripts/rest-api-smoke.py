@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_wire_inputs, rust_openapi_responses, rust_rest_contract, vpn_guard_live
+from emule_test_harness.paths import get_required_emule_workspace_root
 from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     EMULE_SECURITY_NODES_DAT_URL,
@@ -331,17 +332,18 @@ REST_STRESS_LONG_UNICODE_PATH = (
 )
 REST_CONTRACT_SHARED_ROOT_ENV = "EMULEBB_REST_CONTRACT_SHARED_ROOT"
 REST_CONTRACT_IGNORE_RULE_KEY = "noise.desktop-ini"
+WORKSPACE_ROOT = get_required_emule_workspace_root()
 OPENAPI_CONTRACT_PATH = Path(
     os.environ.get(
         "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
-        str(REPO_ROOT.parent / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
+        str(WORKSPACE_ROOT / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
     )
 ).resolve()
 NATIVE_CONTRACT_SOURCE_ROOT = Path(
     os.environ.get(
         "EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR",
         str(
-            REPO_ROOT.parent.parent
+            WORKSPACE_ROOT
             / "workspaces"
             / "workspace"
             / "app"
