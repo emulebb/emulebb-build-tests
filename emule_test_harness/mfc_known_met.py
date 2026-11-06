@@ -206,7 +206,7 @@ def build_imported_known_rows(
         aich_hashset = _effective_aich_hashset(entry, known2_aich, entry.size_bytes)
         if entry.aich_root is not None and not entry.aich_hashset and aich_hashset:
             known2_aich_used += 1
-        if entry.aich_root is not None and len(aich_hashset) != expected_aich_hash_count(entry.size_bytes):
+        if aich_hashset and len(aich_hashset) != expected_aich_hash_count(entry.size_bytes):
             reason_counts["aich_count_mismatch"] += 1
             continue
         if (

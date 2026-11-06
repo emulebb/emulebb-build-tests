@@ -103,7 +103,7 @@ def load_export_job(path: Path) -> ExportJob:
     )
 
 
-def build_export_manifest(job: ExportJob) -> dict[str, Any]:
+def build_export_manifest(job: ExportJob, *, hashes_only: bool = False) -> dict[str, Any]:
     """Build one validated portable import manifest without writing it."""
 
     config_dir = resolve_emule_config_dir(job.source_profile)
@@ -127,8 +127,8 @@ def build_export_manifest(job: ExportJob) -> dict[str, Any]:
     if not known_rows:
         raise ValueError("known.met did not contain any reusable hash records")
 
-    discovered_roots = discover_shared_roots(config_dir, detected_flavor)
-    if not discovered_roots:
+    discovered_roots = [] if hashes_only else discover_shared_roots(config_dir, detected_flavor)
+    if not discovered_roots and not hashes_only:
         raise ValueError("profile did not contain any shared-directory roots")
     mapped_roots = [
         {
@@ -266,10 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("check", "export"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--config", type=Path, required=True)
+        subparser.add_argument("--hashes-only", action="store_true", help="Export reusable hashes without sharing roots")
     args = parser.parse_args(argv)
 
     job = load_export_job(args.config)
-    manifest = build_export_manifest(job)
+    manifest = build_export_manifest(job, hashes_only=args.hashes_only)
     if args.command == "export":
         export_manifest(job, manifest)
     print(
