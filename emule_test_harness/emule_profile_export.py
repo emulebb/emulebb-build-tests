@@ -5,10 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import ntpath
-import os
 import posixpath
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +19,6 @@ from . import mfc_known_met, mfc_profile_import
 from .ini import parse_ini_values, read_ini_text
 
 JOB_SCHEMA_VERSION = 1
-MANIFEST_SCHEMA = "emulebb-rust.profile-import.v1"
 SUPPORTED_FLAVORS = {"auto", "stock", "mfc"}
 SUPPORTED_TARGET_PLATFORMS = {"windows", "unix", "linux", "macos"}
 
@@ -101,61 +98,6 @@ def load_export_job(path: Path) -> ExportJob:
         output_manifest=output_manifest,
         path_mappings=tuple(mappings),
     )
-
-
-def build_export_manifest(job: ExportJob, *, hashes_only: bool = False) -> dict[str, Any]:
-    """Build one validated portable import manifest without writing it."""
-
-    config_dir = resolve_emule_config_dir(job.source_profile)
-    detected_flavor = detect_profile_flavor(config_dir)
-    if job.flavor != "auto" and job.flavor != detected_flavor:
-        raise ValueError(
-            f"source.flavor is {job.flavor!r}, but profile files identify {detected_flavor!r}"
-        )
-
-    known_met = config_dir / "known.met"
-    if not known_met.is_file():
-        raise ValueError(f"eMule profile is missing known.met under {config_dir}")
-    known2_met = next(
-        (candidate for candidate in (config_dir / "known2_64.met", config_dir / "known2.met") if candidate.is_file()),
-        None,
-    )
-    known_rows, known_summary = mfc_known_met.build_imported_known_rows(
-        known_met=known_met,
-        known2_met=known2_met,
-    )
-    if not known_rows:
-        raise ValueError("known.met did not contain any reusable hash records")
-
-    discovered_roots = [] if hashes_only else discover_shared_roots(config_dir, detected_flavor)
-    if not discovered_roots and not hashes_only:
-        raise ValueError("profile did not contain any shared-directory roots")
-    mapped_roots = [
-        {
-            "path": map_shared_root(root.path, job),
-            "origin": root.origin,
-        }
-        for root in discovered_roots
-    ]
-    mapped_roots = _dedupe_mapped_roots(mapped_roots, job.target_platform)
-
-    return {
-        "schema": MANIFEST_SCHEMA,
-        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
-        "targetPlatform": job.target_platform,
-        "source": {
-            "flavor": detected_flavor,
-            "knownMet": known_met.name,
-            "known2Met": known2_met.name if known2_met is not None else None,
-        },
-        "sharedRoots": mapped_roots,
-        "knownFiles": [_manifest_known_file(row) for row in known_rows],
-        "summary": {
-            **known_summary,
-            "discoveredSharedRoots": len(discovered_roots),
-            "mappedSharedRoots": len(mapped_roots),
-        },
-    }
 
 
 def discover_shared_roots(config_dir: Path, flavor: str) -> list[DiscoveredRoot]:
@@ -249,48 +191,27 @@ def map_shared_root(source_root: str, job: ExportJob) -> str:
     raise ValueError(f"shared root requires a path mapping for {job.target_platform}: {source_root}")
 
 
-def export_manifest(job: ExportJob, manifest: dict[str, Any]) -> Path:
-    """Write a manifest atomically to the configured output path."""
-
-    output = job.output_manifest
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f"{output.name}.tmp")
-    temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, output)
-    return output
-
-
 def main(argv: list[str] | None = None) -> int:
+    """Check or publish the current portable SQLite exchange format."""
+    from .profile_exchange import write_exchange
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("check", "export"):
-        subparser = subparsers.add_parser(command)
-        subparser.add_argument("--config", type=Path, required=True)
-        subparser.add_argument("--hashes-only", action="store_true", help="Export reusable hashes without sharing roots")
-    args = parser.parse_args(argv)
-
-    job = load_export_job(args.config)
-    if args.command == "export":
-        from .profile_exchange import write_exchange
-        print(json.dumps(write_exchange(job, hashes_only=args.hashes_only), indent=2))
-        return 0
-    manifest = build_export_manifest(job, hashes_only=args.hashes_only)
-    if args.command == "export":
-        export_manifest(job, manifest)
-    print(
-        json.dumps(
-            {
-                "schema": manifest["schema"],
-                "targetPlatform": manifest["targetPlatform"],
-                "outputManifest": str(job.output_manifest),
-                "summary": manifest["summary"],
-                "sharedRoots": manifest["sharedRoots"],
-                "written": args.command == "export",
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    commands=parser.add_subparsers(dest="command",required=True)
+    for command in ("check","export"):
+        sub=commands.add_parser(command)
+        sub.add_argument("--config",type=Path,required=True)
+        sub.add_argument("--hashes-only",action="store_true")
+    args=parser.parse_args(argv)
+    job=load_export_job(args.config)
+    if args.command=="export":
+        result=write_exchange(job,hashes_only=args.hashes_only)
+    else:
+        import tempfile
+        from .paths import get_workspace_output_root
+        with tempfile.TemporaryDirectory(prefix="profile-check-",dir=get_workspace_output_root()) as directory:
+            result=write_exchange(replace(job,output_manifest=Path(directory)/"check.sqlite"),hashes_only=args.hashes_only)
+        result["written"]=False
+        result["outputManifest"]=str(job.output_manifest)
+    print(json.dumps(result,indent=2))
     return 0
 
 

@@ -91,10 +91,12 @@ def mount_argument(value: str) -> tuple[str, str]:
     return source, target
 
 
-def validate_reconciliation(report: dict) -> None:
+def validate_reconciliation(report: dict, *, require_complete_reuse: bool = False) -> None:
     """Fail if an offline pass reports hashing, payload reads, or active work."""
     if any(report[key] for key in ("hashedCount", "completedReadBytes", "activeHashCount", "running")):
         raise RuntimeError("offline reconciliation performed unexpected payload work")
+    if require_complete_reuse and report.get("plannedHashCount",0):
+        raise RuntimeError("complete reuse audit found files queued for hashing")
 
 
 def prepare_windows_mounts(wsl: list[str], job: emule_profile_export.ExportJob,
@@ -117,8 +119,9 @@ def prepare_windows_mounts(wsl: list[str], job: emule_profile_export.ExportJob,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--profile", required=True, help="Windows path, or WSL path with --image")
+    parser.add_argument("--create-fixture", type=Path, help="Create a fresh output-root stock profile from standard MD4 test vectors and exit")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--profile", help="Windows path, or WSL path with --image")
     parser.add_argument("--image", help="Use isolated network-none Docker containers in WSL")
     parser.add_argument("--wsl-distro", default="Ubuntu")
     parser.add_argument("--mount", action="append", type=mount_argument, default=[])
@@ -126,7 +129,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Temporarily mount missing mapped Windows volumes read-only")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--require-complete-reuse", action="store_true", help="Fail if reconciliation plans any payload hashing")
     args = parser.parse_args(argv)
+    if args.create_fixture:
+        print(json.dumps(create_import_fixture(args.create_fixture),indent=2))
+        return 0
+    if args.config is None or args.profile is None:
+        parser.error("--config and --profile are required for an import audit")
     started = time.monotonic()
     output = get_workspace_output_root()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -203,13 +212,13 @@ def main(argv: list[str] | None = None) -> int:
         report["import"] = run_json(prefix + ["import-emule-profile", import_path], args.timeout)
         report["hashValidation"] = validate_imported_hashes(profile, manifest_path)
         report["firstPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
-        validate_reconciliation(report["firstPass"])
+        validate_reconciliation(report["firstPass"],require_complete_reuse=args.require_complete_reuse)
         report["firstCounts"] = profile_counts(profile)
         report["hashOnlyReimport"] = run_json(
             prefix + ["import-emule-profile", "--hashes-only", hashes_path], args.timeout,
         )
         report["secondPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
-        validate_reconciliation(report["secondPass"])
+        validate_reconciliation(report["secondPass"],require_complete_reuse=args.require_complete_reuse)
         report["secondCounts"] = profile_counts(profile)
         if report["firstCounts"] != report["secondCounts"]:
             raise RuntimeError("durable hash counts changed on the repeated offline pass")
@@ -230,3 +239,52 @@ def main(argv: list[str] | None = None) -> int:
             report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             print(json.dumps({"report": str(report_path), **report}, indent=2))
     return 0
+
+
+def create_import_fixture(root: Path) -> dict:
+    """Create an isolated stock profile using RFC 1320 MD4 vectors, never operator data."""
+    import base64
+    import hashlib
+    import struct
+    from .ini import write_utf16_ini_text
+    from . import mfc_known_met as known
+    root=root.resolve()
+    if not root.is_relative_to(get_workspace_output_root().resolve()):
+        raise ValueError("synthetic import fixtures must remain under the workspace output root")
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("synthetic fixture target must be new or empty")
+    config=root/"stock"/"config"
+    config.mkdir(parents=True)
+    shared=root/"shared"
+    shared.mkdir()
+    vectors=[(b"a","bde52cb31de33e46245e05fbdbd6fb24"),(b"abc","a448017aaf21d8525fc10ae87aa6729d"),(b"message digest","d9130a8164549fe818874806e1c7014b"),(b"a","bde52cb31de33e46245e05fbdbd6fb24")]
+    records=[]
+    recovery=bytearray(b"\x02")
+    timestamp=1_700_000_000
+    for index,(payload,md4) in enumerate(vectors):
+        name=f"Sample-{index}-caf\u00e9-\u6f22.bin" if index==3 else f"Sample-{index}.bin"
+        path=shared/name
+        path.write_bytes(payload)
+        os.utime(path,(timestamp,timestamp))
+        master=hashlib.sha1(payload).digest()
+        def string_tag(identifier,value):
+            raw=value.encode("utf-8")
+            if not value.isascii():
+                raw=b"\xef\xbb\xbf"+raw
+            return bytes([known.TAGTYPE_STRING])+struct.pack("<H",1)+bytes([identifier])+struct.pack("<H",len(raw))+raw
+        tags=[string_tag(known.FT_FILENAME,name),bytes([known.TAGTYPE_UINT64])+struct.pack("<H",1)+bytes([known.FT_FILESIZE])+struct.pack("<Q",len(payload)),string_tag(known.FT_AICH_HASH,base64.b32encode(master).decode().rstrip("="))]
+        records.append(struct.pack("<I",timestamp)+bytes.fromhex(md4)+struct.pack("<HI",0,len(tags))+b"".join(tags))
+        recovery+=master+struct.pack("<I",1)+master
+    (config/"known.met").write_bytes(bytes([known.MET_HEADER_I64TAGS])+struct.pack("<I",len(records))+b"".join(records))
+    (config/"known2_64.met").write_bytes(recovery)
+    write_utf16_ini_text(config/"preferences.ini",f"IncomingDir={shared}\r\n")
+    write_utf16_ini_text(config/"shareddir.dat",f"{shared}\r\n")
+    result={"fixture":str(root),"shared":str(shared),"files":len(vectors)}
+    for platform in ("windows","linux"):
+        job=root/f"{platform}.toml"
+        text=f"schema_version=1\n[source]\nprofile='{(root/'stock').as_posix()}'\nflavor='stock'\n[target]\nplatform='{platform}'\n[output]\nmanifest='{(root/(platform+'.sqlite')).as_posix()}'\n"
+        if platform=="linux":
+            text+=f"[[path_mappings]]\nsource='{shared.as_posix()}'\ntarget='/data/sample'\n"
+        job.write_text(text,encoding="utf-8",newline="\n")
+        result[platform+"Config"]=str(job)
+    return result
