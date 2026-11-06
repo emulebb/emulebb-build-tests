@@ -64,13 +64,16 @@ def test_native_profile_mount_cleans_up_after_seed_copy_failure(
 
     monkeypatch.setattr(rust_upload_soak.subprocess, "run", run)
     with pytest.raises(rust_upload_soak.subprocess.CalledProcessError):
-        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, 128)
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, "/mnt/c/seed", 128)
     native = rust_upload_soak.wsl_metadata_path("/mnt/proof", profile)
     assert commands[-1] == ["wsl.exe", "--user", "root", "--", "umount", native]
     assert "size=128m,uid=1000,gid=1000" in commands[0]
     commands.clear()
     with pytest.raises(ValueError):
-        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", tmp_path / "outside", 128)
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", tmp_path / "outside", "/mnt/c/seed", 128)
+    assert commands == []
+    with pytest.raises(ValueError, match="separate pre-mount"):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, native, 128)
     assert commands == []
 
 

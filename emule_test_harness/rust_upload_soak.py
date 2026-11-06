@@ -144,7 +144,7 @@ def windows_output_path(mountpoint: str, linux_path: str) -> Path:
     return path
 
 
-def mount_native_wsl_profile(mountpoint: str, profile: Path, size_mib: int) -> str:
+def mount_native_wsl_profile(mountpoint: str, profile: Path, seed: str, size_mib: int) -> str:
     """Overlay an owned test profile with a bounded native Linux filesystem.
 
     DrvFs does not implement RENAME_NOREPLACE. Linux delivery and retirement
@@ -153,7 +153,8 @@ def mount_native_wsl_profile(mountpoint: str, profile: Path, size_mib: int) -> s
     """
 
     native = wsl_metadata_path(mountpoint, profile)
-    seed = rust_ed2k.wsl_path(profile)
+    if not seed.startswith("/") or PurePosixPath(seed) == PurePosixPath(native):
+        raise ValueError("Native profile seed must use its separate pre-mount drive view")
     uid = subprocess.check_output(["wsl.exe", "--", "id", "-u"], text=True).strip()
     gid = subprocess.check_output(["wsl.exe", "--", "id", "-g"], text=True).strip()
     subprocess.run([
@@ -658,6 +659,10 @@ def run(argv: list[str] | None = None) -> int:
         report["network"]["seederAddress"] = seeder_addr
         seeder_profile = artifacts_dir / "seeder-profile"
         leecher_profile = artifacts_dir / "leecher-profile"
+        profile_seeds = {
+            profile: rust_ed2k.wsl_path(profile)
+            for profile in (seeder_profile, leecher_profile)
+        } if kad_wsl else {}
         rust_client.write_rust_profile(
             seeder_profile,
             rust_repo=rust_repo,
@@ -716,7 +721,7 @@ def run(argv: list[str] | None = None) -> int:
             # tmpfs capacity; pages are allocated only for the small fixture.
             native_capacity_mib = max(8192, args.payload_mib * 4 + 6144)
             for profile in (seeder_profile, leecher_profile):
-                native = mount_native_wsl_profile(wsl_mountpoint, profile, native_capacity_mib)
+                native = mount_native_wsl_profile(wsl_mountpoint, profile, profile_seeds[profile], native_capacity_mib)
                 native_profiles.append((native, artifacts_dir / f"{profile.name}-snapshot.tar"))
             report["profileStorage"] = "bounded-native-linux-tmpfs"
             report["profileStorageCapacityMiB"] = native_capacity_mib
