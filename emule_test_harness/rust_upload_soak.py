@@ -13,11 +13,11 @@ import time
 import traceback
 from urllib.parse import urlsplit
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust_client, rust_ed2k, rust_metadata
-from .kad_firewall_helper import DockerKadFirewallWitness, start_docker_witness
+from .kad_firewall_helper import KadFirewallHelper
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     ed2k_link_with_source,
@@ -129,6 +129,19 @@ def wsl_metadata_path(mountpoint: str, path: Path) -> str:
     if not absolute.drive or not absolute.is_relative_to(get_workspace_output_root().resolve()):
         raise ValueError(f"WSL profile path must be below the workspace output root: {absolute}")
     return mountpoint + "/" + "/".join(absolute.parts[1:])
+
+
+def windows_output_path(mountpoint: str, linux_path: str) -> Path:
+    """Resolve a delivered file through our owned DrvFs mount and output root."""
+
+    relative = PurePosixPath(linux_path).relative_to(PurePosixPath(mountpoint))
+    if any(part == ".." for part in relative.parts):
+        raise ValueError("WSL delivered path escapes its metadata mount")
+    output_root = get_workspace_output_root().resolve()
+    path = Path(output_root.anchor).joinpath(*relative.parts).resolve()
+    if not path.is_relative_to(output_root):
+        raise ValueError("WSL delivered path is outside the workspace output root")
+    return path
 
 
 def mount_wsl_output_with_metadata(run_id: str, output_path: Path) -> str:
@@ -538,6 +551,10 @@ def run(argv: list[str] | None = None) -> int:
             ).strip(),
         },
         "discoveryMode": args.discovery_mode,
+        "clientPlatforms": {
+            "seeder": "linux" if args.discovery_mode == "kad-wsl" else "windows",
+            "leecher": "linux" if args.discovery_mode == "kad-wsl" else "windows",
+        },
         "network": {
             "lanBindAddr": lan,
             "serverPort": server_port,
@@ -563,7 +580,7 @@ def run(argv: list[str] | None = None) -> int:
     leecher_base = ""
     file_hash = ""
     wsl_mountpoint: str | None = None
-    kad_helper: DockerKadFirewallWitness | None = None
+    kad_helper: KadFirewallHelper | None = None
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -601,7 +618,7 @@ def run(argv: list[str] | None = None) -> int:
             server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
             local_only_discovery=True,
             network_kademlia=True if kad_wsl else None,
-            local_kad_seed=kad_nodes.BootstrapContact(lan, leecher_kad_port, leecher_ed2k_port) if kad_wsl else None,
+            local_kad_seed=kad_nodes.BootstrapContact(seeder_addr, leecher_kad_port, leecher_ed2k_port) if kad_wsl else None,
             kad_bootstrap_min_routing_contacts=1 if kad_wsl else 10,
             obfuscation_enabled=not kad_wsl,
         )
@@ -624,7 +641,7 @@ def run(argv: list[str] | None = None) -> int:
             rest_addr="127.0.0.1",
             rest_port=leecher_rest_port,
             api_key=args.api_key,
-            p2p_bind_ip=lan,
+            p2p_bind_ip=seeder_addr if kad_wsl else lan,
             ed2k_port=leecher_ed2k_port,
             kad_port=leecher_kad_port,
             server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
@@ -634,6 +651,14 @@ def run(argv: list[str] | None = None) -> int:
             kad_bootstrap_min_routing_contacts=1 if kad_wsl else 10,
             obfuscation_enabled=not kad_wsl,
         )
+        if kad_wsl:
+            leecher_settings = wsl_metadata_path(wsl_mountpoint, leecher_profile / rust_client.RUST_PROFILE_SETTINGS_FILE)
+            subprocess.run(["wsl.exe", "--", "chmod", "600", leecher_settings], check=True)
+            rust_metadata.replace_settings_section(
+                leecher_profile / rust_metadata.RUST_PROFILE_METADATA_FILE,
+                "daemon",
+                {"incomingDir": wsl_metadata_path(wsl_mountpoint, leecher_profile / "incoming"), "p2pBindIp": seeder_addr},
+            )
         seeder_diag = artifacts_dir / "diagnostics" / "seeder"
         leecher_diag = artifacts_dir / "diagnostics" / "leecher"
         if kad_wsl:
@@ -651,13 +676,21 @@ def run(argv: list[str] | None = None) -> int:
                 log_path=artifacts_dir / "logs" / "seeder.out",
                 diag_dir=seeder_diag,
             )
-        leecher_process, leecher_log = start_rust(
-            exe=args.rust_exe,
-            profile_dir=leecher_profile,
-            log_path=artifacts_dir / "logs" / "leecher.out",
-            diag_dir=leecher_diag,
-            rust_log=KAD_FIREWALL_LOG_FILTER if kad_wsl else None,
-        )
+        if kad_wsl:
+            leecher_process = rust_ed2k.start_wsl_managed_executable(
+                args.linux_rust_exe,
+                ["--profile", wsl_metadata_path(wsl_mountpoint, leecher_profile)],
+                artifacts_dir / "logs" / "leecher.out",
+                artifacts_dir / "logs" / "leecher.pid",
+                rust_log=KAD_FIREWALL_LOG_FILTER,
+            )
+        else:
+            leecher_process, leecher_log = start_rust(
+                exe=args.rust_exe,
+                profile_dir=leecher_profile,
+                log_path=artifacts_dir / "logs" / "leecher.out",
+                diag_dir=leecher_diag,
+            )
         seeder_base = f"http://127.0.0.1:{seeder_rest_port}"
         leecher_base = f"http://127.0.0.1:{leecher_rest_port}"
         wait_for_rest_ready(seeder_base, seeder_process, artifacts_dir / "logs" / "seeder.out", args.api_key, 60.0)
@@ -673,10 +706,8 @@ def run(argv: list[str] | None = None) -> int:
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
         if kad_wsl:
-            kad_helper = start_docker_witness(
-                artifacts_dir / "kad-witness", {seeder_addr},
-                distribution=os.environ.get(rust_ed2k.RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None,
-            )
+            kad_helper = KadFirewallHelper(lan, {seeder_addr})
+            kad_helper.start()
             report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
                 seeder_base, leecher_base, args.api_key, seeder_addr,
                 witness_nodes_url=kad_helper.nodes_url,
@@ -762,7 +793,8 @@ def run(argv: list[str] | None = None) -> int:
             }
         if not kad_wsl:
             seeder_metrics = open_process_metrics(seeder_process, "seeder", artifacts_dir / "analysis", args.sample_interval_seconds)
-        leecher_metrics = open_process_metrics(leecher_process, "leecher", artifacts_dir / "analysis", args.sample_interval_seconds)
+        if not kad_wsl:
+            leecher_metrics = open_process_metrics(leecher_process, "leecher", artifacts_dir / "analysis", args.sample_interval_seconds)
         deadline = time.monotonic() + args.duration_seconds
         sample_count = 0
         max_active_uploads = 0
@@ -828,9 +860,12 @@ def run(argv: list[str] | None = None) -> int:
         report["finalSeederStatus"] = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
         report["finalLeecherTransfer"] = find_hash_item(leecher_base, args.api_key, "/api/v1/transfers", file_hash)
         report["finalLeecherSharedFile"] = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
+        delivery_share = report["finalLeecherSharedFile"]
+        if kad_wsl and delivery_share is not None:
+            delivery_share = {**delivery_share, "path": str(windows_output_path(wsl_mountpoint, str(delivery_share["path"])))}
         report["checks"]["downloadDelivery"] = verify_download_delivery(
             report["finalLeecherTransfer"],
-            report["finalLeecherSharedFile"],
+            delivery_share,
             payload,
             require_completion=bool(args.require_completion),
             require_delivered_path=bool(args.require_delivered_path),
@@ -866,7 +901,10 @@ def run(argv: list[str] | None = None) -> int:
             "seeder": close_process_metrics(seeder_metrics),
             "leecher": close_process_metrics(leecher_metrics),
         }
-        rust_client.stop_process_tree(leecher_process)
+        if isinstance(leecher_process, rust_ed2k.RustWslProcess):
+            rust_ed2k.stop_process(leecher_process)
+        else:
+            rust_client.stop_process_tree(leecher_process)
         if isinstance(seeder_process, rust_ed2k.RustWslProcess):
             rust_ed2k.stop_process(seeder_process)
         else:

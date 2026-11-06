@@ -32,6 +32,21 @@ def test_utc_run_id_uses_canonical_format() -> None:
     assert rust_upload_soak.utc_run_id(now) == "20260715T101112Z"
 
 
+def test_wsl_delivered_path_mapping_stays_in_owned_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _root, output = configure_workspace_env(monkeypatch, tmp_path)
+    delivered = output / "leecher" / "incoming" / "file.bin"
+    mapped = rust_upload_soak.wsl_metadata_path("/mnt/proof", delivered)
+    assert rust_upload_soak.windows_output_path("/mnt/proof", mapped) == delivered.resolve()
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/foreign/file.bin")
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/proof/../foreign/file.bin")
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/proof/Windows/foreign.bin")
+
+
 def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
     rust_exe = stage_dummy_rust_tools(output_root)
