@@ -62,6 +62,9 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
 
     def request(base: str, method: str, path: str, _key: str, _body=None):
         calls.append((base, method, path))
+        if path == "/api/v1/kad/operations/import-nodes-url":
+            assert _body == {"url": "http://witness/nodes.dat"}
+            return {"imported": True}
         if path.startswith("/api/v1/kad/nodes"):
             return {"items": [{
                 "ip": "192.0.2.20", "kadVersion": 9, "udpPort": 4672,
@@ -73,7 +76,8 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(rust_upload_soak, "request_json", request)
     result = rust_upload_soak.recheck_kad_after_bootstrap(
-        "http://seed", "http://leech", "local-key", "192.0.2.10"
+        "http://seed", "http://leech", "local-key", "192.0.2.10",
+        witness_nodes_url="http://witness/nodes.dat",
     )
 
     assert result == {
@@ -87,11 +91,13 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
             "udpFirewalled": False,
         }],
         "seederEligibleFirewallHelpers": 1,
+        "witnessImported": True,
         "recheckQueued": True,
     }
     assert calls == [
         ("http://seed", "GET", "/api/v1/kad"),
         ("http://leech", "GET", "/api/v1/kad"),
+        ("http://seed", "POST", "/api/v1/kad/operations/import-nodes-url"),
         ("http://seed", "GET", "/api/v1/kad/nodes?limit=100"),
         ("http://seed", "POST", "/api/v1/kad/operations/recheck-firewall"),
     ]

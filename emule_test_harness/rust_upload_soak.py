@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust_client, rust_ed2k, rust_metadata
+from .kad_firewall_helper import KadFirewallHelper
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     ed2k_link_with_source,
@@ -203,7 +204,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def recheck_kad_after_bootstrap(
-    seeder_base: str, leecher_base: str, api_key: str, seeder_ip: str
+    seeder_base: str, leecher_base: str, api_key: str, seeder_ip: str,
+    *, witness_nodes_url: str | None = None,
 ) -> dict[str, object]:
     """Queue a real UDP reachability check after both local Kad peers connect."""
 
@@ -220,6 +222,13 @@ def recheck_kad_after_bootstrap(
             description=f"{role} Kad connected",
         )
         connected[role] = safe_int(status.get("contactCount"))
+    if witness_nodes_url is not None:
+        imported = request_json(
+            seeder_base, "POST", "/api/v1/kad/operations/import-nodes-url", api_key,
+            {"url": witness_nodes_url},
+        )
+        if imported.get("imported") is not True:
+            raise RuntimeError("Kad firewall witness contact was not imported")
     nodes = request_json(seeder_base, "GET", "/api/v1/kad/nodes?limit=100", api_key)
     rows = nodes.get("items") if isinstance(nodes.get("items"), list) else []
     contact_evidence = [
@@ -256,6 +265,7 @@ def recheck_kad_after_bootstrap(
         "leecherConnectedContacts": connected["leecher"],
         "seederFirewallContacts": contact_evidence,
         "seederEligibleFirewallHelpers": eligible_helpers,
+        "witnessImported": witness_nodes_url is not None,
         "recheckQueued": recheck.get("operationQueued") is True,
     }
 
@@ -511,6 +521,16 @@ def run(argv: list[str] | None = None) -> int:
         "requireCompletion": args.require_completion,
         "requireDeliveredPath": args.require_delivered_path,
         "rustExe": str(args.rust_exe),
+        "buildProvenance": {
+            "windowsBinarySha256": file_sha256(args.rust_exe),
+            "linuxBinarySha256": file_sha256(args.linux_rust_exe) if args.discovery_mode == "kad-wsl" else None,
+            "rustRevision": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=rust_repo, text=True,
+            ).strip(),
+            "harnessRevision": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1], text=True,
+            ).strip(),
+        },
         "discoveryMode": args.discovery_mode,
         "network": {
             "lanBindAddr": lan,
@@ -537,6 +557,7 @@ def run(argv: list[str] | None = None) -> int:
     leecher_base = ""
     file_hash = ""
     wsl_mountpoint: str | None = None
+    kad_helper: KadFirewallHelper | None = None
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -639,21 +660,18 @@ def run(argv: list[str] | None = None) -> int:
         if kad_wsl:
             for base in (seeder_base, leecher_base):
                 request_json(base, "POST", "/api/v1/kad/operations/start", args.api_key, {})
-            request_json(
-                seeder_base, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
-                {"address": lan, "port": leecher_kad_port},
-            )
-            request_json(
-                leecher_base, "POST", "/api/v1/kad/operations/bootstrap", args.api_key,
-                {"address": seeder_addr, "port": seeder_kad_port},
-            )
+            # Each clean profile already owns its local bootstrap contact.
+            # Starting the network below performs the normal configured join.
         request_json(seeder_base, "POST", "/api/v1/servers/operations/connect", args.api_key)
         request_json(leecher_base, "POST", "/api/v1/servers/operations/connect", args.api_key)
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
         if kad_wsl:
+            kad_helper = KadFirewallHelper(lan, {lan, seeder_addr})
+            kad_helper.start()
             report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
-                seeder_base, leecher_base, args.api_key, seeder_addr
+                seeder_base, leecher_base, args.api_key, seeder_addr,
+                witness_nodes_url=kad_helper.nodes_url,
             )
         share = publish_shared_tree(
             seeder_base,
@@ -676,6 +694,23 @@ def run(argv: list[str] | None = None) -> int:
             interval_seconds=1.0,
             description="local Rust seeder offer indexed by server",
         )
+        if kad_wsl:
+            def published_kad_source() -> dict[str, object] | None:
+                diagnostics = request_json(seeder_base, "GET", "/api/v1/diagnostics", args.api_key)
+                publish = diagnostics.get("kadPublish") or {}
+                return publish if safe_int(publish.get("sourcePublishedTotal")) > 0 else None
+
+            report["checks"]["kadSourcePublication"] = wait_for(
+                published_kad_source, timeout_seconds=90, interval_seconds=1,
+                description="stock-gated Kad source publication acknowledged",
+            )
+            # A clean leecher has no source hints. Retire its server session so
+            # the plain link can discover the first peer only through Kad.
+            request_json(leecher_base, "POST", "/api/v1/servers/operations/disconnect", args.api_key)
+            isolated = request_json(leecher_base, "GET", "/api/v1/status", args.api_key)
+            if isolated.get("stats", {}).get("ed2kConnected") is not False:
+                raise RuntimeError("Kad-only leecher still has a server session")
+            report["checks"]["kadDiscoveryIsolation"] = {"serverDisconnectedBeforeTransfer": True}
         transfer = request_json(
             leecher_base,
             "POST",
@@ -792,6 +827,8 @@ def run(argv: list[str] | None = None) -> int:
             require_completion=bool(args.require_completion),
             require_delivered_path=bool(args.require_delivered_path),
         )
+        if kad_helper is not None and safe_int(kad_helper.evidence().get("unbiasedRequests")) == 0:
+            raise RuntimeError("Kad run has no unbiased UDP firewall witness")
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -811,6 +848,12 @@ def run(argv: list[str] | None = None) -> int:
                 report["failureServerEvidenceError"] = str(server_error)
         return 1
     finally:
+        if kad_helper is not None:
+            try:
+                kad_helper.close()
+            except Exception as helper_error:
+                report["helperCleanupError"] = str(helper_error)
+            report["checks"]["kadFirewallWitness"] = kad_helper.evidence()
         report["processMetrics"] = {
             "seeder": close_process_metrics(seeder_metrics),
             "leecher": close_process_metrics(leecher_metrics),
