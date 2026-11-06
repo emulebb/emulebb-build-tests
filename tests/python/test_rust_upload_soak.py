@@ -57,6 +57,32 @@ def test_kad_wsl_mode_requires_staged_linux_client(monkeypatch: pytest.MonkeyPat
     rust_upload_soak.validate_args(args)
 
 
+def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def request(base: str, method: str, path: str, _key: str, _body=None):
+        calls.append((base, method, path))
+        if method == "GET":
+            return {"connected": True, "contactCount": 2}
+        return {"operationQueued": True}
+
+    monkeypatch.setattr(rust_upload_soak, "request_json", request)
+    result = rust_upload_soak.recheck_kad_after_bootstrap(
+        "http://seed", "http://leech", "local-key"
+    )
+
+    assert result == {
+        "seederConnectedContacts": 2,
+        "leecherConnectedContacts": 2,
+        "recheckQueued": True,
+    }
+    assert calls == [
+        ("http://seed", "GET", "/api/v1/kad"),
+        ("http://leech", "GET", "/api/v1/kad"),
+        ("http://seed", "POST", "/api/v1/kad/operations/recheck-firewall"),
+    ]
+
+
 def test_wsl_metadata_path_stays_within_output_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
     profile = output_root / "soak" / "profile"

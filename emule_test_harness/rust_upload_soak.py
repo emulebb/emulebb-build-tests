@@ -197,6 +197,41 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"Linux Rust executable was not found: {args.linux_rust_exe}")
 
 
+def recheck_kad_after_bootstrap(
+    seeder_base: str, leecher_base: str, api_key: str
+) -> dict[str, object]:
+    """Queue a real UDP reachability check after both local Kad peers connect."""
+
+    connected: dict[str, int] = {}
+    for role, base in (("seeder", seeder_base), ("leecher", leecher_base)):
+        status = wait_for(
+            lambda base=base: (
+                data
+                if (data := request_json(base, "GET", "/api/v1/kad", api_key)).get("connected")
+                else None
+            ),
+            timeout_seconds=60.0,
+            interval_seconds=1.0,
+            description=f"{role} Kad connected",
+        )
+        connected[role] = safe_int(status.get("contactCount"))
+    # WHY: the driver's warmup can fire before bootstrap, then defer its next
+    # round for the normal long interval. The explicit operation preserves the
+    # stock reachability gate while testing it during this bounded local run.
+    recheck = request_json(
+        seeder_base,
+        "POST",
+        "/api/v1/kad/operations/recheck-firewall",
+        api_key,
+        {},
+    )
+    return {
+        "seederConnectedContacts": connected["seeder"],
+        "leecherConnectedContacts": connected["leecher"],
+        "recheckQueued": recheck.get("operationQueued") is True,
+    }
+
+
 def write_payload(path: Path, size_bytes: int) -> dict[str, object]:
     """Writes deterministic incompressible soak bytes and returns metadata."""
 
@@ -583,6 +618,10 @@ def run(argv: list[str] | None = None) -> int:
         request_json(leecher_base, "POST", "/api/v1/servers/operations/connect", args.api_key)
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
+        if kad_wsl:
+            report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
+                seeder_base, leecher_base, args.api_key
+            )
         share = publish_shared_tree(
             seeder_base,
             args.api_key,
