@@ -3526,9 +3526,9 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
         (r'\("PATCH",\s*\["transfers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/transfers/{hash}"),
         (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
         (
-            r'\("PATCH",\s*\["shared-directories", "exclusions", "rules", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
+            r'\("PATCH",\s*\["shared-directories", "ignores", "defaults", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
             "PATCH",
-            "/shared-directories/exclusions/rules/{ruleKey}",
+            "/shared-directories/ignores/defaults/{ruleKey}",
         ),
         (r'\("PATCH",\s*\["servers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/servers/{serverId}"),
         (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryId}"),
