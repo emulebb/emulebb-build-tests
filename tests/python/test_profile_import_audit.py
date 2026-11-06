@@ -70,7 +70,7 @@ def test_audit_restores_only_its_own_read_only_data_mount(tmp_path: Path, monkey
             ["wsl.exe", "-d", "SampleDistro", "--"], job,
             [("/mnt/sample", "/data/sample")], cleanup,
         )
-        assert calls[-1][-5:] == ["drvfs", "-o", "ro", str(tmp_path), "/mnt/sample"]
+        assert calls[-1][-5:] == ["drvfs", "-o", "ro", tmp_path.as_posix(), "/mnt/sample"]
     assert calls[-1][-2:] == ["umount", "/mnt/sample"]
 
 
@@ -83,3 +83,23 @@ def test_metadata_output_mount_uses_selected_distribution(tmp_path: Path, monkey
     mountpoint = rust_upload_soak.mount_wsl_output_with_metadata("test", tmp_path, distribution="SampleDistro")
     rust_upload_soak.unmount_wsl_output(mountpoint, distribution="SampleDistro")
     assert all(command[:3] == ["wsl.exe", "-d", "SampleDistro"] for command in calls)
+
+
+def test_snapshot_does_not_create_cross_platform_sqlite_sidecars(tmp_path: Path) -> None:
+    with sqlite3.connect(tmp_path / "emulebb-rust-metadata.db") as connection:
+        connection.execute("CREATE TABLE sample(value)")
+    connection.close()
+    snapshot = profile_import_audit.open_profile_snapshot(tmp_path)
+    assert snapshot.execute("SELECT count(*) FROM sample").fetchone()[0] == 0
+    snapshot.close()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["emulebb-rust-metadata.db"]
+    (tmp_path / "emulebb-rust-metadata.db-wal").write_bytes(b"uncheckpointed data")
+    with pytest.raises(RuntimeError, match="uncheckpointed WAL"):
+        profile_import_audit.open_profile_snapshot(tmp_path)
+
+
+def test_offline_failure_retains_the_actual_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(profile_import_audit.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=1, stderr="sample failure", stdout=""))
+    with pytest.raises(RuntimeError, match="sample failure"):
+        profile_import_audit.run_json(["sample"], 10)

@@ -8,7 +8,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,17 +19,26 @@ from .paths import get_workspace_output_root
 
 def run_json(command: list[str], timeout: int) -> dict:
     """Run an offline product command and parse its JSON result."""
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=True)
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    if completed.returncode:
+        raise RuntimeError(f"offline command failed ({completed.returncode}): {completed.stderr.strip()}")
     return json.loads(completed.stdout)
+
+
+def open_profile_snapshot(profile: Path) -> sqlite3.Connection:
+    """Open a closed profile without creating cross-platform WAL/shm files."""
+    database = profile / "emulebb-rust-metadata.db"
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    wal = database.with_name(database.name + "-wal")
+    if wal.exists() and wal.stat().st_size:
+        raise RuntimeError("profile still has uncheckpointed WAL data")
+    return sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)
 
 
 def profile_counts(profile: Path) -> dict[str, int]:
     """Read durable hash counts after the offline process has closed SQLite."""
-    database = profile / "emulebb-rust-metadata.db"
-    if not database.is_file():
-        raise FileNotFoundError(database)
-    with sqlite3.connect(database) as connection:
-        connection.execute("PRAGMA query_only = ON")
+    with closing(open_profile_snapshot(profile)) as connection:
         return {
             table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
             for table in (
@@ -42,8 +51,7 @@ def profile_counts(profile: Path) -> dict[str, int]:
 
 def validate_imported_hashes(profile: Path, manifest: dict) -> dict[str, int]:
     """Compare every imported hash and ordered part hashset with the export."""
-    with sqlite3.connect(profile / "emulebb-rust-metadata.db") as connection:
-        connection.execute("PRAGMA query_only = ON")
+    with closing(open_profile_snapshot(profile)) as connection:
         md4: dict[int, list[str]] = {}
         aich: dict[int, list[str]] = {}
         for table, column, destination in (
@@ -107,7 +115,7 @@ def prepare_windows_mounts(wsl: list[str], job: emule_profile_export.ExportJob,
             continue
         root_wsl = wsl[:-1] + ["-u", "root", "--"]
         subprocess.run(root_wsl + ["mkdir", "-p", host], check=True)
-        subprocess.run(root_wsl + ["mount", "-t", "drvfs", "-o", "ro", source, host], check=True)
+        subprocess.run(root_wsl + ["mount", "-t", "drvfs", "-o", "ro", Path(source).as_posix(), host], check=True)
         cleanup.callback(subprocess.run, root_wsl + ["umount", host], check=True)
 
 
@@ -148,11 +156,11 @@ def main(argv: list[str] | None = None) -> int:
         windows_profile = subprocess.check_output(wsl + ["wslpath", "-w", args.profile], text=True).strip()
         profile = Path(windows_profile)
         profile.mkdir(parents=True, exist_ok=True)
-        manifest_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", str(manifest_path)], text=True).strip()
-        hashes_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", str(hash_manifest_path)], text=True).strip()
+        manifest_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", manifest_path.as_posix()], text=True).strip()
+        hashes_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", hash_manifest_path.as_posix()], text=True).strip()
         # Each invocation creates and removes a distinct container. Data mounts
         # are read-only; the image init and all network startup are bypassed.
-        prefix = wsl + ["docker", "run", "--rm", "--network", "none", "--user", "1000:1000",
+        prefix = wsl + ["docker", "run", "--rm", "--network", "none", "--no-healthcheck", "--user", "1000:1000",
                         "--entrypoint", "/usr/lib/emulebb-rust/emulebb-rust",
                         "--mount", f"type=bind,src={args.profile},dst=/profile",
                         "--mount", f"type=bind,src={manifest_wsl},dst=/import.json,readonly",
