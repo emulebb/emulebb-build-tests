@@ -5737,6 +5737,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             .route("/api/v1/app", get(app))
             .route("/api/v1/transfers", post(create_transfer))
             .route("/api/v1/transfers/{hash}", patch(update_transfer))
+            .route("/api/v1/shared-directories/ignores/defaults/{ruleKey}", patch(update_ignore))
             .route("/api/v1/servers/operations/import-met-url", post(import_servers))
             .route("/api/v1/searches/{searchId}/results/{hash}/operations/download", post(download));
         ''',
@@ -5748,6 +5749,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             const TRANSFER_ADD: &[&str] = &["link", "links", "categoryId", "categoryName", "paused"];
             const TRANSFER_PATCH: &[&str] = &["displayName", "priority", "categoryId", "categoryName"];
             const SEARCH_RESULT_DOWNLOAD: &[&str] = &["categoryId", "categoryName", "paused"];
+            const SHARED_FILE_IGNORE_RULE: &[&str] = &["enabled"];
             const URL_IMPORT: &[&str] = &["url"];
             if method == "POST" && path == "/api/v1/transfers" {
                 return Some(TRANSFER_ADD);
@@ -5758,6 +5760,9 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             let segments = api_segments(path)?;
             match (method, segments.as_slice()) {
                 ("PATCH", ["transfers", _]) => Some(TRANSFER_PATCH),
+                ("PATCH", ["shared-directories", "ignores", "defaults", _]) => {
+                    Some(SHARED_FILE_IGNORE_RULE)
+                }
                 ("POST", ["searches", _, "results", _, "operations", "download"]) => {
                     Some(SEARCH_RESULT_DOWNLOAD)
                 }
@@ -5776,6 +5781,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
 
     assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),
+        Route("PATCH", "/shared-directories/ignores/defaults/{ruleKey}"): ("enabled",),
         Route("POST", "/transfers"): ("categoryId", "categoryName", "link", "links", "paused"),
         Route("PATCH", "/transfers/{hash}"): (
             "categoryId",

@@ -2,9 +2,8 @@
 
 This mirrors the binary layout parsed by the Rust client in
 ``crates/emulebb-kad-dht/src/bootstrap.rs`` so the harness can seed the
-daemon's ``[kad] bootstrapNodes`` from a real, current ``nodes.dat`` (the
-REST ``import-nodes-url`` endpoint is a stub, and the public mirror serves an
-HTML page to non-browser clients).
+daemon's import-only contact facility from a stock ``nodes.dat``. The public
+mirror may serve an HTML page to non-browser clients.
 """
 
 from __future__ import annotations

@@ -260,6 +260,45 @@ def _is_windows_host() -> bool:
     return os.name == "nt"
 
 
+def start_wsl_managed_executable(
+    executable: Path,
+    linux_args: list[str],
+    log_path: Path,
+    pid_path: Path,
+    *,
+    distribution: str | None = None,
+    rust_log: str | None = None,
+) -> RustWslProcess:
+    """Starts one Linux executable with the shared PID-backed WSL lifecycle."""
+
+    linux_exe = wsl_path(executable, distribution)
+    linux_pid = wsl_path(pid_path, distribution)
+    linux_helper = wsl_path(Path(__file__).with_name("wsl_managed_process.sh"), distribution)
+    child_command = wsl_managed_child_command(linux_exe, linux_args, rust_log)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb", buffering=0) as log_handle:
+        proxy = subprocess.Popen(
+            _wsl_command(
+                distribution,
+                "setsid", "--wait", "/bin/sh", linux_helper,
+                "--pid-file", linux_pid, "--", *child_command,
+            ),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+        )
+    return RustWslProcess(proxy=proxy, pid_path=pid_path, distribution=distribution)
+
+
+def wsl_managed_child_command(
+    linux_exe: str, linux_args: list[str], rust_log: str | None
+) -> list[str]:
+    """Build a child-only log filter without changing inherited WSL state."""
+
+    if rust_log is None:
+        return [linux_exe, *linux_args]
+    return ["/usr/bin/env", f"RUST_LOG={rust_log}", linux_exe, *linux_args]
+
+
 def start_server(
     server_exe: Path,
     config_path: Path,
@@ -270,33 +309,16 @@ def start_server(
 ) -> ManagedProcess:
     """Starts the Linux Rust server directly or through a managed WSL process."""
 
+    if _is_windows_host():
+        return start_wsl_managed_executable(
+            server_exe,
+            ["--config", wsl_path(config_path, distribution)],
+            log_path,
+            pid_path,
+            distribution=distribution,
+        )
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_handle = log_path.open("wb", buffering=0)
-    try:
-        if _is_windows_host():
-            linux_exe = wsl_path(server_exe, distribution)
-            linux_config = wsl_path(config_path, distribution)
-            linux_pid = wsl_path(pid_path, distribution)
-            helper_path = Path(__file__).with_name("wsl_managed_process.sh")
-            linux_helper = wsl_path(helper_path, distribution)
-            proxy = subprocess.Popen(
-                _wsl_command(
-                    distribution,
-                    "setsid",
-                    "--wait",
-                    "/bin/sh",
-                    linux_helper,
-                    "--pid-file",
-                    linux_pid,
-                    "--",
-                    linux_exe,
-                    "--config",
-                    linux_config,
-                ),
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-            )
-            return RustWslProcess(proxy=proxy, pid_path=pid_path, distribution=distribution)
+    with log_path.open("wb", buffering=0) as log_handle:
         return subprocess.Popen(
             [str(server_exe), "--config", str(config_path)],
             stdout=log_handle,
@@ -304,8 +326,6 @@ def start_server(
             cwd=server_exe.parent,
             start_new_session=True,
         )
-    finally:
-        log_handle.close()
 
 
 def stop_process(process: ManagedProcess | None, *, timeout_seconds: float = 10.0) -> None:

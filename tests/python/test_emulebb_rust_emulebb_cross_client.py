@@ -5,6 +5,8 @@ import json
 import os
 import sys
 from pathlib import Path
+
+from emule_test_harness.paths import get_required_emule_workspace_root
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +22,7 @@ from emule_test_harness import rust_metadata
 
 
 def _rust_repo() -> Path:
-    return Path(__file__).resolve().parents[3] / "emulebb-rust"
+    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
 
 
 def load_suite_module():

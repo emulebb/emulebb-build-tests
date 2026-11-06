@@ -152,22 +152,24 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
         "/api/v1/shared-directories/roots?"
         + urllib.parse.urlencode({"path": str(shared_root.resolve())})
     )
-    exclusion_path = shared_root / "excluded-by-rest-contract.bin"
-    assert routes_by_operation["removeSharedFileExclusion"]["path"] == (
-        "/api/v1/shared-directories/exclusions?"
-        + urllib.parse.urlencode({"path": str(exclusion_path.resolve())})
+    assert routes_by_operation["removeSharedFileIgnorePattern"]["path"] == (
+        "/api/v1/shared-directories/ignores?"
+        + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"})
     )
     assert routes_by_operation["updateSharedFileIgnoreRule"]["path"] == (
-        "/api/v1/shared-directories/exclusions/rules/noise.desktop-ini"
+        "/api/v1/shared-directories/ignores/defaults/noise.desktop-ini"
     )
+    assert module.normalize_contract_path_for_openapi(
+        routes_by_operation["updateSharedFileIgnoreRule"]["path"]
+    ) == "/shared-directories/ignores/defaults/{ruleKey}"
+    assert module.assert_contract_routes_match_openapi()["ok"] is True
     assert module.get_contract_route_body("addSharedDirectoryRoot") == {
         "path": str(shared_root.resolve())
     }
     assert shared_root.is_dir()
-    assert module.get_contract_route_body("addSharedFileExclusion") == {
-        "path": str(exclusion_path.resolve())
+    assert module.get_contract_route_body("addSharedFileIgnorePattern") == {
+        "pattern": "rest-contract-ignored-*.bin"
     }
-    assert exclusion_path.read_bytes() == b"REST contract exclusion fixture\n"
     assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {
         "enabled": True
     }

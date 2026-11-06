@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_wire_inputs, rust_openapi_responses, rust_rest_contract, vpn_guard_live
+from emule_test_harness.paths import get_required_emule_workspace_root
 from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     EMULE_SECURITY_NODES_DAT_URL,
@@ -331,17 +332,18 @@ REST_STRESS_LONG_UNICODE_PATH = (
 )
 REST_CONTRACT_SHARED_ROOT_ENV = "EMULEBB_REST_CONTRACT_SHARED_ROOT"
 REST_CONTRACT_IGNORE_RULE_KEY = "noise.desktop-ini"
+WORKSPACE_ROOT = get_required_emule_workspace_root()
 OPENAPI_CONTRACT_PATH = Path(
     os.environ.get(
         "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
-        str(REPO_ROOT.parent / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
+        str(WORKSPACE_ROOT / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
     )
 ).resolve()
 NATIVE_CONTRACT_SOURCE_ROOT = Path(
     os.environ.get(
         "EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR",
         str(
-            REPO_ROOT.parent.parent
+            WORKSPACE_ROOT
             / "workspaces"
             / "workspace"
             / "app"
@@ -838,6 +840,8 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
         path += "?limit=9"
     elif operation_id == "removeSharedDirectoryRoot":
         path += "?" + urllib.parse.urlencode({"path": str(contract_shared_root_path())})
+    elif operation_id == "removeSharedFileIgnorePattern":
+        path += "?" + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"})
     elif operation_id == "removeSharedFileExclusion":
         path += "?" + urllib.parse.urlencode({"path": str(contract_shared_exclusion_path())})
     elif operation_id in {"deleteTransferFiles", "deleteSharedFileContent", "deleteSearches"}:
@@ -916,6 +920,10 @@ def normalize_contract_path_for_openapi(path: str) -> str:
     normalized = normalized.replace("/categories/999999", "/categories/{categoryId}")
     normalized = normalized.replace("/servers/192.0.2.254:4669", "/servers/{serverId}")
     normalized = normalized.replace("/searches/123/results/{hash}", "/searches/{searchId}/results/{hash}")
+    normalized = normalized.replace(
+        f"/shared-directories/ignores/defaults/{REST_CONTRACT_IGNORE_RULE_KEY}",
+        "/shared-directories/ignores/defaults/{ruleKey}",
+    )
     normalized = normalized.replace(
         f"/shared-directories/exclusions/rules/{REST_CONTRACT_IGNORE_RULE_KEY}",
         "/shared-directories/exclusions/rules/{ruleKey}",
@@ -3852,6 +3860,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         shared_root = contract_shared_root_path()
         shared_root.mkdir(parents=True, exist_ok=True)
         return {"path": str(shared_root)}
+    if route_name == "addSharedFileIgnorePattern":
+        return {"pattern": "rest-contract-ignored-*.bin"}
     if route_name == "addSharedFileExclusion":
         exclusion = contract_shared_exclusion_path()
         exclusion.parent.mkdir(parents=True, exist_ok=True)

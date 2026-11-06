@@ -36,6 +36,19 @@ class FakeProcess:
         return self.returncode
 
 
+@pytest.mark.unit
+def test_wsl_managed_child_log_filter_is_child_only() -> None:
+    executable = "/mnt/out/emulebb-rust"
+    args = ["--profile", "/mnt/out/profile"]
+
+    assert rust_ed2k.wsl_managed_child_command(executable, args, None) == [
+        executable, *args
+    ]
+    assert rust_ed2k.wsl_managed_child_command(
+        executable, args, "info,emulebb_core=debug"
+    ) == ["/usr/bin/env", "RUST_LOG=info,emulebb_core=debug", executable, *args]
+
+
 def available_local_port(*, udp_offsets: tuple[int, ...] = ()) -> int:
     """Chooses a non-ephemeral port whose requested TCP/UDP companions are free."""
 

@@ -32,6 +32,51 @@ def test_utc_run_id_uses_canonical_format() -> None:
     assert rust_upload_soak.utc_run_id(now) == "20260715T101112Z"
 
 
+def test_wsl_delivered_path_mapping_stays_in_owned_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _root, output = configure_workspace_env(monkeypatch, tmp_path)
+    delivered = output / "leecher" / "incoming" / "file.bin"
+    mapped = rust_upload_soak.wsl_metadata_path("/mnt/proof", delivered)
+    assert rust_upload_soak.windows_output_path("/mnt/proof", mapped) == delivered.resolve()
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/foreign/file.bin")
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/proof/../foreign/file.bin")
+    with pytest.raises(ValueError):
+        rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/proof/Windows/foreign.bin")
+
+
+def test_native_profile_mount_cleans_up_after_seed_copy_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _root, output = configure_workspace_env(monkeypatch, tmp_path)
+    profile = output / "profile"
+    profile.mkdir()
+    commands = []
+    monkeypatch.setattr(rust_upload_soak.rust_ed2k, "wsl_path", lambda _path: "/mnt/c/seed")
+    monkeypatch.setattr(rust_upload_soak.subprocess, "check_output", lambda *_args, **_kwargs: "1000\n")
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if "cp" in command:
+            raise rust_upload_soak.subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(rust_upload_soak.subprocess, "run", run)
+    with pytest.raises(rust_upload_soak.subprocess.CalledProcessError):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, "/mnt/c/seed", 128)
+    native = rust_upload_soak.wsl_metadata_path("/mnt/proof", profile)
+    assert commands[-1] == ["wsl.exe", "--user", "root", "--", "umount", native]
+    assert "size=128m,uid=1000,gid=1000" in commands[0]
+    commands.clear()
+    with pytest.raises(ValueError):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", tmp_path / "outside", "/mnt/c/seed", 128)
+    assert commands == []
+    with pytest.raises(ValueError, match="separate pre-mount"):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, native, 128)
+    assert commands == []
+
+
 def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
     rust_exe = stage_dummy_rust_tools(output_root)
@@ -43,20 +88,86 @@ def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, t
     assert args.duration_seconds == rust_upload_soak.DEFAULT_DURATION_SECONDS
 
 
-def test_resolve_ed2k_server_repo_override_uses_workspace_rust_repo(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspace"
-    repo = workspace_root / "repos" / "ed2k-server"
-    repo.mkdir(parents=True)
-    (repo / "Cargo.toml").write_text("[package]\nname = 'ed2k-server'\n", encoding="utf-8")
+def test_kad_wsl_mode_requires_staged_linux_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
+    stage_dummy_rust_tools(output_root)
+    args = rust_upload_soak.build_parser().parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--discovery-mode", "kad-wsl"]
+    )
 
-    assert rust_upload_soak.resolve_ed2k_server_repo_override(workspace_root, None) == str(repo)
+    with pytest.raises(ValueError, match="Linux Rust executable"):
+        rust_upload_soak.validate_args(args)
+    args.linux_rust_exe.parent.mkdir(parents=True, exist_ok=True)
+    args.linux_rust_exe.write_bytes(b"linux rust")
+    rust_upload_soak.validate_args(args)
+
+
+def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def request(base: str, method: str, path: str, _key: str, _body=None):
+        calls.append((base, method, path))
+        if path == "/api/v1/kad/operations/import-nodes-url":
+            assert _body == {"url": "http://192.0.2.20/nodes.dat"}
+            return {"imported": True}
+        if path.startswith("/api/v1/kad/nodes"):
+            return {"items": [{
+                "ip": "192.0.2.20", "kadVersion": 9, "udpPort": 4672,
+                "tcpPort": 4662, "udpFirewalled": False,
+            }]}
+        if method == "GET":
+            return {"connected": True, "contactCount": 2}
+        return {"operationQueued": True}
+
+    monkeypatch.setattr(rust_upload_soak, "request_json", request)
+    result = rust_upload_soak.recheck_kad_after_bootstrap(
+        "http://seed", "http://leech", "local-key", "192.0.2.10",
+        witness_nodes_url="http://192.0.2.20/nodes.dat",
+    )
+
+    assert result == {
+        "seederConnectedContacts": 2,
+        "leecherConnectedContacts": 2,
+        "seederFirewallContacts": [{
+            "sameBindIp": False,
+            "kadVersion": 9,
+            "udpPortPresent": True,
+            "tcpPortPresent": True,
+            "udpFirewalled": False,
+        }],
+        "seederEligibleFirewallHelpers": 1,
+        "witnessImported": True,
+        "recheckQueued": True,
+    }
+    assert calls == [
+        ("http://seed", "GET", "/api/v1/kad"),
+        ("http://leech", "GET", "/api/v1/kad"),
+        ("http://seed", "POST", "/api/v1/kad/operations/import-nodes-url"),
+        ("http://seed", "GET", "/api/v1/kad/nodes?limit=100"),
+        ("http://seed", "POST", "/api/v1/kad/operations/recheck-firewall"),
+    ]
+
+
+def test_wsl_metadata_path_stays_within_output_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
+    profile = output_root / "soak" / "profile"
+
+    mapped = rust_upload_soak.wsl_metadata_path("/mnt/metadata", profile)
+
+    assert mapped.startswith("/mnt/metadata/")
+    assert mapped.endswith("/out/soak/profile")
+    with pytest.raises(ValueError, match="below the workspace output root"):
+        rust_upload_soak.wsl_metadata_path("/mnt/metadata", workspace_root / "profile")
+
+
+def test_canonical_ed2k_server_does_not_use_repo_override() -> None:
+    assert rust_upload_soak.resolve_ed2k_server_repo_override(None) is None
 
 
 def test_resolve_ed2k_server_repo_override_prefers_explicit_path(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspace"
     override = tmp_path / "custom-ed2k-server"
 
-    assert rust_upload_soak.resolve_ed2k_server_repo_override(workspace_root, override) == str(override)
+    assert rust_upload_soak.resolve_ed2k_server_repo_override(override) == str(override)
 
 
 def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -67,6 +178,10 @@ def test_validate_args_rejects_unusable_values(monkeypatch: pytest.MonkeyPatch, 
     )
 
     with pytest.raises(ValueError, match="duration-seconds"):
+        rust_upload_soak.validate_args(args)
+
+    args = rust_upload_soak.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10", "--api-key", "short"])
+    with pytest.raises(ValueError, match="api-key"):
         rust_upload_soak.validate_args(args)
 
 
@@ -101,16 +216,25 @@ def test_safe_counter_helpers_tolerate_missing_values() -> None:
     assert rust_upload_soak.safe_float("bad") == 0.0
 
 
-def test_verify_download_delivery_checks_completed_delivered_file(tmp_path: Path) -> None:
+def test_find_hash_item_handles_retired_transfer_and_local_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    file_hash = "00112233445566778899aabbccddeeff"
+    responses = {
+        "/api/v1/transfers": {"items": []},
+        "/api/v1/shared-files": {"items": [{"hash": file_hash, "path": "C:\\incoming\\payload.bin"}]},
+    }
+    monkeypatch.setattr(rust_upload_soak, "request_json", lambda _base, _method, path, _key: responses[path])
+
+    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/transfers", file_hash) is None
+    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/shared-files", file_hash) == responses["/api/v1/shared-files"]["items"][0]
+
+
+def test_verify_download_delivery_checks_library_promotion(tmp_path: Path) -> None:
     delivered = tmp_path / "incoming" / "payload.bin"
     payload = rust_upload_soak.write_payload(delivered, 4096)
 
     result = rust_upload_soak.verify_download_delivery(
-        {
-            "state": "completed",
-            "completedBytes": payload["sizeBytes"],
-            "deliveredPath": str(delivered),
-        },
+        None,
+        {"hash": "00112233445566778899aabbccddeeff", "sizeBytes": payload["sizeBytes"], "path": str(delivered)},
         payload,
         require_completion=True,
         require_delivered_path=True,
@@ -127,10 +251,25 @@ def test_verify_download_delivery_checks_completed_delivered_file(tmp_path: Path
 def test_verify_download_delivery_rejects_incomplete_transfer(tmp_path: Path) -> None:
     payload = rust_upload_soak.write_payload(tmp_path / "payload.bin", 4096)
 
-    with pytest.raises(RuntimeError, match="did not complete"):
+    with pytest.raises(RuntimeError, match="did not enter the verified library"):
         rust_upload_soak.verify_download_delivery(
             {"state": "downloading", "completedBytes": 1024},
+            None,
             payload,
             require_completion=True,
             require_delivered_path=False,
+        )
+
+
+def test_delivered_path_requires_retired_transfer(tmp_path: Path) -> None:
+    delivered = tmp_path / "incoming" / "payload.bin"
+    payload = rust_upload_soak.write_payload(delivered, 4096)
+
+    with pytest.raises(RuntimeError, match="still has a transfer row"):
+        rust_upload_soak.verify_download_delivery(
+            {"state": "completed", "completedBytes": 4096},
+            {"sizeBytes": 4096, "path": str(delivered)},
+            payload,
+            require_completion=False,
+            require_delivered_path=True,
         )

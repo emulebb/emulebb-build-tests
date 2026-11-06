@@ -7,10 +7,33 @@ import struct
 from pathlib import Path
 
 from emule_test_harness import mfc_known_met, rust_metadata
+from emule_test_harness.paths import get_required_emule_workspace_root
 
 
 def _rust_repo() -> Path:
-    return Path(__file__).resolve().parents[2].parent / "emulebb-rust"
+    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
+
+
+def _read_import_hint(db_path: Path, ed2k_hash: str) -> dict:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM imported_known_files WHERE ed2k_hash = ?",
+            (bytes.fromhex(ed2k_hash),),
+        ).fetchone()
+        assert row is not None
+        result = dict(row)
+        result["aich_root"] = row["aich_root"].hex() if row["aich_root"] else None
+        result["aich_hashset"] = [
+            part[0].hex() for part in conn.execute(
+                "SELECT aich_hash FROM imported_known_file_aich_hashes "
+                "WHERE imported_known_file_id = ? ORDER BY part_index", (row["id"],),
+            )
+        ]
+        # Imported hints cannot grant serving authority or fabricate downloads.
+        for table in ("transfers", "verified_local_content", "local_file_instances", "shared_file_memberships"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        return result
 
 
 def _tag_string(name_id: int, value: str) -> bytes:
@@ -185,7 +208,7 @@ def test_import_known_met_uses_known2_aich_hashset(tmp_path: Path) -> None:
     )
 
     assert summary["known2AichUsed"] == 1
-    manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
+    manifest = _read_import_hint(db_path, "00112233445566778899aabbccddeeff")
     assert manifest is not None
     assert manifest["aich_root"] == "aa" * 20
     assert manifest["aich_hashset"] == ["bb" * 20, "cc" * 20]
@@ -241,7 +264,28 @@ def test_import_known_met_cache_seeds_pathless_rows_without_shared_files(tmp_pat
     assert transfers == 0
 
 
-def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
+def test_empty_stock_cache_replacement_clears_previous_hints(tmp_path: Path) -> None:
+    db_path = tmp_path / "metadata.sqlite"
+    known_met = tmp_path / "known.met"
+    rust_metadata.create_metadata_db(_rust_repo(), db_path)
+    rust_metadata.seed_imported_known_files(db_path, [{
+        "ed2k_hash": "00112233445566778899aabbccddeeff",
+        "name": "Sample.bin", "size_bytes": 8, "modified_s": 1_700_000_000,
+        "md4_hashset": ["11" * 16], "aich_root": "22" * 20,
+        "aich_hashset": ["33" * 20],
+    }])
+    _write_known_met(known_met, [])
+    for dry_run, expected_rows in ((True, 1), (False, 0)):
+        mfc_known_met.import_mfc_known_met_cache(
+            rust_repo=_rust_repo(), metadata_db=db_path,
+            known_met=known_met, dry_run=dry_run,
+        )
+        with sqlite3.connect(db_path) as conn:
+            for table in ("imported_known_files", "imported_known_file_md4_hashes", "imported_known_file_aich_hashes"):
+                assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == expected_rows
+
+
+def test_import_known_met_only_seeds_pathless_cache_hints(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
     payload = shared / "Sample File.bin"
@@ -272,34 +316,9 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
 
     assert summary["importedRecords"] == 1
     assert summary["matchedSourcePaths"] == 1
-    manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
+    manifest = _read_import_hint(db_path, "00112233445566778899aabbccddeeff")
     assert manifest is not None
-    assert manifest["completed"] is True
-    assert manifest["source_path"] == str(payload)
-    assert manifest["source_mtime_ms"] // 1000 == modified_s
-    assert manifest["md4_hashset_acquired"] is True
-    with sqlite3.connect(db_path) as conn:
-        source_row = conn.execute(
-            """
-            SELECT shared_file_sources.file_size,
-                   length(shared_file_sources.source_fingerprint)
-            FROM shared_file_sources
-            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-            WHERE local_paths.display_path = ?
-            """,
-            (str(payload),),
-        ).fetchone()
-        piece_rows = conn.execute("SELECT count(*) FROM transfer_pieces").fetchone()[0]
-        range_row = conn.execute(
-            """
-            SELECT start_offset, end_offset
-            FROM verified_ranges
-            """
-        ).fetchone()
-    assert source_row[0] == payload.stat().st_size
-    assert source_row[1] > 0
-    assert piece_rows == 0
-    assert range_row == (0, payload.stat().st_size)
+    assert manifest["modified_s"] == modified_s
 
 
 def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> None:
@@ -368,25 +387,12 @@ def test_import_known_met_seeds_all_duplicate_paths(tmp_path: Path) -> None:
         shared_roots=roots,
     )
 
-    # A known.met record matching two byte-identical duplicates seeds the shared hash
-    # for BOTH paths (same content -> same ed2k hash) instead of being discarded.
     assert summary["matchedRecords"] == 1
     assert summary["duplicateRecords"] == 1
+    assert summary["matchedSourcePaths"] == 2
     assert summary["importedRecords"] == 1
-    assert summary["importedSourcePaths"] == 2
-    assert summary["skipped"]["no_path_match"] == 0
-    with sqlite3.connect(db_path) as conn:
-        seeded = {
-            row[0]
-            for row in conn.execute(
-                """
-                SELECT local_paths.display_path
-                FROM shared_file_sources
-                JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-                """
-            )
-        }
-    assert seeded == {str(payloads[0]), str(payloads[1])}
+    assert summary["importedSourcePaths"] == 0
+    _read_import_hint(db_path, "00112233445566778899aabbccddeeff")
 
 
 def test_import_known_met_reports_missing_path_match(tmp_path: Path) -> None:
@@ -492,36 +498,12 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
 
     assert summary["importedRows"] == 1
     assert summary["skipped"]["path_outside_shared_roots"] == 0
-    manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
+    manifest = _read_import_hint(db_path, "00112233445566778899aabbccddeeff")
     assert manifest is not None
-    assert manifest["completed"] is True
-    assert manifest["source_path"] == str(payload)
-    assert manifest["source_mtime_ms"] // 1000 == modified_s
+    assert manifest["modified_s"] == modified_s
     assert manifest["upload_priority"] == "normal"
-    assert manifest["auto_upload_priority"] is False
+    assert manifest["auto_upload_priority"] == 0
     assert manifest["all_time_uploaded_bytes"] == 0
-    with sqlite3.connect(db_path) as conn:
-        source_row = conn.execute(
-            """
-            SELECT shared_file_sources.file_size,
-                   length(shared_file_sources.source_fingerprint)
-            FROM shared_file_sources
-            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-            WHERE local_paths.display_path = ?
-            """,
-            (str(payload),),
-        ).fetchone()
-        piece_rows = conn.execute("SELECT count(*) FROM transfer_pieces").fetchone()[0]
-        range_row = conn.execute(
-            """
-            SELECT start_offset, end_offset
-            FROM verified_ranges
-            """
-        ).fetchone()
-    assert source_row[0] == payload.stat().st_size
-    assert source_row[1] > 0
-    assert piece_rows == 0
-    assert range_row == (0, payload.stat().st_size)
 
 
 def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path) -> None:

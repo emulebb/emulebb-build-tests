@@ -128,14 +128,18 @@ def write_rust_profile(
     if local_only_discovery:
         # WHY: first-run discovery imports public nodes.dat when this file is
         # absent. Local-only harnesses must never silently bootstrap public Kad.
-        if local_kad_seed is None:
-            kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [])
-        else:
+        if local_kad_seed is not None:
             if network_kademlia is not True:
                 raise ValueError(
                     "local_kad_seed requires network_kademlia=True so the intent is explicit"
                 )
-            kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [local_kad_seed])
+            if kad_bootstrap_nodes:
+                raise ValueError("Choose a local Kad seed or explicit bootstrap endpoints")
+            # An endpoint is not a known routing identity. Invented node IDs in
+            # nodes.dat prevent the real responder from joining under the
+            # one-node-per-IP routing rule and make later REQ recipients wrong.
+            kad_bootstrap_nodes = [local_kad_seed.endpoint]
+        kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [])
     settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():

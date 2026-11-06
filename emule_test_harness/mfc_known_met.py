@@ -265,7 +265,7 @@ def import_mfc_known_met_cache(
         known_met=known_met,
         known2_met=known2_64_met,
     )
-    if imported_rows and not dry_run:
+    if not dry_run:
         rust_metadata.seed_imported_known_files(metadata_db, imported_rows)
 
     return {
@@ -284,7 +284,6 @@ def import_mfc_known_met_hashes(
     shared_roots: list[object],
     shared_file_candidates: list[SharedFileCandidate] | None = None,
     scan_shared_roots: bool = True,
-    preserve_existing_runtime_state: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if not dry_run and not metadata_db.exists():
@@ -334,7 +333,6 @@ def import_mfc_known_met_hashes(
     known2_aich_used = 0
     stats_records = 0
     stats_source_paths = 0
-    manifests: list[dict[str, Any]] = []
     for entry in entries:
         if entry.name is None or entry.size_bytes is None:
             reason_counts["missing_identity"] += 1
@@ -353,15 +351,7 @@ def import_mfc_known_met_hashes(
             reason_counts["aich_count_mismatch"] += 1
             continue
 
-        # A known.met record whose (name, size, whole-second mtime) identity matches
-        # more than one shared file is a set of byte-identical duplicates: same content
-        # -> same ed2k/MD4/AICH hashset. Seed EVERY duplicate path with the shared hash
-        # so Rust's share-in-place reload skips re-hashing all of them, instead of
-        # discarding the record (which previously cost ~68% of MFC's known.met). This
-        # extends the same (name,size,mtime)->hash trust the unique-match path already
-        # applies without a content re-hash; a rare false collision (distinct content
-        # sharing that identity) is caught by the downloader's AICH/hash verification
-        # and self-corrects on the next share scan.
+        # Matching metadata is diagnostic only; it does not verify any native path.
         matched += 1
         matched_source_paths += len(matches)
         if len(matches) > 1:
@@ -375,35 +365,13 @@ def import_mfc_known_met_hashes(
         if has_stats:
             stats_records += 1
             stats_source_paths += len(matches)
-        if not dry_run:
-            for candidate in matches:
-                manifests.append(
-                    {
-                        "ed2k_hash": entry.ed2k_hash,
-                        "name": entry.name,
-                        "size_bytes": entry.size_bytes,
-                        "source_path": normal_windows_display_path(candidate.path),
-                        "source_mtime_ms": candidate.mtime_ms,
-                        "md4_hashset": entry.md4_hashset,
-                        "aich_root": entry.aich_root,
-                        "aich_hashset": aich_hashset,
-                        "upload_priority": entry.upload_priority,
-                        "auto_upload_priority": entry.auto_upload_priority,
-                        "all_time_uploaded_bytes": entry.all_time_uploaded_bytes,
-                        "all_time_upload_requests": entry.all_time_upload_requests,
-                        "all_time_upload_accepts": entry.all_time_upload_accepts,
-                        "last_upload_request_ms": entry.last_upload_request_ms,
-                    }
-                )
-    if manifests:
-        if preserve_existing_runtime_state:
-            rust_metadata.upsert_share_in_place_hash_manifests(metadata_db, manifests)
-        else:
-            rust_metadata.seed_share_in_place_manifests(
-                metadata_db,
-                manifests,
-                seed_piece_rows=False,
-            )
+    if not dry_run:
+        # WHY: a stock hash import is a cache hint, not evidence that Rust has
+        # verified a native file. Only the daemon may grant library membership.
+        import_mfc_known_met_cache(
+            rust_repo=rust_repo, metadata_db=metadata_db, known_met=known_met,
+            known2_64_met=known2_64_met,
+        )
 
     return {
         "knownMetRecords": len(entries),
@@ -417,8 +385,8 @@ def import_mfc_known_met_hashes(
         "statsRecords": stats_records,
         "statsSourcePaths": stats_source_paths,
         "importedRecords": matched,
-        "importedSourcePaths": len(manifests),
-        "writeMode": "refresh-existing" if preserve_existing_runtime_state else "seed-profile",
+        "importedSourcePaths": 0,
+        "writeMode": "import-cache",
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),
@@ -492,15 +460,14 @@ def import_mfc_shared_file_rows_hashes(
         parsed_rows.append((parsed, entry, stat.st_mtime_ns // 1_000_000, aich_hashset))
 
     if not dry_run:
-        rust_metadata.seed_share_in_place_manifests(
+        rust_metadata.seed_imported_known_files(
             metadata_db,
             [
                 {
                     "ed2k_hash": parsed.ed2k_hash,
                     "name": parsed.name,
                     "size_bytes": parsed.size_bytes,
-                    "source_path": normal_windows_display_path(parsed.path),
-                    "source_mtime_ms": source_mtime_ms,
+                    "modified_s": entry.modified_s,
                     "md4_hashset": entry.md4_hashset,
                     "aich_root": entry.aich_root,
                     "aich_hashset": aich_hashset,
@@ -513,7 +480,6 @@ def import_mfc_shared_file_rows_hashes(
                 }
                 for parsed, entry, source_mtime_ms, aich_hashset in parsed_rows
             ],
-            seed_piece_rows=False,
         )
 
     return {
